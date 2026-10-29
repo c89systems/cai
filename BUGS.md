@@ -5,6 +5,22 @@ needed to close each issue. An upstream cause must be reproduced independently
 before it is attributed to a dependency. Keep resolved entries with their fix
 commit and verification evidence.
 
+## BUG-073: Two runtimes can open the same conversation for writing
+
+- **Status:** open; native collection lease support proposed upstream.
+- **Reported:** two CAI instances resumed one session. After one accepted a
+  prompt, the other failed with "append ID is bound to different compact JSON
+  bytes". Their independent event counters had diverged.
+- **Cause:** CAI's shared session-use guard prevents deletion but permits
+  multiple runtime owners. Collection operation locks serialize individual
+  appends; they do not provide a conversation-lifetime writer lease.
+- **Required behavior:** acquire exclusive conversation ownership before
+  restoring a writable runtime; reject a second live owner. Preserve public
+  reads and provide safe recovery after a crash without losing committed
+  history or waiting for a long lease to expire.
+- **Next step:** [collection lease/takeover change request](stash/liblockdc-collection-leases-cr.md).
+  No CAI ownership change or liblockdc implementation is included yet.
+
 ## BUG-072: Streamed events repeatedly transact on conversation lookup metadata
 
 - **Status:** fixed in CAI's Pouch adapter.
