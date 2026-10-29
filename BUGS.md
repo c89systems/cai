@@ -7,7 +7,7 @@ commit and verification evidence.
 
 ## BUG-071: Conversation startup repeats expensive journal reads
 
-- **Status:** investigating; measured on an isolated copy, user store unchanged.
+- **Status:** fixed; measured on copies and verified against the real workspace.
 - **Evidence:** the existing conversation `dbgtfervs68i52ohr8gg` took 4.38 s
   to resume with compressed storage and console replay disabled, versus 3.58 s
   after converting a separate copy to uncompressed storage. Rendering the last
@@ -19,12 +19,20 @@ commit and verification evidence.
   syscall-counting run without console replay or verbose logging observed
   582,605 seeks, 148,486 positional reads and 23,171 descriptor duplications.
   Profiling overhead makes its elapsed time unsuitable for comparison.
-  Compression alone does not explain the latency. Attribute costs to each pass
-  before changing collection access; preserve append-only storage and streaming.
+  Compression alone did not explain the latency.
+- **Resolution:** read mixed entries directly, discard commit state through a
+  bounded parser sink, and retain sparse transient native-position hints for
+  console-tail replay. Context restore still precedes event recovery so final
+  trim visibility and commit watermarks are authoritative. No new persisted
+  cache, snapshot, store client or producer thread.
+- **Verification:** native range/parser regressions, large commit strings,
+  stale/cross-session bounds, replay/export checks, and the real static musl
+  binary. Controlled ten-turn startup improved from 6.18 s to 3.94 s; CPU time
+  fell from 6.04 s to 3.78 s. See [measurements](docs/startup-responsiveness.md).
 
 ## BUG-070: Streaming can monopolize the interactive owner thread
 
-- **Status:** investigating; CAI scheduling and lock hazards confirmed in source.
+- **Status:** fixed in CAI's dispatch and journal locking.
 - **Reported:** typing/key repeat becomes sluggish while Markdown is streaming,
   despite moderate CPU use; Softline's chat examples do not reproduce it.
 - **Evidence:** Softline's C chat watch consumes at most 64 bytes and returns.
@@ -33,11 +41,18 @@ commit and verification evidence.
   synchronous transcript appends while holding the runtime mutex that owner
   callbacks and status reads also acquire. Durable storage can therefore block
   the UI even without high CPU consumption.
-- **Required verification:** reproduce sustained streaming with concurrent draft
-  editing and a gated storage append; prove input fairness, cancellation,
-  wakeup readiness, event order and durable acknowledgement. The disposable
-  burst probe alone does not establish the exact reported key-repeat failure.
-  Do not attribute this to Softline or libmdf without independent evidence.
+- **Resolution:** public bounded C/Lua pumping; four observations per interactive
+  dispatch, text/reasoning slices at most 1 KiB, and serialized durable appends
+  outside the runtime state mutex. Pending events keep wakeup readiness. The UI
+  shows “Finishing turn” until final events are processed, instead of an early
+  “Worked for” that incorrectly suggests shell handoff is ready.
+- **Verification:** condition-gated storage success/failure/cancellation,
+  concurrent durable submissions, UTF-8 slicing, callback limits, event order,
+  wakeup readiness, C/Lua embedding and finalization regressions. Real musl burst
+  input became visible during streaming; last-key-to-draft observation improved
+  from 7,075 ms to 6 ms. CPU time remained comparable (1.54 s versus 1.64 s).
+  No Softline or libmdf changes were needed. See
+  [measurements and limits](docs/startup-responsiveness.md).
 
 ## BUG-069: Tool activity ignores the effective Markdown theme
 

@@ -633,6 +633,9 @@ struct cai_agent_runtime {
   unsigned long long commit_event_sequence;
   unsigned long long applied_event_sequence;
   unsigned long long next_event_sequence;
+  /* Serialize durable event acceptance without holding the UI/state mutex
+   * across a host store callback. Waiters release lock through condition. */
+  int journal_writing;
   unsigned long long journal_v2_start_sequence;
   int history_compaction_pending;
   /* Inline compaction is a distinct non-steerable task, as in Codex. */
@@ -1524,6 +1527,7 @@ static int cai_runtime_enqueue_locked(cai_agent_runtime *runtime, int type,
                                       cai_agent_run_state state,
                                       cai_error *error) {
   cai_runtime_event_node *node;
+  size_t chunk;
   int rc;
 
   if (type == CAI_AGENT_EVENT_TEXT_DELTA ||
@@ -1544,16 +1548,32 @@ static int cai_runtime_enqueue_locked(cai_agent_runtime *runtime, int type,
   if (runtime->event_callback == NULL) {
     return CAI_OK;
   }
-  rc = cai_runtime_wait_event_capacity_locked(runtime, error);
-  if (rc != CAI_OK) {
-    return rc;
-  }
-  rc = cai_runtime_event_node_new(type, data, data_length, tool_name,
-                                  tool_call_id, state, &node, error);
-  if (rc != CAI_OK) {
-    return rc;
-  }
-  cai_runtime_append_event_node_locked(runtime, node);
+  do {
+    chunk = data_length;
+    /* A large provider delta must not defeat an interactive pump's budget.
+     * Split observations only, after their original durable append succeeded.
+     * Preserve provider UTF-8 boundaries when splitting a complete scalar. */
+    if ((type == CAI_AGENT_EVENT_TEXT_DELTA ||
+         type == CAI_AGENT_EVENT_REASONING_SUMMARY) &&
+        chunk > 1024U) {
+      chunk = 1024U;
+      while (chunk != 0U && ((unsigned char)data[chunk] & 0xc0U) == 0x80U)
+        chunk--;
+      if (chunk == 0U)
+        chunk = 1024U;
+    }
+    rc = cai_runtime_wait_event_capacity_locked(runtime, error);
+    if (rc != CAI_OK)
+      return rc;
+    rc = cai_runtime_event_node_new(type, data, chunk, tool_name, tool_call_id,
+                                    state, &node, error);
+    if (rc != CAI_OK)
+      return rc;
+    cai_runtime_append_event_node_locked(runtime, node);
+    if (data != NULL)
+      data += chunk;
+    data_length -= chunk;
+  } while (data_length != 0U);
   return CAI_OK;
 }
 
@@ -2713,12 +2733,17 @@ static int cai_runtime_append_journal_event_locked(
     return cai_set_error(error, CAI_ERR_INVALID,
                          "session store does not support durable agent input");
   }
+  while (runtime->journal_writing)
+    pthread_cond_wait(&runtime->condition, &runtime->lock);
+  runtime->journal_writing = 1;
   event.sequence = runtime->next_event_sequence + 1U;
   event.type = type;
   event.data = data;
+  pthread_mutex_unlock(&runtime->lock);
   rc = runtime->session_store->append_event(runtime->session_store->context,
                                             runtime->session_scope,
                                             runtime->session_id, &event, error);
+  pthread_mutex_lock(&runtime->lock);
   if (rc == CAI_OK) {
     runtime->next_event_sequence = event.sequence;
     if (out_sequence != NULL) {
@@ -2727,6 +2752,8 @@ static int cai_runtime_append_journal_event_locked(
     if (runtime->journal_parent != NULL)
       rc = cai_runtime_mirror_journal_locked(runtime, &event, error);
   }
+  runtime->journal_writing = 0;
+  pthread_cond_broadcast(&runtime->condition);
   return rc;
 }
 
@@ -8392,6 +8419,11 @@ static int cai_runtime_enqueue_input(cai_agent_runtime *runtime,
   }
   activated = 0;
   pthread_mutex_lock(&runtime->lock);
+  /* Admission must validate queue capacity/state after any in-flight durable
+   * acceptance has finished publishing. Readers and cancellation do not wait
+   * on this gate. No state reservation precedes a condition wait. */
+  while (runtime->journal_writing && !runtime->stopping)
+    pthread_cond_wait(&runtime->condition, &runtime->lock);
   /* Once close has begun, no successful submission may be discarded by the
    * worker's shutdown path.  The caller owns runtime lifetime, so this guard
    * applies while the runtime remains valid and protected by its lock. */
@@ -12619,6 +12651,8 @@ static int cai_runtime_enqueue_goal_control(cai_agent_runtime *runtime,
     data = number;
   }
   pthread_mutex_lock(&runtime->lock);
+  while (runtime->journal_writing && !runtime->stopping)
+    pthread_cond_wait(&runtime->condition, &runtime->lock);
   if (runtime->stopping) {
     pthread_mutex_unlock(&runtime->lock);
     cai_free_mem(NULL, journal_data);
@@ -12737,8 +12771,8 @@ int cai_agent_runtime_clear_goal(cai_agent_runtime *runtime, cai_error *error) {
                                                 NULL, 0, 0LL, error);
 }
 
-int cai_agent_runtime_pump(cai_agent_runtime *runtime, long timeout_ms,
-                           cai_error *error) {
+int cai_agent_runtime_pump_bounded(cai_agent_runtime *runtime, long timeout_ms,
+                                   size_t max_events, cai_error *error) {
   cai_runtime_event_node *node;
   int close_deferred;
   int terminal_event;
@@ -12749,9 +12783,10 @@ int cai_agent_runtime_pump(cai_agent_runtime *runtime, long timeout_ms,
   if (rc != CAI_OK) {
     return rc;
   }
-  if (timeout_ms < 0L) {
-    return cai_set_error(error, CAI_ERR_INVALID,
-                         "pump timeout must not be negative");
+  if (timeout_ms < 0L || max_events == 0U) {
+    return cai_set_error(
+        error, CAI_ERR_INVALID,
+        "pump needs a nonnegative timeout and positive event limit");
   }
   pthread_mutex_lock(&runtime->lock);
   if (runtime->pumping) {
@@ -12776,7 +12811,8 @@ int cai_agent_runtime_pump(cai_agent_runtime *runtime, long timeout_ms,
     (void)pthread_cond_timedwait(&runtime->condition, &runtime->lock,
                                  &deadline);
   }
-  while ((node = runtime->event_head) != NULL) {
+  while (max_events != 0U && (node = runtime->event_head) != NULL) {
+    max_events--;
     input_boundary = node->event.type == CAI_AGENT_EVENT_INPUT_BOUNDARY &&
                      node->event.sequence == runtime->input_boundary_sequence;
     terminal_event = node->event.type == CAI_AGENT_EVENT_RUN_COMPLETED ||
@@ -12842,6 +12878,11 @@ int cai_agent_runtime_pump(cai_agent_runtime *runtime, long timeout_ms,
     cai_agent_runtime_destroy(runtime);
   }
   return rc;
+}
+
+int cai_agent_runtime_pump(cai_agent_runtime *runtime, long timeout_ms,
+                           cai_error *error) {
+  return cai_agent_runtime_pump_bounded(runtime, timeout_ms, SIZE_MAX, error);
 }
 
 int cai_agent_runtime_wakeup_fd(const cai_agent_runtime *runtime, int *out_fd,

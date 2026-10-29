@@ -1,5 +1,14 @@
 #include "cai_process_environment.h"
 
+typedef struct yolo_terminal_handle {
+  char id[64];
+} yolo_terminal_handle;
+static const lonejson_field yolo_terminal_handle_fields[] = {
+    LONEJSON_FIELD_STRING_FIXED_REQ(yolo_terminal_handle, id, "session_id",
+                                    LONEJSON_OVERFLOW_FAIL)};
+LONEJSON_MAP_DEFINE(yolo_terminal_handle_map, yolo_terminal_handle,
+                    yolo_terminal_handle_fields);
+
 static int yolo_host_tool(void *context, const char *arguments, cai_sink *sink,
                           cai_error *error) {
   (void)context;
@@ -41,6 +50,9 @@ static void test_runtime_yolo(test_state *state) {
   char work[PATH_MAX], outside[PATH_MAX], images[PATH_MAX], added[PATH_MAX];
   char image[PATH_MAX];
   char id[128];
+  char terminal_input[256];
+  yolo_terminal_handle handle;
+  lonejson_error json_error;
   cai_client_config cc;
   cai_agent_runtime_config config;
   cai_agent_preset preset;
@@ -208,9 +220,20 @@ static void test_runtime_yolo(test_state *state) {
       state, "runtime_yolo_start_terminal",
       cai_tool_registry_run(
           tools, "exec_command",
-          "{\"cmd\":\"read answer; printf got-$answer\",\"yield_time_ms\":1}",
+          "{\"cmd\":\"read answer; printf got-$answer\",\"yield_time_ms\":1,"
+          "\"tty\":true}",
           sink, &error),
       CAI_OK);
+  memset(&handle, 0, sizeof(handle));
+  lonejson_error_init(&json_error);
+  expect_int(state, "runtime_yolo_active_handle",
+             CAI_LJ->parse_cstr(CAI_LJ, &yolo_terminal_handle_map, &handle,
+                                output.buffer, &json_error),
+             LONEJSON_STATUS_OK);
+  snprintf(terminal_input, sizeof(terminal_input),
+           "{\"session_id\":\"%s\",\"chars\":\"retained\\n\","
+           "\"yield_time_ms\":1000}",
+           handle.id);
   expect_int(state, "runtime_yolo_busy_get",
              cai_agent_runtime_get_yolo(runtime, &enabled, &ready, &error),
              CAI_OK);
@@ -224,12 +247,10 @@ static void test_runtime_yolo(test_state *state) {
              CAI_OK);
   expect_int(state, "runtime_yolo_noop_applied", applied, 1);
   memset(&output, 0, sizeof(output));
-  expect_int(state, "runtime_yolo_retained_terminal",
-             cai_tool_registry_run(tools, "write_stdin",
-                                   "{\"session_id\":\"terminal-1\",\"chars\":"
-                                   "\"retained\\n\",\"yield_time_ms\":1000}",
-                                   sink, &error),
-             CAI_OK);
+  expect_int(
+      state, "runtime_yolo_retained_terminal",
+      cai_tool_registry_run(tools, "write_stdin", terminal_input, sink, &error),
+      CAI_OK);
   expect_substr(state, "runtime_yolo_retained_output", output.buffer,
                 "got-retained");
   expect_int(state, "runtime_yolo_after_terminal",

@@ -501,6 +501,7 @@ static void collection_regressions(cai_cli_pouch *pouch, cai_error *error) {
 }
 
 #include "pouch_journal_fault_test.inc"
+#include "pouch_replay_read_test.inc"
 
 int main(int argc, char **argv) {
   char directory[PATH_MAX];
@@ -695,6 +696,8 @@ int main(int argc, char **argv) {
   assert(observed == 0);
   cai_error_cleanup(&error);
   cai_error_init(&error);
+  replay_native_ranges(&error);
+  replay_large_commit(&error);
   collection_regressions(&pouch, &error);
   todo_transactions(&pouch, &error);
   replay_limits(&pouch, &error);

@@ -1332,7 +1332,9 @@ do
     }))
     assert_ok(callback_runtime:submit("close from Lua event callback"), nil,
       "Lua callback-close runtime accepts its turn")
-    assert_eq(callback_runtime:pump(100), "cancelled",
+    assert_throws(function() callback_runtime:pump(0, -1) end,
+      "Lua bounded pump rejects negative limits")
+    assert_eq(callback_runtime:pump(100, 1), "cancelled",
       "Lua callback-close pump reports cancellation")
     assert_eq(callback_calls, 1, "Lua callback-close called exactly once")
     assert_throws(function()

@@ -226,6 +226,17 @@ static const lonejson_field event_fields[] = {
     LONEJSON_FIELD_STRING_ALLOC_REQ(cli_record, type, "type"),
     LONEJSON_FIELD_STRING_ALLOC(cli_record, data, "data")};
 LONEJSON_MAP_DEFINE(event_map, cli_record, event_fields);
+static const lonejson_field journal_event_fields[] = {
+    LONEJSON_FIELD_STRING_FIXED_REQ(cli_record, record_type, "record_type",
+                                    LONEJSON_OVERFLOW_FAIL),
+    /* Ordered reads also encounter commits. Validate required event fields at
+     * the authenticated collection boundary instead of filtering/decrypting
+     * every entry in LQL before parsing the same body again. */
+    LONEJSON_FIELD_U64(cli_record, sequence, "sequence"),
+    LONEJSON_FIELD_STRING_ALLOC(cli_record, type, "type"),
+    LONEJSON_FIELD_STRING_ALLOC(cli_record, data, "data"),
+    LONEJSON_FIELD_JSON_VALUE(cli_record, state, "state")};
+LONEJSON_MAP_DEFINE(journal_event_map, cli_record, journal_event_fields);
 static const lonejson_field commit_fields[] = {
     LONEJSON_FIELD_STRING_FIXED_REQ(cli_record, record_type, "record_type",
                                     LONEJSON_OVERFLOW_FAIL),
@@ -777,7 +788,7 @@ static int commit_download_write(void *context, cai_sink *sink,
   commit_download *request = context;
   /* The journal parser consumes commits and discards observation payloads
    * incrementally. Read the ordered collection without a redundant selector
-   * pass; the SDK LQL scanner also exceeds musl's default worker stack. */
+   * pass. Final trim visibility is known before observation recovery starts. */
   return collection_copy(request->collection, 0U, UINT64_MAX, sink, error);
 }
 static void commit_download_close(void *context) {
@@ -1624,12 +1635,72 @@ typedef struct collection_events {
   cli_record record;
   int initialized, limited, rc, observe, discard_data;
   unsigned long long previous;
+  unsigned long long after, through;
+  int index_positions;
   uint64_t position;
   int (*select_event)(void *, unsigned long long);
   cai_agent_session_event_fn visit;
   void *visitor;
   cai_error *error;
 } collection_events;
+
+typedef struct cai_cli_event_position {
+  unsigned long long sequence, position;
+} cai_cli_event_position;
+
+static int event_position_add(collection_events *read,
+                              const lc_collection_read_metadata *metadata) {
+  cai_cli_pouch *pouch = read->pouch;
+  cai_cli_event_position *points;
+  size_t capacity;
+  if (!read->index_positions)
+    return CAI_OK;
+  pouch->event_last_sequence = read->record.sequence;
+  pouch->event_last_position = metadata->position;
+  if (pouch->event_position_stride++ % 128U != 0U)
+    return CAI_OK;
+  if (pouch->event_position_count == pouch->event_position_capacity) {
+    capacity = pouch->event_position_capacity != 0U
+                   ? pouch->event_position_capacity * 2U
+                   : 32U;
+    if (capacity < pouch->event_position_capacity ||
+        capacity > (size_t)-1 / sizeof(*points))
+      return cai_cli_error(read->error, CAI_ERR_LIMIT,
+                           "replay position index exceeds addressable size");
+    points = realloc(pouch->event_positions, capacity * sizeof(*points));
+    if (points == NULL)
+      return cai_cli_error(read->error, CAI_ERR_NOMEM,
+                           "allocate replay position index");
+    pouch->event_positions = points;
+    pouch->event_position_capacity = capacity;
+  }
+  points = pouch->event_positions + pouch->event_position_count++;
+  points->sequence = read->record.sequence;
+  points->position = metadata->position;
+  return CAI_OK;
+}
+
+static void event_position_window(const cai_cli_pouch *pouch, const char *id,
+                                  unsigned long long after,
+                                  unsigned long long through,
+                                  lc_collection_read_opts *options) {
+  size_t i;
+  if (through == 0U || strcmp(pouch->event_position_session, id) != 0 ||
+      pouch->event_last_sequence == 0U || through > pouch->event_last_sequence)
+    return;
+  options->has_after = options->has_through = 1;
+  options->after = 0U;
+  options->through = pouch->event_last_position;
+  for (i = 0U; i < pouch->event_position_count; i++) {
+    const cai_cli_event_position *point = &pouch->event_positions[i];
+    if (point->sequence <= after)
+      options->after = point->position;
+    if (point->sequence >= through) {
+      options->through = point->position;
+      break;
+    }
+  }
+}
 
 static lonejson_status discard_json(void *context, const void *bytes,
                                     size_t count, lonejson_error *error) {
@@ -1706,6 +1777,15 @@ collection_event_boundary(void *context,
   if (!read->limited && read->rc == CAI_OK &&
       lonejson_curl_parse_finish(&read->parser) != LONEJSON_STATUS_OK)
     read->rc = cai_cli_lj_error(read->error, &read->parser.error);
+  if (read->rc == CAI_OK && !read->limited &&
+      strcmp(read->record.record_type, "commit") == 0) {
+    if (metadata->append_id == NULL ||
+        strncmp(metadata->append_id, "commit-", 7U) != 0)
+      read->rc = cai_cli_error(read->error, CAI_ERR_INVALID,
+                               "invalid stored commit identity");
+    collection_event_cleanup(read);
+    return read->rc == CAI_OK ? LC_OK : LC_ERR_INVALID;
+  }
   sequence = 0U;
   if (metadata->append_id != NULL &&
       strncmp(metadata->append_id, "event-", 6U) == 0) {
@@ -1716,8 +1796,10 @@ collection_event_boundary(void *context,
   }
   if (read->rc == CAI_OK &&
       (sequence == 0U || sequence <= read->previous ||
-       (!read->limited && (read->record.sequence != sequence ||
-                           strcmp(read->record.record_type, "event") != 0))))
+       (!read->limited &&
+        (read->record.sequence != sequence ||
+         (read->map == &journal_event_map && read->record.type == NULL) ||
+         strcmp(read->record.record_type, "event") != 0))))
     read->rc = cai_cli_error(read->error, CAI_ERR_INVALID,
                              "invalid stored event identity or order");
   if (read->rc == CAI_OK && read->limited && read->pouch->logger != NULL) {
@@ -1731,13 +1813,20 @@ collection_event_boundary(void *context,
         fields, 2U);
   }
   if (read->rc == CAI_OK) {
+    /* Oversized events retain their native identity, too. */
+    read->record.sequence = sequence;
+    read->rc = event_position_add(read, metadata);
+  }
+  if (read->rc == CAI_OK) {
     read->previous = sequence;
     read->position = metadata->position;
     event.sequence = sequence;
     event.type = read->limited ? "replay_event_omitted" : read->record.type;
     event.data = read->limited ? NULL : read->record.data;
-    if (read->select_event == NULL ||
-        read->select_event(read->visitor, sequence)) {
+    if (sequence > read->after &&
+        (read->through == 0U || sequence <= read->through) &&
+        (read->select_event == NULL ||
+         read->select_event(read->visitor, sequence))) {
       read->rc = read->visit(read->visitor, &event, read->error);
       if (read->rc == CAI_OK && !read->limited && read->observe &&
           read->pouch->replay_event != NULL)
@@ -1847,7 +1936,6 @@ static int read_events(void *context, const char *scope, const char *id,
   lc_sink sink;
   lc_error local;
   lonejson_error json_error;
-  char selector[160];
   int rc, exists;
   memset(&read, 0, sizeof(read));
   memset(&sink, 0, sizeof(sink));
@@ -1855,16 +1943,25 @@ static int read_events(void *context, const char *scope, const char *id,
   lc_collection_read_opts_init(&options);
   lc_collection_read_res_init(&result);
   read.pouch = pouch;
-  read.map = &event_map;
+  read.map = &journal_event_map;
+  read.discard_data = 1;
   read.id = id;
   read.visit = visit;
   read.visitor = visitor;
   read.select_event = select_event;
   read.error = error;
-  read.previous = after;
+  read.after = after;
+  read.through = through;
   read.observe =
       observers && pthread_equal(pthread_self(), pouch->owner_thread) &&
       pouch->replay_scope != NULL && strcmp(scope, pouch->replay_scope) == 0;
+  read.index_positions = read.observe && after == 0U;
+  if (read.index_positions) {
+    pouch->event_position_count = pouch->event_position_stride = 0U;
+    pouch->event_last_sequence = pouch->event_last_position = 0U;
+    snprintf(pouch->event_position_session,
+             sizeof(pouch->event_position_session), "%s", id);
+  }
   rc = history_supported(pouch, error);
   if (rc == CAI_OK)
     rc = session_exists(pouch, id, &exists, error);
@@ -1884,13 +1981,8 @@ static int read_events(void *context, const char *scope, const char *id,
       rc = cai_cli_lj_error(error, &json_error);
   }
   if (rc == CAI_OK) {
-    if (through != 0U)
-      snprintf(selector, sizeof(selector),
-               "range{field=/sequence,gt=%llu,lte=%llu}", after, through);
-    else
-      snprintf(selector, sizeof(selector), "range{field=/sequence,gt=%llu}",
-               after);
-    options.selector_lql = selector;
+    if (!observers)
+      event_position_window(pouch, id, after, through, &options);
     options.on_metadata = collection_event_boundary;
     options.metadata_context = &read;
     sink.write = collection_event_write;
@@ -1904,6 +1996,8 @@ static int read_events(void *context, const char *scope, const char *id,
     collection->close(collection);
   lc_collection_read_res_cleanup(&result);
   lc_error_cleanup(&local);
+  if (rc != CAI_OK && read.index_positions)
+    pouch->event_position_session[0] = '\0';
   return rc;
 }
 
@@ -2428,6 +2522,8 @@ int cai_cli_pouch_open_options(cai_cli_pouch *pouch,
 void cai_cli_pouch_close(cai_cli_pouch *pouch) {
   cai_cli_pouch_client **link, *entry;
   cai_cli_pouch_prompt_close(pouch);
+  free(pouch->event_positions);
+  pouch->event_positions = NULL;
   cai_cli_pouch_end_use(pouch);
   if (pouch->history_lock_initialized) {
     if (pouch->history_anchor != NULL)

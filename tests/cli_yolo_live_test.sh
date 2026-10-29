@@ -57,7 +57,7 @@ cmp "$root/policy.ini" "$root/policy.original"
 
 # A managed process can outlive the model turn. The pending policy stays in
 # Softline, editable, while its original terminal session is still usable.
-policy_plan '[{tool:"exec_command",arguments:{cmd:"read answer; printf got-$answer",yield_time_ms:1}},"LIVE PROCESS READY"]'
+policy_plan '[{tool:"exec_command",arguments:{cmd:"read answer; printf got-$answer",tty:true,yield_time_ms:1}},"LIVE PROCESS READY"]'
 terminal_start -N
 prompt 'Start a terminal command' 'LIVE PROCESS READY'
 send '/yolo on\r'; expect 'Q 1. /yolo on'

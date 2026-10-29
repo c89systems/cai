@@ -776,7 +776,10 @@ static void expect_child_exit(test_state *state, const char *name, pid_t pid,
   } else if (wait_rc > 0) {
     test_fail(state, name, "mock child timed out");
   } else if (!WIFEXITED(*child_status) || WEXITSTATUS(*child_status) != 0) {
-    test_fail(state, name, "mock child failed");
+    char message[96];
+    snprintf(message, sizeof(message), "mock child failed (wait status %d)",
+             *child_status);
+    test_fail(state, name, message);
   }
 }
 
@@ -8848,6 +8851,8 @@ static int mock_request_matches(const char *request,
   for (i = 0U; i < expectation->required_count; i++) {
     if (expectation->required[i] != NULL &&
         strstr(request, expectation->required[i]) == NULL) {
+      fprintf(stderr, "mock request missing required fragment: %s\n",
+              expectation->required[i]);
       return 0;
     }
   }
@@ -25702,8 +25707,7 @@ static void test_smith_profile(test_state *state) {
       "\"name\":\"apply_patch\"",
       "\"name\":\"exec_command\"",
       "\"name\":\"write_stdin\"",
-      "Default configuration waits 10000 ms and caps the wait at 30000 ms; "
-      "the host may configure other limits.",
+      "Default wait is 10000 ms, capped at 30000 ms",
       "Default configuration gives non-empty writes a 250 ms wait capped at "
       "30000 ms, and empty polls a 5000-300000 ms wait. Termination uses the "
       "non-empty-write limits. The host may configure other limits.",
@@ -26922,6 +26926,7 @@ static int test_runtime_input_boundary(void *context,
 #include "runtime_goal_continuation_test.inc"
 #include "runtime_goal_restart_test.inc"
 #include "runtime_input_ack_test.inc"
+#include "runtime_responsiveness_test.inc"
 
 static void test_agent_runtime_input_boundary(test_state *state) {
   static const char response[] =
@@ -54765,6 +54770,7 @@ static const test_entry test_entries[] = {
      test_agent_local_session_store_rejects_unsafe_scope},
     {"agent_runtime_resume", test_agent_runtime_resume},
     {"agent_runtime_input_ack", test_agent_runtime_input_ack},
+    {"agent_runtime_responsiveness", test_agent_runtime_responsiveness},
     {"agent_runtime_markdown_export", test_agent_runtime_markdown_export},
     {"goal_tools", test_goal_tools},
     {"goal_create_allocation_failure", test_goal_create_allocation_failure},

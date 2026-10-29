@@ -479,11 +479,25 @@ order. A started call without a terminal record is incomplete, not a replay
 request to execute it.
 
 The journal durably acknowledges each record before its live notification.
+Journal acceptance is serialized separately from the runtime state mutex:
+worker-side store callbacks do not hold the lock needed by owner-thread state
+and metrics reads or cancellation. An append error is still a turn failure;
+it never acknowledges or presents the failed text as successful output.
 Worker-side notifications use the bounded event queue; synchronous owner
 operations never wait for their own pump and retain the journal if the live
 queue is full. Recording failures prevent starting a tool whose arguments
 could not be recorded. Deeper transport/storage implementation logs remain
 with the host's pslog sink; no log-severity filter feeds execution history.
+
+Use `cai_agent_runtime_pump_bounded(runtime, timeout_ms, max_events, error)` in
+an interactive event loop. The positive limit bounds callbacks, not callback
+execution time; the host must keep its own callbacks short. Remaining events
+keep the borrowed wakeup descriptor readable. `cai_agent_runtime_pump` retains
+its drain behavior. Lua accepts the optional event limit as
+`runtime:pump(timeout_ms, max_events)`; zero/omitted selects ordinary drain.
+libcai_app uses four events per interactive dispatch, including manual reviews.
+Text/reasoning observations have at most 1024 payload bytes, splitting complete
+UTF-8 scalars at chunk boundaries. Their durable provider deltas are unchanged.
 
 `app->control(app, type, text, &id, &error)` is safe from other host threads
 while the app remains alive. It copies input into a FIFO of at most 64 waiting

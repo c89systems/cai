@@ -56,7 +56,9 @@ logs
 jq -se 'any(.[]; .msg == "cai.user_shell.completed" and (.duration_ms|type) == "number" and (.bytes|type) == "number" and .role == "user")' "$root/logs.jsonl" >/dev/null
 absent "$term/text" 'invalid kvfmt'
 count=$(requests)
-terminal_start; expect RAW-END; expect secret-local-result
+# This fixture checks every saved shell event, including those older than the
+# default ten-entry console tail.
+terminal_start --replay-turns -1; expect RAW-END; expect secret-local-result
 expect 'C1-live:'; expect 'Ü€🛫'
 [[ $(cat "$work/executions") == replay-once && $(requests) == "$count" ]]
 terminal_close

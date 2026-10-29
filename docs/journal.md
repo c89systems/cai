@@ -48,6 +48,17 @@ headers to repair selection. A stale index watermark cannot suppress newer
 committed state. Pending events after the recovered watermark remain eligible
 for the existing input/control replay path.
 
+Recovery reads mixed commit/event entries directly through the collection's
+ordered reader. The event pass discards commit state through a bounded parse
+sink; it does not run an LQL range scan that decrypts and parses each selected
+event before parsing it again. Context restoration precedes event recovery so
+final trim visibility and the authoritative commit watermark are known.
+During recovery the application retains one sequence/collection-position pair
+per 128 events, with no text. Console-tail replay seeks native position bounds
+using those transient hints and checks exact sequence/visibility bounds before
+rendering. It never applies a stale captured upper bound to unbounded exports
+or newer events. These hints add no persisted index, collection or snapshot.
+
 Internal review/subagent scopes have no workspace-latest index. Their journals
 and session metadata remain available by ID and in the parent's replay timeline;
 workspace auto-resume is only for ordinary conversation scopes. Child commit,

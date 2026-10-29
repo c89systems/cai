@@ -64,6 +64,16 @@ only. Hosts can use the borrowed wakeup descriptor with `poll`/`select`, copy
 streamed text or provider-issued reasoning summaries into any renderer, and
 call the explicit threadsafe input methods from an input thread.
 
+Interactive hosts should use `cai_agent_runtime_pump_bounded(runtime, timeout_ms,
+max_events, &error)` (Lua `runtime:pump(timeout_ms, max_events)`) to return to
+keyboard and other watches between batches. A positive event limit preserves
+pending wakeup readiness; omitting Lua's limit or setting it to zero uses the
+original drain operation. libcai_app dispatches four events per interactive
+wakeup. Live text/reasoning observations are split into at most 1 KiB chunks;
+their original journal records and content are unchanged. Store appends remain
+serialized and durably acknowledged before notification, but run outside the
+mutex protecting UI state and published snapshots.
+
 The built-in `smith` preset is CAI's Codex-inspired coding-agent profile. It
 uses the native `apply_patch`, sandboxed file/image tools, optional MCP and
 image generation, durable goals, and one managed pipe/PTY terminal slot with only

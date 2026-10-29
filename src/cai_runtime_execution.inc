@@ -42,6 +42,9 @@ static int cai_runtime_execution_emit_locked(cai_runtime_execution_stream *s,
                                              cai_error *error) {
   char *json = NULL;
   int rc;
+  /* source_sequence belongs to this append, not an in-flight writer's slot. */
+  while (s->runtime->journal_writing)
+    pthread_cond_wait(&s->runtime->condition, &s->runtime->lock);
   memcpy(s->record.data, s->bytes, count);
   s->record.data[count] = '\0';
   s->record.final = final;

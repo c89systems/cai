@@ -6,6 +6,9 @@
 #include "../cli/messages.h"
 #include "../cli/pouch.h"
 #include <cai/agent_runtime.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -14,6 +17,45 @@ static int fixture_late_steer(void *context,
                               const cai_agent_runtime_event *event,
                               cai_error *error);
 static cai_agent_runtime_event_fn fixture_event_callback;
+static cai_agent_session_store fixture_gated_store;
+static int (*fixture_real_append)(void *, const char *, const char *,
+                                  const cai_agent_session_event *, cai_error *);
+
+static int fixture_gated_append(void *context, const char *scope,
+                                const char *id,
+                                const cai_agent_session_event *event,
+                                cai_error *error) {
+  static int entered;
+  const char *directory = getenv("CAI_TEST_APPEND_GATE");
+  int final = getenv("CAI_TEST_APPEND_GATE_FINAL") != NULL;
+  if (!entered &&
+      (final ? strcmp(event->type, "execution") == 0 && event->data != NULL &&
+                   strstr(event->data, "\"kind\":\"turn.completed\"") != NULL
+             : strcmp(event->type, "assistant_text_delta") == 0)) {
+    char path[PATH_MAX], token;
+    FILE *marker;
+    int fd;
+    ssize_t count;
+    entered = 1;
+    snprintf(path, sizeof(path), "%s/entered", directory);
+    marker = fopen(path, "w");
+    if (marker == NULL)
+      return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                           "create append gate marker");
+    fclose(marker);
+    snprintf(path, sizeof(path), "%s/release", directory);
+    fd = open(path, O_RDONLY);
+    if (fd < 0)
+      return cai_cli_error(error, CAI_ERR_TRANSPORT, "open append gate");
+    do {
+      count = read(fd, &token, 1U);
+    } while (count < 0 && errno == EINTR);
+    close(fd);
+    if (count != 1 || token == 'f')
+      return cai_cli_error(error, CAI_ERR_TRANSPORT, "gated append failed");
+  }
+  return fixture_real_append(context, scope, id, event, error);
+}
 
 /* Test-only wait injection: exercise the real retry path without wall sleeps.
  */
@@ -43,6 +85,13 @@ static int fixture_runtime_open(cai_client *client,
   cai_agent_preset worker;
   cai_agent_subagent_profile profile;
   const char *volatile_session = getenv("CAI_TEST_VOLATILE_SESSION");
+  if (getenv("CAI_TEST_APPEND_GATE") != NULL &&
+      selected.session_store != NULL) {
+    fixture_gated_store = *selected.session_store;
+    fixture_real_append = fixture_gated_store.append_event;
+    fixture_gated_store.append_event = fixture_gated_append;
+    selected.session_store = &fixture_gated_store;
+  }
   if (getenv("CAI_TEST_LATE_STEER") != NULL) {
     fixture_event_callback = selected.event_callback;
     selected.event_callback = fixture_late_steer;

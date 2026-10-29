@@ -2079,8 +2079,13 @@ static int cli_sync_status(cli_state *state, cai_error *error) {
     reasoning_title = "Compacting context";
   if (state->capacity_retry_message[0] != '\0' && metrics.turn_active)
     reasoning_title = state->capacity_retry_message;
-  if (cai_cli_turn_status_message(turn_message, sizeof(turn_message),
-                                  reasoning_title, turn_metrics) != 0)
+  /* The worker's timing can settle before its final durable lifecycle record
+   * and terminal observation reach the owner. Do not advertise an idle turn
+   * while command admission still correctly treats that boundary as busy. */
+  if (busy && !turn_metrics->turn_active && state->shell.pid <= 0)
+    strcpy(turn_message, "Finishing turn");
+  else if (cai_cli_turn_status_message(turn_message, sizeof(turn_message),
+                                       reasoning_title, turn_metrics) != 0)
     return CAI_ERR_TRANSPORT;
   if (state->show_welcome && !metrics.turn_active)
     strcpy(turn_message, state->welcome);
@@ -3758,7 +3763,9 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
       return cai_cli_error(error, CAI_ERR_TRANSPORT, "wait for app events");
     timeout = 0L;
   }
-  rc = cai_agent_runtime_pump(state->runtime, timeout, error);
+  rc = state->interactive
+           ? cai_agent_runtime_pump_bounded(state->runtime, timeout, 4U, error)
+           : cai_agent_runtime_pump(state->runtime, timeout, error);
   if (rc == CAI_OK)
     rc = cli_host_process(state, error);
   return rc;
@@ -4387,7 +4394,7 @@ static int cli_review_wakeup(sl_t *sl, const sl_watch_event_t *event,
   (void)sl;
   (void)event;
   cai_error_init(&error);
-  rc = cai_agent_runtime_pump(state->review_runtime, 0L, &error);
+  rc = cai_agent_runtime_pump_bounded(state->review_runtime, 0L, 4U, &error);
   if (rc == CAI_OK)
     rc = cai_agent_runtime_state(state->review_runtime, &run_state, &error);
   if (rc == CAI_OK)

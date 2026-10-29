@@ -56,6 +56,12 @@ typedef struct cai_cli_pouch {
   char root_directory[PATH_MAX];
   struct cai_cli_session_guard *use_guard;
   int capture_session;
+  /* Sparse, transient sequence -> native collection-position hints. No text,
+   * snapshots, extra store or persisted cache. One point per 128 events. */
+  struct cai_cli_event_position *event_positions;
+  size_t event_position_count, event_position_capacity, event_position_stride;
+  char event_position_session[CAI_AGENT_SESSION_ID_MAX];
+  unsigned long long event_last_sequence, event_last_position;
 } cai_cli_pouch;
 
 int cai_cli_pouch_open_options(cai_cli_pouch *pouch,

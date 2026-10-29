@@ -5661,13 +5661,21 @@ static int cai_lua_agent_runtime_pump(lua_State *L) {
   cai_agent_run_state state;
   cai_error error;
   long timeout_ms;
+  lua_Integer max_events;
   int rc;
 
   self = cai_lua_check_agent_runtime(L, 1);
   timeout_ms = (long)luaL_optinteger(L, 2, 0);
+  max_events = luaL_optinteger(L, 3, 0);
+  luaL_argcheck(L, max_events >= 0, 3, "event limit must not be negative");
+  luaL_argcheck(
+      L, (unsigned long long)max_events <= (unsigned long long)(size_t)-1, 3,
+      "event limit exceeds addressable size");
   cai_error_init(&error);
   cai_lua_agent_runtime_enter(self);
-  rc = cai_agent_runtime_pump(self->ptr, timeout_ms, &error);
+  rc = max_events != 0 ? cai_agent_runtime_pump_bounded(
+                             self->ptr, timeout_ms, (size_t)max_events, &error)
+                       : cai_agent_runtime_pump(self->ptr, timeout_ms, &error);
   if (self->close_requested) {
     /* A Lua event callback may close its runtime. The C pump owns deferred
      * teardown and has destroyed ptr before returning to this frame. */

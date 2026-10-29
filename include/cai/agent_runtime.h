@@ -1133,6 +1133,13 @@ int cai_agent_runtime_clear_goal(cai_agent_runtime *runtime, cai_error *error);
  */
 int cai_agent_runtime_pump(cai_agent_runtime *runtime, long timeout_ms,
                            cai_error *error);
+/** Dispatch at most max_events callbacks, then return to the owner's event
+ * loop. max_events must be positive. timeout_ms limits only the initial wait;
+ * callbacks are synchronous. Pending events retain a readable wakeup fd.
+ * Callback errors, terminal acknowledgements and deferred close have the same
+ * behavior as pump. Use a small limit for interactive hosts. */
+int cai_agent_runtime_pump_bounded(cai_agent_runtime *runtime, long timeout_ms,
+                                   size_t max_events, cai_error *error);
 /**
  * Return a borrowed pollable descriptor that becomes readable when CAI queues
  * host-visible runtime events. It is useful only when event_callback is
