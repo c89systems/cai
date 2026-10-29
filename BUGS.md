@@ -5,6 +5,40 @@ needed to close each issue. An upstream cause must be reproduced independently
 before it is attributed to a dependency. Keep resolved entries with their fix
 commit and verification evidence.
 
+## BUG-071: Conversation startup repeats expensive journal reads
+
+- **Status:** investigating; measured on an isolated copy, user store unchanged.
+- **Evidence:** the existing conversation `dbgtfervs68i52ohr8gg` took 4.38 s
+  to resume with compressed storage and console replay disabled, versus 3.58 s
+  after converting a separate copy to uncompressed storage. Rendering the last
+  ten turns took 6.35 s with compression. These are single warm-host samples,
+  not stable benchmark thresholds. Reducing logging to warnings still took
+  4.33 s. Existing startup logs also place most delay after Pouch open.
+- **Investigation:** restore reads the ordered journal, runtime recovery reads
+  events again, and selected console replay performs another read. A separate
+  syscall-counting run without console replay or verbose logging observed
+  582,605 seeks, 148,486 positional reads and 23,171 descriptor duplications.
+  Profiling overhead makes its elapsed time unsuitable for comparison.
+  Compression alone does not explain the latency. Attribute costs to each pass
+  before changing collection access; preserve append-only storage and streaming.
+
+## BUG-070: Streaming can monopolize the interactive owner thread
+
+- **Status:** investigating; CAI scheduling and lock hazards confirmed in source.
+- **Reported:** typing/key repeat becomes sluggish while Markdown is streaming,
+  despite moderate CPU use; Softline's chat examples do not reproduce it.
+- **Evidence:** Softline's C chat watch consumes at most 64 bytes and returns.
+  CAI's watch invokes `cai_agent_runtime_pump`, which drains newly arriving
+  events without a dispatch bound. Separately, text/reasoning callbacks perform
+  synchronous transcript appends while holding the runtime mutex that owner
+  callbacks and status reads also acquire. Durable storage can therefore block
+  the UI even without high CPU consumption.
+- **Required verification:** reproduce sustained streaming with concurrent draft
+  editing and a gated storage append; prove input fairness, cancellation,
+  wakeup readiness, event order and durable acknowledgement. The disposable
+  burst probe alone does not establish the exact reported key-repeat failure.
+  Do not attribute this to Softline or libmdf without independent evidence.
+
 ## BUG-069: Tool activity ignores the effective Markdown theme
 
 - **Status:** fixed.
