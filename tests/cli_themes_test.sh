@@ -88,15 +88,17 @@ tui_themes() {
   prompt 'plain theme response' 'Bold and italic text.'
   tail -c +$((offset+1)) "$term/raw" >"$root/plain-runtime"
   plain_styles "$root/plain-runtime"
-  absent "$root/plain-runtime" $'\033[1;96m'
+  absent "$root/plain-runtime" $'\033[0;1m'
   absent "$root/plain-runtime" $'\033[92m'
   send '/theme dracula\r'; expect 'Theme changed to dracula:dracula.'
-  plan "$(jq -n --arg sample "$sample" '{plan:[$sample]}')"
+  plan "$(jq -n --arg sample "$sample" '{plan:[{tool:"read_file",arguments:{path:"theme.txt"}},$sample]}')"
   offset=$(wc -c <"$term/raw")
   prompt 'colored theme response' 'Bold and italic text.'
   tail -c +$((offset+1)) "$term/raw" >"$root/colored-runtime"
   contains "$root/colored-runtime" '38;'
   contains "$root/colored-runtime" $'\033[1m'
+  grep -Eq $'\033\\[(0;)?38;5;141mRead' "$root/colored-runtime"
+  grep -Eq $'\033\\[(0;)?1;38;5;219mtheme.txt' "$root/colored-runtime"
   plan '{"plan":[{"pause":true,"tool":"read_file","arguments":{"path":"theme.txt"}},"THEME BOUNDARY DONE"]}'
   offset=$(wc -c <"$term/text")
   send 'read while checking theme guard\r'; expect 'STREAM in flight'
@@ -108,6 +110,12 @@ tui_themes() {
   expect 'Theme changed to synthwave:synthwave-84.'
   absent "$term/feed" 'Change themes between turns'
   contains "$root/peer/requests.jsonl" 'THEME TOOL CONTENT'
+  plan '{"plan":[{"tool":"read_file","arguments":{"path":"theme.txt"}},"THEMED TOOL DONE"]}'
+  offset=$(wc -c <"$term/raw")
+  prompt 'read using the new palette' 'THEMED TOOL DONE'
+  tail -c +$((offset+1)) "$term/raw" >"$root/tool-runtime"
+  grep -Eq $'\033\\[(0;)?38;5;198mRead' "$root/tool-runtime"
+  grep -Eq $'\033\\[(0;)?1;38;5;51mtheme.txt' "$root/tool-runtime"
   send '/new\r'; expect 'New session'
   send '/theme\r'; expect 'Current: synthwave:synthwave-84'
   cmp "$root/config-before" "$root/config/cai/config.ini"

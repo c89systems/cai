@@ -182,6 +182,7 @@ typedef struct cli_state {
   int notice_first_row;
   int command_input;
   int command_ok;
+  char command_foreground[MDF_THEME_FOREGROUND_SIZE];
   const char *pending_command;
   cai_cli_shell shell;
   sl_watch_id_t shell_watches[3];
@@ -397,16 +398,18 @@ static int cli_notice_sink(void *context, const char *bytes, size_t count) {
     unsigned char ch = (unsigned char)bytes[i];
     if (state->row_line_start && state->row_ansi == 0 && ch != 27U &&
         ch != '\n' && ch != '\r') {
+      char styled_prefix[96];
       const char *prefix =
           state->notice_first_row ? (state->command_input ? "$ " : "* ") : "  ";
       if (state->interactive && !state->theme.ascii &&
           getenv("NO_COLOR") == NULL) {
         if (state->command_input) {
-          prefix = !state->notice_first_row
-                       ? "\033[38;2;215;160;95m  "
-                       : (state->command_ok
-                              ? "\033[0;92m$\033[0m \033[38;2;215;160;95m"
-                              : "\033[0;91m$\033[0m \033[38;2;215;160;95m");
+          snprintf(styled_prefix, sizeof(styled_prefix), "%s\033[0;1m%s",
+                   !state->notice_first_row ? "  "
+                   : state->command_ok      ? "\033[0;92m$\033[0m "
+                                            : "\033[0;91m$\033[0m ",
+                   state->command_foreground);
+          prefix = styled_prefix;
         } else if (state->notice_first_row)
           prefix = "\033[91m*\033[0m ";
       }
@@ -494,6 +497,8 @@ static int cli_tool_display_create(cli_state *state, const cai_cli_theme *theme,
   config.begin_block = cli_tool_begin_block;
   config.begin_block_context = state;
   rc = cai_tool_display_new(&config, out, error);
+  if (rc == CAI_OK)
+    rc = cai_cli_theme_tools(theme, *out, error);
   width = cli_render_width();
   if (rc == CAI_OK)
     rc = cai_tool_display_set_width(*out,
@@ -515,7 +520,7 @@ static int cli_tool_display_init(cli_state *state, cai_error *error) {
   callbacks.write = cli_tool_sink;
   callbacks.context = state;
   rc = cai_sink_from_callbacks(&callbacks, &state->tool_sink, error);
-  return rc == CAI_OK ? cli_tool_display_create(state, &state->theme,
+  return rc == CAI_OK ? cli_tool_display_create(state, &state->render_theme,
                                                 &state->tool_display, error)
                       : rc;
 }
@@ -719,6 +724,14 @@ static int cli_set_theme_scope(cli_state *state, int scope, cai_error *error) {
     return cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "finish themed Markdown block");
   }
+  if (changed && state->tool_display != NULL) {
+    rc = cai_cli_theme_tools(&selected, state->tool_display, error);
+    if (rc != CAI_OK) {
+      if (renderer != NULL)
+        renderer->destroy(renderer);
+      return rc;
+    }
+  }
   if (renderer != NULL) {
     state->renderer->destroy(state->renderer);
     state->renderer = renderer;
@@ -827,6 +840,10 @@ static int cli_flush_command(cli_state *state, int ok) {
   while (state->feed_breaks < 2)
     if (cli_sink(state, "\n", 1U) != 0)
       return -1;
+  if (mdf_theme_heading_foreground(state->render_theme.markdown, 2,
+                                   state->command_foreground,
+                                   sizeof(state->command_foreground)) != MDF_OK)
+    return -1;
   state->notice_open = 1;
   state->notice_first_row = 1;
   state->command_input = 1;
@@ -4266,10 +4283,12 @@ static int cli_theme_command(cli_state *state, const char *arguments,
   }
   /* A terminal call can span several write_stdin tools. Keep its identity,
    * output limit, UTF-8/control decoder and pending command state intact. */
-  rc = cai_tool_display_set_color(state->tool_display,
-                                  state->interactive && !selected.ascii &&
-                                      getenv("NO_COLOR") == NULL,
-                                  error);
+  rc = cai_cli_theme_tools(&effective, state->tool_display, error);
+  if (rc == CAI_OK)
+    rc = cai_tool_display_set_color(state->tool_display,
+                                    state->interactive && !selected.ascii &&
+                                        getenv("NO_COLOR") == NULL,
+                                    error);
   if (rc != CAI_OK) {
     renderer->destroy(renderer);
     return rc;

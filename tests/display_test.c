@@ -329,11 +329,8 @@ static void patches(capture *c) {
   assert(strstr(c->bytes,
                 "\033[48;2;74;34;29m\033[97m\033[91m-\033[97mold\033[0m\n") !=
          NULL);
-  assert(
-      strstr(
-          c->bytes,
-          "\033[92m*\033[0m \033[0;36mEdited \033[1;96mdir/file.c\033[0m\n") !=
-      NULL);
+  assert(strstr(c->bytes, "\033[92m*\033[0m \033[0m\033[36mEdited "
+                          "\033[0;1m\033[96mdir/file.c\033[0m\n") != NULL);
   assert(strstr(c->bytes, "\n between0\n ⋮\n between3\n") != NULL);
   reset(c);
   assert(render(c, patch, sizeof(patch) - 1U, 4096U, 1, 0, 0) == CAI_OK);
@@ -434,6 +431,9 @@ static void palette_change(capture *c) {
         "palette command", 0, 0);
   event(display, CAI_AGENT_EVENT_TERMINAL_OUTPUT, "palette",
         "\033[32mone\n\xc3", 0, 0);
+  assert(cai_tool_display_set_palette(display, "\033[38;5;141m",
+                                      "\033[38;2;240;180;100m",
+                                      &error) == CAI_OK);
   assert(cai_tool_display_set_color(display, 0, &error) == CAI_OK);
   reset(c);
   event(display, CAI_AGENT_EVENT_TERMINAL_OUTPUT, "palette", "\xa5 second\n", 0,
@@ -445,9 +445,92 @@ static void palette_change(capture *c) {
         "three\nfour\nfive\nHIDDEN\n", 0, 0);
   assert(strstr(c->bytes, "palette command") != NULL &&
          strstr(c->bytes, "\033[92m*\033[0m") != NULL);
+  assert(strstr(c->bytes, "\033[0m\033[38;5;141mRan \033[0;1m"
+                          "\033[38;2;240;180;100mpalette command"
+                          "\033[0m\033[38;5;141m (0ms)\033[0m\n") != NULL);
   assert(strstr(c->bytes, "HIDDEN") == NULL); /* Preserve the preview budget. */
   assert(cai_tool_display_set_color(display, 2, &error) == CAI_ERR_INVALID);
   assert(cai_tool_display_set_color(NULL, 1, &error) == CAI_ERR_INVALID);
+  cai_tool_display_close(display);
+  cai_sink_close(sink);
+  cai_error_cleanup(&error);
+}
+
+static void palette_validation(capture *c) {
+  static const char *const valid[] = {"",
+                                      "\033[30m",
+                                      "\033[37m",
+                                      "\033[90m",
+                                      "\033[97m",
+                                      "\033[39m",
+                                      "\033[38;5;0m",
+                                      "\033[38;5;255m",
+                                      "\033[38;2;0;128;255m"};
+  static const char *const invalid[] = {
+      NULL,
+      "plain",
+      "\033[0m",
+      "\033[1;31m",
+      "\033[48;5;3m",
+      "\033[31mtext",
+      "\033[38;5;256m",
+      "\033[38;2;1;2m",
+      "\033[38;2;1;2;256m",
+      "\033[38;2;-1;2;3m",
+      "\033[31m\033[32m",
+      "\033]title\007",
+      "\033[38;5;99999999999999999999999999999m"};
+  cai_tool_display *display = NULL;
+  cai_tool_display_config config;
+  cai_sink_callbacks callbacks;
+  cai_sink *sink = NULL;
+  cai_error error;
+  char expected[192], owned[32] = "\033[38;5;123m";
+  size_t i;
+  memset(&callbacks, 0, sizeof(callbacks));
+  callbacks.write = write_capture;
+  callbacks.context = c;
+  memset(&config, 0, sizeof(config));
+  cai_error_init(&error);
+  assert(cai_sink_from_callbacks(&callbacks, &sink, &error) == CAI_OK);
+  config.sink = sink;
+  config.color = 1;
+  assert(cai_tool_display_new(&config, &display, &error) == CAI_OK);
+  for (i = 0U; i < sizeof(valid) / sizeof(valid[0]); i++) {
+    reset(c);
+    assert(cai_tool_display_set_palette(display, valid[i], valid[i], &error) ==
+           CAI_OK);
+    event(display, CAI_AGENT_EVENT_TOOL_CALL_COMPLETED, "palette", NULL,
+          CAI_AGENT_TOOL_ACTION_READ, 0);
+    snprintf(expected, sizeof(expected),
+             "\033[92m*\033[0m \033[0m%sRead "
+             "\033[0;1m%sfixture\033[0m\n",
+             valid[i], valid[i]);
+    assert(strstr(c->bytes, expected) != NULL);
+  }
+  assert(cai_tool_display_set_palette(display, owned, "\033[34m", &error) ==
+         CAI_OK);
+  memset(owned, 'x', sizeof(owned)); /* The renderer owns its copy. */
+  for (i = 0U; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+    reset(c);
+    assert(cai_tool_display_set_palette(display, invalid[i], "\033[31m",
+                                        &error) == CAI_ERR_INVALID);
+    assert(cai_tool_display_set_palette(display, "\033[31m", invalid[i],
+                                        &error) == CAI_ERR_INVALID);
+    event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED, "palette",
+          "command", 0, 0);
+    assert(strstr(c->bytes, "\033[90m*\033[0m \033[0m\033[38;5;123mRunning "
+                            "\033[0;1m\033[34mcommand\033[0m\n") != NULL);
+    event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED, "palette", NULL,
+          0, 0);
+  }
+  assert(cai_tool_display_set_palette(NULL, "", "", &error) == CAI_ERR_INVALID);
+  assert(cai_tool_display_set_color(display, 0, &error) == CAI_OK);
+  reset(c);
+  event(display, CAI_AGENT_EVENT_TOOL_CALL_COMPLETED, "plain", NULL,
+        CAI_AGENT_TOOL_ACTION_READ, 0);
+  assert(strstr(c->bytes, "* Read fixture\n") != NULL &&
+         strchr(c->bytes, '\033') == NULL);
   cai_tool_display_close(display);
   cai_sink_close(sink);
   cai_error_cleanup(&error);
@@ -473,7 +556,8 @@ static void commands(capture *c) {
         CAI_AGENT_TOOL_ACTION_EXECUTE, 0);
   event(d, CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED, "one", "printf args", 0,
         0);
-  assert(strstr(c->bytes, "\033[0;36mRunning \033[1;96mprintf args\033[0m") !=
+  assert(strstr(c->bytes,
+                "\033[0m\033[36mRunning \033[0;1m\033[96mprintf args\033[0m") !=
          NULL);
   event(d, CAI_AGENT_EVENT_TERMINAL_OUTPUT, "one", "1\n2", 0, 0);
   assert(strstr(c->bytes, "1\n2") != NULL); /* Visible before completion. */
@@ -482,8 +566,10 @@ static void commands(capture *c) {
         "\n3\n4\n5\nHIDDEN6\nHIDDEN7\n", 0, 0);
   event(d, CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED, "one", NULL, 0, 0);
   assert(strstr(c->bytes, "HIDDEN") == NULL);
-  assert(strstr(c->bytes, "\033[92m*\033[0m \033[0;36mRan \033[1;96mprintf args"
-                          "\033[0;36m (0ms)\033[0m\n") != NULL);
+  assert(
+      strstr(c->bytes,
+             "\033[92m*\033[0m \033[0m\033[36mRan \033[0;1m\033[96mprintf args"
+             "\033[0m\033[36m (0ms)\033[0m\n") != NULL);
   reset(c);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_STARTED, "two", NULL,
         CAI_AGENT_TOOL_ACTION_EXECUTE, 0);
@@ -492,9 +578,11 @@ static void commands(capture *c) {
         0, 0);
   event(d, CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED, "two", NULL, 0, 3);
   assert(strstr(c->bytes, "SIX\nSEVEN\n") != NULL);
-  assert(strstr(c->bytes,
-                "\033[91m*\033[0m \033[0;36mRan "
-                "\033[1;96mexit 3\033[0;36m (0ms)\033[0m\n  exit=3") != NULL);
+  assert(
+      strstr(c->bytes,
+             "\033[91m*\033[0m \033[0m\033[36mRan "
+             "\033[0;1m\033[96mexit 3\033[0m\033[36m (0ms)\033[0m\n  exit=3") !=
+      NULL);
   reset(c);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_STARTED, "quick", NULL,
         CAI_AGENT_TOOL_ACTION_EXECUTE, 0);
@@ -520,9 +608,12 @@ static void commands(capture *c) {
     e.terminal_signal = 15;
     e.terminal_output_truncated = 1;
     assert(cai_tool_display_event(d, &e, &error) == CAI_OK);
-    assert(strstr(c->bytes,
-                  "\033[91m*\033[0m \033[0;36mCancelled "
-                  "\033[1;96msignal command\033[0;36m (0ms)\033[0m\n") != NULL);
+    assert(
+        strstr(
+            c->bytes,
+            "\033[91m*\033[0m \033[0m\033[36mCancelled "
+            "\033[0;1m\033[96msignal command\033[0m\033[36m (0ms)\033[0m\n") !=
+        NULL);
     assert(strstr(c->bytes, "exit=-1 signal=15") != NULL);
     assert(strstr(c->bytes, "truncated by the tool") != NULL);
   }
@@ -541,50 +632,55 @@ static void commands(capture *c) {
         CAI_AGENT_TOOL_ACTION_MCP, 0);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_COMPLETED, "mcp", "MCP result",
         CAI_AGENT_TOOL_ACTION_MCP, 0);
-  assert(
-      strstr(c->bytes,
-             "*\033[0m \033[0;36mMCP \033[1;96mfixture\033[0m\nMCP result") !=
-      NULL);
+  assert(strstr(c->bytes,
+                "*\033[0m \033[0m\033[36mMCP "
+                "\033[0;1m\033[96mfixture\033[0m\nMCP result") != NULL);
   reset(c);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_STARTED, "mcperror", NULL,
         CAI_AGENT_TOOL_ACTION_MCP, 0);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_COMPLETED, "mcperror",
         "{\"content\":[{\"text\":\"failed\"}],\"isError\":true}",
         CAI_AGENT_TOOL_ACTION_MCP, 0);
-  assert(strstr(c->bytes,
-                "\033[91m*\033[0m \033[0;36mMCP failed \033[1;96mfixture") !=
-         NULL);
+  assert(strstr(c->bytes, "\033[91m*\033[0m \033[0m\033[36mMCP failed "
+                          "\033[0;1m\033[96mfixture") != NULL);
   reset(c);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_STARTED, "mcpsuccess", NULL,
         CAI_AGENT_TOOL_ACTION_MCP, 0);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_COMPLETED, "mcpsuccess",
         "{\"content\":[{\"text\":\"isError: true\"}],\"isError\":false}",
         CAI_AGENT_TOOL_ACTION_MCP, 0);
-  assert(strstr(c->bytes, "\033[92m*\033[0m \033[0;36mMCP \033[1;96mfixture") !=
-         NULL);
+  assert(
+      strstr(c->bytes,
+             "\033[92m*\033[0m \033[0m\033[36mMCP \033[0;1m\033[96mfixture") !=
+      NULL);
   reset(c);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_STARTED, "chrome", NULL,
         CAI_AGENT_TOOL_ACTION_CHROME, 0);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_COMPLETED, "chrome", "page snapshot",
         CAI_AGENT_TOOL_ACTION_CHROME, 0);
-  assert(strstr(c->bytes,
-                "\033[92m*\033[0m \033[0;36mUsed Chrome \033[1;96mfixture") !=
-         NULL);
+  assert(strstr(c->bytes, "\033[92m*\033[0m \033[0m\033[36mUsed Chrome "
+                          "\033[0;1m\033[96mfixture") != NULL);
   reset(c);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_STARTED, "chromeerror", NULL,
         CAI_AGENT_TOOL_ACTION_CHROME, 0);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_FAILED, "chromeerror", "Debugger detached",
         CAI_AGENT_TOOL_ACTION_CHROME, 0);
-  assert(strstr(c->bytes,
-                "\033[91m*\033[0m \033[0;36mFailed \033[1;96mfixture") != NULL);
+  assert(
+      strstr(
+          c->bytes,
+          "\033[91m*\033[0m \033[0m\033[36mFailed \033[0;1m\033[96mfixture") !=
+      NULL);
   assert(strstr(c->bytes, "Debugger detached") != NULL);
   reset(c);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_STARTED, "badpatch", NULL,
         CAI_AGENT_TOOL_ACTION_PATCH, 0);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_FAILED, "badpatch", "context mismatch",
         CAI_AGENT_TOOL_ACTION_PATCH, 0);
-  assert(strstr(c->bytes,
-                "\033[91m*\033[0m \033[0;36mFailed \033[1;96mfixture") != NULL);
+  assert(
+      strstr(
+          c->bytes,
+          "\033[91m*\033[0m \033[0m\033[36mFailed \033[0;1m\033[96mfixture") !=
+      NULL);
   assert(strstr(c->bytes, "Edited") == NULL);
   event(d, CAI_AGENT_EVENT_TOOL_CALL_STARTED, "cancel", NULL,
         CAI_AGENT_TOOL_ACTION_EXECUTE, 0);
@@ -633,8 +729,8 @@ static void commands(capture *c) {
     e.tool_path = "two.c";
     e.runtime_session_id = "child-two";
     assert(cai_tool_display_event(d, &e, &error) == CAI_OK);
-    assert(strstr(c->bytes, "Read \033[1;96mone.c") != NULL &&
-           strstr(c->bytes, "Read \033[1;96mtwo.c") != NULL);
+    assert(strstr(c->bytes, "Read \033[0;1m\033[96mone.c") != NULL &&
+           strstr(c->bytes, "Read \033[0;1m\033[96mtwo.c") != NULL);
   }
   assert(cai_tool_display_set_mode(d, 999, &error) == CAI_ERR_INVALID);
   cai_error_cleanup(&error);
@@ -929,11 +1025,12 @@ static void command_durations(capture *c) {
             e.terminal_has_exit_code = 1;
             assert(cai_tool_display_event(display, &e, &error) == CAI_OK);
           }
-          snprintf(
-              expected, sizeof(expected),
-              color ? "\033[0;36m%s \033[1;96mcommand\033[0;36m (%s)\033[0m\n"
-                    : "%s command (%s)\n",
-              cancelled ? "Cancelled" : "Ran", elapsed[i]);
+          snprintf(expected, sizeof(expected),
+                   color
+                       ? "\033[0m\033[36m%s "
+                         "\033[0;1m\033[96mcommand\033[0m\033[36m (%s)\033[0m\n"
+                       : "%s command (%s)\n",
+                   cancelled ? "Cancelled" : "Ran", elapsed[i]);
           assert(strstr(c->bytes, expected) != NULL);
           assert(strstr(c->bytes, " for ") == NULL);
           assert(strstr(c->bytes, " after ") == NULL);
@@ -955,6 +1052,7 @@ int main(void) {
   numbered_patches(&c);
   patches(&c);
   palette_change(&c);
+  palette_validation(&c);
   commands(&c);
   command_durations(&c);
   command_controls();

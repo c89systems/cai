@@ -2701,6 +2701,7 @@ do
   local display, ev
   display = assert_ok(cai.tool_display({}, function(chunk)
     assert_not_ok(display:close())
+    assert(not pcall(display.set_palette, display, "", ""))
     ev.data = nil
     ev.tool_path = nil
     collectgarbage("collect")
@@ -2768,6 +2769,7 @@ do
   assert_throws(function() display:set_color(1) end)
   assert_ok(display:close())
   assert_throws(function() display:event({}) end)
+  assert_throws(function() display:set_palette("", "") end)
 end
 
 -- Smith browser registration is lazy: an unavailable browser cannot prevent

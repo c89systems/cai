@@ -5,6 +5,21 @@ needed to close each issue. An upstream cause must be reproduced independently
 before it is attributed to a dependency. Keep resolved entries with their fix
 commit and verification evidence.
 
+## BUG-069: Tool activity ignores the effective Markdown theme
+
+- **Status:** fixed.
+- **Cause:** native tool headings and slash-command text used fixed cyan/orange
+  styling, so changing libmdf themes or review offsets affected only Markdown.
+- **Resolution:** libmdf 0.18.0's public palette supplies H2 foreground for bold
+  command/path/tool labels and slash-command text, and H3 foreground for normal
+  activity verbs/durations. Gray/green/red status symbols and diff colors stay
+  independent. A dependency-free C/Lua display setter copies the foregrounds
+  without resetting active call or decoder state. The existing public display
+  config layout is unchanged.
+- **Verification:** every built-in theme, live/replay and review restoration;
+  palette validation, copied ownership, empty slots, partial UTF-8, preview
+  preservation, C/Lua parity, fixed status colors and ASCII/NO_COLOR behavior.
+
 ## BUG-068: Review startup is invisible among parent tool output
 
 - **Status:** fixed.

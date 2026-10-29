@@ -17,9 +17,10 @@ typedef enum cai_tool_output_mode {
 typedef struct cai_tool_display_config {
   /** Borrowed output sink. The renderer never closes it. */
   cai_sink *sink;
-  /** Enable patch backgrounds and bright success/failure markers. Activity
-   * verbs use normal cyan; command/path details use bold bright cyan. Command
-   * output retains recognized ANSI SGR colors/styles only when enabled. */
+  /** Enable patch backgrounds and gray/green/red activity markers. Activity
+   * verbs use normal cyan and labels bold bright cyan until set_palette.
+   * Command output retains recognized ANSI SGR colors/styles only when enabled.
+   */
   int color;
   /** Default captured by the next tool call; compact is the zero default. */
   int mode;
@@ -46,6 +47,18 @@ int cai_tool_display_set_mode(cai_tool_display *display, int mode,
  * split UTF-8/control decoding state are retained. enabled must be 0 or 1. */
 int cai_tool_display_set_color(cai_tool_display *display, int enabled,
                                cai_error *error);
+/** Copy activity and label foregrounds between owner-thread events, without
+ * losing active calls or split output decoding. Do not call from the sink.
+ * Each is empty (terminal default), or
+ * one foreground-only SGR, at most 31 bytes: 30..37/90..97/39, 38;5;N or
+ * 38;2;R;G;B, with components 0..255. Invalid input leaves both unchanged.
+ * Activity/durations use normal weight; labels use bold. Marker and diff colors
+ * are independent. Color-off suppresses every style. Strings are borrowed only
+ * for this call. This API does not depend on a theme or Markdown library. */
+int cai_tool_display_set_palette(cai_tool_display *display,
+                                 const char *activity_foreground,
+                                 const char *label_foreground,
+                                 cai_error *error);
 /** Set terminal columns for numbered, wrapped patch rows (32..4096).
  * Zero selects the default unwrapped patch format. Colored changed rows fill
  * the specified width; continuations align below the content. Width changes

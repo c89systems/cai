@@ -70,6 +70,7 @@ struct cai_tool_display {
   size_t utf8_expected;
   unsigned int breaks;
   int ansi;
+  char activity_foreground[32], label_foreground[32];
 };
 
 typedef struct display_mcp_result {
@@ -246,13 +247,21 @@ static void display_command_duration(char out[80],
   else
     snprintf(out, 80U, " (%llus)", seconds);
 }
+static int display_heading_style(cai_tool_display *d, int label,
+                                 cai_error *error) {
+  char style[40];
+  snprintf(style, sizeof(style), "%s%s", label ? "\033[0;1m" : "\033[0m",
+           label ? d->label_foreground : d->activity_foreground);
+  return display_text(d, style, error);
+}
 static int display_marker_suffix(cai_tool_display *d, int result,
                                  const char *verb, const char *text, size_t n,
                                  const char *suffix, cai_error *error) {
   int rc;
-  const char *star = !d->config.color || result < 0 ? "* "
-                     : result                       ? "\033[92m*\033[0m "
-                                                    : "\033[91m*\033[0m ";
+  const char *star = !d->config.color ? "* "
+                     : result < 0     ? "\033[90m*\033[0m "
+                     : result         ? "\033[92m*\033[0m "
+                                      : "\033[91m*\033[0m ";
   rc = display_flush_utf8(d, error);
   if (rc == CAI_OK && d->config.begin_block != NULL)
     rc = d->config.begin_block(d->config.begin_block_context, error);
@@ -263,19 +272,19 @@ static int display_marker_suffix(cai_tool_display *d, int result,
   if (rc == CAI_OK)
     rc = display_text(d, star, error);
   if (rc == CAI_OK && d->config.color)
-    rc = display_text(d, "\033[0;36m", error);
+    rc = display_heading_style(d, 0, error);
   if (rc == CAI_OK)
     rc = display_safe(d, verb, strlen(verb), error);
   if (rc == CAI_OK && n != 0U)
     rc = display_text(d, " ", error);
   if (rc == CAI_OK && n != 0U && d->config.color)
-    rc = display_text(d, "\033[1;96m", error);
+    rc = display_heading_style(d, 1, error);
   if (rc == CAI_OK)
     rc = display_safe(d, text, n, error);
   if (rc == CAI_OK)
     rc = display_flush_utf8(d, error);
   if (rc == CAI_OK && suffix != NULL && d->config.color)
-    rc = display_text(d, "\033[0;36m", error);
+    rc = display_heading_style(d, 0, error);
   if (rc == CAI_OK && suffix != NULL)
     rc = display_text(d, suffix, error);
   if (rc == CAI_OK && d->config.color)
@@ -1174,6 +1183,8 @@ int cai_tool_display_new(const cai_tool_display_config *config,
     return cai_set_error(error, CAI_ERR_NOMEM, "cannot allocate tool renderer");
   memset(d, 0, sizeof(*d));
   d->config = *config;
+  strcpy(d->activity_foreground, "\033[36m");
+  strcpy(d->label_foreground, "\033[96m");
   d->breaks = 2U;
   if (d->config.preview_lines == 0U)
     d->config.preview_lines = 5U;
@@ -1194,6 +1205,54 @@ int cai_tool_display_set_color(cai_tool_display *d, int enabled,
     return cai_set_error(error, CAI_ERR_INVALID,
                          "tool display color must be zero or one");
   d->config.color = enabled;
+  return CAI_OK;
+}
+static int display_foreground_valid(const char *style) {
+  unsigned int parts[5], count = 0U, value;
+  size_t length;
+  const char *p;
+  if (style == NULL)
+    return 0;
+  for (length = 0U; length < 32U && style[length] != '\0'; length++)
+    ;
+  if (length == 0U)
+    return 1;
+  if (length == 32U || length < 5U || style[0] != '\033' || style[1] != '[')
+    return 0;
+  p = style + 2U;
+  for (;;) {
+    if (count == 5U || *p < '0' || *p > '9')
+      return 0;
+    value = 0U;
+    do {
+      value = value * 10U + (unsigned int)(*p++ - '0');
+      if (value > 255U)
+        return 0;
+    } while (*p >= '0' && *p <= '9');
+    parts[count++] = value;
+    if (*p != ';')
+      break;
+    p++;
+  }
+  if (*p != 'm' || p[1] != '\0')
+    return 0;
+  return (count == 1U &&
+          ((parts[0] >= 30U && parts[0] <= 37U) ||
+           (parts[0] >= 90U && parts[0] <= 97U) || parts[0] == 39U)) ||
+         (count == 3U && parts[0] == 38U && parts[1] == 5U) ||
+         (count == 5U && parts[0] == 38U && parts[1] == 2U);
+}
+int cai_tool_display_set_palette(cai_tool_display *d,
+                                 const char *activity_foreground,
+                                 const char *label_foreground,
+                                 cai_error *error) {
+  if (d == NULL || !display_foreground_valid(activity_foreground) ||
+      !display_foreground_valid(label_foreground))
+    return cai_set_error(
+        error, CAI_ERR_INVALID,
+        "tool palette requires two foreground-only SGRs of at most 31 bytes");
+  strcpy(d->activity_foreground, activity_foreground);
+  strcpy(d->label_foreground, label_foreground);
   return CAI_OK;
 }
 int cai_tool_display_event(cai_tool_display *d,

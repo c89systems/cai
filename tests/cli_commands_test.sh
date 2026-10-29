@@ -24,10 +24,10 @@ for colors in yes no; do
     esac
     tail -c +$((offset+1)) "$term/raw" >"$root/command"
     if [[ "$colors" == yes ]]; then
-      contains "$root/command" $'\033[0;92m$\033[0m \033[38;2;215;160;95m'
+      contains "$root/command" $'\033[0;92m$\033[0m \033[0;1m\033[34m'
     else
       absent "$root/command" $'\033[0;92m$'
-      absent "$root/command" $'\033[38;2;215;160;95m'
+      absent "$root/command" $'\033[0;1m\033[34m'
     fi
     absent "$root/command" $'\033[3m'
   done
@@ -56,7 +56,7 @@ for colors in yes no; do
     send "$command\r"; expect "\$ $command"; expect '* ERROR:'
     tail -c +$((offset+1)) "$term/raw" >"$root/command"
     if [[ "$colors" == yes ]]; then
-      contains "$root/command" $'\033[0;91m$\033[0m \033[38;2;215;160;95m'
+      contains "$root/command" $'\033[0;91m$\033[0m \033[0;1m\033[34m'
     else
       absent "$root/command" $'\033[0;91m$'
     fi

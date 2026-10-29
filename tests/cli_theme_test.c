@@ -61,6 +61,51 @@ static void test_offsets(void) {
   free(names);
 }
 
+static void test_tool_palettes(capture *out, cai_sink *sink, cai_error *error) {
+  cai_tool_display_config config;
+  cai_tool_display *display = NULL;
+  cai_agent_runtime_event event;
+  cai_cli_theme theme;
+  mdf_theme_palette palette;
+  size_t i;
+  char expected[256];
+  memset(&config, 0, sizeof(config));
+  config.sink = sink;
+  config.color = 1;
+  assert(cai_tool_display_new(&config, &display, error) == CAI_OK);
+  assert(cai_cli_theme_parse("default", &theme) == NULL);
+  for (i = 0U; i < mdf_theme_count(); i++) {
+    theme.markdown = mdf_theme_name(i);
+    assert(mdf_theme_get_palette(theme.markdown, &palette) == MDF_OK);
+    assert(cai_cli_theme_tools(&theme, display, error) == CAI_OK);
+    out->length = 0U;
+    out->bytes[0] = '\0';
+    memset(&event, 0, sizeof(event));
+    event.type = CAI_AGENT_EVENT_TOOL_CALL_COMPLETED;
+    event.tool_action = CAI_AGENT_TOOL_ACTION_READ;
+    event.tool_name = "read_file";
+    event.tool_path = "file.txt";
+    event.tool_call_id = "palette";
+    event.runtime_session_id = "session";
+    assert(cai_tool_display_event(display, &event, error) == CAI_OK);
+    snprintf(expected, sizeof(expected),
+             "\033[0m%sRead \033[0;1m%sfile.txt\033[0m\n", palette.heading[2],
+             palette.heading[1]);
+    assert(strstr(out->bytes, expected) != NULL);
+    event.terminal_duration_ms = 23U;
+    assert(cai_tool_display_replay_begin(display, &event, "Ran", "command", 1,
+                                         error) == CAI_OK);
+    snprintf(expected, sizeof(expected),
+             "\033[0m%sRan \033[0;1m%scommand\033[0m%s (23ms)\033[0m\n",
+             palette.heading[2], palette.heading[1], palette.heading[2]);
+    assert(strstr(out->bytes, expected) != NULL);
+    event.type = CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED;
+    event.terminal_has_exit_code = 1;
+    assert(cai_tool_display_event(display, &event, error) == CAI_OK);
+  }
+  cai_tool_display_close(display);
+}
+
 int main(void) {
   static const struct {
     const char *alias, *markdown;
@@ -161,6 +206,8 @@ int main(void) {
   out.fail = 1;
   assert(cai_cli_theme_list(sink, &error) == CAI_ERR_TRANSPORT);
   assert(cai_cli_theme_describe(&theme, sink, &error) == CAI_ERR_TRANSPORT);
+  out.fail = 0;
+  test_tool_palettes(&out, sink, &error);
   cai_sink_close(sink);
   cai_error_cleanup(&error);
   return 0;

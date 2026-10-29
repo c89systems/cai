@@ -2,6 +2,7 @@
 #define CAI_CLI_THEME_H
 
 #include <cai/cai.h>
+#include <cai/display.h>
 #include <libmdf/mdf.h>
 #include <softline/softline.h>
 
@@ -16,6 +17,9 @@ typedef struct cai_cli_theme {
 const char *cai_cli_theme_parse(const char *text, cai_cli_theme *out);
 const char *cai_cli_theme_prompt_name(const cai_cli_theme *theme);
 void cai_cli_theme_markdown(const cai_cli_theme *theme, mdf_options *options);
+/* Public libmdf palette: H3 activity, H2 labels; display owns copied colors. */
+int cai_cli_theme_tools(const cai_cli_theme *theme, cai_tool_display *display,
+                        cai_error *error);
 /* Rotate in libmdf's published order, excluding boring; preserve prompt and
  * ANSI policy. Signed offsets are reduced before addition (including MIN). */
 void cai_cli_theme_offset(const cai_cli_theme *base, long long offset,

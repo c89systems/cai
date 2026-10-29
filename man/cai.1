@@ -988,8 +988,11 @@ The gutter shows original file line numbers for removals and result file line
 numbers for additions and context. Wrapped continuations align below the
 content and retain the background. Tabs expand to spaces; UTF-8 glyphs wrap
 by terminal cell width. Terminals narrower than 32 columns omit the gutter.
-Unchanged rows have no background. Activity headings are bold bright cyan, independently of the
-bright green/red success/failure star. No file or Git comparison is performed.
+Unchanged rows have no background. Activity and duration use the effective
+libmdf theme's H3 foreground at normal weight; command/path labels use H2
+foreground in bold. Status symbols stay gray/green/red for neutral/success/failure.
+Theme changes and reviewer offsets apply to live and replayed headings.
+Patch diff backgrounds remain independent. No file or Git comparison is performed.
 NO_COLOR disables colors.
 .TP
 .B /status

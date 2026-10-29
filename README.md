@@ -143,7 +143,7 @@ runtime, review, storage, and presentation contracts.
 The musl SDK presets build the terminal coding agent as a statically linked
 Linux x86_64, aarch64 or armhf executable. The `cai` convenience preset selects
 the same x86_64 musl producer. It adds pinned softline 0.15.0 for the prompt and
-libmdf 0.17.0 for streamed Markdown rendering, and liblockdc 0.24.0 with
+libmdf 0.18.0 for streamed Markdown rendering and its public theme palette, and liblockdc 0.24.0 with
 liblql 0.4.0 for durable storage. It uses libpslog 0.12.0 for logging.
 The native dependency SDK is cpkt 0.6.1 from
 [c89systems/cpkt](https://github.com/c89systems/cpkt). CAI consumes liblockdc's
@@ -612,7 +612,8 @@ Review calls print a start receipt before preparation, then a completion or
 failure receipt. Both model-invoked reviews and `/review` show standalone
 **Review started** and **Review finished** Markdown titles, including when
 colors are disabled. Review output uses the next libmdf theme by default and restores
-the parent theme when it ends. These offsets affect Markdown only:
+the parent theme when it ends. These offsets affect Markdown and tool headings;
+Softline's theme stays unchanged:
 
 | Context | INI setting | Flag and TUI command | Environment | Default |
 | --- | --- | --- | --- | --- |
@@ -881,7 +882,8 @@ cache; it makes no additional startup request. Explicit `/model` and
 `/reasoning` listings refresh discovery using the configured client request
 timeout. A failed refresh retains the last catalog when available; repeat the
 command to retry immediately. Accepted commands have a green `$`, rejected
-commands a red `$`, and literal, non-italic command text is brownish orange.
+commands a red `$`. Literal, non-italic command text uses the effective theme's
+H2 foreground in bold.
 Interactive warnings and errors
 use a red `*` with `WARN:` or `ERROR:` and readable details, with one blank
 line between feed blocks. Complete diagnostic records stay in the session log.
@@ -1043,8 +1045,9 @@ conversation. Previously unrecorded child
 output cannot be recreated by this change.
 
 Live command completions use the same elapsed-time heading, with seconds,
-minutes or hours as needed. The activity and duration use normal cyan; the
-command remains bright cyan. Fast commands may omit the live completion row,
+minutes or hours as needed. Activity and duration use the effective theme's
+H3 foreground at normal weight; the command uses H2 foreground in bold.
+Fast commands may omit the live completion row,
 but still have a saved completion and output on replay.
 
 Execution records and subagent envelopes never enter model context, recovery actions or compaction
@@ -1350,8 +1353,8 @@ libmdf as literal text. Diagnostic stars remain red, continuation rows align
 under the message, and paths and punctuation retain their original spelling.
 Notices keep one blank row before and after; `NO_COLOR` disables star colors.
 
-Interactive tool activity uses bright green/red `*` receipts for success/failure,
-with normal cyan activity verbs, bold bright cyan command/path details, and
+Interactive tool activity uses gray/green/red `*` receipts for neutral/success/failure,
+with normal-weight H3 activity verbs and durations, bold H2 command/path details, and
 separate MCP and Chrome receipts.
 The heading color is independent of the green/red success/failure star.
 Non-command result bodies use the themed Markdown feed. Tool failures are
@@ -1422,6 +1425,14 @@ owner-thread runtime events with `cai_tool_display_event`, then close it with
 `cai_tool_display_set_color` (Lua `display:set_color`) changes future styling
 between events without losing active command identity, preview limits or
 split UTF-8/control decoding state.
+`cai_tool_display_set_palette(display, activity_foreground, label_foreground,
+&error)` (Lua `display:set_palette(activity_foreground, label_foreground)`)
+copies two bounded foreground-only SGRs; empty strings select terminal-default
+foreground. It preserves active calls and rejects attributes, backgrounds and
+non-color controls. Standalone displays default to cyan activity and bright
+cyan labels. libcai_app obtains H3/H2 from libmdf's public palette for the
+effective theme, including live changes and parent/reviewer offsets. It keeps
+status symbols gray/green/red and patch diff colors independent of that palette.
 Hosts with structured tool presenters can use `cai_tool_display_summary` instead
 of the generic completion event, then feed details to their Markdown renderer.
 It emits a colored success/failure marker with escaped plain-text labels and

@@ -44,6 +44,7 @@ if [[ "$scope" == plain ]]; then
   exit 0
 fi
 export CAI_TEST_STEER_WORKER=1
+printf 'REVIEW PALETTE FILE\n' >"$work/review.txt"
 terminal_start -N -t dracula
 send '/review-theme-offset\r'; expect 'Review theme offset: 1.'
 send '/subagent-theme-offset\r'; expect 'Subagent theme offset: 0.'
@@ -51,13 +52,22 @@ palette parent
 [[ -s "$root/parent.palette" ]]
 plan "$(jq -nc --argjson chat "$chat" --arg report "$report" '{chat:$chat,plan:[
  {tool:"run_review",arguments:{target:"custom",instructions:"Inspect the fixture"}},
+ {tool:"read_file",arguments:{path:"review.txt"}},
  {pause:true,pause_text:"",text:$report},"**REVIEW TOOL DONE** with `parent code`."]}')"
-expected_requests=$(( $(requests)+2 ))
+expected_requests=$(( $(requests)+3 ))
 send 'review once\r'; expect '* Starting run_review'; expect 'Review started'; wait_for ready
 absent "$term/text" '* Completed run_review'
+# Softline can redraw between receipt writes and replay the current SGR.
+# Assert the style attached to each visible span, independent of write chunks.
+grep -Eq $'\033\\[(0;)?90m\\*' "$term/raw"
+grep -Eq $'\033\\[(0;)?38;5;141mStarting' "$term/raw"
+grep -Eq $'\033\\[(0;)?1;38;5;219mrun_review' "$term/raw"
+grep -Eq $'\033\\[(0;)?38;5;108mRead' "$term/raw"
+grep -Eq $'\033\\[(0;)?1;38;5;143mreview.txt' "$term/raw"
 palette reviewer
 if cmp -s "$root/parent.palette" "$root/reviewer.palette"; then fail 'review kept parent palette'; fi
 release; expect 'REVIEW TOOL DONE'; expect 'Worked for'
+grep -Eq $'\033\\[(0;)?38;5;141mCompleted' "$term/raw"
 palette restored
 cmp "$root/parent.palette" "$root/restored.palette"
 start=$(grep -nFm1 '* Starting run_review' "$term/text" | cut -d: -f1)
@@ -135,6 +145,8 @@ before=$(requests)
 terminal_start --resume "$id" -t dracula --replay-turns -1
 expect 'Conversation resumed.'
 contains "$term/text" 'Review subagent'
+grep -Eq $'\033\\[(0;)?38;5;108mRead' "$term/raw"
+grep -Eq $'\033\\[(0;)?1;38;5;143mreview.txt' "$term/raw"
 [[ $(grep -c '^  Review started$' "$term/text") == 4 ]]
 [[ $(grep -c '^  Review finished$' "$term/text") == 4 ]]
 LC_ALL=C grep -oE '38;5;[0-9]+' "$term/raw" | LC_ALL=C sort -u >"$root/replay.palette"

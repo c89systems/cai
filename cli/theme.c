@@ -75,6 +75,22 @@ void cai_cli_theme_markdown(const cai_cli_theme *theme, mdf_options *options) {
     options->ansi_mode = MDF_ANSI_OFF;
 }
 
+int cai_cli_theme_tools(const cai_cli_theme *theme, cai_tool_display *display,
+                        cai_error *error) {
+  mdf_theme_palette palette;
+  if (theme == NULL ||
+      mdf_theme_get_palette(theme->markdown, &palette) != MDF_OK) {
+    if (error != NULL) {
+      cai_error_cleanup(error);
+      error->code = CAI_ERR_INVALID;
+      error->message = strdup("cannot resolve libmdf tool palette");
+    }
+    return CAI_ERR_INVALID;
+  }
+  return cai_tool_display_set_palette(display, palette.heading[2],
+                                      palette.heading[1], error);
+}
+
 void cai_cli_theme_offset(const cai_cli_theme *base, long long offset,
                           cai_cli_theme *out) {
   size_t i, count = 0U, index = 0U, current = 0U;

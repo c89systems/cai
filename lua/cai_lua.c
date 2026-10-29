@@ -12135,6 +12135,23 @@ static int cai_lua_display_set_width(lua_State *L) {
   return cai_lua_bool_result(
       L, cai_tool_display_set_width(self->ptr, (size_t)width, &error), &error);
 }
+static int cai_lua_display_set_palette(lua_State *L) {
+  cai_lua_display *self = luaL_checkudata(L, 1, "cai.tool_display");
+  cai_error error;
+  size_t activity_length, label_length;
+  const char *activity = luaL_checklstring(L, 2, &activity_length);
+  const char *label = luaL_checklstring(L, 3, &label_length);
+  luaL_argcheck(L, self->ptr != NULL, 1, "closed tool display");
+  luaL_argcheck(L, !self->active, 1, "tool display is in an active callback");
+  luaL_argcheck(L, memchr(activity, '\0', activity_length) == NULL, 2,
+                "foreground contains NUL");
+  luaL_argcheck(L, memchr(label, '\0', label_length) == NULL, 3,
+                "foreground contains NUL");
+  cai_error_init(&error);
+  return cai_lua_bool_result(
+      L, cai_tool_display_set_palette(self->ptr, activity, label, &error),
+      &error);
+}
 static lua_Integer cai_lua_display_integer(lua_State *L, int index,
                                            const char *key,
                                            lua_Integer fallback) {
@@ -12272,6 +12289,7 @@ static const luaL_Reg cai_lua_display_methods[] = {
     {"replay_begin", cai_lua_display_replay_begin},
     {"set_mode", cai_lua_display_set_mode},
     {"set_color", cai_lua_display_set_color},
+    {"set_palette", cai_lua_display_set_palette},
     {"set_width", cai_lua_display_set_width},
     {"close", cai_lua_display_close},
     {NULL, NULL}};

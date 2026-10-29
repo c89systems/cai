@@ -252,7 +252,7 @@ lists both libraries' themes before configuration, authentication or storage
 startup. See the [pairing table](../README.md) for aliases. `plain:ascii`
 disables Markdown ANSI styling while preserving UTF-8. `NO_COLOR` overrides
 the selection with the plain prompt and escape-free Markdown. Themes apply
-to the Markdown introduction and conversation feed; raw banners stay verbatim
+to the Markdown introduction, conversation feed and tool headings; raw banners stay verbatim
 and logger configuration remains independent.
 The same TUI provides `/theme` to show the active pair and both libraries'
 themes, and `/theme NAME` or `/theme SOFTLINE:LIBMDF` to change the selection.
@@ -272,6 +272,15 @@ uses libmdf's theme order with `boring` excluded; offsets are reduced modulo
 that count before addition. ASCII/NO_COLOR and Softline's theme are unchanged.
 Live and replayed review content uses the selected child theme, restoring the
 parent on completion, failure or cancellation.
+Tool activity verbs and durations use the effective palette's H3 foreground
+with normal weight; commands, paths, tool labels and slash-command text use
+H2 foreground in bold. Neutral/success/failure symbols stay gray/green/red.
+The application copies foregrounds from libmdf 0.18.0's public palette into
+libcai's dependency-free `cai_tool_display_set_palette` API (Lua
+`display:set_palette(activity_foreground, label_foreground)`). Palette changes
+preserve active call identity, output limits and partial UTF-8/SGR decoding.
+ASCII/NO_COLOR suppresses styles. Raw subprocess SGR and patch diff backgrounds
+retain their existing independent treatment.
 
 C hosts pass these keys in `cai_app_setting`; Lua uses, for example,
 `settings = {ui = {theme_offset = -300}, review = {theme_offset = 1}}`.
