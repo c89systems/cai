@@ -118,6 +118,7 @@ void cai_cli_pouch_begin_use(cai_cli_pouch *pouch) {
   pouch->capture_session = 1;
 }
 void cai_cli_pouch_end_use(cai_cli_pouch *pouch) {
+  journal_contexts_close(pouch);
   session_guard_close(pouch->use_guard);
   pouch->use_guard = NULL;
   pouch->capture_session = 0;

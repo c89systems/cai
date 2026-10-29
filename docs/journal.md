@@ -91,11 +91,31 @@ adoption of the stored mode. Remote clients receive no local compression setting
 
 Journal appends atomically renew whole-collection inactivity retention through
 the native append request. There is no second collection-metadata write per
-event, and identical retries do not extend either the collection or session
-metadata lifetime. Small generated records retain liblockdc's pull-append fast
+event, and identical retries do not extend the collection deadline. Conversation
+lookup metadata has no independent expiry: the collection owns the lifecycle.
+Listing removes stale lookup records and associated prompt recall once the
+backing collection is gone, while native use guards protect open conversations.
+Small generated records retain liblockdc's pull-append fast
 path; the new push writer's segment-per-commit cost is unnecessary here.
 The configured mode must match the root manifest. This cutover does not migrate
 old snapshot-backed stores; use a new root.
+
+Append receivers stay open for the application conversation and its children.
+Steady-state event appends do not acquire, load, renew or release a state-object
+lease. First-prompt publication and other logical metadata changes still use
+short transactions, with public committed reads available throughout.
+
+Each native metadata transaction also holds a private, close-on-exec file lock
+under the same Pouch root. This serializes participating CAI writers across
+processes; process death releases the lock immediately. After acquiring that
+lock, a replacement can recover an abandoned lease through public SDK describe
+and fenced rollback/release operations, then acquire normally. It does not wait
+for the lease TTL or guess process liveness from a PID. Live guard holders and
+foreign logical owners are not reclaimed. Native SDK transaction recovery
+preserves committed data and discards uncommitted staging.
+The guard files contain no session data or lease credentials and remain stable
+to prevent lock-inode replacement races. Writers of application-owned metadata
+must participate in this protocol; remote state retains server lease semantics.
 
 Portable JSONL export excludes trimmed entries. It streams the visible
 observation events and then one initialization commit for the retained

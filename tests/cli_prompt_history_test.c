@@ -175,7 +175,7 @@ static void retention_test(cai_cli_pouch *pouch, cai_error *error) {
   time_t before = time(NULL);
   lc_error_init(&local);
   save_session(pouch, "retained", error);
-  session_deadline(pouch, "retained", 30L * 86400L, before);
+  session_deadline(pouch, "retained", 0L, before);
   assert(open_history_collection(pouch, "retained", "events", 0, 0, &collection,
                                  error) == CAI_OK);
   assert(collection->describe(collection, &info, &local) == LC_OK);
@@ -192,20 +192,17 @@ static void retention_test(cai_cli_pouch *pouch, cai_error *error) {
                                    error) == CAI_OK);
   assert(collection->describe(collection, &info, &local) == LC_OK);
   assert(info.retention_expires_at_unix >= before + 30L * 86400L);
-  /* Identical retries preserve both retention deadlines. */
+  /* Identical retries preserve the owner's deadline. Lookups have no
+   * independent inactivity clock; their collection decides availability. */
   assert(collection_retain(collection, 1L, &local) == LC_OK);
   assert(collection->describe(collection, &info, &local) == LC_OK);
   {
     lc_unix_seconds deadline = info.retention_expires_at_unix;
-    assert(acquire(pouch, "retained", &removed, error) == CAI_OK);
-    assert(session_retain(removed, 1L, &local) == LC_OK);
-    assert(release(removed, CAI_OK, error) == CAI_OK);
-    removed = NULL;
     assert(pouch->store.append_event(pouch, "/workspace", "retained", &event,
                                      error) == CAI_OK);
     assert(collection->describe(collection, &info, &local) == LC_OK);
     assert(info.retention_expires_at_unix == deadline);
-    session_deadline(pouch, "retained", 1L, before);
+    session_deadline(pouch, "retained", 0L, before);
   }
   lc_collection_read_opts_init(&options);
   lc_collection_read_res_init(&result);
@@ -231,7 +228,7 @@ static void retention_test(cai_cli_pouch *pouch, cai_error *error) {
   assert(collection->describe(collection, &info, &local) == LC_OK);
   assert(info.retention_expires_at_unix >= before + 7L * 86400L &&
          info.retention_expires_at_unix <= time(NULL) + 7L * 86400L);
-  /* Imports stream with no metadata lease; renew that at final publication. */
+  /* Imports renew their owner in the append, without a metadata lease. */
   memset(&imported, 0, sizeof(imported));
   strcpy(imported.record_type, "event");
   imported.sequence = 5U;
@@ -243,7 +240,7 @@ static void retention_test(cai_cli_pouch *pouch, cai_error *error) {
   real_metadata = collection->metadata;
   metadata_calls = 0;
   collection->metadata = reject_metadata;
-  assert(journal_append_source(pouch, NULL, &metadata, collection,
+  assert(journal_append_source(pouch, &metadata, collection,
                                "event-00000000000000000005", source, NULL,
                                error) == CAI_OK);
   assert(metadata_calls ==

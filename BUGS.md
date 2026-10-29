@@ -5,9 +5,35 @@ needed to close each issue. An upstream cause must be reproduced independently
 before it is attributed to a dependency. Keep resolved entries with their fix
 commit and verification evidence.
 
+## BUG-072: Streamed events repeatedly transact on conversation lookup metadata
+
+- **Status:** fixed in CAI's Pouch adapter.
+- **Cause:** each delta acquired, loaded, renewed and released the conversation
+  lookup object in addition to its native collection append. Native CPU sampling
+  attributed about 60% of sampled CPU to append, dominated by those extra
+  transactions rather than the collection write.
+- **Resolution:** retain append receivers for the conversation and its children.
+  The collection alone owns retention; derived lookup hints have no separate
+  expiry and are removed when their backing collection is gone. Public reads
+  remain available, and metadata leases cover logical changes only.
+- **Crash recovery:** private native ownership guards cover complete metadata
+  transactions. Once an owner exits, its exact observed SDK lease can be
+  recovered without waiting for its one-hour TTL. A live guard holder and a
+  foreign logical owner are protected. Committed data survives; staging is
+  rolled back. Failed releases also relinquish the unusable receiver's guard.
+- **Verification:** zero metadata acquisitions across subsequent deltas while
+  another real lease holds the metadata object; stable parent/child receivers;
+  shared-client namespace separation; stale-hint/prompt cleanup; deterministic
+  SIGKILL and failed-release regressions on native and static musl. Twenty-five
+  affected Debug C/Lua application checks passed.
+  Production musl streaming/typing CPU fell from 1.60 s to 0.59 s.
+  The final real-conversation probe observed draft edits in 5 ms during
+  generation at about 5% of one CPU. See the
+  [profile and measurement limits](docs/startup-responsiveness.md#follow-up-metadata-ownership-and-streaming-cpu).
+
 ## BUG-071: Conversation startup repeats expensive journal reads
 
-- **Status:** fixed; measured on copies and verified against the real workspace.
+- **Status:** improved; combining recovery traversals remains open.
 - **Evidence:** the existing conversation `dbgtfervs68i52ohr8gg` took 4.38 s
   to resume with compressed storage and console replay disabled, versus 3.58 s
   after converting a separate copy to uncompressed storage. Rendering the last
@@ -29,6 +55,10 @@ commit and verification evidence.
   stale/cross-session bounds, replay/export checks, and the real static musl
   binary. Controlled ten-turn startup improved from 6.18 s to 3.94 s; CPU time
   fell from 6.04 s to 3.78 s. See [measurements](docs/startup-responsiveness.md).
+- **Remaining:** context restoration runs once, but event recovery still makes
+  a separate ordered pass before selected console replay. The later metadata
+  ownership fix in BUG-072 removes streaming lease churn; real startup remains
+  about 4.8 seconds. Complete UI/backend separation is also future work.
 
 ## BUG-070: Streaming can monopolize the interactive owner thread
 

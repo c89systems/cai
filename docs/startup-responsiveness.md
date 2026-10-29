@@ -98,9 +98,75 @@ The initial baseline also reproduced an 8,717 ms typing batch at 15% CPU.
   it was ready in 4,041 ms. Workspace Git status was identical before and after.
   No model work was requested. These probes do not measure live-provider latency.
 
-The final artifact is `build/x86_64-linux-musl-release/cai`, statically linked
+The artifact from that initial dispatch change was
+`build/x86_64-linux-musl-release/cai`, statically linked
 with no ELF interpreter. SHA-256:
 `700d17af7f9e4e35ea89fa452e57e720c8e3866e0057269834312d8ea8da2d9d`.
 The saved baseline SHA-256 was
 `2949a9b7032054914f926d8609be8cdd981948ba8f6e48c578f708b0f60c9253`.
 No release matrix, cross-target gate or live-provider test was run for this task.
+
+## Follow-up: metadata ownership and streaming CPU
+
+The following measurements use the saved static musl binary from `fb883e9`
+as baseline and retain zlib, encryption and production durable-sync settings.
+A disposable Bash driver streamed 128 Markdown paragraphs through a loopback
+provider and real Pouch storage. No benchmark was added to the regular suite.
+
+Software CPU sampling of the corresponding native Debug application attributed
+0.528 of 0.873 sampled CPU seconds to event append. Nested within that path,
+lease release used 0.261 seconds and separate metadata retention used 0.129;
+the native collection append itself used only 0.052. These inclusive times
+overlap. A separate musl syscall-counting run observed 42,810 opens, 41,669
+directory-creation attempts and 46,204 directory reads for the interactive
+probe. Traced wall times include instrumentation overhead and are not normal
+latency measurements.
+
+CAI was acquiring, loading, renewing and releasing a lookup object for every
+delta. That transaction was unnecessary: a native collection append already
+persists the entry and renews whole-collection retention atomically.
+Conversation-scoped collection receivers now remain open, lookup metadata has
+no independent expiry, and leases cover logical metadata changes only.
+The follow-up native sample used 0.093 CPU seconds, with 0.041 in event append
+and 0.010 in lease release across the entire invocation. Samples are diagnostic;
+production measurements below are the CPU comparison.
+
+| Production musl probe | Before elapsed | After elapsed | Before CPU total | After CPU total |
+| --- | --- | --- | --- | --- |
+| Markdown and concurrent draft typing | 8.46 s | 1.95 s | 1.60 s | 0.59 s |
+| Batch, without the terminal UI | 7.96 s | 1.62 s | 1.05 s | 0.20 s |
+
+Streaming plus typing used about 63% less CPU time; batch used about 81% less.
+These are single comparable samples, not performance thresholds.
+CPU percentage alone is misleading for the burst fixture because the optimized
+invocation finishes much sooner.
+
+The real `~/lab/x` conversation was resumed through the installed musl symlink.
+Status, tool inventory, theme inventory and an ordinary shell command worked.
+Live ChatGPT generation completed without tools or workspace edits. A draft
+typed during output became visible in 8 ms; the request interval used 1.20 CPU
+seconds over 34.04 wall seconds (about 3.5% of one CPU). After finalizing metadata
+release cleanup, the rebuilt binary repeated live generation: 5 ms draft
+visibility, 0.93 CPU seconds over 18.59 wall seconds (about 5%).
+Three verification prompts/replies were added to that conversation.
+
+Startup/replay remains a separate cost: the final live-generation probe took
+4.77 seconds to become ready. A subsequent reopen replayed its completed answer,
+accepted a fresh draft and quit successfully; after settling, it consumed no
+measurable CPU ticks over five idle seconds (10 ms accounting resolution).
+That reopen took 4.86 seconds. Context is restored once, followed by event
+recovery and selected console replay as described above. This change does not claim a
+single combined recovery pass or complete UI/backend separation.
+
+Twenty-five affected native Debug CLI/application checks passed, including
+C/Lua embedding, messaging, kanban, history, export and responsiveness.
+Additional condition-gated crash cases exercise live ownership, SIGKILL during
+staging, committed-state preservation, death immediately after SDK release,
+abandoned failed-release recovery, scope metadata and foreign-owner refusal.
+The storage regression also passed on static musl, and the production musl
+binary passed isolated review/reopen checks using default worker stacks.
+
+The rebuilt static musl executable at the same path has SHA-256
+`7364588b3ac34359cbdf94fe091c6e9ab90a03a16c53de742c20193340e7f9e1`.
+The workspace Git status was unchanged by the live tests. No release matrix or
+cross-target gate ran for this follow-up.

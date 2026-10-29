@@ -16,9 +16,11 @@ existing pull producers would add work without removing a thread or body copy.
 Journal append requests now carry the whole-collection retention directive.
 The SDK publishes the entry and resolved parent deadline atomically. CAI no
 longer issues a second collection-metadata mutation after every event or
-context edit. Session metadata keeps its existing retention renewal; identical
-append retries renew neither deadline. Transport acknowledgement recovery still
-checks append identity/status before acknowledging an uncertain write.
+context edit. Conversation lookup metadata now follows the collection's
+lifecycle without its own expiry or per-delta lease transaction; identical
+append retries do not renew the collection deadline. Transport acknowledgement
+recovery still checks append identity/status before acknowledging an uncertain
+write.
 
 Prompt recall configures the collection's native `max_entries` policy from the
 existing limit, default 200. The existing SDK worker performs lazy oldest-first

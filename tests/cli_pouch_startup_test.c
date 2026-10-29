@@ -500,6 +500,7 @@ static void collection_regressions(cai_cli_pouch *pouch, cai_error *error) {
   lc_error_cleanup(&local);
 }
 
+#include "pouch_context_test.inc"
 #include "pouch_journal_fault_test.inc"
 #include "pouch_replay_read_test.inc"
 
@@ -702,9 +703,14 @@ int main(int argc, char **argv) {
   todo_transactions(&pouch, &error);
   replay_limits(&pouch, &error);
   journal_faults(&pouch, &error);
+  append_context_test(&pouch, &error);
+  foreign_metadata_owner(&pouch, &error);
+  abandoned_metadata_recovery(&pouch, &error);
+  context_namespace_and_expiry(&pouch, &error);
   cai_cli_pouch_close(&pouch);
   cai_error_cleanup(&error);
   interrupted_idle_writer();
+  crashed_metadata_recovery();
   /* Test runner removes the isolated encrypted root. */
   printf("Fixture: %s\n", directory);
   return 0;
