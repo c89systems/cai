@@ -20,6 +20,11 @@ class Peer(http.server.BaseHTTPRequestHandler):
         with (root / 'gets').open('a') as output:
             output.write(self.path + '\n')
         try:
+            if config.get('catalog_gate'):
+                gate = root / config['catalog_gate']
+                deadline = time.monotonic() + 15
+                while not gate.exists() and time.monotonic() < deadline:
+                    time.sleep(.005)
             time.sleep(config.get('catalog_delay_ms', 0) / 1000)
             self.send_response(config.get('catalog_status', 200))
             self.send_header('Content-Type', 'application/json')

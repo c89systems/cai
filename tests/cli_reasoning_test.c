@@ -511,6 +511,10 @@ static int test_output_failure(int operation) {
     replay.type = "reasoning_summary";
     replay.data = "Heading\n\nOutput unavailable.\n\n";
     rc = cli_replay_render(&state, &replay, NULL);
+  } else if (operation == 18) {
+    rc = cli_dispatch_command(&state, "/quit", NULL, &handled);
+    if (state.exit_requested)
+      rc = CAI_OK; /* A failed receipt must prevent command side effects. */
   } else if (operation >= 15) {
     event.type = CAI_AGENT_EVENT_SUBAGENT_HANDED_OFF;
     event.subagent_name = "review";
@@ -898,7 +902,7 @@ int main(void) {
   struct timespec before = {400, 499999999L};
   struct timespec boundary = {400, 500000000L};
 
-  for (rc = 0; rc < 18; rc++)
+  for (rc = 0; rc < 19; rc++)
     if (test_output_failure(rc) != 0)
       return 1;
   if (test_command_queue_modes() != 0 || test_goal_handoff() != 0 ||

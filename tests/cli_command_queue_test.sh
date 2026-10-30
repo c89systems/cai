@@ -71,7 +71,8 @@ absent "$root/peer/requests.jsonl" '/yolo off'
 terminal_close
 
 # Enter leaves goal controls editable until the next safe response seam.
-command_plan '[{pause:true,pause_text:"QueueGoalBegin\n\n",text:"QueueGoalEnd"}]'
+command_plan '[{pause:true,pause_text:"QueueGoalBegin\n\n",text:"QueueGoalEnd"},
+  "QueueClearDone"]'
 before=$(requests)
 terminal_start -N
 send '/goal new Queue ownership objective\r'; expect QueueGoalBegin
@@ -92,8 +93,10 @@ send '\025\033[200~/goal\tstatus  \033[201~\r'; expect 'Status: active'
 send '\033e'; expect_prompt '/goal pause'
 send '\025/goal clear\r'; expect 'Q 1. /goal clear'
 release; expect 'Goal control queued'
+# Clearing at a request boundary updates context within the existing turn.
+expect_turn "$send_offset" QueueClearDone
 send '/goal\r'; expect 'No goal.'
-[[ $(requests) == $((before+1)) ]]
+[[ $(requests) == $((before+2)) ]]
 absent "$root/peer/requests.jsonl" '/goal clear'
 terminal_close
 

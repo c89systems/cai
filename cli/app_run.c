@@ -181,9 +181,7 @@ typedef struct cli_state {
   int notice_open;
   int notice_first_row;
   int command_input;
-  int command_ok;
   char command_foreground[MDF_THEME_FOREGROUND_SIZE];
-  const char *pending_command;
   cai_cli_shell shell;
   sl_watch_id_t shell_watches[3];
   int shell_watched[3];
@@ -199,7 +197,6 @@ static pslog_logger *cli_logger(const cli_state *state) {
 static int cli_advance_automation(cli_state *state, cai_error *error);
 static int cli_messages_process(cli_state *state, int at_boundary,
                                 cai_error *error);
-static int cli_flush_command(cli_state *state, int ok);
 static int cli_dispatch_command(cli_state *state, const char *line,
                                 cai_error *error, int *handled);
 static int cli_submit_automation(cli_state *state, const char *instruction,
@@ -405,9 +402,7 @@ static int cli_notice_sink(void *context, const char *bytes, size_t count) {
           getenv("NO_COLOR") == NULL) {
         if (state->command_input) {
           snprintf(styled_prefix, sizeof(styled_prefix), "%s\033[0;1m%s",
-                   !state->notice_first_row ? "  "
-                   : state->command_ok      ? "\033[0;92m$\033[0m "
-                                            : "\033[0;91m$\033[0m ",
+                   !state->notice_first_row ? "  " : "\033[0;92m$\033[0m ",
                    state->command_foreground);
           prefix = styled_prefix;
         } else if (state->notice_first_row)
@@ -593,8 +588,6 @@ static int cli_reasoning_body(void *context, const char *data, size_t length) {
 }
 
 static int cli_text(cli_state *state, const char *data, size_t length) {
-  if (cli_flush_command(state, 1) != 0)
-    return -1;
   if (cli_finish_reasoning(state) != 0) {
     return -1;
   }
@@ -676,8 +669,7 @@ static int cli_tool_markdown(void *context, const char *text, size_t length) {
 }
 
 static int cli_markdown(cli_state *state, const char *text) {
-  if (cli_flush_command(state, 1) != 0 || cli_finish_response(state) != 0 ||
-      cli_finish_reasoning(state) != 0)
+  if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0)
     return -1;
   if (state->batch) {
     cli_diagnostic(state, PSLOG_LEVEL_INFO, text);
@@ -802,40 +794,25 @@ static int cli_review_boundary(cli_state *state, int start, cai_error *error) {
   return rc;
 }
 
-static int cli_prompt(cli_state *state, const char *text) {
+/* A delivered input is displayed before any work it triggers. Softline keeps
+ * pending entries editable; neither handler validation nor its first output
+ * is a second admission boundary. The command marker acknowledges submission,
+ * while failures have their own diagnostic marker. */
+static int cli_input(cli_state *state, const char *text, int command) {
+  int rc;
   if (state->batch)
     return 0;
-  if (cli_flush_command(state, 1) != 0)
-    return -1;
-  if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0) {
+  if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0 ||
+      cli_reconcile_output(state) != 0) {
     return -1;
   }
-  if (cli_reconcile_output(state) != 0 ||
-      sl_output_stream_write_quoted_prompt(state->sl, text) != SL_OK)
-    return -1;
-  state->feed_breaks = 2;
-  return 0;
-}
-
-static void cli_command_input(cli_state *state, const char *text) {
-  pslog_field field =
-      pslog_str("prompt_kind", text[0] == '!' ? "shell_command" : "command");
-  cai_cli_log_message(cli_logger(state), PSLOG_LEVEL_INFO, "command_input",
-                      "user", text, strlen(text), &field, 1U);
-  state->pending_command = text;
-}
-
-/* Delay the echo until validation succeeds or fails, but always emit it
- * before command results. No command output is buffered for this purpose. */
-static int cli_flush_command(cli_state *state, int ok) {
-  const char *text = state->pending_command;
-  int rc;
-  if (text == NULL)
+  if (!command) {
+    if (sl_output_stream_write_quoted_prompt(state->sl, text) != SL_OK)
+      return -1;
+    state->feed_breaks = 2;
     return 0;
-  state->pending_command = NULL;
-  state->command_ok = ok;
-  if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0 ||
-      cli_geometry(state) != 0 || cli_literal_prepare(state) != 0)
+  }
+  if (cli_geometry(state) != 0 || cli_literal_prepare(state) != 0)
     return -1;
   while (state->feed_breaks < 2)
     if (cli_sink(state, "\n", 1U) != 0)
@@ -858,6 +835,18 @@ static int cli_flush_command(cli_state *state, int ok) {
   while (rc == 0 && state->feed_breaks < 2)
     rc = cli_sink(state, "\n", 1U);
   return rc;
+}
+
+static int cli_prompt(cli_state *state, const char *text) {
+  return cli_input(state, text, 0);
+}
+
+static int cli_command_input(cli_state *state, const char *text) {
+  pslog_field field =
+      pslog_str("prompt_kind", text[0] == '!' ? "shell_command" : "command");
+  cai_cli_log_message(cli_logger(state), PSLOG_LEVEL_INFO, "command_input",
+                      "user", text, strlen(text), &field, 1U);
+  return cli_input(state, text, 1);
 }
 
 static int cli_shell_literal(void *context, const char *bytes, size_t length,
@@ -1436,8 +1425,7 @@ static int cli_terminal_shell(cli_state *state, int share, cai_error *error) {
       return rc;
   }
   (void)clock_gettime(CLOCK_MONOTONIC, &state->shell.started);
-  if (cli_flush_command(state, 1) != 0 || cli_finish_response(state) != 0 ||
-      cli_finish_reasoning(state) != 0 ||
+  if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0 ||
       sl_output_stream_end(state->sl) != SL_OK) {
     state->exit_requested = 1;
     return cai_cli_error(error, CAI_ERR_TRANSPORT,
@@ -2509,10 +2497,7 @@ static int cli_replay_output_raw(cli_state *state,
     if (cai_cli_shell_plain(&state->shell, NULL, 0U, 1, cli_shell_literal,
                             state, error) != CAI_OK)
       return CAI_ERR_TRANSPORT;
-    if (cli_flush_command(state, 1) != 0)
-      return CAI_ERR_TRANSPORT;
-    state->pending_command = command;
-    return cli_flush_command(state, 1) == 0 ? CAI_OK : CAI_ERR_TRANSPORT;
+    return cli_input(state, command, 1) == 0 ? CAI_OK : CAI_ERR_TRANSPORT;
   }
   if (event->data != NULL &&
       strcmp(event->type, "user_shell_output_hex") == 0) {
@@ -4023,8 +4008,6 @@ static int cli_settings_command(cli_state *state, const char *arguments,
                 : CAI_MODEL_CATALOG_REFRESH_ONLINE_IF_UNCACHED,
         &catalog, error);
     if (rc != CAI_OK) {
-      if (listing && cli_flush_command(state, 0) != 0)
-        return CAI_ERR_TRANSPORT;
       cai_error_cleanup(error);
       cai_error_init(error);
       /* An explicit retry may fail while a previous successful catalog is
@@ -4275,8 +4258,7 @@ static int cli_theme_command(cli_state *state, const char *arguments,
   cli_theme_for_scope(state, &selected, state->theme_scope, &effective);
   rc = cli_renderer_create(state, &effective, &renderer, error);
   if (rc == CAI_OK &&
-      (cli_flush_command(state, 1) != 0 || cli_finish_response(state) != 0 ||
-       cli_finish_reasoning(state) != 0 ||
+      (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0 ||
        renderer->set_geometry(renderer, state->width, state->width >= 5 ? 2 : 0,
                               0) != MDF_OK ||
        sl_set_prompt_theme(state->sl, getenv("NO_COLOR") != NULL
@@ -5302,12 +5284,13 @@ static int cli_dispatch_command(cli_state *state, const char *line,
     normalized[name] = '\0';
     command = normalized;
   }
-  if (line[0] == '/' || line[0] == '!')
-    cli_command_input(state, line);
+  if ((line[0] == '/' || line[0] == '!') &&
+      cli_command_input(state, line) != 0) {
+    free(normalized);
+    return cai_cli_error(error, CAI_ERR_TRANSPORT, "display command input");
+  }
   rc = cli_handle_command(state, command, error, handled);
   free(normalized);
-  if (cli_flush_command(state, rc == CAI_OK) != 0)
-    rc = CAI_ERR_TRANSPORT;
   /* FIFO delivery can return without an active editor. Refresh the retained
    * native status rows before closing, rather than adding a feed farewell. */
   if (rc == CAI_OK && state->exit_requested && state->interactive &&

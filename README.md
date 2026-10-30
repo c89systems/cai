@@ -891,9 +891,12 @@ startup defaults. Catalog discovery uses a separate client and a five-minute
 cache; it makes no additional startup request. Explicit `/model` and
 `/reasoning` listings refresh discovery using the configured client request
 timeout. A failed refresh retains the last catalog when available; repeat the
-command to retry immediately. Accepted commands have a green `$`, rejected
-commands a red `$`. Literal, non-italic command text uses the effective theme's
-H2 foreground in bold.
+command to retry immediately. Every delivered slash command is printed with a
+green `$` before its handler starts, including discovery and other operations
+that may wait. Pending commands stay editable in Softline until delivery.
+The marker acknowledges submission; failures have a separate red diagnostic.
+Literal, non-italic command text uses the effective theme's H2 foreground in
+bold.
 Interactive warnings and errors
 use a red `*` with `WARN:` or `ERROR:` and readable details, with one blank
 line between feed blocks. Complete diagnostic records stay in the session log.

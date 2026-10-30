@@ -83,6 +83,14 @@ Horizontal whitespace separating a slash command and its arguments, and trailing
 horizontal whitespace, mean the same during classification and dispatch. The
 original input is echoed/recorded; argument interiors and shell text are preserved.
 
+All delivered slash and shell commands enter the same dispatch path. It prints
+the input through the shared transcript renderer before invoking the handler,
+including commands that wait for a catalog, storage or a subagent. The green
+`$` means submitted, not completed; failure diagnostics have their own red
+marker. The original alias and literal argument text are retained. Pending
+Softline entries are not printed until they are consumed, and handlers/results
+do not print a second copy. Failure to render the input prevents dispatch.
+
 ## Foreground reviews and subagents
 
 Conversation steers reach the active child when subagent steering is enabled;

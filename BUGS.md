@@ -1099,22 +1099,25 @@ commit and verification evidence.
 - **Priority:** normal.
 - **Status:** fixed; native and static musl command checks passed.
 - **Reported:** `$ /command` uses pale text and an undifferentiated `$`.
-- **Required behavior:** green `$` for success, red `$` for failure. Command
-  text should be code-like, non-italic, and brownish orange (the latest color
-  selection supersedes the earlier prompt-colored/green suggestions). Keep
-  terminal input distinct from the submitted transcript.
+- **Required behavior:** print delivered commands before their handlers run.
+  Green `$` acknowledges submission; failures use a separate red diagnostic.
+  Command text is literal and non-italic, using the theme's bold H2 foreground.
+  Keep terminal input distinct from the submitted transcript.
 - **Verification:** successful and invalid slash commands, refused operations,
   wrapped commands, and `NO_COLOR`. Preserve input-before-result ordering and
   keep non-interactive structured logging intact.
-- **Fix:** defer the command echo until validation or the first result, keeping
-  it before all result output without buffering results. Use brownish-orange
-  literal text, with green/red outcome markers and explicit color resets.
-  Invalid resume selections, unknown commands, and busy session switches now
-  report rejection through the normal diagnostic path.
+- **Fix:** the original outcome-based deferral was removed: the common input
+  renderer now prints each delivered command immediately, before validation,
+  network requests or other work. Invalid resume selections, unknown commands,
+  and busy session switches report rejection through the normal diagnostic
+  path. Handler output never triggers a second command receipt.
 - **Evidence:** `cai_cli_commands` covers successful and invalid settings,
   invalid resume selections, unknown commands, literal Markdown punctuation,
-  wrapped output and `NO_COLOR`. Existing settings, shell, handoff, session,
-  logging, and spinner checks pass with the change.
+  wrapped output, `NO_COLOR`, and exactly one receipt before status/errors.
+  `cai_cli_model_catalog` holds discovery open until its input receipt appears;
+  `cai_cli_reasoning` proves a failed receipt prevents command side effects.
+  Queue, steering, shell, handoff, replay, theme and Lua embedding checks pass,
+  as does command presentation against the rebuilt static musl executable.
 
 ## BUG-004: Patch colors are too bright and lack distinct change markers
 

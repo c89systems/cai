@@ -56,11 +56,24 @@ for colors in yes no; do
     send "$command\r"; expect "\$ $command"; expect '* ERROR:'
     tail -c +$((offset+1)) "$term/raw" >"$root/command"
     if [[ "$colors" == yes ]]; then
-      contains "$root/command" $'\033[0;91m$\033[0m \033[0;1m\033[34m'
+      contains "$root/command" $'\033[0;92m$\033[0m \033[0;1m\033[34m'
+      contains "$root/command" $'\033[91m*\033[0m'
     else
-      absent "$root/command" $'\033[0;91m$'
+      absent "$root/command" $'\033[0;92m$'
     fi
+    # The receipt reports submission, never a deferred outcome. Errors follow
+    # it, and no result/diagnostic emits another copy of the input.
+    tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/receipt"
+    awk -v command="\$ $command" '
+      index($0, command) { count++; seen=1 }
+      /\* ERROR:/ { if (!seen) exit 1 }
+      END { if (count != 1) exit 1 }
+    ' "$root/receipt"
   done
+  send '/status\r'; expect 'Use /tools for the full inventory.'
+  tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/receipt"
+  awk '/\$ \/status/ { count++; seen=1 } /## Status/ { if (!seen) exit 1 }
+       END { if (count != 1) exit 1 }' "$root/receipt"
   # An invalid command containing Markdown punctuation remains literal, wraps,
   # and is echoed before its error rather than after the result.
   send '/unknown **literal** _path_ `code` [label](url)\r'
