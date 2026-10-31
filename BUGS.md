@@ -5,9 +5,25 @@ needed to close each issue. An upstream cause must be reproduced independently
 before it is attributed to a dependency. Keep resolved entries with their fix
 commit and verification evidence.
 
+## BUG-074: Embedded application/export exceed a default worker stack
+
+- **Status:** fixed; constrained-worker regression added.
+- **Cause:** the application entry frame used about 124 KiB, mostly receiver state.
+  Markdown export nested roughly 44 KiB and 58 KiB parser/reader frames. A
+  128 KiB host worker crashed during startup and, after moving the entry state,
+  during export. Main-thread checks did not establish the worker contract.
+- **Resolution:** heap-own the application receiver and one bounded export
+  workspace, released after all callbacks/workers and export passes finish.
+  No stack enlargement or full-message buffering is used.
+- **Evidence:** `cai_app_worker_stack` runs fresh inference, resume, export,
+  interactive status/quit and temporary mode on a 128 KiB glibc thread, using
+  default pthread attributes on musl. The fixture reproduced both failures
+  before their respective fixes. Existing Markdown export cases retain sink
+  failure and record-order coverage.
+
 ## BUG-073: Two runtimes can open the same conversation for writing
 
-- **Status:** open; native collection lease support proposed upstream.
+- **Status:** fixed using liblockdc 0.25.0 collection leases.
 - **Reported:** two CAI instances resumed one session. After one accepted a
   prompt, the other failed with "append ID is bound to different compact JSON
   bytes". Their independent event counters had diverged.
@@ -18,8 +34,16 @@ commit and verification evidence.
   restoring a writable runtime; reject a second live owner. Preserve public
   reads and provide safe recovery after a crash without losing committed
   history or waiting for a long lease to expire.
-- **Next step:** [collection lease/takeover change request](stash/liblockdc-collection-leases-cr.md).
-  No CAI ownership change or liblockdc implementation is included yet.
+- **Resolution:** acquire before writable restoration and initial event IDs;
+  use owned receivers for journal/prompt mutations, with independent keepalive
+  and public committed reads. A native liveness guard permits conditional
+  takeover of CAI's own abandoned lease without guessing from a PID/name.
+  Live/foreign owners are rejected; renewal failure stops the restored context.
+- **Evidence:** focused native ownership/failure checks plus C and Lua app
+  duplicate-open, public export, independent conversation, SIGKILL recovery,
+  resumed inference and clean-reopen checks. See
+  [the integration notes](docs/liblockdc-0.25.0-upgrade.md) and the original
+  [change request](stash/liblockdc-collection-leases-cr.md).
 
 ## BUG-072: Streamed events repeatedly transact on conversation lookup metadata
 

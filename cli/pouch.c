@@ -53,6 +53,7 @@ static cai_cli_journal_context *journal_context_find(cai_cli_pouch *pouch,
   return NULL;
 }
 static void journal_contexts_close(cai_cli_pouch *pouch);
+static void collection_owners_close(cai_cli_pouch *pouch);
 
 static int same_pouch_options(const char *a, const char *b) {
   size_t na, nb;
@@ -535,7 +536,8 @@ static int history_supported(cai_cli_pouch *pouch, cai_error *error) {
   int rc;
   lc_error_init(&local);
   rc = lc_client_collection_capabilities(pouch->sessions, &caps, &local);
-  if (rc == LC_OK && !caps.collections) {
+  if (rc == LC_OK &&
+      (!caps.collections || !caps.leases || !caps.lease_takeover)) {
     lc_error_cleanup(&local);
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "Session history requires a Pouch endpoint; remote "
@@ -546,14 +548,19 @@ static int history_supported(cai_cli_pouch *pouch, cai_error *error) {
   lc_error_cleanup(&local);
   return rc;
 }
-static int open_history_collection(cai_cli_pouch *pouch, const char *id,
-                                   const char *kind, int create, int optional,
-                                   lc_collection **out, cai_error *error) {
+static int open_history_collection_options(cai_cli_pouch *pouch, const char *id,
+                                           const char *kind, int create,
+                                           int optional,
+                                           const lc_collection_lease_req *lease,
+                                           int *created, lc_collection **out,
+                                           cai_error *error) {
   lc_collection_config config;
   lc_error local;
   char name[192];
   int rc;
   *out = NULL;
+  if (created != NULL)
+    *created = 0;
   lc_error_init(&local);
   rc = history_supported(pouch, error);
   if (rc != CAI_OK)
@@ -563,7 +570,7 @@ static int open_history_collection(cai_cli_pouch *pouch, const char *id,
   config.ns = pouch->sessions_namespace;
   config.name = name;
   rc = lc_client_open_collection(pouch->sessions, &config, out, &local);
-  if (rc != LC_OK && optional && local.server_code != NULL &&
+  if (rc != LC_OK && optional && !create && local.server_code != NULL &&
       strcmp(local.server_code, "collection_not_found") == 0) {
     lc_error_cleanup(&local);
     return CAI_OK;
@@ -576,12 +583,16 @@ static int open_history_collection(cai_cli_pouch *pouch, const char *id,
       config.has_retention_seconds = 1;
       config.retention_seconds = pouch->conversation_retention_seconds;
     }
+    config.lease = lease;
     rc = lc_client_create_collection(pouch->sessions, &config, out, &local);
+    if (rc == LC_OK && created != NULL)
+      *created = 1;
     if (rc != LC_OK && local.server_code != NULL &&
         strcmp(local.server_code, "collection_exists") == 0) {
       lc_error_cleanup(&local);
       lc_error_init(&local);
       config.has_retention_seconds = 0;
+      config.lease = NULL;
       rc = lc_client_open_collection(pouch->sessions, &config, out, &local);
     }
   }
@@ -589,6 +600,12 @@ static int open_history_collection(cai_cli_pouch *pouch, const char *id,
     rc = cai_cli_lc_error(error, &local);
   lc_error_cleanup(&local);
   return rc;
+}
+static int open_history_collection(cai_cli_pouch *pouch, const char *id,
+                                   const char *kind, int create, int optional,
+                                   lc_collection **out, cai_error *error) {
+  return open_history_collection_options(pouch, id, kind, create, optional,
+                                         NULL, NULL, out, error);
 }
 
 /* SDK maintenance owns expiry. Availability checks test only whether cleanup
@@ -605,9 +622,9 @@ static int session_available(cai_cli_pouch *pouch, const char *id,
   return rc;
 }
 
-/* Last-receiver close commits the collection. Keep the active journal open
- * until a different conversation uses it or the store closes.
- * Callers still own independent receivers, including streaming readers. */
+/* A stable read anchor avoids repeated close-time projection checkpoints.
+ * Appends commit independently; lease release never publishes/rolls them back.
+ * Callers own separate public readers, including streaming sources. */
 static int history_collection(cai_cli_pouch *pouch, const char *id,
                               const char *kind, int create, lc_collection **out,
                               cai_error *error) {
@@ -637,6 +654,9 @@ static int history_collection(cai_cli_pouch *pouch, const char *id,
 
 static int journal_write_ready(cai_cli_pouch *pouch, cai_error *error) {
   int uncertain;
+  int rc = cai_cli_pouch_ownership_check(pouch, error);
+  if (rc != CAI_OK)
+    return rc;
   pthread_mutex_lock(&clients_lock);
   uncertain = pouch->connection != NULL && pouch->connection->write_uncertain;
   pthread_mutex_unlock(&clients_lock);
@@ -850,6 +870,9 @@ int cai_cli_pouch_session(cai_cli_pouch *pouch, const char *id,
 #include "pouch_guard.inc"
 #include "pouch_lease_guard.inc"
 
+/* Collection ownership reuses the native liveness-guard helpers above. */
+#include "pouch_collection_owner.inc"
+
 static int acquire_wait(cai_cli_pouch *pouch, const char *ns, const char *key,
                         long wait_seconds, lc_lease **out, cai_error *error) {
   lc_acquire_req request;
@@ -1041,7 +1064,7 @@ int cai_cli_pouch_set_retention(cai_cli_pouch *pouch, const char *id, long days,
   if (rc == CAI_OK)
     rc = get_session(lease, NULL, id, &session, error);
   if (rc == CAI_OK)
-    rc = open_history_collection(pouch, id, "events", 0, 0, &collection, error);
+    rc = collection_owner_open(pouch, id, "events", 0, 0, &collection, error);
   if (rc == CAI_OK &&
       collection_retain(collection, days * 86400L, &local) != LC_OK)
     rc = cai_cli_lc_error(error, &local);
@@ -1050,7 +1073,6 @@ int cai_cli_pouch_set_retention(cai_cli_pouch *pouch, const char *id, long days,
     session.retention_days = days;
     rc = update_session(lease, &session, error);
   }
-  lc_collection_close(collection);
   lc_error_cleanup(&local);
   rc = release(lease, rc, error);
   if (rc == CAI_OK) {
@@ -1088,14 +1110,11 @@ static int commit(void *context, const char *scope, const char *id,
   directory = NULL;
   memset(&record, 0, sizeof(record));
   rc = session_claim(pouch, id, error);
+  pthread_mutex_lock(&pouch->journal_lock);
   if (rc == CAI_OK)
     rc = journal_write_ready(pouch, error);
   if (rc == CAI_OK)
-    rc = history_collection(pouch, id, "events", 1, &collection, error);
-  if (collection != NULL) {
-    collection->close(collection);
-    collection = NULL;
-  }
+    rc = collection_owner_open(pouch, id, "events", 1, 0, &collection, error);
   if (rc == CAI_OK && scope_indexed(scope))
     rc = latest_open(pouch, scope, &directory, &index, error);
   if (rc == CAI_OK && directory != NULL) {
@@ -1135,8 +1154,6 @@ static int commit(void *context, const char *scope, const char *id,
     if (rc == CAI_OK)
       rc = cai_cli_mapped_source(&commit_map, &record, &source, error);
     if (rc == CAI_OK)
-      rc = history_collection(pouch, id, "events", 1, &collection, error);
-    if (rc == CAI_OK)
       rc = journal_append_source(pouch, &session, collection, append_id, source,
                                  &position, error);
     durable = rc == CAI_OK;
@@ -1144,8 +1161,6 @@ static int commit(void *context, const char *scope, const char *id,
     if (rc == CAI_OK)
       rc = update_session(lease, &session, error);
   }
-  if (collection != NULL)
-    collection->close(collection);
   cai_source_close(source);
   lonejson_json_value_cleanup(&record.state);
   rc = release(lease, rc, error);
@@ -1180,18 +1195,19 @@ static int commit(void *context, const char *scope, const char *id,
     cai_error_init(error);
     rc = CAI_OK;
   }
+  pthread_mutex_unlock(&pouch->journal_lock);
   return rc;
 }
 
-static int load_id(void *context, const char *scope, const char *id,
-                   cai_source **out, unsigned long long *sequence,
-                   cai_error *error) {
+static int load_id_mode(void *context, const char *scope, const char *id,
+                        cai_source **out, unsigned long long *sequence,
+                        int writable, cai_error *error) {
   cai_cli_pouch *pouch;
   cai_cli_session session;
   int rc, available;
   pouch = (cai_cli_pouch *)context;
   *out = NULL;
-  rc = session_claim(pouch, id, error);
+  rc = writable ? session_claim(pouch, id, error) : CAI_OK;
   if (rc == CAI_OK)
     rc = history_supported(pouch, error);
   if (rc == CAI_OK)
@@ -1212,6 +1228,12 @@ static int load_id(void *context, const char *scope, const char *id,
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "Conversation journal is no longer available (it may "
                          "have expired); start a new conversation");
+  if (writable) {
+    lc_collection *owned = NULL;
+    rc = collection_owner_open(pouch, id, "events", 0, 0, &owned, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
   if (session.commit_position == 0U) {
     rc = session_refresh(pouch, &session, error);
     if (rc != CAI_OK)
@@ -1219,6 +1241,24 @@ static int load_id(void *context, const char *scope, const char *id,
   }
   *sequence = session.applied_sequence;
   return commit_source(pouch, id, out, error);
+}
+
+static int load_id(void *context, const char *scope, const char *id,
+                   cai_source **out, unsigned long long *sequence,
+                   cai_error *error) {
+  return load_id_mode(context, scope, id, out, sequence, 0, error);
+}
+
+int cai_cli_pouch_read_id(cai_cli_pouch *pouch, const char *scope,
+                          const char *id, cai_source **out,
+                          unsigned long long *sequence, cai_error *error) {
+  return load_id(pouch, scope, id, out, sequence, error);
+}
+
+static int load_owned_id(void *context, const char *scope, const char *id,
+                         cai_source **out, unsigned long long *sequence,
+                         cai_error *error) {
+  return load_id_mode(context, scope, id, out, sequence, 1, error);
 }
 
 static int session_compare(const void *left, const void *right) {
@@ -1506,9 +1546,10 @@ static int latest_open(cai_cli_pouch *pouch, const char *scope, lc_lease **out,
   return latest_open_wait(pouch, scope, 5L, out, index, error);
 }
 
-static int load_latest(void *context, const char *scope, char *id,
-                       size_t capacity, cai_source **out,
-                       unsigned long long *sequence, cai_error *error) {
+static int load_latest_mode(void *context, const char *scope, char *id,
+                            size_t capacity, cai_source **out,
+                            unsigned long long *sequence, int writable,
+                            cai_error *error) {
   cai_cli_pouch *pouch = context;
   lc_lease *directory = NULL;
   cai_source *source = NULL;
@@ -1574,10 +1615,17 @@ static int load_latest(void *context, const char *scope, char *id,
       rc = cai_cli_error(error, CAI_ERR_INVALID, "session ID output too small");
     else {
       strcpy(id, index.latest.id);
-      rc = load_id(context, scope, id, out, sequence, error);
+      rc = load_id_mode(context, scope, id, out, sequence, writable, error);
     }
   }
   return rc;
+}
+
+static int load_latest(void *context, const char *scope, char *id,
+                       size_t capacity, cai_source **out,
+                       unsigned long long *sequence, cai_error *error) {
+  return load_latest_mode(context, scope, id, capacity, out, sequence, 1,
+                          error);
 }
 
 static void preview(char *out, size_t capacity, const char *text) {
@@ -2570,13 +2618,18 @@ int cai_cli_pouch_open_options(cai_cli_pouch *pouch,
                          "initialize journal context mutex");
   }
   pouch->journal_lock_initialized = 1;
+  rc = collection_owners_init(pouch, error);
+  if (rc != CAI_OK) {
+    cai_cli_pouch_close(pouch);
+    return rc;
+  }
   pouch->owner_thread = pthread_self();
   if (local_pouch)
     prepare_session_indexes(pouch);
   pouch->store.context = pouch;
   pouch->store.commit = commit;
   pouch->store.load_latest = load_latest;
-  pouch->store.load_id = load_id;
+  pouch->store.load_id = load_owned_id;
   pouch->store.append_event = append_event;
   pouch->store.load_events_after = load_events;
   pouch->credentials.context = pouch;
@@ -2591,6 +2644,16 @@ void cai_cli_pouch_close(cai_cli_pouch *pouch) {
   free(pouch->event_positions);
   pouch->event_positions = NULL;
   cai_cli_pouch_end_use(pouch);
+  if (pouch->ownership_initialized) {
+    if (pouch->ownership_pipe[0] >= 0)
+      close(pouch->ownership_pipe[0]);
+    if (pouch->ownership_pipe[1] >= 0)
+      close(pouch->ownership_pipe[1]);
+    pthread_cond_destroy(&pouch->ownership_condition);
+    pthread_mutex_destroy(&pouch->ownership_health_lock);
+    pthread_mutex_destroy(&pouch->ownership_lock);
+    pouch->ownership_initialized = 0;
+  }
   if (pouch->journal_lock_initialized) {
     pthread_mutex_destroy(&pouch->journal_lock);
     pouch->journal_lock_initialized = 0;

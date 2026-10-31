@@ -123,11 +123,11 @@ static int deletion_drop(cai_cli_pouch *pouch, const char *id, const char *kind,
   lc_error local;
   int rc;
   lc_error_init(&local);
-  rc = open_history_collection(pouch, id, kind, 0, 1, &collection, error);
+  rc = collection_owner_open(pouch, id, kind, 0, 1, &collection, error);
   if (rc == CAI_OK && collection != NULL &&
-      collection->drop(collection, &local) != LC_OK)
+      collection_owner_drop(pouch, collection, &local) != LC_OK)
     rc = cai_cli_lc_error(error, &local);
-  lc_collection_close(collection);
+  collection_owner_remove(pouch, collection);
   lc_error_cleanup(&local);
   return rc;
 }

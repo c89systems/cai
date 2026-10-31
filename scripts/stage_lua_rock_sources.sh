@@ -61,6 +61,7 @@ files=(
   docs/agent-messaging.md
   docs/kanban.md
   docs/journal.md
+  docs/liblockdc-0.25.0-upgrade.md
   docs/patch-tool.md
   examples/app.lua
   cli/main.c

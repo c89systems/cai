@@ -35,6 +35,7 @@ typedef struct cai_cli_pouch {
   /* Owner-thread prompt recall; shares the session client, never model input.
    */
   lc_collection *prompt_history;
+  int prompt_history_read_only;
   long conversation_retention_seconds;
   pthread_mutex_t history_lock;
   int history_lock_initialized;
@@ -43,6 +44,17 @@ typedef struct cai_cli_pouch {
   pthread_mutex_t journal_lock;
   int journal_lock_initialized;
   struct cai_cli_journal_context *journal_contexts;
+  /* One renewal service for this store context, independent of journal writes.
+   * Receivers retain their SDK lease until the context exits. */
+  struct cai_cli_collection_owner *collection_owners;
+  pthread_mutex_t ownership_lock;
+  pthread_mutex_t ownership_health_lock;
+  pthread_cond_t ownership_condition;
+  pthread_t ownership_thread;
+  int ownership_initialized, ownership_running, ownership_stopping;
+  int ownership_failed;
+  int ownership_pipe[2];
+  char ownership_error[512];
   char program_name[33], queue_prefix[33];
   char sessions_namespace[129], auth_namespace[129], scopes_namespace[129];
   char todo_namespace[129], messages_namespace[129];
@@ -79,8 +91,16 @@ int cai_cli_pouch_open_at(cai_cli_pouch *pouch, const char *state_directory,
                           const char *endpoint, const char *client_pem,
                           pslog_logger *logger, cai_error *error);
 void cai_cli_pouch_close(cai_cli_pouch *pouch);
+/* Read committed history without acquiring writable runtime ownership. */
+int cai_cli_pouch_read_id(cai_cli_pouch *pouch, const char *scope,
+                          const char *id, cai_source **out,
+                          unsigned long long *sequence, cai_error *error);
 int cai_cli_pouch_prompt_open(cai_cli_pouch *pouch, const char *id,
                               cai_error *error);
+/* Public committed recall without mutation authority. Missing storage reads
+ * as an empty history; it is never created by this opener. */
+int cai_cli_pouch_prompt_open_read(cai_cli_pouch *pouch, const char *id,
+                                   cai_error *error);
 void cai_cli_pouch_prompt_close(cai_cli_pouch *pouch);
 /* SDK maintenance owns oldest-first pruning; zero clears the stored count cap.
  * Applying an unchanged limit does not write metadata. */
@@ -115,10 +135,16 @@ int cai_cli_pouch_session(cai_cli_pouch *pouch, const char *id,
                           cai_cli_session *out, cai_error *error);
 int cai_cli_pouch_publish(cai_cli_pouch *pouch, const char *id, int published,
                           cai_error *error);
-/* Capture the root runtime's session identity during its synchronous open.
- * A shared filesystem lock stays held until end_use (after runtime close). */
+/* Capture the root runtime's identity and acquire SDK ownership before writable
+ * restoration. A shared filesystem pin prevents deletion; a separate native
+ * liveness guard enables recovery of an abandoned SDK lease. All close after
+ * runtime/prompt writers stop at end_use. */
 void cai_cli_pouch_begin_use(cai_cli_pouch *pouch);
 void cai_cli_pouch_end_use(cai_cli_pouch *pouch);
+/* A sticky renewal failure stops the context; never silently reacquire while
+ * its restored runtime may be stale. The fd wakes an interactive owner. */
+int cai_cli_pouch_ownership_check(cai_cli_pouch *pouch, cai_error *error);
+int cai_cli_pouch_ownership_fd(cai_cli_pouch *pouch);
 int cai_cli_pouch_begin_read(cai_cli_pouch *pouch, const char *id,
                              struct cai_cli_session_guard **guard,
                              cai_error *error);

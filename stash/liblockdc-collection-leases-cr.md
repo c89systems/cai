@@ -1,6 +1,7 @@
 # CR: collection-level leases and explicit ownership takeover
 
-Status: proposed; not implemented.
+Status: implemented upstream in liblockdc 0.25.0; CAI integration is documented
+in [the consumer upgrade notes](../docs/liblockdc-0.25.0-upgrade.md).
 Date: 2026-10-29.
 Target: liblockdc, initially its native Pouch collections implementation, with
 public C and Lua API parity.

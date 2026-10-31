@@ -33,18 +33,17 @@ static int journal_context_open(cai_cli_pouch *pouch, const char *scope,
   if (rc == CAI_OK)
     rc = session_retention(pouch, &entry->session, &seconds, error);
   if (rc == CAI_OK)
+    rc = collection_owner_open(pouch, id, "events",
+                               entry->session.commit_position == 0U, 0,
+                               &entry->collection, error);
+  if (rc == CAI_OK)
     rc = update_session(lease, &entry->session, error);
   rc = release(lease, rc, error);
-  if (rc == CAI_OK)
-    rc = open_history_collection(pouch, id, "events",
-                                 entry->session.commit_position == 0U, 0,
-                                 &entry->collection, error);
   if (rc == CAI_OK) {
     entry->next = pouch->journal_contexts;
     pouch->journal_contexts = entry;
     *out = entry;
   } else {
-    lc_collection_close(entry->collection);
     session_guard_close(entry->guard);
     free(entry);
   }
@@ -58,7 +57,6 @@ static void journal_contexts_close(cai_cli_pouch *pouch) {
   pthread_mutex_lock(&pouch->journal_lock);
   while ((entry = pouch->journal_contexts) != NULL) {
     pouch->journal_contexts = entry->next;
-    lc_collection_close(entry->collection);
     session_guard_close(entry->guard);
     free(entry);
   }
@@ -112,10 +110,10 @@ static int journal_prune_missing_hint(cai_cli_pouch *pouch,
       return CAI_OK;
     }
     cai_error_cleanup(&guarded);
-    rc = open_history_collection(pouch, session->id, "prompts", 0, 1, &prompts,
-                                 error);
+    rc = collection_owner_open(pouch, session->id, "prompts", 0, 1, &prompts,
+                               error);
     if (rc == CAI_OK && prompts != NULL &&
-        prompts->drop(prompts, &local) != LC_OK)
+        collection_owner_drop(pouch, prompts, &local) != LC_OK)
       rc = cai_cli_lc_error(error, &local);
     if (rc == CAI_OK && lease->state_etag != NULL &&
         lease->state_etag[0] != '\0' &&
@@ -127,7 +125,7 @@ static int journal_prune_missing_hint(cai_cli_pouch *pouch,
       rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "remove expired conversation registry entry");
   }
-  lc_collection_close(prompts);
+  collection_owner_remove(pouch, prompts);
   lc_collection_close(collection);
   lc_error_cleanup(&local);
   session_guard_close(guard);

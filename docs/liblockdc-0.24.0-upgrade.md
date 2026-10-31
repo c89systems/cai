@@ -1,5 +1,8 @@
 # liblockdc 0.24.0 integration
 
+Historical integration notes. The current pin and collection ownership contract
+are documented in [the 0.25.0 upgrade notes](liblockdc-0.25.0-upgrade.md).
+
 CAI consumes verified release SDKs for its six Linux targets. The upgrade
 changes liblockdc's private dependency ABI from 6 to 7; rebuild application
 consumers against the matching header and library. CAI's public C layouts are

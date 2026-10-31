@@ -2,4 +2,6 @@
 set -euo pipefail
 root=$(mktemp -d "$2/pouch-startup-test.XXXXXX")
 trap 'rm -rf "$root"' EXIT
-"$1" "$root"
+args=("$root")
+if [[ $# -gt 2 ]]; then args+=("$3"); fi
+"$1" "${args[@]}"

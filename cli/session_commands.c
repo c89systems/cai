@@ -230,8 +230,8 @@ static int export_load(void *context, const char *scope, const char *id,
   export_store *store;
   (void)scope;
   store = (export_store *)context;
-  return store->pouch->store.load_id(store->pouch, store->scope, id, out,
-                                     sequence, error);
+  return cai_cli_pouch_read_id(store->pouch, store->scope, id, out, sequence,
+                               error);
 }
 
 static int export_latest(void *context, const char *scope, char *id,

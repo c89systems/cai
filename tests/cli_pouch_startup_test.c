@@ -51,8 +51,8 @@ static void newest(cai_cli_pouch *pouch, const char *scope,
   char id[CAI_AGENT_SESSION_ID_MAX];
   cai_source *source = NULL;
   unsigned long long sequence = 0;
-  assert(pouch->store.load_latest(pouch, scope, id, sizeof(id), &source,
-                                  &sequence, error) == CAI_OK);
+  assert(load_latest_mode(pouch, scope, id, sizeof(id), &source, &sequence, 0,
+                          error) == CAI_OK);
   assert((source != NULL) == (expected != NULL));
   if (expected != NULL) {
     assert(strcmp(id, expected) == 0);
@@ -325,12 +325,11 @@ static void replay_limits(cai_cli_pouch *pouch, cai_error *error) {
          CAI_OK);
   {
     lc_collection *collection = NULL;
-    assert(history_collection(pouch, "oversized", "events", 0, &collection,
-                              error) == CAI_OK);
+    assert(collection_owner_open(pouch, "oversized", "events", 0, 0,
+                                 &collection, error) == CAI_OK);
     rc = collection_append_source(pouch, collection,
                                   "event-00000000000001000004", source, NULL,
                                   NULL, NULL, error);
-    collection->close(collection);
     assert(rc == CAI_OK);
   }
   cai_source_close(source);
@@ -489,6 +488,7 @@ static void collection_regressions(cai_cli_pouch *pouch, cai_error *error) {
   cai_error_init(error);
   pouch->sessions->collection_capabilities = capabilities;
   /* A missing collection is corruption, not an empty recovered journal. */
+  cai_cli_pouch_end_use(pouch);
   assert(history_collection(pouch, "collection-test", "events", 0, &collection,
                             error) == CAI_OK);
   assert(collection->drop(collection, &local) == LC_OK);
@@ -503,6 +503,8 @@ static void collection_regressions(cai_cli_pouch *pouch, cai_error *error) {
 #include "pouch_context_test.inc"
 #include "pouch_journal_fault_test.inc"
 #include "pouch_replay_read_test.inc"
+
+#include "pouch_collection_lease_test.inc"
 
 int main(int argc, char **argv) {
   char directory[PATH_MAX];
@@ -524,11 +526,17 @@ int main(int argc, char **argv) {
     cai_error_cleanup(&error);
     return 0;
   }
-  assert(argc == 2);
+  assert(argc == 2 || (argc == 3 && strcmp(argv[2], "--leases") == 0));
   assert(snprintf(directory, sizeof(directory), "%s/pouch-startup-XXXXXX",
                   argv[1]) > 0);
   assert(mkdtemp(directory) != NULL);
   assert(setenv("XDG_STATE_HOME", directory, 1) == 0);
+  if (argc == 3) {
+    collection_lease_contracts();
+    collection_lease_failures();
+    collection_crash_takeover();
+    return 0;
+  }
   cai_error_init(&error);
   assert(cai_cli_pouch_open(&pouch, NULL, NULL, NULL, &error) == CAI_OK);
   newest(&pouch, "/work/empty", NULL, &error);

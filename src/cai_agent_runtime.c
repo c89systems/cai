@@ -529,6 +529,15 @@ typedef struct cai_runtime_spooled_record_reader {
   int eof;
 } cai_runtime_spooled_record_reader;
 
+/* Bounded parser/reader scratch belongs to the export operation, not its
+ * caller's worker stack. Reuse it for metadata and history rendering. */
+typedef struct cai_runtime_export_workspace {
+  cai_runtime_exporter exporter;
+  cai_runtime_spooled_record_reader records;
+  cai_runtime_spooled_record_reader record_start;
+  cai_runtime_spooled_record_reader pass;
+} cai_runtime_export_workspace;
+
 typedef struct cai_runtime_history_record_reader {
   cai_runtime_spooled_record_reader *records;
   unsigned long remaining;
@@ -6936,21 +6945,22 @@ cai_runtime_history_record_drain(cai_runtime_spooled_record_reader *records,
   return CAI_OK;
 }
 
-static int cai_runtime_export_history_markdown(cai_session *session,
-                                               cai_sink *sink,
-                                               cai_error *error) {
-  cai_runtime_exporter exporter;
-  cai_runtime_spooled_record_reader records;
+static int
+cai_runtime_export_history_markdown(cai_session *session, cai_sink *sink,
+                                    cai_error *error,
+                                    cai_runtime_export_workspace *workspace) {
+  cai_runtime_exporter *exporter = &workspace->exporter;
+  cai_runtime_spooled_record_reader *records = &workspace->records;
   lonejson_value_visitor visitor;
   lonejson_error json_error;
   unsigned long record_length;
   int have_record;
   int rc;
 
-  memset(&exporter, 0, sizeof(exporter));
-  exporter.sink = sink;
-  exporter.error = error;
-  exporter.rc = CAI_OK;
+  memset(exporter, 0, sizeof(*exporter));
+  exporter->sink = sink;
+  exporter->error = error;
+  exporter->rc = CAI_OK;
   visitor = lonejson_default_value_visitor();
   visitor.object_begin = cai_runtime_export_object_begin;
   visitor.object_end = cai_runtime_export_object_end;
@@ -6961,12 +6971,12 @@ static int cai_runtime_export_history_markdown(cai_session *session,
   visitor.string_begin = cai_runtime_export_string_begin;
   visitor.string_chunk = cai_runtime_export_string_chunk;
   visitor.string_end = cai_runtime_export_string_end;
-  records.cursor = CAI_SESSION_IMPL(session)->history;
-  records.offset = 0U;
-  records.length = 0U;
-  records.eof = 0;
+  records->cursor = CAI_SESSION_IMPL(session)->history;
+  records->offset = 0U;
+  records->length = 0U;
+  records->eof = 0;
   lonejson_error_init(&json_error);
-  if (records.cursor.rewind(&records.cursor, &json_error) !=
+  if (records->cursor.rewind(&records->cursor, &json_error) !=
       LONEJSON_STATUS_OK) {
     return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
                                 "failed to rewind conversation history",
@@ -6974,49 +6984,47 @@ static int cai_runtime_export_history_markdown(cai_session *session,
   }
   rc = CAI_OK;
   for (;;) {
-    cai_runtime_spooled_record_reader record_start;
-    cai_runtime_spooled_record_reader pass;
-
-    rc = cai_runtime_history_record_length(&records, &record_length,
+    rc = cai_runtime_history_record_length(records, &record_length,
                                            &have_record, error);
-    if (rc != CAI_OK || !have_record || exporter.rc != CAI_OK) {
+    if (rc != CAI_OK || !have_record || exporter->rc != CAI_OK) {
       break;
     }
-    record_start = records;
+    workspace->record_start = *records;
     /* Durable history is normalized to one item per array record when it is
      * appended. JSON object member order is not semantic, so each bounded
      * record receives one metadata scan before its streaming render pass.
      * Export is consequently linear in the durable history size. */
-    exporter.target_item_index = 0U;
-    exporter.metadata_only = 1;
-    exporter.preserve_item_metadata = 0;
-    pass = record_start;
-    rc = cai_runtime_export_history_record(&pass, record_length, &visitor,
-                                           &exporter, error);
-    if (rc == CAI_OK && exporter.rc == CAI_OK && !exporter.target_item_found) {
+    exporter->target_item_index = 0U;
+    exporter->metadata_only = 1;
+    exporter->preserve_item_metadata = 0;
+    workspace->pass = workspace->record_start;
+    rc = cai_runtime_export_history_record(&workspace->pass, record_length,
+                                           &visitor, exporter, error);
+    if (rc == CAI_OK && exporter->rc == CAI_OK &&
+        !exporter->target_item_found) {
       rc = cai_set_error(error, CAI_ERR_PROTOCOL,
                          "conversation history record has no item");
     }
-    if (rc == CAI_OK && exporter.rc == CAI_OK) {
-      exporter.metadata_only = 0;
-      exporter.preserve_item_metadata = 1;
-      pass = record_start;
-      rc = cai_runtime_export_history_record(&pass, record_length, &visitor,
-                                             &exporter, error);
+    if (rc == CAI_OK && exporter->rc == CAI_OK) {
+      exporter->metadata_only = 0;
+      exporter->preserve_item_metadata = 1;
+      workspace->pass = workspace->record_start;
+      rc = cai_runtime_export_history_record(&workspace->pass, record_length,
+                                             &visitor, exporter, error);
     }
-    exporter.metadata_only = 0;
-    exporter.preserve_item_metadata = 0;
-    if (rc != CAI_OK || exporter.rc != CAI_OK) {
+    exporter->metadata_only = 0;
+    exporter->preserve_item_metadata = 0;
+    if (rc != CAI_OK || exporter->rc != CAI_OK) {
       break;
     }
-    records = record_start;
-    rc = cai_runtime_history_record_drain(&records, record_length, error);
+    *records = workspace->record_start;
+    rc = cai_runtime_history_record_drain(records, record_length, error);
     if (rc != CAI_OK) {
       break;
     }
   }
-  if (exporter.rc != CAI_OK) {
-    return exporter.rc;
+  if (exporter->rc != CAI_OK) {
+    return exporter->rc;
   }
   return rc;
 }
@@ -7026,79 +7034,83 @@ static int cai_runtime_export_handover_markdown(cai_agent_runtime *runtime,
                                                 cai_error *error) {
   const cai_session_impl *session;
   const cai_agent_impl *agent;
-  cai_runtime_exporter exporter;
+  cai_runtime_export_workspace *workspace;
+  cai_runtime_exporter *exporter;
   char number[64];
   int rc;
 
   session = CAI_SESSION_IMPL(runtime->session);
   agent = CAI_SESSION_AGENT_IMPL(runtime->session);
-  memset(&exporter, 0, sizeof(exporter));
-  exporter.sink = sink;
-  exporter.error = error;
-  exporter.rc = CAI_OK;
-  (void)cai_runtime_export_literal(&exporter, "# CAI agent handover\n\n");
+  workspace = cai_alloc(NULL, sizeof(*workspace));
+  if (workspace == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "failed to allocate Markdown export workspace");
+  exporter = &workspace->exporter;
+  memset(exporter, 0, sizeof(*exporter));
+  exporter->sink = sink;
+  exporter->error = error;
+  exporter->rc = CAI_OK;
+  (void)cai_runtime_export_literal(exporter, "# CAI agent handover\n\n");
   (void)cai_runtime_export_literal(
-      &exporter, "> **Format:** `cai-agent-handover/1`\n>\n> ");
+      exporter, "> **Format:** `cai-agent-handover/1`\n>\n> ");
   (void)cai_runtime_export_literal(
-      &exporter,
+      exporter,
       "This is a non-resumable handover document, not a session commit. "
       "It preserves durable conversation context and active developer "
       "instructions available to this runtime.\n\n");
-  (void)cai_runtime_export_literal(&exporter, "## Runtime\n\n");
-  (void)cai_runtime_export_write_metadata(&exporter, "Preset",
+  (void)cai_runtime_export_literal(exporter, "## Runtime\n\n");
+  (void)cai_runtime_export_write_metadata(exporter, "Preset",
                                           runtime->preset_name);
-  (void)cai_runtime_export_write_metadata(&exporter, "Preset prompt version",
+  (void)cai_runtime_export_write_metadata(exporter, "Preset prompt version",
                                           runtime->preset_prompt_version);
-  (void)cai_runtime_export_write_metadata(&exporter, "Active model",
+  (void)cai_runtime_export_write_metadata(exporter, "Active model",
                                           agent->model);
   if (session->state_model != NULL && agent->model != NULL &&
       strcmp(session->state_model, agent->model) != 0) {
-    (void)cai_runtime_export_write_metadata(&exporter, "Recorded history model",
+    (void)cai_runtime_export_write_metadata(exporter, "Recorded history model",
                                             session->state_model);
   }
-  (void)cai_runtime_export_write_metadata(&exporter, "Reasoning effort",
+  (void)cai_runtime_export_write_metadata(exporter, "Reasoning effort",
                                           agent->reasoning_effort);
   (void)cai_runtime_export_write_metadata(
-      &exporter, "Runtime state",
-      cai_runtime_export_state_name(runtime->state));
-  (void)cai_runtime_export_write_metadata(&exporter, "Session ID",
+      exporter, "Runtime state", cai_runtime_export_state_name(runtime->state));
+  (void)cai_runtime_export_write_metadata(exporter, "Session ID",
                                           runtime->session_id);
-  (void)cai_runtime_export_write_metadata(&exporter, "Workspace",
+  (void)cai_runtime_export_write_metadata(exporter, "Workspace",
                                           runtime->workspace_directory);
-  (void)cai_runtime_export_write_metadata(&exporter, "Session scope",
+  (void)cai_runtime_export_write_metadata(exporter, "Session scope",
                                           runtime->session_scope);
-  (void)cai_runtime_export_literal(&exporter, "- Terminal tools: ");
+  (void)cai_runtime_export_literal(exporter, "- Terminal tools: ");
   (void)cai_runtime_export_literal(
-      &exporter, runtime->terminal_enabled ? "enabled\n\n" : "disabled\n\n");
-  (void)cai_runtime_export_literal(&exporter, "- Image generation: ");
-  (void)cai_runtime_export_literal(&exporter, runtime->image_generation_enabled
-                                                  ? "enabled\n\n"
-                                                  : "disabled\n\n");
+      exporter, runtime->terminal_enabled ? "enabled\n\n" : "disabled\n\n");
+  (void)cai_runtime_export_literal(exporter, "- Image generation: ");
+  (void)cai_runtime_export_literal(exporter, runtime->image_generation_enabled
+                                                 ? "enabled\n\n"
+                                                 : "disabled\n\n");
   (void)snprintf(number, sizeof(number), "%lu configured",
                  (unsigned long)runtime->mcp_client_count);
-  (void)cai_runtime_export_write_metadata(&exporter, "MCP clients", number);
+  (void)cai_runtime_export_write_metadata(exporter, "MCP clients", number);
 
-  (void)cai_runtime_export_literal(&exporter, "## Active goal\n\n");
+  (void)cai_runtime_export_literal(exporter, "## Active goal\n\n");
   if (session->goal_objective == NULL) {
-    (void)cai_runtime_export_literal(&exporter, "No active durable goal.\n\n");
+    (void)cai_runtime_export_literal(exporter, "No active durable goal.\n\n");
   } else {
-    (void)cai_runtime_export_write_metadata(&exporter, "Status",
+    (void)cai_runtime_export_write_metadata(exporter, "Status",
                                             session->goal_status);
     if (session->goal_has_token_budget) {
       (void)snprintf(number, sizeof(number), "%lld",
                      session->goal_token_budget);
-      (void)cai_runtime_export_write_metadata(&exporter, "Token budget",
-                                              number);
+      (void)cai_runtime_export_write_metadata(exporter, "Token budget", number);
     } else {
-      (void)cai_runtime_export_write_metadata(&exporter, "Token budget",
+      (void)cai_runtime_export_write_metadata(exporter, "Token budget",
                                               "unbounded");
     }
     (void)snprintf(number, sizeof(number), "%lld", session->goal_tokens_used);
-    (void)cai_runtime_export_write_metadata(&exporter, "Tokens used", number);
+    (void)cai_runtime_export_write_metadata(exporter, "Tokens used", number);
     (void)snprintf(number, sizeof(number), "%lld",
                    cai_session_goal_elapsed_seconds(runtime->session,
                                                     (long long)time(NULL)));
-    (void)cai_runtime_export_write_metadata(&exporter, "Elapsed active seconds",
+    (void)cai_runtime_export_write_metadata(exporter, "Elapsed active seconds",
                                             number);
     if (session->goal_has_token_budget) {
       (void)snprintf(number, sizeof(number), "%lld",
@@ -7106,31 +7118,30 @@ static int cai_runtime_export_handover_markdown(cai_agent_runtime *runtime,
                          ? 0LL
                          : session->goal_token_budget -
                                session->goal_tokens_used);
-      (void)cai_runtime_export_write_metadata(&exporter, "Tokens remaining",
+      (void)cai_runtime_export_write_metadata(exporter, "Tokens remaining",
                                               number);
     }
-    (void)cai_runtime_export_literal(&exporter, "### Objective\n\n");
-    (void)cai_runtime_export_write_text(&exporter, session->goal_objective,
+    (void)cai_runtime_export_literal(exporter, "### Objective\n\n");
+    (void)cai_runtime_export_write_text(exporter, session->goal_objective,
                                         strlen(session->goal_objective));
-    (void)cai_runtime_export_literal(&exporter, "\n\n");
+    (void)cai_runtime_export_literal(exporter, "\n\n");
   }
 
-  (void)cai_runtime_export_literal(&exporter,
+  (void)cai_runtime_export_literal(exporter,
                                    "## Active developer instructions\n\n");
   if (agent->developer_instructions == NULL ||
       agent->developer_instructions[0] == '\0') {
     (void)cai_runtime_export_literal(
-        &exporter, "*[no developer instructions configured]*\n\n");
+        exporter, "*[no developer instructions configured]*\n\n");
   } else {
-    (void)cai_runtime_export_write_text(&exporter,
-                                        agent->developer_instructions,
+    (void)cai_runtime_export_write_text(exporter, agent->developer_instructions,
                                         strlen(agent->developer_instructions));
-    (void)cai_runtime_export_literal(&exporter, "\n\n");
+    (void)cai_runtime_export_literal(exporter, "\n\n");
   }
 
-  (void)cai_runtime_export_literal(&exporter, "## Handover limits\n\n");
+  (void)cai_runtime_export_literal(exporter, "## Handover limits\n\n");
   (void)cai_runtime_export_literal(
-      &exporter,
+      exporter,
       "- This Markdown does not resume or authenticate a CAI session; the "
       "durable session commit remains authoritative for continuation.\n"
       "- No live terminal process, PTY state, in-flight model/tool call, or "
@@ -7140,10 +7151,11 @@ static int cai_runtime_export_handover_markdown(cai_agent_runtime *runtime,
       "- Text already durable in the conversation or configured as developer "
       "instructions is intentionally preserved and is not automatically "
       "redacted.\n\n");
-  if (exporter.rc != CAI_OK) {
-    return exporter.rc;
-  }
-  rc = cai_runtime_export_history_markdown(runtime->session, sink, error);
+  rc = exporter->rc;
+  if (rc == CAI_OK)
+    rc = cai_runtime_export_history_markdown(runtime->session, sink, error,
+                                             workspace);
+  cai_free_mem(NULL, workspace);
   return rc;
 }
 

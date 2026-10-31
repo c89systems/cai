@@ -9,8 +9,12 @@ static const lonejson_field prompt_fields[] = {
 LONEJSON_MAP_DEFINE(prompt_map, prompt_record, prompt_fields);
 
 void cai_cli_pouch_prompt_close(cai_cli_pouch *pouch) {
-  lc_collection_close(pouch->prompt_history);
+  if (pouch->prompt_history_read_only)
+    lc_collection_close(pouch->prompt_history);
+  else
+    collection_owner_remove(pouch, pouch->prompt_history);
   pouch->prompt_history = NULL;
+  pouch->prompt_history_read_only = 0;
 }
 int cai_cli_pouch_prompt_open(cai_cli_pouch *pouch, const char *id,
                               cai_error *error) {
@@ -19,10 +23,28 @@ int cai_cli_pouch_prompt_open(cai_cli_pouch *pouch, const char *id,
   if (!session_component(id) || strlen(id) >= CAI_AGENT_SESSION_ID_MAX)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "invalid prompt-history conversation ID");
-  rc = open_history_collection(pouch, id, "prompts", 1, 0, &collection, error);
+  rc = collection_owner_open(pouch, id, "prompts", 1, 0, &collection, error);
+  if (rc == CAI_OK) {
+    if (pouch->prompt_history != collection)
+      cai_cli_pouch_prompt_close(pouch);
+    pouch->prompt_history = collection;
+    pouch->prompt_history_read_only = 0;
+  }
+  return rc;
+}
+
+int cai_cli_pouch_prompt_open_read(cai_cli_pouch *pouch, const char *id,
+                                   cai_error *error) {
+  lc_collection *collection = NULL;
+  int rc;
+  if (!session_component(id) || strlen(id) >= CAI_AGENT_SESSION_ID_MAX)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "invalid prompt-history conversation ID");
+  rc = open_history_collection(pouch, id, "prompts", 0, 1, &collection, error);
   if (rc == CAI_OK) {
     cai_cli_pouch_prompt_close(pouch);
     pouch->prompt_history = collection;
+    pouch->prompt_history_read_only = 1;
   }
   return rc;
 }
@@ -33,7 +55,7 @@ int cai_cli_pouch_prompt_set_limit(cai_cli_pouch *pouch, unsigned int limit,
   lc_collection_metadata_req request;
   lc_error local;
   int rc;
-  if (pouch->prompt_history == NULL)
+  if (pouch->prompt_history == NULL || pouch->prompt_history_read_only)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "prompt-history collection is not open");
   lc_error_init(&local);
@@ -61,8 +83,8 @@ int cai_cli_pouch_prompt_configure(cai_cli_pouch *pouch, const char *id,
     if (limit != 0U)
       rc = cai_cli_pouch_prompt_open(pouch, id, error);
     else
-      rc = open_history_collection(pouch, id, "prompts", 0, 1,
-                                   &pouch->prompt_history, error);
+      rc = collection_owner_open(pouch, id, "prompts", 0, 1,
+                                 &pouch->prompt_history, error);
   }
   if (rc == CAI_OK && pouch->prompt_history != NULL)
     rc = cai_cli_pouch_prompt_set_limit(pouch, limit, error);
@@ -136,6 +158,9 @@ int cai_cli_pouch_prompt_load(cai_cli_pouch *pouch, unsigned int limit,
   lc_error local;
   lonejson_error json_error;
   int rc;
+  if (emit != NULL && pouch->prompt_history == NULL &&
+      pouch->prompt_history_read_only)
+    return CAI_OK;
   if (pouch->prompt_history == NULL || emit == NULL)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "prompt-history collection is not open");
@@ -181,7 +206,8 @@ int cai_cli_pouch_prompt_append(cai_cli_pouch *pouch, const char *prompt,
   prompt_record record;
   cai_source *source = NULL;
   int rc;
-  if (pouch->prompt_history == NULL || prompt == NULL)
+  if (pouch->prompt_history == NULL || pouch->prompt_history_read_only ||
+      prompt == NULL)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "prompt-history collection is not open");
   if (RAND_bytes(nonce, sizeof(nonce)) != 1)

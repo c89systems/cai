@@ -101,8 +101,8 @@ static void journal_faults(cai_cli_pouch *pouch, cai_error *error) {
   newest(pouch, "/work/fault-identity", "fault-identity", error);
   assert(validate_commit(pouch, "fault-identity", "/work/fault-identity",
                          error) == CAI_OK);
-  assert(history_collection(pouch, "append-faults", "events", 1, &collection,
-                            error) == CAI_OK);
+  assert(collection_owner_open(pouch, "append-faults", "events", 1, 0,
+                               &collection, error) == CAI_OK);
   journal_real_append = collection->append;
   journal_real_status = collection->append_status;
   collection->append = journal_lost_ack;
@@ -152,7 +152,7 @@ static void journal_faults(cai_cli_pouch *pouch, cai_error *error) {
   cai_source_close(source);
   cai_error_cleanup(error);
   cai_cli_pouch_close(&alias);
-  collection->close(collection);
+  collection_owner_remove(pouch, collection);
   lc_error_cleanup(&local);
   cai_cli_pouch_close(pouch);
   assert(cai_cli_pouch_open(pouch, NULL, NULL, NULL, error) == CAI_OK);

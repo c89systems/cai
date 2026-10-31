@@ -132,6 +132,8 @@ typedef struct cli_state {
   sl_watch_id_t watch_id;
   sl_watch_id_t timer_watch_id;
   int has_watch;
+  sl_watch_id_t ownership_watch_id;
+  int has_ownership_watch;
   int has_timer_watch;
   int timer_fd;
   int timer_armed;
@@ -3063,6 +3065,14 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
       return rc;
     }
     state->has_watch = 1;
+    wakeup_fd = cai_cli_pouch_ownership_fd(&state->pouch);
+    if (wakeup_fd >= 0) {
+      if (sl_watch_add(state->sl, wakeup_fd, SL_WATCH_READ | SL_WATCH_ERROR,
+                       cli_wakeup, state, &state->ownership_watch_id) != SL_OK)
+        return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                             "watch conversation ownership");
+      state->has_ownership_watch = 1;
+    }
   }
   /* A crash can leave the last replayed summary without an end marker. */
   rc = cli_finish_response(state) == 0 && cli_finish_reasoning(state) == 0
@@ -3130,6 +3140,10 @@ static void cli_close_runtime(cli_state *state) {
   if (state->has_watch) {
     (void)sl_watch_remove(state->sl, state->watch_id);
     state->has_watch = 0;
+  }
+  if (state->has_ownership_watch) {
+    (void)sl_watch_remove(state->sl, state->ownership_watch_id);
+    state->has_ownership_watch = 0;
   }
   cai_agent_runtime_close(state->runtime);
   state->runtime = NULL;
@@ -3731,22 +3745,34 @@ static int cli_host_process(cli_state *state, cai_error *error) {
 /* Both descriptors are level-triggered. Batch runs wake immediately for host
  * commands instead of waiting for the runtime's timed condition variable. */
 static int cli_pump(cli_state *state, long timeout, cai_error *error) {
-  struct pollfd descriptors[2];
+  struct pollfd descriptors[3];
   int fd, rc;
-  if (state->bridge != NULL && timeout > 0L) {
+  rc = cai_cli_pouch_ownership_check(&state->pouch, error);
+  if (rc != CAI_OK) {
+    (void)cai_agent_runtime_cancel_turn(state->runtime, NULL);
+    return rc;
+  }
+  if (timeout > 0L) {
     rc = cai_agent_runtime_wakeup_fd(state->runtime, &fd, error);
     if (rc != CAI_OK)
       return rc;
     memset(descriptors, 0, sizeof(descriptors));
     descriptors[0].fd = fd;
-    descriptors[1].fd = state->bridge->fd;
-    descriptors[0].events = descriptors[1].events = POLLIN;
+    descriptors[1].fd = state->bridge != NULL ? state->bridge->fd : -1;
+    descriptors[2].fd = cai_cli_pouch_ownership_fd(&state->pouch);
+    descriptors[0].events = descriptors[1].events = descriptors[2].events =
+        POLLIN;
     do {
-      rc = poll(descriptors, 2U, (int)timeout);
+      rc = poll(descriptors, 3U, (int)timeout);
     } while (rc < 0 && errno == EINTR);
     if (rc < 0)
       return cai_cli_error(error, CAI_ERR_TRANSPORT, "wait for app events");
     timeout = 0L;
+  }
+  rc = cai_cli_pouch_ownership_check(&state->pouch, error);
+  if (rc != CAI_OK) {
+    (void)cai_agent_runtime_cancel_turn(state->runtime, NULL);
+    return rc;
   }
   rc = state->interactive
            ? cai_agent_runtime_pump_bounded(state->runtime, timeout, 4U, error)
@@ -5617,9 +5643,9 @@ static int cli_temp_stop(void *context) {
   return state->host_stopped;
 }
 
-int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
-                    cai_app_bridge *bridge) {
-  cli_state state;
+static int cli_app_run_state(cli_state *state, int argc, char **argv,
+                             const cai_app_config *application,
+                             cai_app_bridge *bridge) {
   cai_client_config client_config;
   cai_chatgpt_auth_config auth_config;
   cai_cli_pouch *auth_store = NULL;
@@ -5639,12 +5665,12 @@ int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
   int rc;
   int result;
 
-  memset(&state, 0, sizeof(state));
-  cai_cli_temp_init(&state.temporary);
-  state.application = application;
-  state.bridge = bridge;
-  state.timer_fd = -1;
-  cai_cli_shell_init(&state.shell);
+  memset(state, 0, sizeof(*state));
+  cai_cli_temp_init(&state->temporary);
+  state->application = application;
+  state->bridge = bridge;
+  state->timer_fd = -1;
+  cai_cli_shell_init(&state->shell);
   result = 1;
   metadata_json = NULL;
   cai_error_init(&error);
@@ -5654,7 +5680,7 @@ int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
     /* Native messaging owns stdout; LOG_OUTPUT cannot redirect diagnostics
      * there. */
     (void)unsetenv("LOG_OUTPUT");
-    if (cai_cli_log_new(&state.log, PSLOG_LEVEL_WARN, 0,
+    if (cai_cli_log_new(&state->log, PSLOG_LEVEL_WARN, 0,
                         application != NULL ? application->logger : NULL,
                         &error) != CAI_OK)
       goto cleanup;
@@ -5664,227 +5690,230 @@ int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
     else {
       /* Chrome only supplies its origin. Resolve the host's own identity and
        * startup config without treating the origin as an agent argument. */
-      rc = cai_cli_configure(1, argv, &state.options, &state.configuration,
+      rc = cai_cli_configure(1, argv, &state->options, &state->configuration,
                              application, &error);
       if (rc == 1) {
-        const char *directory = state.configuration->get(
-            state.configuration, "chrome", "socket_directory");
+        const char *directory = state->configuration->get(
+            state->configuration, "chrome", "socket_directory");
         rc = cai_cli_private_directory(directory, &error);
         if (rc == CAI_OK)
           rc = cai_chrome_native_host_run_at(argv[explicit_mode ? 2 : 1],
-                                             directory, state.log->logger,
+                                             directory, state->log->logger,
                                              &error);
       } else
         rc = CAI_ERR_INVALID;
     }
     if (rc != CAI_OK)
-      cai_cli_log_error(state.log->logger, "Chrome native host", &error);
+      cai_cli_log_error(state->log->logger, "Chrome native host", &error);
     result = rc == CAI_OK ? 0 : 1;
     goto cleanup;
   }
-  parsed = cai_cli_configure(argc, argv, &state.options, &state.configuration,
+  parsed = cai_cli_configure(argc, argv, &state->options, &state->configuration,
                              application, &error);
   if (parsed > 0) {
-    const char *reason = cai_cli_theme_parse(state.options.theme, &state.theme);
+    const char *reason =
+        cai_cli_theme_parse(state->options.theme, &state->theme);
     if (reason != NULL) {
       cai_cli_error(&error, CAI_ERR_INVALID, reason);
       parsed = -1;
     }
-    cli_theme_for_scope(&state, &state.theme, 0, &state.render_theme);
+    cli_theme_for_scope(state, &state->theme, 0, &state->render_theme);
   }
   if (parsed > 0 &&
-      cai_cli_stores_resolve(state.configuration, &error) != CAI_OK)
+      cai_cli_stores_resolve(state->configuration, &error) != CAI_OK)
     parsed = -1;
   if (parsed > 0) {
-    state.normal_options = state.options;
-    if (state.options.temporary &&
-        cai_cli_temp_open(&state.temporary, &state.options, &error) != CAI_OK)
+    state->normal_options = state->options;
+    if (state->options.temporary &&
+        cai_cli_temp_open(&state->temporary, &state->options, &error) != CAI_OK)
       parsed = -1;
   }
   if (parsed <= 0) {
     if (parsed < 0 &&
-        cai_cli_log_new(&state.log, PSLOG_LEVEL_WARN, 0,
+        cai_cli_log_new(&state->log, PSLOG_LEVEL_WARN, 0,
                         application != NULL ? application->logger : NULL,
                         &error) == CAI_OK)
-      cli_diagnostic(&state, PSLOG_LEVEL_ERROR,
+      cli_diagnostic(state, PSLOG_LEVEL_ERROR,
                      error.message != NULL ? error.message
-                                           : state.options.diagnostic);
+                                           : state->options.diagnostic);
     result = parsed == 0 ? 0 : 2;
     if (parsed < 0 && error.code == CAI_OK)
-      cai_cli_error(&error, CAI_ERR_INVALID, state.options.diagnostic);
+      cai_cli_error(&error, CAI_ERR_INVALID, state->options.diagnostic);
     goto cleanup;
   }
-  snprintf(state.welcome, sizeof(state.welcome),
-           "Welcome to %s. Send /help for usage.", state.options.program_name);
-  state.batch = state.options.review || state.options.non_interactive;
+  snprintf(state->welcome, sizeof(state->welcome),
+           "Welcome to %s. Send /help for usage.", state->options.program_name);
+  state->batch = state->options.review || state->options.non_interactive;
   utility_mode =
-      state.options.chrome_setup || state.options.chrome_remove ||
-      state.options.login || state.options.list || state.options.resume_list ||
-      state.options.delete_list || state.options.delete_id != NULL ||
-      state.options.export_id != NULL || state.options.import_file != NULL ||
-      state.options.install_skill != NULL || state.options.message != NULL;
+      state->options.chrome_setup || state->options.chrome_remove ||
+      state->options.login || state->options.list ||
+      state->options.resume_list || state->options.delete_list ||
+      state->options.delete_id != NULL || state->options.export_id != NULL ||
+      state->options.import_file != NULL ||
+      state->options.install_skill != NULL || state->options.message != NULL;
   default_log_level = utility_mode ? PSLOG_LEVEL_WARN : PSLOG_LEVEL_TRACE;
   if (cai_cli_log_new(
-          &state.log, default_log_level, !state.batch && !utility_mode,
+          &state->log, default_log_level, !state->batch && !utility_mode,
           application != NULL ? application->logger : NULL, &error) != CAI_OK)
     goto cleanup;
   (void)setlocale(LC_CTYPE, "");
   result = 1;
-  if (realpath(".", state.workspace) == NULL) {
-    cli_diagnostic(&state, PSLOG_LEVEL_ERROR, "cannot resolve workspace");
+  if (realpath(".", state->workspace) == NULL) {
+    cli_diagnostic(state, PSLOG_LEVEL_ERROR, "cannot resolve workspace");
     result = 2;
     goto cleanup;
   }
-  if (state.options.install_skill != NULL) {
-    result = cai_cli_install_skill(&state.options, state.log->logger);
+  if (state->options.install_skill != NULL) {
+    result = cai_cli_install_skill(&state->options, state->log->logger);
     goto cleanup;
   }
-  if (!state.batch && !utility_mode) {
-    rc = cai_cli_log_interactive_at(state.log, state.options.log_dir, &error);
+  if (!state->batch && !utility_mode) {
+    rc = cai_cli_log_interactive_at(state->log, state->options.log_dir, &error);
     if (rc != CAI_OK) {
-      cli_print_error(&state, "open interactive log", &error);
+      cli_print_error(state, "open interactive log", &error);
       goto cleanup;
     }
   }
-  if (state.options.temporary) {
-    pslog_field field = pslog_str("workspace", state.temporary.workspace);
-    cai_cli_log_message(state.log->logger, PSLOG_LEVEL_INFO,
+  if (state->options.temporary) {
+    pslog_field field = pslog_str("workspace", state->temporary.workspace);
+    cai_cli_log_message(state->log->logger, PSLOG_LEVEL_INFO,
                         "temp_workspace_opened", "diagnostic",
                         "Temporary workspace created", 27U, &field, 1U);
   }
-  if (state.options.chrome_setup || state.options.chrome_remove) {
+  if (state->options.chrome_setup || state->options.chrome_remove) {
     rc = cai_chrome_native_host_setup_at(
-        state.options.program_name, state.options.chrome_manifest,
-        state.options.chrome_remove,
-        state.configuration->get(state.configuration, "chrome",
-                                 "socket_directory"),
-        state.log->logger, &error);
+        state->options.program_name, state->options.chrome_manifest,
+        state->options.chrome_remove,
+        state->configuration->get(state->configuration, "chrome",
+                                  "socket_directory"),
+        state->log->logger, &error);
     if (rc != CAI_OK)
-      cli_print_error(&state, "Chrome registration", &error);
+      cli_print_error(state, "Chrome registration", &error);
     result = rc == CAI_OK ? 0 : 1;
     goto cleanup;
   }
   {
     cai_cli_options selected;
-    const char *name = state.options.login ? state.normal_options.auth_store
-                       : state.options.message != NULL
-                           ? state.normal_options.messaging_store
-                           : state.normal_options.sessions_store;
-    rc = state.options.temporary
-             ? (selected = state.options, CAI_OK)
-             : cai_cli_store_options(state.configuration, &state.normal_options,
-                                     name, &selected, &error);
+    const char *name = state->options.login ? state->normal_options.auth_store
+                       : state->options.message != NULL
+                           ? state->normal_options.messaging_store
+                           : state->normal_options.sessions_store;
+    rc = state->options.temporary
+             ? (selected = state->options, CAI_OK)
+             : cai_cli_store_options(state->configuration,
+                                     &state->normal_options, name, &selected,
+                                     &error);
     if (rc == CAI_OK)
-      rc = cai_cli_pouch_open_options(&state.pouch, &selected,
-                                      state.log->logger, &error);
+      rc = cai_cli_pouch_open_options(&state->pouch, &selected,
+                                      state->log->logger, &error);
   }
   if (rc != CAI_OK) {
-    cli_print_error(&state, "open lockd store", &error);
+    cli_print_error(state, "open lockd store", &error);
     goto cleanup;
   }
-  state.store = state.pouch.store;
-  rc = cli_host_process(&state, &error);
-  if (rc != CAI_OK || state.host_stopped) {
+  state->store = state->pouch.store;
+  rc = cli_host_process(state, &error);
+  if (rc != CAI_OK || state->host_stopped) {
     result = rc == CAI_OK ? 0 : 1;
     goto cleanup;
   }
-  if (state.options.message != NULL) {
+  if (state->options.message != NULL) {
     cai_sink *destination = NULL;
     rc = cai_sink_stdout(&destination, &error);
     if (rc == CAI_OK)
-      rc = cai_cli_messages_send_once(&state.pouch, state.options.send_queue,
-                                      state.options.message, destination,
+      rc = cai_cli_messages_send_once(&state->pouch, state->options.send_queue,
+                                      state->options.message, destination,
                                       &error);
     if (rc == CAI_OK)
       rc = cai_sink_write(destination, "\n", 1U, &error);
     cai_sink_close(destination);
     if (rc != CAI_OK)
-      cli_print_error(&state, "send message", &error);
+      cli_print_error(state, "send message", &error);
     result = rc == CAI_OK ? 0 : 1;
-    if (cli_host_process(&state, &error) != CAI_OK)
+    if (cli_host_process(state, &error) != CAI_OK)
       result = 1;
     goto cleanup;
   }
-  if (state.options.login) {
-    result = cai_cli_login(&state.pouch.credentials, state.log->logger,
+  if (state->options.login) {
+    result = cai_cli_login(&state->pouch.credentials, state->log->logger,
                            bridge != NULL ? bridge->fd : -1,
-                           cli_terminal_shell_stop, &state);
-    if (cli_host_process(&state, &error) != CAI_OK)
+                           cli_terminal_shell_stop, state);
+    if (cli_host_process(state, &error) != CAI_OK)
       result = 1;
     goto cleanup;
   }
-  if (state.options.list || state.options.resume_list ||
-      state.options.delete_list) {
+  if (state->options.list || state->options.resume_list ||
+      state->options.delete_list) {
     cai_sink *destination;
     destination = NULL;
-    rc = cai_cli_pouch_list(&state.pouch,
-                            state.options.list ? NULL : state.workspace,
-                            &state.sessions, &state.session_count, &error);
-    if (rc == CAI_OK && state.options.delete_list)
-      rc = cai_cli_sessions_deletable(&state.pouch, state.sessions,
-                                      &state.session_count, &error);
+    rc = cai_cli_pouch_list(&state->pouch,
+                            state->options.list ? NULL : state->workspace,
+                            &state->sessions, &state->session_count, &error);
+    if (rc == CAI_OK && state->options.delete_list)
+      rc = cai_cli_sessions_deletable(&state->pouch, state->sessions,
+                                      &state->session_count, &error);
     if (rc == CAI_OK)
       rc = cai_sink_stdout(&destination, &error);
     if (rc == CAI_OK)
       rc = cai_cli_sessions_print(
-          destination, state.sessions, state.session_count, !state.options.list,
-          mdf_terminal_width(STDOUT_FILENO, 80), &error);
+          destination, state->sessions, state->session_count,
+          !state->options.list, mdf_terminal_width(STDOUT_FILENO, 80), &error);
     cai_sink_close(destination);
     if (rc != CAI_OK)
-      cli_print_error(&state, "list conversations", &error);
+      cli_print_error(state, "list conversations", &error);
     result = rc == CAI_OK ? 0 : 1;
     goto cleanup;
   }
-  if (state.options.delete_id != NULL) {
+  if (state->options.delete_id != NULL) {
     cai_cli_pouch *messaging = cli_named_store(
-        &state, state.normal_options.messaging_store, 0, &error);
+        state, state->normal_options.messaging_store, 0, &error);
     char id[CAI_AGENT_SESSION_ID_MAX];
     rc = messaging == NULL
              ? error.code
-             : cai_cli_session_delete(&state.pouch, messaging, &state.options,
-                                      state.workspace, state.options.delete_id,
-                                      id, &error);
+             : cai_cli_session_delete(&state->pouch, messaging, &state->options,
+                                      state->workspace,
+                                      state->options.delete_id, id, &error);
     if (rc != CAI_OK)
-      cli_print_error(&state, "delete conversation", &error);
+      cli_print_error(state, "delete conversation", &error);
     else if (fprintf(stdout, "Deleted conversation %s.\n", id) < 0 ||
              fflush(stdout) != 0)
       rc = CAI_ERR_TRANSPORT;
     result = rc == CAI_OK ? 0 : 1;
-    if (cli_host_process(&state, &error) != CAI_OK)
+    if (cli_host_process(state, &error) != CAI_OK)
       result = 1;
     goto cleanup;
   }
-  if (state.options.export_id != NULL) {
+  if (state->options.export_id != NULL) {
     cai_sink *destination;
     destination = NULL;
     rc = cai_sink_stdout(&destination, &error);
     if (rc == CAI_OK)
       rc = cai_cli_session_export(
-          &state.pouch, state.options.export_id, state.options.export_dir,
-          state.options.export_out, NULL, destination, &error);
+          &state->pouch, state->options.export_id, state->options.export_dir,
+          state->options.export_out, NULL, destination, &error);
     cai_sink_close(destination);
     if (rc != CAI_OK)
-      cli_print_error(&state, "export conversation", &error);
+      cli_print_error(state, "export conversation", &error);
     result = rc == CAI_OK ? 0 : 1;
     goto cleanup;
   }
-  if (state.options.import_file != NULL) {
+  if (state->options.import_file != NULL) {
     char id[CAI_AGENT_SESSION_ID_MAX];
-    rc = cai_cli_pouch_import(&state.pouch, state.options.import_file,
-                              state.workspace, id, sizeof(id), &error);
+    rc = cai_cli_pouch_import(&state->pouch, state->options.import_file,
+                              state->workspace, id, sizeof(id), &error);
     if (rc == CAI_OK)
       puts(id);
     else
-      cli_print_error(&state, "import conversation", &error);
+      cli_print_error(state, "import conversation", &error);
     result = rc == CAI_OK ? 0 : 1;
     goto cleanup;
   }
-  auth_file = state.options.auth_json;
-  if (strcmp(state.options.provider, "chatgpt") == 0) {
+  auth_file = state->options.auth_json;
+  if (strcmp(state->options.provider, "chatgpt") == 0) {
     auth_store =
-        cli_named_store(&state, state.normal_options.auth_store, 1, &error);
+        cli_named_store(state, state->normal_options.auth_store, 1, &error);
     if (auth_store == NULL) {
-      cli_print_error(&state, "open authentication store", &error);
+      cli_print_error(state, "open authentication store", &error);
       goto cleanup;
     }
     if (auth_file == NULL && getenv("HOME") != NULL) {
@@ -5897,315 +5926,317 @@ int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
     if (auth_file != NULL) {
       rc = cai_cli_pouch_seed_auth(auth_store, auth_file, &error);
       if (rc != CAI_OK) {
-        cli_print_error(&state, "import ChatGPT auth", &error);
+        cli_print_error(state, "import ChatGPT auth", &error);
         goto cleanup;
       }
     }
   }
-  state.interactive = !state.options.review && !state.options.non_interactive &&
-                      isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
-  if (state.interactive &&
+  state->interactive = !state->options.review &&
+                       !state->options.non_interactive &&
+                       isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
+  if (state->interactive &&
       signal(SIGINT, cli_keep_session_on_interrupt) == SIG_ERR) {
-    cli_diagnostic(&state, PSLOG_LEVEL_ERROR,
+    cli_diagnostic(state, PSLOG_LEVEL_ERROR,
                    "failed to install interactive interrupt handler\n");
     goto cleanup;
   }
 
-  cai_cli_status_init(&state.status, state.workspace, getenv("HOME"));
-  (void)cai_cli_status_fields_parse(state.options.status_fields,
-                                    &state.status.fields);
+  cai_cli_status_init(&state->status, state->workspace, getenv("HOME"));
+  (void)cai_cli_status_fields_parse(state->options.status_fields,
+                                    &state->status.fields);
   result = 1;
-  rc = cli_prepare_clipboard(&state, &error);
+  rc = cli_prepare_clipboard(state, &error);
   if (rc != CAI_OK) {
-    cli_print_error(&state, "initialize clipboard", &error);
+    cli_print_error(state, "initialize clipboard", &error);
     goto cleanup;
   }
-  if (!state.batch) {
-    if (state.interactive && application != NULL &&
+  if (!state->batch) {
+    if (state->interactive && application != NULL &&
         application->banner != NULL && application->banner[0] != '\0' &&
         (fputs(application->banner, stdout) == EOF || fflush(stdout) != 0)) {
-      cli_diagnostic(&state, PSLOG_LEVEL_ERROR, "cannot write startup banner");
+      cli_diagnostic(state, PSLOG_LEVEL_ERROR, "cannot write startup banner");
       goto cleanup;
     }
     sl_config_init(&prompt_config);
-    prompt_config.prompt_theme =
-        getenv("NO_COLOR") != NULL ? SL_PROMPT_THEME_PLAIN : state.theme.prompt;
+    prompt_config.prompt_theme = getenv("NO_COLOR") != NULL
+                                     ? SL_PROMPT_THEME_PLAIN
+                                     : state->theme.prompt;
     prompt_config.prompt_queue = 1;
     prompt_config.line_max_len = 65536U + 512U;
-    prompt_config.history_max_len = state.options.prompt_history_limit;
-    snprintf(state.clipboard_template, sizeof(state.clipboard_template), "%s/*",
-             state.clipboard_directory);
-    prompt_config.image_paste_path_template = state.clipboard_template;
-    state.sl = sl_create_with_config(&prompt_config);
-    if (state.sl == NULL) {
-      cli_diagnostic(&state, PSLOG_LEVEL_ERROR,
+    prompt_config.history_max_len = state->options.prompt_history_limit;
+    snprintf(state->clipboard_template, sizeof(state->clipboard_template),
+             "%s/*", state->clipboard_directory);
+    prompt_config.image_paste_path_template = state->clipboard_template;
+    state->sl = sl_create_with_config(&prompt_config);
+    if (state->sl == NULL) {
+      cli_diagnostic(state, PSLOG_LEVEL_ERROR,
                      "failed to create softline prompt\n");
       goto cleanup;
     }
   }
-  state.width = cli_render_width();
-  if ((state.interactive &&
-       (sl_bind_key(state.sl, SL_KEY_ESCAPE, cli_cancel_editor, NULL) !=
+  state->width = cli_render_width();
+  if ((state->interactive &&
+       (sl_bind_key(state->sl, SL_KEY_ESCAPE, cli_cancel_editor, NULL) !=
             SL_OK ||
-        sl_set_statusline(state.sl, 1, 0) != SL_OK ||
-        sl_set_status_message(state.sl, state.welcome) != SL_OK)) ||
-      (!state.batch && sl_output_stream_begin(state.sl) != SL_OK)) {
-    cli_diagnostic(&state, PSLOG_LEVEL_ERROR,
+        sl_set_statusline(state->sl, 1, 0) != SL_OK ||
+        sl_set_status_message(state->sl, state->welcome) != SL_OK)) ||
+      (!state->batch && sl_output_stream_begin(state->sl) != SL_OK)) {
+    cli_diagnostic(state, PSLOG_LEVEL_ERROR,
                    "failed to initialize terminal renderers\n");
     goto cleanup;
   }
-  if (cli_renderer_create(&state, &state.render_theme, &state.renderer,
+  if (cli_renderer_create(state, &state->render_theme, &state->renderer,
                           &error) != CAI_OK) {
-    cli_print_error(&state, "initialize Markdown renderer", &error);
+    cli_print_error(state, "initialize Markdown renderer", &error);
     goto cleanup;
   }
-  if (cli_introduction(&state, application) != 0) {
-    cli_diagnostic(&state, PSLOG_LEVEL_ERROR,
+  if (cli_introduction(state, application) != 0) {
+    cli_diagnostic(state, PSLOG_LEVEL_ERROR,
                    "cannot render startup introduction");
     goto cleanup;
   }
-  if (!state.batch && cli_tool_display_init(&state, &error) != CAI_OK) {
-    cli_print_error(&state, "initialize tool renderer", &error);
+  if (!state->batch && cli_tool_display_init(state, &error) != CAI_OK) {
+    cli_print_error(state, "initialize tool renderer", &error);
     goto cleanup;
   }
-  if (state.interactive) {
+  if (state->interactive) {
     if (sl_set_prompt_queue_profile(
-            state.sl, SL_PROMPT_QUEUE_PROFILE_QUEUED_TURNS) != SL_OK ||
-        sl_set_prompt_queue_policy(state.sl, cli_prompt_policy, &state) !=
+            state->sl, SL_PROMPT_QUEUE_PROFILE_QUEUED_TURNS) != SL_OK ||
+        sl_set_prompt_queue_policy(state->sl, cli_prompt_policy, state) !=
             SL_OK ||
-        sl_bind_key(state.sl, SL_KEY_ALT_BASE + 's', cli_shell_editor_key,
-                    &state) != SL_OK ||
-        sl_bind_key(state.sl, SL_KEY_ALT_BASE + 'q', cli_draft_quit_key,
-                    &state) != SL_OK) {
-      cli_diagnostic(&state, PSLOG_LEVEL_ERROR,
+        sl_bind_key(state->sl, SL_KEY_ALT_BASE + 's', cli_shell_editor_key,
+                    state) != SL_OK ||
+        sl_bind_key(state->sl, SL_KEY_ALT_BASE + 'q', cli_draft_quit_key,
+                    state) != SL_OK) {
+      cli_diagnostic(state, PSLOG_LEVEL_ERROR,
                      "bind interactive submission guards");
       goto cleanup;
     }
-    state.timer_fd =
+    state->timer_fd =
         timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-    if (state.timer_fd < 0 ||
-        sl_watch_add(state.sl, state.timer_fd,
+    if (state->timer_fd < 0 ||
+        sl_watch_add(state->sl, state->timer_fd,
                      SL_WATCH_READ | SL_WATCH_ERROR | SL_WATCH_HANGUP,
-                     cli_timer_wakeup, &state,
-                     &state.timer_watch_id) != SL_OK) {
-      cli_diagnostic(&state, PSLOG_LEVEL_ERROR,
+                     cli_timer_wakeup, state,
+                     &state->timer_watch_id) != SL_OK) {
+      cli_diagnostic(state, PSLOG_LEVEL_ERROR,
                      "failed to start turn status timer\n");
       goto cleanup;
     }
-    state.has_timer_watch = 1;
-    if (state.log->wakeup_fd >= 0 &&
-        sl_watch_add(state.sl, state.log->wakeup_fd,
+    state->has_timer_watch = 1;
+    if (state->log->wakeup_fd >= 0 &&
+        sl_watch_add(state->sl, state->log->wakeup_fd,
                      SL_WATCH_READ | SL_WATCH_ERROR | SL_WATCH_HANGUP,
-                     cli_log_wakeup, &state, &state.log_watch_id) != SL_OK) {
-      cli_diagnostic(&state, PSLOG_LEVEL_ERROR,
-                     "watch interactive log notices");
+                     cli_log_wakeup, state, &state->log_watch_id) != SL_OK) {
+      cli_diagnostic(state, PSLOG_LEVEL_ERROR, "watch interactive log notices");
       goto cleanup;
     }
-    state.has_log_watch = state.log->wakeup_fd >= 0;
+    state->has_log_watch = state->log->wakeup_fd >= 0;
   }
   cai_client_config_init(&client_config);
-  client_config.logger = state.log->logger;
-  rc = cli_load_model_metadata(&state.options, &metadata_json, &error);
+  client_config.logger = state->log->logger;
+  rc = cli_load_model_metadata(&state->options, &metadata_json, &error);
   if (rc != CAI_OK) {
-    cli_print_error(&state, "load model metadata", &error);
+    cli_print_error(state, "load model metadata", &error);
     goto cleanup;
   }
   client_config.model_metadata_json = metadata_json;
-  if (strcmp(state.options.provider, "chatgpt") == 0) {
+  if (strcmp(state->options.provider, "chatgpt") == 0) {
     cai_chatgpt_auth_config_init(&auth_config);
-    auth_config.logger = state.log->logger;
+    auth_config.logger = state->log->logger;
     auth_config.storage = &auth_store->credentials;
-    rc = cai_chatgpt_auth_open(&auth_config, &state.auth, &error);
+    rc = cai_chatgpt_auth_open(&auth_config, &state->auth, &error);
     if (rc != CAI_OK) {
       char hint[640];
-      cli_print_error(&state, "open ChatGPT auth", &error);
+      cli_print_error(state, "open ChatGPT auth", &error);
       snprintf(hint, sizeof(hint), "run %s --login to authenticate",
-               state.options.invocation_name);
-      cli_diagnostic(&state, PSLOG_LEVEL_ERROR, hint);
+               state->options.invocation_name);
+      cli_diagnostic(state, PSLOG_LEVEL_ERROR, hint);
       goto cleanup;
     }
-    if (pthread_mutex_init(&state.auth_lock, NULL) != 0) {
+    if (pthread_mutex_init(&state->auth_lock, NULL) != 0) {
       cai_cli_error(&error, CAI_ERR_TRANSPORT, "initialize shared auth lock");
-      cli_print_error(&state, "open ChatGPT auth", &error);
+      cli_print_error(state, "open ChatGPT auth", &error);
       goto cleanup;
     }
-    state.has_auth_lock = 1;
-    state.shared_auth.access_token = cli_auth_token;
-    state.shared_auth.refresh = cli_auth_refresh;
-    state.shared_auth.impl = &state;
-    client_config.chatgpt_auth = &state.shared_auth;
-  } else if (strcmp(state.options.provider, "openrouter") == 0) {
+    state->has_auth_lock = 1;
+    state->shared_auth.access_token = cli_auth_token;
+    state->shared_auth.refresh = cli_auth_refresh;
+    state->shared_auth.impl = state;
+    client_config.chatgpt_auth = &state->shared_auth;
+  } else if (strcmp(state->options.provider, "openrouter") == 0) {
     cai_client_config_use_openrouter(&client_config);
-  } else if (strcmp(state.options.provider, "berget") == 0) {
+  } else if (strcmp(state->options.provider, "berget") == 0) {
     cai_client_config_use_berget(&client_config);
-  } else if (strcmp(state.options.provider, "custom") == 0) {
-    client_config.base_url = state.options.endpoint;
-    client_config.api_key_env = state.options.api_key_env;
+  } else if (strcmp(state->options.provider, "custom") == 0) {
+    client_config.base_url = state->options.endpoint;
+    client_config.api_key_env = state->options.api_key_env;
   }
-  client_config.metadata_provider = state.options.provider;
-  if (state.configuration != NULL &&
-      state.configuration->apply_client(state.configuration, &client_config,
-                                        &error) != CAI_OK) {
-    cli_print_error(&state, "apply client configuration", &error);
+  client_config.metadata_provider = state->options.provider;
+  if (state->configuration != NULL &&
+      state->configuration->apply_client(state->configuration, &client_config,
+                                         &error) != CAI_OK) {
+    cli_print_error(state, "apply client configuration", &error);
     goto cleanup;
   }
-  if (state.options.endpoint != NULL)
-    client_config.base_url = state.options.endpoint;
-  if (state.options.api_key_env != NULL)
-    client_config.api_key_env = state.options.api_key_env;
+  if (state->options.endpoint != NULL)
+    client_config.base_url = state->options.endpoint;
+  if (state->options.api_key_env != NULL)
+    client_config.api_key_env = state->options.api_key_env;
   if (metadata_json != NULL)
     client_config.model_metadata_json = metadata_json;
-  rc = cai_client_open(&client_config, &state.client, &error);
+  rc = cai_client_open(&client_config, &state->client, &error);
   if (rc != CAI_OK) {
-    cli_print_error(&state, "open client", &error);
+    cli_print_error(state, "open client", &error);
     goto cleanup;
   }
   /* Explicit catalog commands inherit the configured request deadline. They
    * are independent of the short, opportunistic quota-refresh timeout. */
   {
     pslog_field operation = pslog_str("operation", "model catalog");
-    state.model_log =
-        state.log->logger->with(state.log->logger, &operation, 1U);
-    if (state.model_log == NULL) {
+    state->model_log =
+        state->log->logger->with(state->log->logger, &operation, 1U);
+    if (state->model_log == NULL) {
       cai_cli_error(&error, CAI_ERR_NOMEM, "create model catalog logger");
-      cli_print_error(&state, "open model catalog client", &error);
+      cli_print_error(state, "open model catalog client", &error);
       goto cleanup;
     }
-    client_config.logger = state.model_log;
+    client_config.logger = state->model_log;
   }
-  rc = cai_client_open(&client_config, &state.model_client, &error);
+  rc = cai_client_open(&client_config, &state->model_client, &error);
   if (rc != CAI_OK) {
-    cli_print_error(&state, "open model catalog client", &error);
+    cli_print_error(state, "open model catalog client", &error);
     goto cleanup;
   }
-  if (state.auth != NULL) {
+  if (state->auth != NULL) {
     cai_error quota_error;
     cai_client_config quota_config;
     cai_error_init(&quota_error);
     cai_client_config_init(&quota_config);
-    quota_config.logger = state.log->logger;
-    quota_config.chatgpt_auth = &state.shared_auth;
+    quota_config.logger = state->log->logger;
+    quota_config.chatgpt_auth = &state->shared_auth;
     quota_config.ca_bundle_path = client_config.ca_bundle_path;
     quota_config.ca_path = client_config.ca_path;
     quota_config.insecure_skip_verify = client_config.insecure_skip_verify;
     quota_config.http_2_disabled = client_config.http_2_disabled;
     quota_config.timeout_ms =
         client_config.timeout_ms > 0L ? client_config.timeout_ms : 10000L;
-    if (cai_client_open(&quota_config, &state.quota_client, &quota_error) ==
+    if (cai_client_open(&quota_config, &state->quota_client, &quota_error) ==
         CAI_OK) {
-      if (state.interactive &&
-          cai_cli_quota_open(&state.quota_refresh, cli_fetch_quota,
-                             state.quota_client, &quota_error) == CAI_OK) {
-        if (sl_watch_add(state.sl, state.quota_refresh.fd,
+      if (state->interactive &&
+          cai_cli_quota_open(&state->quota_refresh, cli_fetch_quota,
+                             state->quota_client, &quota_error) == CAI_OK) {
+        if (sl_watch_add(state->sl, state->quota_refresh.fd,
                          SL_WATCH_READ | SL_WATCH_ERROR, cli_quota_wakeup,
-                         &state, &state.quota_watch_id) == SL_OK)
-          state.has_quota_watch = 1;
+                         state, &state->quota_watch_id) == SL_OK)
+          state->has_quota_watch = 1;
         else {
-          cai_cli_quota_close(&state.quota_refresh);
+          cai_cli_quota_close(&state->quota_refresh);
           cli_diagnostic(
-              &state, PSLOG_LEVEL_WARN,
+              state, PSLOG_LEVEL_WARN,
               "quota updates unavailable: cannot watch quota worker");
         }
       }
     }
     if (quota_error.code != CAI_OK)
-      cai_cli_log_error(state.log->logger, "initialize quota updates",
+      cai_cli_log_error(state->log->logger, "initialize quota updates",
                         &quota_error);
     cai_error_cleanup(&quota_error);
   }
-  rc = cli_open_runtime(&state, state.options.resume_id,
-                        state.options.new_session, &error);
+  rc = cli_open_runtime(state, state->options.resume_id,
+                        state->options.new_session, &error);
   if (rc != CAI_OK) {
-    cli_print_error(&state, "open agent session", &error);
+    cli_print_error(state, "open agent session", &error);
     goto cleanup;
   }
-  rc = cai_app_bridge_publish(bridge, state.runtime, &error);
+  rc = cai_app_bridge_publish(bridge, state->runtime, &error);
   if (rc != CAI_OK)
     goto cleanup;
-  if (cli_sandbox_notice(&state) != 0) {
+  if (cli_sandbox_notice(state) != 0) {
     cai_cli_error(&error, CAI_ERR_TRANSPORT, "render startup policy notice");
     goto cleanup;
   }
-  rc = cli_host_process(&state, &error);
+  rc = cli_host_process(state, &error);
   if (rc != CAI_OK)
     goto cleanup;
-  if (state.exit_requested) {
+  if (state->exit_requested) {
     result = 0;
     goto cleanup;
   }
-  if (state.interactive && bridge != NULL) {
-    if (sl_watch_add(state.sl, bridge->fd, SL_WATCH_READ | SL_WATCH_ERROR,
-                     cli_host_wakeup, &state, &state.host_watch) != SL_OK) {
+  if (state->interactive && bridge != NULL) {
+    if (sl_watch_add(state->sl, bridge->fd, SL_WATCH_READ | SL_WATCH_ERROR,
+                     cli_host_wakeup, state, &state->host_watch) != SL_OK) {
       cai_cli_error(&error, CAI_ERR_TRANSPORT, "watch host controls");
       goto cleanup;
     }
-    state.has_host_watch = 1;
+    state->has_host_watch = 1;
   }
-  if (state.options.review) {
-    rc = cli_run_review(&state, &error);
+  if (state->options.review) {
+    rc = cli_run_review(state, &error);
     if (rc != CAI_OK)
-      cli_print_error(&state, "review", &error);
+      cli_print_error(state, "review", &error);
     else
       result = 0;
     goto cleanup;
   }
-  if (state.interactive)
-    cli_refresh_quota(&state, 0);
-  rc = cli_start_automation(&state, &error);
+  if (state->interactive)
+    cli_refresh_quota(state, 0);
+  rc = cli_start_automation(state, &error);
   if (rc != CAI_OK) {
-    cli_print_error(&state, "start work", &error);
+    cli_print_error(state, "start work", &error);
     goto cleanup;
   }
-  if (state.options.non_interactive) {
-    rc = cli_run_noninteractive(&state, &error);
+  if (state->options.non_interactive) {
+    rc = cli_run_noninteractive(state, &error);
     if (rc != CAI_OK) {
-      if (!state.automation_failed || error.message != NULL)
-        cli_print_error(&state, "non-interactive run", &error);
+      if (!state->automation_failed || error.message != NULL)
+        cli_print_error(state, "non-interactive run", &error);
     } else {
       result = 0;
     }
     goto cleanup;
   }
-  while (!state.exit_requested) {
-    if (cai_cli_log_notices(state.log, cli_notice, &state) != 0)
+  while (!state->exit_requested) {
+    if (cai_cli_log_notices(state->log, cli_notice, state) != 0)
       goto cleanup;
-    line = sl_next_prompt(state.sl, "> ", &prompt_source);
-    if (state.exit_requested) {
+    line = sl_next_prompt(state->sl, "> ", &prompt_source);
+    if (state->exit_requested) {
       if (line != NULL)
-        sl_free_string(state.sl, line);
+        sl_free_string(state->sl, line);
       break;
     }
     if (line == NULL) {
-      prompt_status = sl_last_readline_status(state.sl);
+      prompt_status = sl_last_readline_status(state->sl);
       if (prompt_status == SL_READLINE_SUSPENDED) {
-        rc = cli_terminal_shell(&state, 0, &error);
+        rc = cli_terminal_shell(state, 0, &error);
         if (rc != CAI_OK) {
-          cli_print_error(&state, "interactive shell", &error);
-          if (state.exit_requested)
+          cli_print_error(state, "interactive shell", &error);
+          if (state->exit_requested)
             goto cleanup;
           cai_error_cleanup(&error);
           cai_error_init(&error);
         }
-        if (!state.exit_requested &&
-            cli_sync_status(&state, &error) != CAI_OK) {
-          cli_print_error(&state, "status", &error);
+        if (!state->exit_requested &&
+            cli_sync_status(state, &error) != CAI_OK) {
+          cli_print_error(state, "status", &error);
           goto cleanup;
         }
         continue;
       }
       if (prompt_status == SL_READLINE_CANCELLED ||
           prompt_status == SL_READLINE_INTERRUPTED) {
-        if (state.shell.pid > 0) {
-          cai_cli_shell_cancel(&state.shell);
+        if (state->shell.pid > 0) {
+          cai_cli_shell_cancel(&state->shell);
           continue;
         }
-        cai_cli_messages_cancel_send(state.messages);
-        rc = cai_agent_runtime_cancel_turn(
-            state.review_runtime != NULL ? state.review_runtime : state.runtime,
-            &error);
+        cai_cli_messages_cancel_send(state->messages);
+        rc = cai_agent_runtime_cancel_turn(state->review_runtime != NULL
+                                               ? state->review_runtime
+                                               : state->runtime,
+                                           &error);
         if (rc != CAI_OK) {
           if (rc != CAI_ERR_INVALID)
-            cli_print_error(&state, "cancel turn", &error);
+            cli_print_error(state, "cancel turn", &error);
           cai_error_cleanup(&error);
           cai_error_init(&error);
         }
@@ -6216,54 +6247,54 @@ int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
          * the watched callback. Softline's generic I/O wrapper adds no cause.
          */
         if (bridge == NULL || !bridge->failed) {
-          cai_cli_error(&error, CAI_ERR_TRANSPORT, sl_last_error(state.sl));
-          cli_print_error(&state, "prompt input failed", &error);
+          cai_cli_error(&error, CAI_ERR_TRANSPORT, sl_last_error(state->sl));
+          cli_print_error(state, "prompt input failed", &error);
         }
         goto cleanup;
       }
       break;
     }
     if (line[0] != '\0') {
-      prompt_id = sl_last_prompt_id(state.sl);
+      prompt_id = sl_last_prompt_id(state->sl);
       rc = line[0] == '/' || line[0] == '!'
-               ? cai_cli_messages_consumed(state.messages, prompt_id, &error)
+               ? cai_cli_messages_consumed(state->messages, prompt_id, &error)
                : CAI_OK;
       if (rc == CAI_OK)
-        rc = cli_dispatch_command(&state, line, &error, &handled);
+        rc = cli_dispatch_command(state, line, &error, &handled);
       if (rc == CAI_OK && !handled) {
         if (prompt_source == SL_PROMPT_SOURCE_QUEUED ||
-            cai_cli_messages_is_message(state.messages, prompt_id))
-          rc = cai_agent_runtime_submit_queued(state.runtime, line, &error);
+            cai_cli_messages_is_message(state->messages, prompt_id))
+          rc = cai_agent_runtime_submit_queued(state->runtime, line, &error);
         else
-          rc =
-              cai_agent_runtime_submit_interactive(state.runtime, line, &error);
+          rc = cai_agent_runtime_submit_interactive(state->runtime, line,
+                                                    &error);
         if (rc == CAI_OK)
-          rc = cai_cli_messages_consumed(state.messages, prompt_id, &error);
+          rc = cai_cli_messages_consumed(state->messages, prompt_id, &error);
       }
       if (rc != CAI_OK) {
-        cli_print_error(&state, "input", &error);
-        if (state.runtime == NULL || state.exit_requested) {
-          sl_free_string(state.sl, line);
+        cli_print_error(state, "input", &error);
+        if (state->runtime == NULL || state->exit_requested) {
+          sl_free_string(state->sl, line);
           goto cleanup;
         }
         cai_error_cleanup(&error);
         cai_error_init(&error);
       }
     }
-    sl_free_string(state.sl, line);
-    if (state.runtime != NULL && cli_sync_status(&state, &error) != CAI_OK) {
-      cli_print_error(&state, "status", &error);
+    sl_free_string(state->sl, line);
+    if (state->runtime != NULL && cli_sync_status(state, &error) != CAI_OK) {
+      cli_print_error(state, "status", &error);
       goto cleanup;
     }
   }
-  if (state.shell.pid > 0 && cli_shell_stop(&state, &error) != CAI_OK) {
-    cli_print_error(&state, "finish user shell command", &error);
+  if (state->shell.pid > 0 && cli_shell_stop(state, &error) != CAI_OK) {
+    cli_print_error(state, "finish user shell command", &error);
     goto cleanup;
   }
-  if (state.runtime != NULL && !state.exit_requested) {
-    rc = cli_drain(&state, &error);
+  if (state->runtime != NULL && !state->exit_requested) {
+    rc = cli_drain(state, &error);
     if (rc != CAI_OK) {
-      cli_print_error(&state, "finish agent turn", &error);
+      cli_print_error(state, "finish agent turn", &error);
       goto cleanup;
     }
   }
@@ -6275,132 +6306,153 @@ cleanup:
     /* A discard and Alt-Q/EOF/host STOP can share one input batch, without an
      * idle callback. Flush only decisions already made, before detaching IDs;
      * still-queued or actively edited inbox messages remain recoverable. */
-    if (cai_cli_messages_flush_decisions(state.messages, state.sl,
+    if (cai_cli_messages_flush_decisions(state->messages, state->sl,
                                          &decisions) != CAI_OK) {
-      cli_print_error(&state, "save incoming message decisions", &decisions);
+      cli_print_error(state, "save incoming message decisions", &decisions);
       cai_app_bridge_fail(bridge, &decisions);
       result = 1;
     }
     cai_error_cleanup(&decisions);
   }
-  if (state.host_stopped) {
+  if (state->host_stopped) {
     cai_app_bridge_outcome(bridge, CAI_APP_STOPPED);
   }
   if (bridge != NULL) {
     cai_error snapshot;
     cai_error_init(&snapshot);
-    if (cai_app_bridge_publish(bridge, state.runtime, &snapshot) != CAI_OK) {
+    if (cai_app_bridge_publish(bridge, state->runtime, &snapshot) != CAI_OK) {
       cai_app_bridge_error(bridge, &snapshot);
       result = 1;
     }
     cai_error_cleanup(&snapshot);
     cai_app_bridge_error(bridge, &error);
   }
-  cli_shell_unwatch(&state);
-  cai_cli_shell_close(&state.shell);
-  if (state.batch && !state.options.review && state.renderer != NULL) {
+  cli_shell_unwatch(state);
+  cai_cli_shell_close(&state->shell);
+  if (state->batch && !state->options.review && state->renderer != NULL) {
     cai_error final_error;
     cai_error_init(&final_error);
-    if (cli_output_final(&state, &final_error) != CAI_OK) {
-      cli_print_error(&state, "final response", &final_error);
+    if (cli_output_final(state, &final_error) != CAI_OK) {
+      cli_print_error(state, "final response", &final_error);
       result = 1;
     }
     cai_error_cleanup(&final_error);
   }
-  cai_cli_response_close(&state.final_response);
-  if (state.runtime != NULL)
-    cli_close_runtime(&state);
+  cai_cli_response_close(&state->final_response);
+  if (state->runtime != NULL)
+    cli_close_runtime(state);
   else {
-    cai_cli_messages_close(state.messages);
-    state.messages = NULL;
+    cai_cli_messages_close(state->messages);
+    state->messages = NULL;
   }
-  cai_cli_mcp_close(&state.mcp);
-  if (state.has_host_watch)
-    (void)sl_watch_remove(state.sl, state.host_watch);
-  if (state.has_log_watch)
-    (void)sl_watch_remove(state.sl, state.log_watch_id);
-  if (state.has_timer_watch)
-    (void)sl_watch_remove(state.sl, state.timer_watch_id);
-  if (state.timer_fd >= 0)
-    close(state.timer_fd);
-  if (state.has_quota_watch)
-    (void)sl_watch_remove(state.sl, state.quota_watch_id);
-  cai_cli_quota_close(&state.quota_refresh);
-  if (state.client != NULL)
-    state.client->close(state.client);
-  if (state.model_client != NULL)
-    state.model_client->close(state.model_client);
-  if (state.model_log != NULL)
-    state.model_log->destroy(state.model_log);
-  if (state.quota_client != NULL)
-    state.quota_client->close(state.quota_client);
-  if (state.auth != NULL)
-    state.auth->close(state.auth);
-  if (state.has_auth_lock)
-    pthread_mutex_destroy(&state.auth_lock);
-  cai_cli_pouch_close(&state.pouch);
-  cai_cli_pouch_close(&state.auth_pouch);
-  cai_cli_pouch_close(&state.messaging_pouch);
-  if (state.sl != NULL)
-    (void)cai_cli_log_notices(state.log, cli_notice, &state);
-  if (state.renderer != NULL) {
-    (void)cli_finish_response(&state);
-    (void)cli_finish_reasoning(&state);
-    state.renderer->destroy(state.renderer);
+  cai_cli_mcp_close(&state->mcp);
+  if (state->has_host_watch)
+    (void)sl_watch_remove(state->sl, state->host_watch);
+  if (state->has_log_watch)
+    (void)sl_watch_remove(state->sl, state->log_watch_id);
+  if (state->has_timer_watch)
+    (void)sl_watch_remove(state->sl, state->timer_watch_id);
+  if (state->timer_fd >= 0)
+    close(state->timer_fd);
+  if (state->has_quota_watch)
+    (void)sl_watch_remove(state->sl, state->quota_watch_id);
+  cai_cli_quota_close(&state->quota_refresh);
+  if (state->client != NULL)
+    state->client->close(state->client);
+  if (state->model_client != NULL)
+    state->model_client->close(state->model_client);
+  if (state->model_log != NULL)
+    state->model_log->destroy(state->model_log);
+  if (state->quota_client != NULL)
+    state->quota_client->close(state->quota_client);
+  if (state->auth != NULL)
+    state->auth->close(state->auth);
+  if (state->has_auth_lock)
+    pthread_mutex_destroy(&state->auth_lock);
+  cai_cli_pouch_close(&state->pouch);
+  cai_cli_pouch_close(&state->auth_pouch);
+  cai_cli_pouch_close(&state->messaging_pouch);
+  if (state->sl != NULL)
+    (void)cai_cli_log_notices(state->log, cli_notice, state);
+  if (state->renderer != NULL) {
+    (void)cli_finish_response(state);
+    (void)cli_finish_reasoning(state);
+    state->renderer->destroy(state->renderer);
   }
-  if (state.notice_renderer != NULL)
-    state.notice_renderer->destroy(state.notice_renderer);
-  cai_tool_display_close(state.tool_display);
-  cai_sink_close(state.tool_sink);
-  if (state.sl != NULL) {
-    (void)sl_output_stream_end(state.sl);
-    sl_destroy(state.sl);
+  if (state->notice_renderer != NULL)
+    state->notice_renderer->destroy(state->notice_renderer);
+  cai_tool_display_close(state->tool_display);
+  cai_sink_close(state->tool_sink);
+  if (state->sl != NULL) {
+    (void)sl_output_stream_end(state->sl);
+    sl_destroy(state->sl);
   }
-  if (state.temporary.root[0] != '\0' || state.temporary.cwd_fd >= 0 ||
-      state.temporary.parent_fd >= 0) {
+  if (state->temporary.root[0] != '\0' || state->temporary.cwd_fd >= 0 ||
+      state->temporary.parent_fd >= 0) {
     cai_error cleanup_error;
     int kept = 0;
     cai_error_init(&cleanup_error);
-    rc = cai_cli_temp_close(&state.temporary, state.options.force,
-                            state.interactive && result == 0 &&
-                                !state.host_stopped,
+    rc = cai_cli_temp_close(&state->temporary, state->options.force,
+                            state->interactive && result == 0 &&
+                                !state->host_stopped,
                             bridge != NULL ? bridge->fd : -1, cli_temp_stop,
-                            &state, &kept, &cleanup_error);
+                            state, &kept, &cleanup_error);
     if (kept) {
-      pslog_field field = pslog_str("workspace", state.temporary.workspace);
-      cai_cli_log_message(state.log != NULL ? state.log->logger : NULL,
+      pslog_field field = pslog_str("workspace", state->temporary.workspace);
+      cai_cli_log_message(state->log != NULL ? state->log->logger : NULL,
                           PSLOG_LEVEL_INFO, "temp_workspace_kept", "diagnostic",
                           "Temporary workspace kept", 24U, &field, 1U);
-      if (state.interactive)
+      if (state->interactive)
         fprintf(stdout, "\nKept temporary workspace: %s\n",
-                state.temporary.workspace);
+                state->temporary.workspace);
     }
     if (rc != CAI_OK) {
-      cai_cli_log_error(state.log != NULL ? state.log->logger : NULL,
+      cai_cli_log_error(state->log != NULL ? state->log->logger : NULL,
                         "clean temporary workspace", &cleanup_error);
       fprintf(stderr, "Cannot clean temporary workspace %s: %s\n",
-              state.temporary.root,
+              state->temporary.root,
               cleanup_error.message != NULL ? cleanup_error.message
                                             : "cleanup failed");
       result = 1;
     }
     cai_error_cleanup(&cleanup_error);
   }
-  if (state.sl == NULL)
-    (void)cai_cli_log_notices(state.log, cli_startup_notice, &state);
-  free(state.sessions);
-  free(state.normal_reasoning_override);
-  free(state.high_reasoning_override);
-  free(state.review_report);
-  cai_cli_replay_close(state.replay);
-  cai_cli_replay_order_close(state.replay_order);
-  cai_cli_replay_tools_close(state.replay_tools);
+  if (state->sl == NULL)
+    (void)cai_cli_log_notices(state->log, cli_startup_notice, state);
+  free(state->sessions);
+  free(state->normal_reasoning_override);
+  free(state->high_reasoning_override);
+  free(state->review_report);
+  cai_cli_replay_close(state->replay);
+  cai_cli_replay_order_close(state->replay_order);
+  cai_cli_replay_tools_close(state->replay_tools);
   free(metadata_json);
-  cai_config_close(state.configuration);
+  cai_config_close(state->configuration);
   cai_error_cleanup(&error);
-  if (cai_cli_log_release(state.log) != 0)
+  if (cai_cli_log_release(state->log) != 0)
     result = 1;
   return result;
+}
+
+/* The receiver contains path/configuration aggregates well beyond a worker's
+ * stack budget. Its owner outlives every runtime, lease service and UI
+ * callback.
+ */
+int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
+                    cai_app_bridge *bridge) {
+  cli_state *state = calloc(1U, sizeof(*state));
+  int code;
+  if (state == NULL) {
+    if (application != NULL && application->logger != NULL)
+      application->logger->error(application->logger,
+                                 "cannot allocate application state", NULL, 0U);
+    else
+      fputs("cannot allocate application state\n", stderr);
+    return 1;
+  }
+  code = cli_app_run_state(state, argc, argv, application, bridge);
+  free(state);
+  return code;
 }
 
 int cai_cli_app_main(int argc, char **argv, const cai_app_config *application) {

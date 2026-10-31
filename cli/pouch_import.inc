@@ -117,7 +117,7 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
   rc = release(lease, rc, error);
   lease = NULL;
   if (rc == CAI_OK)
-    rc = history_collection(pouch, id, "events", 1, &collection, error);
+    rc = collection_owner_open(pouch, id, "events", 1, 0, &collection, error);
   while (rc == CAI_OK) {
     journal_import_line line;
     cli_record record;
@@ -231,7 +231,7 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
     cai_error_init(&ignored);
     lc_error_init(&detail);
     if (collection != NULL)
-      (void)collection->drop(collection, &detail);
+      (void)collection_owner_drop(pouch, collection, &detail);
     if (acquire(pouch, id, &lease, &ignored) == CAI_OK) {
       (void)lease->remove(lease, NULL, &detail);
       (void)release(lease, CAI_OK, &ignored);
@@ -239,7 +239,6 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
     lc_error_cleanup(&detail);
     cai_error_cleanup(&ignored);
   }
-  if (collection != NULL)
-    collection->close(collection);
+  collection_owner_remove(pouch, collection);
   return rc;
 }

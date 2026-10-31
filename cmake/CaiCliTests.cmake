@@ -367,6 +367,14 @@
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pouch_startup_test.sh"
         "$<TARGET_FILE:cai_cli_pouch_startup_test>" "${CMAKE_CURRENT_BINARY_DIR}")
     set_tests_properties(cai_cli_pouch_startup PROPERTIES TIMEOUT 60)
+    add_test(NAME cai_cli_collection_leases COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pouch_startup_test.sh"
+      "$<TARGET_FILE:cai_cli_pouch_startup_test>" "${CMAKE_CURRENT_BINARY_DIR}" --leases)
+    set_tests_properties(cai_cli_collection_leases PROPERTIES TIMEOUT 15)
+    add_test(NAME cai_cli_collection_ownership COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_collection_ownership_test.sh"
+      "$<TARGET_FILE:cai_cli_mock_fixture>")
+    set_tests_properties(cai_cli_collection_ownership PROPERTIES TIMEOUT 20)
     add_test(NAME cai_cli_replay_limits
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_replay_limits_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_cli_pouch_startup_test>")
@@ -630,7 +638,7 @@
     get_property(_cai_cli_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
     list(FILTER _cai_cli_targets INCLUDE REGEX "^cai_cli($|_)|^cai_terminal_peer$")
     add_custom_target(cai_cli_tests DEPENDS ${_cai_cli_targets})
-    add_dependencies(cai_cli_tests cai_app_test cai_app_home_test cai_app_status_test cai_app_host cai_app_controls_host cai_app_startup_goal_test cai_app_utility_stop_test cai_kanban_test cai_chrome_client_fixture)
+    add_dependencies(cai_cli_tests cai_app_test cai_app_home_test cai_app_status_test cai_app_host cai_app_worker_stack_host cai_app_controls_host cai_app_startup_goal_test cai_app_utility_stop_test cai_kanban_test cai_chrome_client_fixture)
     add_test(NAME cai_cli_kanban COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_kanban_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")

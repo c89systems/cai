@@ -303,6 +303,7 @@ static void context_namespace_and_expiry(cai_cli_pouch *pouch,
   assert(cai_cli_pouch_prompt_open(pouch, "expired-context", error) == CAI_OK);
   assert(cai_cli_pouch_prompt_append(pouch, "expired draft", error) == CAI_OK);
   cai_cli_pouch_prompt_close(pouch);
+  cai_cli_pouch_end_use(pouch);
   lc_error_init(&local);
   assert(open_history_collection(pouch, "expired-context", "events", 0, 0,
                                  &collection, error) == CAI_OK);

@@ -84,7 +84,7 @@ disable_compression = true
 Embedders can set the same schema field through application settings. Standalone
 kanban receivers expose `disable_compression` in their C/Lua configuration too.
 Equal Pouch roots still share one process client; conflicting compression modes
-within that process are rejected. On a closed root, liblockdc 0.24.0 converts a
+within that process are rejected. On a closed root, liblockdc converts a
 changed explicit mode synchronously, preserving stored values, positions and
 retention. Competing writers prevent conversion and trigger a warning with
 adoption of the stored mode. Remote clients receive no local compression settings.
@@ -95,10 +95,32 @@ event, and identical retries do not extend the collection deadline. Conversation
 lookup metadata has no independent expiry: the collection owns the lifecycle.
 Listing removes stale lookup records and associated prompt recall once the
 backing collection is gone, while native use guards protect open conversations.
-Small generated records retain liblockdc's pull-append fast
-path; the new push writer's segment-per-commit cost is unnecessary here.
-The configured mode must match the root manifest. This cutover does not migrate
-old snapshot-backed stores; use a new root.
+Finite generated records use liblockdc's direct pull append. Each source reads
+already available event/state data; it does not wait for future model output.
+Push and staged pull in 0.25.0 share rolling segments but add encoded staging;
+CAI does not need that staging for these sources. No full-message buffer or
+spool is introduced. The configured compression must match the root manifest.
+Old CAI snapshot-backed journals remain unsupported. Existing append-only
+collection roots use liblockdc's native control-head upgrade, described in
+[the 0.25.0 upgrade notes](liblockdc-0.25.0-upgrade.md).
+
+Writable restore acquires a native SDK collection lease before replaying model
+context or choosing event IDs. All commits/events use that owned receiver until
+the application conversation closes, including its child journal contexts.
+Prompt recall has a separate leased collection. Public committed reads and
+exports do not acquire a writer lease. New collections are created with their
+initial lease atomically; retention, import and deletion use credentialed
+receivers too.
+
+A store-context worker renews held leases every ten seconds with a thirty-second
+TTL, independently of journal writes and the UI. It does not acquire the journal
+mutex or create a worker/client per collection or append. Lease loss/renewal
+failure is sticky: stop the restored context, cancel active work, and reopen
+before further writes. A native liveness guard, held until SDK release/close,
+permits immediate conditional takeover of CAI's own abandoned ownership. It is
+not a replacement for the SDK lease. Live or foreign owners are never silently
+replaced. Keepalive does not renew inactivity retention, and release does not
+commit or roll back already acknowledged appends.
 
 Append receivers stay open for the application conversation and its children.
 Steady-state event appends do not acquire, load, renew or release a state-object
