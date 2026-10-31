@@ -9,10 +9,15 @@ for _, case in ipairs{{0,"0ms"},{999,"999ms"},{1000,"1s"},{63000,"1m3s"},{502500
   out={}
   assert(display:event{type=cai.AGENT_EVENT_TERMINAL_COMMAND_STARTED,
     tool_call_id="live",runtime_session_id="s",data="command"})
+  assert(table.concat(out) == "")
+  assert(display:needs_tick())
+  assert(display:tick())
   assert(display:event{type=cai.AGENT_EVENT_TERMINAL_COMMAND_COMPLETED,
     tool_call_id="live",runtime_session_id="s",terminal_duration_ms=case[1],
     terminal_has_exit_code=true,terminal_exit_code=0})
   assert(table.concat(out):find("\27[0m\27[38;5;141mRan \27[0;1m\27[38;5;219mcommand\27[0m\27[38;5;141m ("..case[2]..")\27[0m\n",1,true))
+  assert(not table.concat(out):find("Running",1,true))
+  assert(not display:needs_tick())
   out={}
   assert(display:replay_begin({type=cai.AGENT_EVENT_TOOL_CALL_COMPLETED,
     tool_call_id="saved",runtime_session_id="s",terminal_duration_ms=case[1]},"Ran","saved command",true))
@@ -36,3 +41,4 @@ assert(display:event{type=cai.AGENT_EVENT_REASONING_TOOL_RESULT,
   data="requested high (high): medium -> high"})
 assert(table.concat(out):find("requested high (high): medium -> high",1,true))
 display:close()
+assert(not pcall(display.tick, display))

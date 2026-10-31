@@ -1,6 +1,7 @@
 #define _XOPEN_SOURCE 700
 #include "cai_internal.h"
 #include <cai/display.h>
+#include <time.h>
 #include <wchar.h>
 
 #define CAI_DISPLAY_LINE_MAX 65536U
@@ -25,6 +26,8 @@ typedef struct cai_display_call {
   char *command;
   int mode;
   int command_active;
+  int running_shown;
+  unsigned long long command_started_ms;
   int replay;
   size_t lines;
   int partial_line;
@@ -1255,6 +1258,58 @@ int cai_tool_display_set_palette(cai_tool_display *d,
   strcpy(d->label_foreground, label_foreground);
   return CAI_OK;
 }
+static int display_now(unsigned long long *milliseconds, cai_error *error) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+    return cai_set_error(error, CAI_ERR_TRANSPORT,
+                         "read command display clock");
+  *milliseconds = (unsigned long long)now.tv_sec * 1000ULL +
+                  (unsigned long long)now.tv_nsec / 1000000ULL;
+  return CAI_OK;
+}
+static int display_running(cai_tool_display *d, cai_display_call *c,
+                           cai_error *error) {
+  int rc;
+  if (!c->command_active || c->running_shown || c->replay)
+    return CAI_OK;
+  rc = display_marker(d, -1, "Running", c->command, strlen(c->command), error);
+  if (rc == CAI_OK)
+    c->running_shown = 1;
+  return rc;
+}
+int cai_tool_display_needs_tick(const cai_tool_display *d) {
+  const cai_display_call *c;
+  if (d == NULL)
+    return 0;
+  for (c = d->calls; c != NULL; c = c->next)
+    if (c->command_active && !c->running_shown && !c->replay)
+      return 1;
+  return 0;
+}
+int cai_tool_display_tick(cai_tool_display *d, cai_error *error) {
+  cai_display_call *c;
+  unsigned long long now = 0ULL;
+  int have_now = 0, rc;
+  if (d == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID, "tool display is required");
+  for (c = d->calls; c != NULL; c = c->next) {
+    if (!c->command_active || c->running_shown || c->replay)
+      continue;
+    if (!have_now) {
+      rc = display_now(&now, error);
+      if (rc != CAI_OK)
+        return rc;
+      have_now = 1;
+    }
+    if (now >= c->command_started_ms &&
+        now - c->command_started_ms >= 2000ULL) {
+      rc = display_running(d, c, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
+  }
+  return CAI_OK;
+}
 int cai_tool_display_event(cai_tool_display *d,
                            const cai_agent_runtime_event *e, cai_error *error) {
   cai_display_call *c;
@@ -1333,13 +1388,21 @@ int cai_tool_display_event(cai_tool_display *d,
     if (c->command == NULL)
       return cai_set_error(error, CAI_ERR_NOMEM,
                            "cannot retain command display label");
+    rc = display_now(&c->command_started_ms, error);
+    if (rc != CAI_OK)
+      return rc;
     c->command_active = 1;
-    return display_marker(d, -1, "Running", c->command, strlen(c->command),
-                          error);
+    return CAI_OK;
   }
-  if (e->type == CAI_AGENT_EVENT_TERMINAL_OUTPUT)
+  if (e->type == CAI_AGENT_EVENT_TERMINAL_OUTPUT) {
+    if (c != NULL && e->data_length != 0U) {
+      rc = display_running(d, c, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
     return c != NULL ? command_feed(d, c, e->data, e->data_length, 0, error)
                      : CAI_OK;
+  }
   if (e->type == CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED ||
       e->type == CAI_AGENT_EVENT_TERMINAL_COMMAND_CANCELLED) {
     char completed[80];
@@ -1348,18 +1411,26 @@ int cai_tool_display_event(cai_tool_display *d,
     if (!c->command_active)
       return cai_set_error(error, CAI_ERR_INVALID,
                            "terminal completion has no started command");
-    rc = command_feed(d, c, e->data, e->data_length, 1, error);
+    ok = e->type == CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED &&
+         e->terminal_has_exit_code && e->terminal_exit_code == 0 &&
+         (!e->terminal_has_signal || e->terminal_signal == 0);
+    display_command_duration(completed, e->terminal_duration_ms);
+    rc = CAI_OK;
+    if (!c->running_shown && !c->replay)
+      rc = display_marker_suffix(
+          d, ok,
+          e->type == CAI_AGENT_EVENT_TERMINAL_COMMAND_CANCELLED ? "Cancelled"
+                                                                : "Ran",
+          c->command, strlen(c->command), completed, error);
+    if (rc == CAI_OK)
+      rc = command_feed(d, c, e->data, e->data_length, 1, error);
     if (rc == CAI_OK && c->partial_line)
       rc = display_text(d, "\n", error);
     if (rc == CAI_OK && e->terminal_output_truncated)
       rc = display_text(
           d, "  [command output truncated by the tool's output limit]\n",
           error);
-    ok = e->type == CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED &&
-         e->terminal_has_exit_code && e->terminal_exit_code == 0 &&
-         (!e->terminal_has_signal || e->terminal_signal == 0);
-    if (rc == CAI_OK && !c->replay) {
-      display_command_duration(completed, e->terminal_duration_ms);
+    if (rc == CAI_OK && c->running_shown && !c->replay) {
       rc = display_marker_suffix(
           d, ok,
           e->type == CAI_AGENT_EVENT_TERMINAL_COMMAND_CANCELLED ? "Cancelled"

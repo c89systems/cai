@@ -2002,7 +2002,7 @@ static int cli_sync_status(cli_state *state, cai_error *error) {
   const char *effort;
   const char *tier;
   const char *reasoning_title;
-  int busy;
+  int busy, timer_active;
   int rc;
   rc = cai_app_bridge_publish(state->bridge, state->runtime, error);
   if (rc != CAI_OK)
@@ -2057,15 +2057,17 @@ static int cli_sync_status(cli_state *state, cai_error *error) {
       cli_refresh_quota(state, 0);
     }
   }
-  if (state->timer_fd >= 0 && state->timer_armed != metrics.turn_active) {
+  timer_active =
+      metrics.turn_active || cai_tool_display_needs_tick(state->tool_display);
+  if (state->timer_fd >= 0 && state->timer_armed != timer_active) {
     memset(&timer_spec, 0, sizeof(timer_spec));
-    if (metrics.turn_active) {
+    if (timer_active) {
       timer_spec.it_value.tv_sec = 1;
       timer_spec.it_interval.tv_sec = 1;
     }
     if (timerfd_settime(state->timer_fd, 0, &timer_spec, NULL) != 0)
       return CAI_ERR_TRANSPORT;
-    state->timer_armed = metrics.turn_active;
+    state->timer_armed = timer_active;
   }
   turn_metrics = state->review_runtime == NULL && state->has_review_metrics &&
                          !metrics.turn_active
@@ -2120,6 +2122,9 @@ static int cli_timer_wakeup(sl_t *sl, const sl_watch_event_t *event,
     return SL_ERROR_IO;
   cai_error_init(&error);
   rc = cli_sync_status(state, &error);
+  if (rc == CAI_OK && !state->response_open && !state->reasoning_open &&
+      !state->notice_open)
+    rc = cai_tool_display_tick(state->tool_display, &error);
   if (rc != CAI_OK)
     cli_print_error(state, "turn timer", &error);
   cai_error_cleanup(&error);

@@ -1053,6 +1053,9 @@ remains in the inspection timeline, not the normal findings display. Failed
 review prose and failure details remain available without a logfile. Successful
 tool calls use the live tool presentation with one completion heading. Commands
 show `* Ran COMMAND (1m3s)` followed by their saved output, without a `Running` row.
+Live commands show `Running` after two seconds or before their first output,
+whichever comes first. Fast, silent commands show only `Ran`. Output continues
+streaming immediately; no output is buffered to wait for the heading.
 Durations below one second use milliseconds, for example `(23ms)`. The duration
 and parentheses use the same dimmer color as `Ran`, while the command stays brighter.
 `write_stdin` output stays attached to the original command and shares its
@@ -1500,6 +1503,9 @@ local display = assert(cai.tool_display({mode = "compact", color = true, width =
   function(chunk) io.write(chunk); return true end))
 -- Forward each runtime event from its owner-thread callback:
 -- assert(display:event(event))
+-- At safe feed boundaries, reuse your UI timer for delayed Running headings:
+-- assert(display:tick())
+-- display:needs_tick() also keeps that timer active after a command yields.
 assert(display:set_mode("full")) -- future calls only
 assert(display:set_width(100)) -- next logical patch row
 assert(display:close())

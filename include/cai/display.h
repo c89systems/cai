@@ -59,6 +59,18 @@ int cai_tool_display_set_palette(cai_tool_display *display,
                                  const char *activity_foreground,
                                  const char *label_foreground,
                                  cai_error *error);
+/** Advance delayed command headings on the owner thread at a feed boundary.
+ * Reuse the host UI timer; no thread or timer is created by this renderer.
+ * A live command shows Running once after two monotonic seconds or before its
+ * first nonempty output event, whichever comes first. A command completed
+ * before either shows only Ran (or Cancelled), followed by any final output.
+ * Replayed commands never acquire a Running heading. Sink/clock errors return
+ * normally. Do not call from the sink or in the middle of another document. */
+int cai_tool_display_tick(cai_tool_display *display, cai_error *error);
+/** Whether a live command still needs a delayed heading. Owner-thread query;
+ * returns zero for NULL, completed commands and replay. Keep the host timer
+ * active while true, even if the model's turn has already ended. */
+int cai_tool_display_needs_tick(const cai_tool_display *display);
 /** Set terminal columns for numbered, wrapped patch rows (32..4096).
  * Zero selects the default unwrapped patch format. Colored changed rows fill
  * the specified width; continuations align below the content. Width changes

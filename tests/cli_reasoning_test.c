@@ -6,6 +6,47 @@ typedef struct event_log_capture {
   size_t length;
 } event_log_capture;
 
+static int tick_stub, tick_calls;
+int __real_cai_tool_display_tick(cai_tool_display *display, cai_error *error);
+int __wrap_cai_tool_display_tick(cai_tool_display *display, cai_error *error);
+int __wrap_cai_tool_display_tick(cai_tool_display *display, cai_error *error) {
+  if (!tick_stub)
+    return __real_cai_tool_display_tick(display, error);
+  tick_calls++;
+  return CAI_OK;
+}
+static int test_command_timer_boundary(void) {
+  cli_state *state = calloc(1U, sizeof(*state));
+  uint64_t expiration = 1U;
+  int descriptors[2], scenario, rc = 0;
+  if (state == NULL)
+    return 1;
+  if (pipe(descriptors) != 0) {
+    free(state);
+    return 1;
+  }
+  state->timer_fd = descriptors[0];
+  tick_stub = 1;
+  tick_calls = 0;
+  for (scenario = 0; scenario < 4; scenario++) {
+    state->response_open = scenario == 0;
+    state->reasoning_open = scenario == 1;
+    state->notice_open = scenario == 2;
+    if (write(descriptors[1], &expiration, sizeof(expiration)) !=
+            (ssize_t)sizeof(expiration) ||
+        cli_timer_wakeup(NULL, NULL, state) != SL_OK ||
+        tick_calls != (scenario == 3 ? 1 : 0)) {
+      rc = 1;
+      break;
+    }
+  }
+  tick_stub = 0;
+  close(descriptors[0]);
+  close(descriptors[1]);
+  free(state);
+  return rc;
+}
+
 static int test_command_queue_modes(void) {
   static const char *const turns[] = {"/new",
                                       "/resume 1",
@@ -906,9 +947,10 @@ int main(void) {
     if (test_output_failure(rc) != 0)
       return 1;
   if (test_command_queue_modes() != 0 || test_goal_handoff() != 0 ||
-      test_shared_auth() != 0 || test_event_logging() != 0 ||
-      test_reasoning_sections() != 0 || test_literal_tokens() != 0 ||
-      test_reasoning_quotes() != 0 || test_reasoning_replay() != 0)
+      test_command_timer_boundary() != 0 || test_shared_auth() != 0 ||
+      test_event_logging() != 0 || test_reasoning_sections() != 0 ||
+      test_literal_tokens() != 0 || test_reasoning_quotes() != 0 ||
+      test_reasoning_replay() != 0)
     return 1;
   memset(&state, 0, sizeof(state));
   if (!cai_cli_quota_due(0, start, start, 0) ||

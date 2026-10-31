@@ -317,6 +317,7 @@
     add_test(NAME cai_cli_storage_stream COMMAND cai_cli_storage_stream_test)
     set_tests_properties(cai_cli_storage_stream PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_reasoning_test tests/cli_reasoning_test.c)
+    target_link_options(cai_cli_reasoning_test PRIVATE -Wl,--wrap=cai_tool_display_tick)
     target_link_libraries(cai_cli_reasoning_test PRIVATE cai_cli_support)
     cai_configure_cli_target(cai_cli_reasoning_test)
     add_test(NAME cai_cli_reasoning COMMAND cai_cli_reasoning_test)

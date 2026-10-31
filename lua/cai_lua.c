@@ -12260,6 +12260,25 @@ static int cai_lua_display_event_common(lua_State *L, int summary) {
 static int cai_lua_display_event(lua_State *L) {
   return cai_lua_display_event_common(L, 0);
 }
+static int cai_lua_display_tick(lua_State *L) {
+  cai_lua_display *self = luaL_checkudata(L, 1, "cai.tool_display");
+  cai_error error;
+  int rc;
+  luaL_argcheck(L, self->ptr != NULL, 1, "closed tool display");
+  luaL_argcheck(L, !self->active, 1,
+                "tool display cannot reenter its callback");
+  cai_error_init(&error);
+  self->active++;
+  rc = cai_tool_display_tick(self->ptr, &error);
+  self->active--;
+  return cai_lua_bool_result(L, rc, &error);
+}
+static int cai_lua_display_needs_tick(lua_State *L) {
+  cai_lua_display *self = luaL_checkudata(L, 1, "cai.tool_display");
+  luaL_argcheck(L, self->ptr != NULL, 1, "closed tool display");
+  lua_pushboolean(L, cai_tool_display_needs_tick(self->ptr));
+  return 1;
+}
 static int cai_lua_display_summary(lua_State *L) {
   return cai_lua_display_event_common(L, 1);
 }
@@ -12321,6 +12340,8 @@ static int cai_lua_patch_render(lua_State *L) {
   return cai_lua_bool_result(L, rc, &error);
 }
 static const luaL_Reg cai_lua_display_methods[] = {
+    {"tick", cai_lua_display_tick},
+    {"needs_tick", cai_lua_display_needs_tick},
     {"event", cai_lua_display_event},
     {"summary", cai_lua_display_summary},
     {"replay_begin", cai_lua_display_replay_begin},

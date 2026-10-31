@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "../src/cai_utf8.h"
 #include <assert.h>
 #include <cai/display.h>
@@ -5,6 +6,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#ifdef CAI_TEST_DISPLAY_CLOCK
+static int fake_clock, fake_clock_error;
+static unsigned long long fake_milliseconds;
+int __real_clock_gettime(clockid_t clock, struct timespec *now);
+int __wrap_clock_gettime(clockid_t clock, struct timespec *now);
+int __wrap_clock_gettime(clockid_t clock, struct timespec *now) {
+  if (!fake_clock || clock != CLOCK_MONOTONIC)
+    return __real_clock_gettime(clock, now);
+  if (fake_clock_error)
+    return -1;
+  now->tv_sec = (time_t)(fake_milliseconds / 1000ULL);
+  now->tv_nsec = (long)(fake_milliseconds % 1000ULL) * 1000000L;
+  return 0;
+}
+#endif
 
 typedef struct capture {
   char *bytes;
@@ -519,6 +537,8 @@ static void palette_validation(capture *c) {
                                         &error) == CAI_ERR_INVALID);
     event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED, "palette",
           "command", 0, 0);
+    event(display, CAI_AGENT_EVENT_TERMINAL_OUTPUT, "palette", "output\n", 0,
+          0);
     assert(strstr(c->bytes, "\033[90m*\033[0m \033[0m\033[38;5;123mRunning "
                             "\033[0;1m\033[34mcommand\033[0m\n") != NULL);
     event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED, "palette", NULL,
@@ -556,10 +576,11 @@ static void commands(capture *c) {
         CAI_AGENT_TOOL_ACTION_EXECUTE, 0);
   event(d, CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED, "one", "printf args", 0,
         0);
+  assert(c->length == 0U);
+  event(d, CAI_AGENT_EVENT_TERMINAL_OUTPUT, "one", "1\n2", 0, 0);
   assert(strstr(c->bytes,
                 "\033[0m\033[36mRunning \033[0;1m\033[96mprintf args\033[0m") !=
          NULL);
-  event(d, CAI_AGENT_EVENT_TERMINAL_OUTPUT, "one", "1\n2", 0, 0);
   assert(strstr(c->bytes, "1\n2") != NULL); /* Visible before completion. */
   assert(cai_tool_display_set_mode(d, CAI_TOOL_OUTPUT_FULL, &error) == CAI_OK);
   event(d, CAI_AGENT_EVENT_TERMINAL_OUTPUT, "one",
@@ -803,6 +824,7 @@ static void command_control_case(const char *bytes, size_t length,
   cai_sink *sink;
   cai_error error;
   char plain[8192];
+  const char *body, *heading;
   size_t split, expected_length = strlen(expected);
   int color;
   memset(&c, 0, sizeof(c));
@@ -830,8 +852,12 @@ static void command_control_case(const char *bytes, size_t length,
       if (!color)
         assert(strchr(c.bytes, '\033') == NULL);
       without_sgr(plain, c.bytes);
-      if (strncmp(plain, expected, expected_length) != 0 ||
-          strcmp(plain + expected_length, "\n\n* Ran command (0ms)\n") != 0) {
+      heading = split == 0U ? "* Ran command (0ms)\n" : "* Running command\n";
+      assert(strncmp(plain, heading, strlen(heading)) == 0);
+      body = plain + strlen(heading);
+      if (strncmp(body, expected, expected_length) != 0 ||
+          strcmp(body + expected_length,
+                 split == 0U ? "\n" : "\n\n* Ran command (0ms)\n") != 0) {
         fprintf(stderr,
                 "command controls color=%d split=%lu: [%s], expected [%s]\n",
                 color, (unsigned long)split, plain, expected);
@@ -1043,6 +1069,156 @@ static void command_durations(capture *c) {
   cai_error_cleanup(&error);
 }
 
+static void command_delay(capture *c) {
+#ifdef CAI_TEST_DISPLAY_CLOCK
+  cai_tool_display_config config;
+  cai_tool_display *display = NULL;
+  cai_sink_callbacks callbacks;
+  cai_sink *sink = NULL;
+  cai_error error;
+  cai_agent_runtime_event saved;
+  const char *heading;
+  size_t length;
+  memset(&config, 0, sizeof(config));
+  memset(&callbacks, 0, sizeof(callbacks));
+  callbacks.write = write_capture;
+  callbacks.context = c;
+  cai_error_init(&error);
+  assert(cai_sink_from_callbacks(&callbacks, &sink, &error) == CAI_OK);
+  config.sink = sink;
+  assert(cai_tool_display_new(&config, &display, &error) == CAI_OK);
+  fake_clock = 1;
+  fake_milliseconds = 10000ULL;
+  assert(!cai_tool_display_needs_tick(NULL) &&
+         !cai_tool_display_needs_tick(display));
+  reset(c);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED, "fast", "true", 0,
+        0);
+  assert(cai_tool_display_needs_tick(display));
+  assert(c->length == 0U);
+  event(display, CAI_AGENT_EVENT_TERMINAL_OUTPUT, "fast", NULL, 0, 0);
+  fake_milliseconds += 1999ULL;
+  assert(cai_tool_display_tick(display, &error) == CAI_OK && c->length == 0U);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED, "fast", NULL, 0,
+        0);
+  assert(!cai_tool_display_needs_tick(display));
+  assert(strstr(c->bytes, "Ran true (0ms)") != NULL &&
+         strstr(c->bytes, "Running") == NULL);
+  length = c->length;
+  fake_milliseconds += 10000ULL;
+  assert(cai_tool_display_tick(display, &error) == CAI_OK &&
+         c->length == length);
+
+  reset(c);
+  fake_milliseconds = 30000ULL;
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED, "slow", "quiet", 0,
+        0);
+  fake_milliseconds = 29000ULL; /* A backward clock must not underflow. */
+  assert(cai_tool_display_tick(display, &error) == CAI_OK && c->length == 0U);
+  fake_milliseconds = 31999ULL;
+  assert(cai_tool_display_tick(display, &error) == CAI_OK && c->length == 0U);
+  fake_milliseconds = 32000ULL;
+  assert(cai_tool_display_tick(display, &error) == CAI_OK);
+  assert(strstr(c->bytes, "Running quiet") != NULL);
+  assert(!cai_tool_display_needs_tick(display));
+  length = c->length;
+  fake_milliseconds++;
+  assert(cai_tool_display_tick(display, &error) == CAI_OK &&
+         c->length == length);
+  event(display, CAI_AGENT_EVENT_TERMINAL_OUTPUT, "slow", "LIVE\n", 0, 0);
+  heading = strstr(c->bytes, "Running");
+  assert(heading != NULL && strstr(c->bytes, "LIVE") != NULL &&
+         heading < strstr(c->bytes, "LIVE") &&
+         strstr(heading + 1, "Running") == NULL);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED, "slow", NULL, 0,
+        0);
+  assert(strstr(c->bytes, "Ran quiet") != NULL);
+
+  reset(c);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED, "output", "prints",
+        0, 0);
+  assert(c->length == 0U);
+  event(display, CAI_AGENT_EVENT_TERMINAL_OUTPUT, "output", "FIRST\n", 0, 0);
+  assert(!cai_tool_display_needs_tick(display));
+  assert(strstr(c->bytes, "Running prints\nFIRST\n") != NULL);
+  length = c->length;
+  fake_milliseconds += 3000ULL;
+  assert(cai_tool_display_tick(display, &error) == CAI_OK &&
+         c->length == length);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED, "output", NULL, 0,
+        0);
+
+  reset(c);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED, "final",
+        "final output", 0, 0);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED, "final", "TAIL\n",
+        0, 0);
+  assert(strstr(c->bytes, "Running") == NULL);
+  assert(strstr(c->bytes, "Ran final output (0ms)\nTAIL\n") != NULL);
+  reset(c);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED, "cancel",
+        "cancelled", 0, 0);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_CANCELLED, "cancel", NULL, 0,
+        1);
+  assert(strstr(c->bytes, "Cancelled cancelled") != NULL &&
+         strstr(c->bytes, "Running") == NULL);
+  reset(c);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED, "error", "exit 2", 0,
+        0);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED, "error", NULL, 0,
+        2);
+  assert(strstr(c->bytes, "Ran exit 2") != NULL &&
+         strstr(c->bytes, "exit=2") != NULL &&
+         strstr(c->bytes, "Running") == NULL);
+
+  reset(c);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED, "dropped", "drop", 0,
+        0);
+  event(display, CAI_AGENT_EVENT_RUN_CANCELLED, "dropped", NULL, 0, 0);
+  fake_milliseconds += 3000ULL;
+  assert(cai_tool_display_tick(display, &error) == CAI_OK && c->length == 0U);
+
+  memset(&saved, 0, sizeof(saved));
+  saved.type = CAI_AGENT_EVENT_TOOL_CALL_COMPLETED;
+  saved.runtime_session_id = "session";
+  saved.tool_call_id = "saved";
+  assert(cai_tool_display_replay_begin(display, &saved, "Ran", "saved command",
+                                       1, &error) == CAI_OK);
+  assert(!cai_tool_display_needs_tick(display));
+  length = c->length;
+  fake_milliseconds += 3000ULL;
+  assert(cai_tool_display_tick(display, &error) == CAI_OK &&
+         c->length == length);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED, "saved", NULL, 0,
+        0);
+
+  reset(c);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED, "fail",
+        "sink failure", 0, 0);
+  fake_milliseconds += 2000ULL;
+  c->fail = 1;
+  assert(cai_tool_display_tick(display, &error) == CAI_ERR_TRANSPORT);
+  c->fail = 0;
+  cai_error_cleanup(&error);
+  cai_error_init(&error);
+  fake_clock_error = 1;
+  assert(cai_tool_display_tick(display, &error) == CAI_ERR_TRANSPORT);
+  fake_clock_error = 0;
+  cai_error_cleanup(&error);
+  cai_error_init(&error);
+  assert(cai_tool_display_tick(display, &error) == CAI_OK);
+  assert(strstr(c->bytes, "Running sink failure") != NULL);
+  event(display, CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED, "fail", NULL, 0,
+        0);
+  assert(cai_tool_display_tick(NULL, &error) == CAI_ERR_INVALID);
+  fake_clock = 0;
+  cai_tool_display_close(display);
+  cai_sink_close(sink);
+  cai_error_cleanup(&error);
+#else
+  (void)c;
+#endif
+}
 int main(void) {
   capture c;
   memset(&c, 0, sizeof(c));
@@ -1055,6 +1231,7 @@ int main(void) {
   palette_validation(&c);
   commands(&c);
   command_durations(&c);
+  command_delay(&c);
   command_controls();
   free(c.bytes);
   puts("patch rendering, live previews, status, mode capture and failure "
