@@ -279,6 +279,9 @@ int cai_agent_runtime_set_reasoning_tool(
     rc = cai_set_error(error, CAI_ERR_INVALID,
                        "Configure the reasoning tool between turns.");
   } else if (!!config->enabled != !!runtime->reasoning_tool.enabled) {
+    cai_agent_impl *agent = CAI_AGENT_IMPL(runtime->agent);
+    if (agent->plugins != NULL)
+      pthread_mutex_lock(&agent->plugins_lock);
     if (config->enabled)
       rc = cai_agent_register_raw_tool(
           runtime->agent, "set_reasoning",
@@ -293,6 +296,16 @@ int cai_agent_runtime_set_reasoning_tool(
     else
       rc = cai_tool_registry_remove_internal(
           CAI_AGENT_IMPL(runtime->agent)->tools, "set_reasoning", error);
+    if (rc == CAI_OK && agent->plugins != NULL) {
+      if (config->enabled) {
+        cai_tool_registry_promote_last_internal(agent->tools,
+                                                agent->plugins_base);
+        agent->plugins_base++;
+      } else
+        agent->plugins_base--;
+    }
+    if (agent->plugins != NULL)
+      pthread_mutex_unlock(&agent->plugins_lock);
   }
   if (rc == CAI_OK) {
     cai_free_mem(NULL, runtime->reasoning_tool.normal_effort);

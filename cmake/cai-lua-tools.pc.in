@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/@CAI_PC_PREFIX_FROM_PKGCONFIG@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+Name: cai-lua-tools
+Description: Optional embedded and host-owned Lua executor for libcai tools
+Version: @CAI_PACKAGE_VERSION@
+Requires: cai
+Requires.private: lua = 5.5.1 lonejson
+Libs: -L${libdir} -lcai_lua_tools
+Cflags: -I${includedir}

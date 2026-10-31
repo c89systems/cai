@@ -3,6 +3,12 @@
 #include <string.h>
 
 static const cai_app_option options[] = {
+    {"--plugins", '\0', CAI_APP_FLAG, NULL,
+     "Hot-load custom tool packages (default on)", 0, 1},
+    {"--tools-dir", '\0', CAI_APP_STRING, "DIR",
+     "Global tool packages (default application data/tools)", 0, 0},
+    {"--workspace-tools-dir", '\0', CAI_APP_STRING, "DIR",
+     "Workspace tool packages (default .program_name/tools)", 0, 0},
     {"--disable-compression", '\0', CAI_APP_FLAG, NULL,
      "Disable Pouch compression (default: zlib enabled)", 0, 0},
     {"--home", '\0', CAI_APP_STRING, "DIR",

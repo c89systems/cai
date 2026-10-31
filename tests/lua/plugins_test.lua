@@ -1,0 +1,25 @@
+local cai = require('cai')
+local root = assert(arg[1])
+local p = assert(cai.plugins({root}))
+assert(p:define({name='host_lua', description='Trusted host function', parameters_json='{"type":"object"}'}, function(input, ctx)
+  local args = input:decode()
+  assert(args.value == 41)
+  assert(ctx.workspace == root)
+  return {answer=args.value + 1}
+end))
+local output = {}
+local sent = false
+assert(p:run('host_lua', function() if sent then return nil end; sent=true; return '{"value":41}' end, function(bytes) output[#output+1]=bytes end, root))
+assert(table.concat(output) == '{"answer":42}')
+local catalog = p:list()
+assert(#catalog == 1 and catalog[1].name == 'host_lua')
+local client = assert(cai.open({api_key='fixture',base_url='http://127.0.0.1:1'}))
+local agent = assert(client:new_agent({model='fixture',disable_auto_compaction=1}))
+assert(agent:use_plugins(p, root))
+assert(not p:close()) -- the adapter must survive its attached agent
+agent:close()
+assert(p:unload('host_lua'))
+assert(#p:list() == 0)
+assert(p:close())
+client:close()
+print('plugin facade passed')

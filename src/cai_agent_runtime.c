@@ -959,6 +959,23 @@ static int cai_runtime_cancel_requested(void *context) {
   return requested;
 }
 
+/* Capabilities call the same policy-aware implementations as model tools.
+ * Do not allow recursive plugin/management calls through this bridge. */
+static int cai_runtime_plugin_tool(void *context, const char *name,
+                                   const char *arguments, cai_sink *output,
+                                   cai_error *error) {
+  cai_agent_runtime *runtime = context;
+  static const char *const allowed[] = {
+      "read_file", "list_files", "apply_patch", "exec_command", "write_stdin"};
+  size_t i;
+  for (i = 0U; i < sizeof(allowed) / sizeof(allowed[0]); i++)
+    if (strcmp(name, allowed[i]) == 0)
+      return cai_tool_registry_run(CAI_AGENT_IMPL(runtime->agent)->tools, name,
+                                   arguments, output, error);
+  return cai_set_error(error, CAI_ERR_INVALID,
+                       "plugin host capability is unavailable");
+}
+
 static void cai_runtime_settings_clear(cai_runtime_settings_owned *settings) {
   cai_free_mem(settings->allocator, settings->model);
   cai_free_mem(settings->allocator, settings->reasoning_effort);
@@ -8338,6 +8355,20 @@ int cai_agent_runtime_open(cai_client *client,
         cai_runtime_capacity_retry;
     CAI_SESSION_IMPL(runtime->session)->retry_request_context = runtime;
   }
+  if (rc == CAI_OK && config->plugins != NULL) {
+    cai_plugin_call call;
+    cai_plugin_call_init(&call);
+    call.workspace = runtime->workspace_directory;
+    call.yolo = runtime->smith_yolo;
+    call.cancelled = cai_runtime_cancel_requested;
+    call.cancel_context = runtime;
+    call.call_tool = cai_runtime_plugin_tool;
+    call.tool_context = runtime;
+    rc = review_mode ? cai_set_error(error, CAI_ERR_INVALID,
+                                     "isolated review does not support plugins")
+                     : cai_agent_use_plugins(runtime->agent, config->plugins,
+                                             &call, error);
+  }
   if (rc == CAI_OK && pthread_create(&runtime->worker_thread, NULL,
                                      cai_runtime_worker, runtime) != 0) {
     rc = cai_set_error(error, CAI_ERR_TRANSPORT,
@@ -12986,9 +13017,9 @@ int cai_agent_runtime_visit_tools(cai_agent_runtime *runtime,
     return rc;
   if (visitor == NULL)
     return cai_set_error(error, CAI_ERR_INVALID, "tool visitor is required");
-  /* Registration is completed before the worker starts. Tool execution and
-   * model/effort updates do not mutate this registry. */
   agent = CAI_AGENT_IMPL(runtime->agent);
+  if (agent->plugins_lock_initialized)
+    pthread_mutex_lock(&agent->plugins_lock);
   for (i = 0U; rc == CAI_OK && i < cai_tool_registry_count(agent->tools); i++) {
     memset(&info, 0, sizeof(info));
     info.name = cai_tool_registry_name_at(agent->tools, i);
@@ -13010,6 +13041,8 @@ int cai_agent_runtime_visit_tools(cai_agent_runtime *runtime,
     }
     rc = visitor(context, &info, error);
   }
+  if (agent->plugins_lock_initialized)
+    pthread_mutex_unlock(&agent->plugins_lock);
   for (i = 0U; rc == CAI_OK && i < agent->hosted_tools.count; i++) {
     struct cai_function_tool *tools = agent->hosted_tools.items;
     cai_runtime_hosted_info hosted;

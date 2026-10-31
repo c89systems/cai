@@ -1,4 +1,5 @@
 #include "cai_internal.h"
+#include "cai_plugins_internal.h"
 #include <cai/tools/todo.h>
 #include <float.h>
 
@@ -328,6 +329,9 @@ static int cai_history_validate_metadata(cai_session *session,
                                          const cai_session_state_doc *doc,
                                          cai_error *error);
 static int cai_token_usage_is_empty(const cai_token_usage *usage);
+static int cai_session_sync_plugin_request(cai_session *session,
+                                           cai_response_create_params *params,
+                                           cai_error *error);
 static int cai_session_prepare_history_params(
     cai_session *session, cai_response_create_params *params,
     lonejson_spooled *out_pending_items, int *out_has_pending_items,
@@ -920,6 +924,10 @@ void cai_agent_destroy(cai_agent *agent) {
   if (impl->tools != NULL) {
     impl->tools->destroy(impl->tools);
   }
+  cai_plugins_close(impl->plugins);
+  cai_free_mem(NULL, impl->plugin_workspace);
+  if (impl->plugins_lock_initialized)
+    pthread_mutex_destroy(&impl->plugins_lock);
   cai_free_mem(allocator, impl);
   agent->impl = NULL;
   cai_free_mem(allocator, agent);
@@ -5667,7 +5675,9 @@ static int cai_session_create_response_from_params(
   int rc;
 
   response = NULL;
-  rc = cai_session_check_usage_available(session, error);
+  rc = cai_session_sync_plugin_request(session, params, error);
+  if (rc == CAI_OK)
+    rc = cai_session_check_usage_available(session, error);
   if (rc != CAI_OK) {
     return rc;
   }
@@ -6003,6 +6013,25 @@ static int cai_session_init_response_params(cai_session *session,
   return cai_session_init_response_params_mode(session, 0, out, error);
 }
 
+static int cai_session_sync_plugin_request(cai_session *session,
+                                           cai_response_create_params *params,
+                                           cai_error *error) {
+  cai_agent_impl *agent = CAI_SESSION_AGENT_IMPL(session);
+  unsigned long generation = agent->plugins_generation;
+  struct cai_function_tool *hosted = agent->hosted_tools.items;
+  size_t i;
+  int rc = cai_plugins_sync_agent(CAI_SESSION_IMPL(session)->agent, error);
+  if (rc != CAI_OK || agent->plugins == NULL ||
+      generation == agent->plugins_generation)
+    return rc;
+  cai_plugin_request_clear_tools(params);
+  for (i = 0U; rc == CAI_OK && i < agent->hosted_tools.count; i++)
+    rc = params->add_hosted_tool_json(params, hosted[i].raw_json, error);
+  if (rc == CAI_OK)
+    rc = agent->tools->add_to_response_params(agent->tools, params, error);
+  return rc;
+}
+
 static int cai_session_clear_tool_choice_for_tool_continuation(
     cai_response_create_params *params, cai_error *error) {
   return params->set_tool_choice(params, NULL, error);
@@ -6015,7 +6044,9 @@ cai_session_refresh_request_settings(cai_session *session,
                                      cai_response_create_params *params,
                                      cai_error *error) {
   cai_agent_impl *agent = CAI_SESSION_AGENT_IMPL(session);
-  int rc = params->set_model(params, agent->model, error);
+  int rc = cai_session_sync_plugin_request(session, params, error);
+  if (rc == CAI_OK)
+    rc = params->set_model(params, agent->model, error);
   if (rc == CAI_OK)
     rc = params->set_instructions(params, agent->developer_instructions, error);
   if (rc == CAI_OK)
@@ -6524,6 +6555,8 @@ static int cai_session_stream_once(cai_session *session,
   memset(&usage, 0, sizeof(usage));
   rc = cai_session_init_response_params_mode(session, diagnostic, &params,
                                              error);
+  if (rc == CAI_OK && !diagnostic)
+    rc = cai_session_sync_plugin_request(session, params, error);
   if (rc == CAI_OK) {
     rc = cai_session_prepare_history_params(session, params, &pending_items,
                                             &has_pending_items, error);

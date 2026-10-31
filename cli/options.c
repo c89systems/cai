@@ -62,6 +62,7 @@ void cai_cli_options_init(cai_cli_options *options) {
   options->shell_context_max_lines = 5000U;
   options->shell_context_max_bytes = 4U * 1024U * 1024U;
   options->review_subagent = 1;
+  options->plugins = 1;
   options->subagent_steering = 1;
   options->capacity_retry = 1;
   options->chrome = 1;
@@ -158,6 +159,10 @@ static int cli_read_options(int argc, char *const *argv,
     }
     if (strcmp(flag, "--no-temp") == 0) {
       options->temporary = 0;
+      continue;
+    }
+    if (strcmp(flag, "--plugins") == 0 || strcmp(flag, "--no-plugins") == 0) {
+      options->plugins = strcmp(flag, "--plugins") == 0;
       continue;
     }
     if (strcmp(flag, "--chrome") == 0) {
@@ -624,6 +629,10 @@ static int cli_read_options(int argc, char *const *argv,
       field = &options->config_file;
     else if (strcmp(flag, "--config-dir") == 0)
       field = &options->config_dir;
+    else if (strcmp(flag, "--tools-dir") == 0)
+      field = &options->tools_dir;
+    else if (strcmp(flag, "--workspace-tools-dir") == 0)
+      field = &options->workspace_tools_dir;
     else if (strcmp(flag, "--skills-dir") == 0)
       field = &options->skills_dir;
     else if (strcmp(flag, "--install-skill") == 0)

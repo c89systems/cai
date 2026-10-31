@@ -1,4 +1,5 @@
 #include "cai_internal.h"
+#include "cai_plugins_internal.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -1507,6 +1508,15 @@ void cai_response_create_params_destroy(cai_response_create_params *params) {
   cai_free_mem(&params->allocator, params->input.items);
   cai_free_mem(&params->allocator, params->tools.items);
   cai_free_mem(&params->allocator, params);
+}
+
+void cai_plugin_request_clear_tools(cai_response_create_params *params) {
+  struct cai_function_tool *tools = params->tools.items;
+  size_t i;
+  for (i = 0U; i < params->tools.count; i++)
+    cai_function_tool_cleanup(&params->allocator, &tools[i]);
+  cai_free_mem(&params->allocator, params->tools.items);
+  memset(&params->tools, 0, sizeof(params->tools));
 }
 
 void cai_response_create_params_clear_input(

@@ -78,6 +78,8 @@ typedef struct cai_cli_options {
   const char *agents_md;
   const char *config_dir;
   const char *skills_dir;
+  int plugins;
+  const char *tools_dir, *workspace_tools_dir;
   const char *install_skill;
   int force, temporary;
   const char *identity;

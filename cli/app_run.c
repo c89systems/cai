@@ -28,6 +28,10 @@
 #include "todo.h"
 #include "tool_result.h"
 #include <cai/chrome.h>
+#include <cai/plugins.h>
+#ifdef CAI_APP_LUA_TOOLS
+#include <cai/lua_tools.h>
+#endif
 #include <locale.h>
 
 #include <cai/agent_runtime.h>
@@ -103,6 +107,11 @@ typedef struct cli_state {
   pslog_logger *model_log;
   cai_client *quota_client;
   cai_agent_runtime *runtime;
+  cai_plugins *plugins;
+  int owns_plugins;
+#ifdef CAI_APP_LUA_TOOLS
+  cai_lua_tools *lua_tools;
+#endif
   cai_agent_runtime *review_runtime;
   int foreground_subagent;
   sl_watch_id_t review_watch_id;
@@ -1090,7 +1099,7 @@ static const struct cli_command_definition {
 } cli_command_definitions[] = {
     {"/help", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
     {"/status", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/tools", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
+    {"/tools", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
     {"/skills", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
     {"/quit", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
     {"/exit", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
@@ -2880,6 +2889,49 @@ static cai_cli_pouch *cli_named_store(cli_state *state, const char *name,
   return store;
 }
 
+static int cli_open_plugins(cli_state *state, cai_error *error) {
+  cai_plugins_config config;
+  const char *roots[2];
+  char global[PATH_MAX], local[PATH_MAX];
+  int rc;
+  if (!state->options.plugins || state->options.review ||
+      state->plugins != NULL)
+    return CAI_OK;
+  if (state->application != NULL && state->application->plugins != NULL) {
+    state->plugins = state->application->plugins;
+    return CAI_OK;
+  }
+  if (snprintf(global, sizeof(global), "%s/tools",
+               state->normal_options.data_dir) >= (int)sizeof(global) ||
+      snprintf(local, sizeof(local), "%s/.%s/tools", state->workspace,
+               state->options.program_name) >= (int)sizeof(local))
+    return cai_cli_error(error, CAI_ERR_INVALID, "tool root path too long");
+  roots[0] =
+      state->options.tools_dir != NULL ? state->options.tools_dir : global;
+  roots[1] = state->options.workspace_tools_dir != NULL
+                 ? state->options.workspace_tools_dir
+                 : local;
+  cai_plugins_config_init(&config);
+  config.directories = roots;
+  config.directory_count = 2U;
+  rc = cai_plugins_open(&config, &state->plugins, error);
+  if (rc != CAI_OK)
+    return rc;
+  state->owns_plugins = 1;
+#ifdef CAI_APP_LUA_TOOLS
+  {
+    cai_lua_tools_config adapter;
+    cai_lua_tools_config_init(&adapter);
+    rc = cai_lua_tools_open(&adapter, &state->lua_tools, error);
+  }
+  if (rc == CAI_OK)
+    rc = cai_lua_tools_attach(state->lua_tools, state->plugins, error);
+#endif
+  if (rc == CAI_OK)
+    rc = cai_plugins_reload(state->plugins, error);
+  return rc;
+}
+
 static int cli_open_runtime(cli_state *state, const char *resume_id,
                             int new_session, cai_error *error) {
   cai_agent_runtime_config config;
@@ -2925,6 +2977,11 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     config.revgeo.response_spool_dir = state->temporary.private_dir;
   }
   cai_cli_apply_runtime_options(&state->options, &config, &preset, &skills);
+  rc = cli_open_plugins(state, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (state->options.plugins && !state->options.review)
+    config.plugins = state->plugins;
   terminal.default_yield_time_ms = state->options.yield_time_ms;
   terminal.foreground = state->options.foreground;
   if (state->suppress_replay) {
@@ -5038,7 +5095,10 @@ static int cli_handle_command(cli_state *state, const char *line,
         "quota metrics and the tool summary. Refresh ChatGPT quota "
         "immediately. |\n"
         "| `/tools` | List installed tools, MCP servers, discovery errors and "
-        "tool descriptions. |\n"
+        "tool descriptions. |\n",
+        "| `/tools reload [PATH]` | Reload configured tool packages or one "
+        "package. |\n"
+        "| `/tools unload NAME` | Retire a plugin before the next request. |\n"
         "| `/skills` | List loaded skill names and descriptions. |\n"
         "| `/resume` | List conversations for the current directory. |\n",
         "| `/resume NUMBER` | Resume a listed conversation and replay prompts "
@@ -5138,6 +5198,28 @@ static int cli_handle_command(cli_state *state, const char *line,
   }
   if (strcmp(line, "/new") == 0) {
     return cli_switch_session(state, NULL, 1, error);
+  }
+  if (strncmp(line, "/tools ", 7U) == 0) {
+    const char *action = line + 7U;
+    const char *message = "Tool catalog updated for the next model request.\n";
+    if (state->plugins == NULL)
+      return cai_cli_error(
+          error, CAI_ERR_INVALID,
+          "Plugins are disabled; enable --plugins or [plugins] enabled.");
+    if (strcmp(action, "reload") == 0)
+      rc = cai_plugins_reload(state->plugins, error);
+    else if (strncmp(action, "reload ", 7U) == 0)
+      rc = cai_plugins_load(state->plugins, action + 7U, error);
+    else if (strncmp(action, "unload ", 7U) == 0)
+      rc = cai_plugins_unload(state->plugins, action + 7U, error);
+    else
+      return cai_cli_error(
+          error, CAI_ERR_INVALID,
+          "Use /tools, /tools reload [PATH], or /tools unload NAME.");
+    if (rc == CAI_OK && (cli_text(state, message, strlen(message)) != 0 ||
+                         cli_finish_response(state) != 0))
+      rc = CAI_ERR_TRANSPORT;
+    return rc;
   }
   if (strcmp(line, "/tools") == 0) {
     if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0)
@@ -6346,6 +6428,11 @@ cleanup:
     state->messages = NULL;
   }
   cai_cli_mcp_close(&state->mcp);
+  if (state->owns_plugins)
+    cai_plugins_close(state->plugins);
+#ifdef CAI_APP_LUA_TOOLS
+  cai_lua_tools_close(state->lua_tools);
+#endif
   if (state->has_host_watch)
     (void)sl_watch_remove(state->sl, state->host_watch);
   if (state->has_log_watch)

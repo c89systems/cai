@@ -1,0 +1,4 @@
+include(CMakeFindDependencyMacro)
+find_dependency(cai CONFIG)
+find_dependency(Lua 5.5.1 EXACT CONFIG)
+include("${CMAKE_CURRENT_LIST_DIR}/cai-lua-tools-targets.cmake")

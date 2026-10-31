@@ -82,6 +82,25 @@
       "$<TARGET_FILE:cai_cli_mock_fixture>")
     set_tests_properties(cai_cli_messages_toggle_failure PROPERTIES TIMEOUT 15)
     add_test(NAME cai_cli_help COMMAND cai_cli --help)
+    if(CAI_BUILD_LUA_TOOLS)
+      add_executable(cai_plugins_seam_test tests/plugins_seam_test.c)
+      target_link_libraries(cai_plugins_seam_test PRIVATE cai_static)
+      cai_configure_c_target(cai_plugins_seam_test)
+      target_compile_options(cai_plugins_seam_test PRIVATE -UNDEBUG)
+      foreach(_plugin_protocol responses chat_completions)
+        add_test(NAME cai_plugins_seam_${_plugin_protocol} COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/plugins_seam_test.sh"
+          "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_plugins_seam_test>" "${_plugin_protocol}")
+        set_tests_properties(cai_plugins_seam_${_plugin_protocol} PROPERTIES
+          LABELS "unit;local;offline" TIMEOUT 5)
+        add_test(NAME cai_cli_plugins_${_plugin_protocol} COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_plugins_test.sh"
+          "$<TARGET_FILE:cai_cli_mock_fixture>" "${_plugin_protocol}")
+        set_tests_properties(cai_cli_plugins_${_plugin_protocol} PROPERTIES
+          LABELS "cli;local;offline" TIMEOUT 15
+          ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+      endforeach()
+    endif()
     add_test(NAME cai_cli_startup_text COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_startup_text_test.sh"
       "$<TARGET_FILE:cai_cli>" cai)

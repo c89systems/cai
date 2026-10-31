@@ -6,6 +6,10 @@
 #include <cai/display.h>
 #include <cai/execution.h>
 #include <cai/mcp.h>
+#include <cai/plugins.h>
+#ifdef CAI_LUA_TOOLS
+#include <cai/lua_tools.h>
+#endif
 #include <cai/smith.h>
 #include <cai/tools/exec.h>
 #include <cai/tools/read.h>
@@ -100,6 +104,7 @@ typedef struct cai_lua_agent {
   size_t child_sessions;
   int parent_ref;
   int skill_provider_ref;
+  int plugins_ref;
 } cai_lua_agent;
 
 typedef struct cai_lua_session {
@@ -122,6 +127,7 @@ typedef struct cai_lua_agent_runtime {
   int session_store_ref;
   int instruction_store_ref;
   int skill_provider_ref;
+  int plugins_ref;
   int subagent_prepare_backends_ref;
   int todo_store_ref;
   int mcp_clients_ref;
@@ -2853,6 +2859,8 @@ static int cai_lua_client_close(lua_State *L) {
   return cai_lua_client_gc(L);
 }
 
+#include "cai_lua_plugins.inc"
+
 static int cai_lua_client_new_agent(lua_State *L) {
   cai_lua_client *self;
   cai_agent_config config;
@@ -3931,7 +3939,25 @@ static int cai_lua_client_new_smith_runtime_common(lua_State *L,
   }
   if (rc == CAI_OK) {
     cai_lua_client_enter(client);
-    rc = cai_agent_runtime_open(client->ptr, &config, &runtime->ptr, &error);
+    lua_getfield(L, 2, "plugins");
+    if (!lua_isnil(L, -1)) {
+      cai_lua_plugins *plugins = plugins_check(L, -1);
+#ifdef CAI_LUA_TOOLS
+      if (plugins->trusted)
+        rc = cai_lua_set_error(
+            &error, CAI_ERR_INVALID,
+            "host Lua functions require a C owner-thread dispatcher; use file "
+            "packages with Lua runtimes");
+#endif
+      if (rc == CAI_OK) {
+        config.plugins = plugins->ptr;
+        runtime->plugins_ref = plugins_hold(L, -1);
+        plugins->workers++;
+      }
+    }
+    lua_pop(L, 1);
+    if (rc == CAI_OK)
+      rc = cai_agent_runtime_open(client->ptr, &config, &runtime->ptr, &error);
     cai_lua_client_leave(client);
   }
   if (rc == CAI_OK && subagent_config.prepare_backends != NULL) {
@@ -3963,6 +3989,7 @@ static int cai_lua_client_new_smith_runtime_common(lua_State *L,
   free(mcp_clients);
   if (rc != CAI_OK) {
     cai_chrome_close(runtime->chrome);
+    plugins_release_runtime_ref(L, &runtime->plugins_ref);
     runtime->chrome = NULL;
     cai_lua_unref_pslog_logger(&logger_ref, &has_logger_ref);
     if (runtime->callback_ref != LUA_NOREF) {
@@ -4473,6 +4500,7 @@ static int cai_lua_agent_gc(lua_State *L) {
     cai_lua_agent_leave(self);
     self->ptr = NULL;
   }
+  plugins_release_ref(L, &self->plugins_ref);
   cai_lua_unref_tools(L, self->tools);
   self->tools = NULL;
   if (self->parent_ref != LUA_NOREF) {
@@ -4538,6 +4566,7 @@ static const char *cai_lua_agent_runtime_state_name(cai_agent_run_state state) {
 
 static void cai_lua_agent_runtime_release(lua_State *L,
                                           cai_lua_agent_runtime *self) {
+  plugins_release_runtime_ref(L, &self->plugins_ref);
   cai_chrome_close(self->chrome);
   self->chrome = NULL;
   if (self->todo_store_ref != LUA_NOREF) {
@@ -12385,6 +12414,7 @@ static const luaL_Reg cai_lua_agent_runtime_methods[] = {
     {NULL, NULL}};
 
 static const luaL_Reg cai_lua_agent_methods[] = {
+    {"use_plugins", cai_lua_agent_use_plugins},
     {"instruction_status", cai_lua_agent_instruction_status},
     {"new_session", cai_lua_agent_new_session},
     {"new_conversation_session", cai_lua_agent_new_conversation_session},
@@ -12750,6 +12780,7 @@ int luaopen_cai(lua_State *L) {
     lua_pushinteger(L, (lua_Integer)(value));                                  \
     lua_setfield(L, -2, (name));                                               \
   } while (0)
+  cai_lua_metatable(L, CAI_LUA_PLUGINS, plugins_methods, plugins_close);
   cai_lua_metatable(L, CAI_LUA_CONFIG, cai_lua_config_methods,
                     cai_lua_config_close);
   cai_lua_metatable(L, CAI_LUA_SKILL_METADATA, cai_lua_skill_metadata_methods,
@@ -12815,6 +12846,8 @@ int luaopen_cai(lua_State *L) {
   lua_setfield(L, -2, "patch_render");
   lua_pushcfunction(L, cai_lua_display_new);
   lua_setfield(L, -2, "tool_display");
+  lua_pushcfunction(L, plugins_new);
+  lua_setfield(L, -2, "plugins");
   lua_pushcfunction(L, cai_lua_registry_new);
   lua_setfield(L, -2, "tool_registry");
   lua_pushcfunction(L, cai_lua_native_store_new);

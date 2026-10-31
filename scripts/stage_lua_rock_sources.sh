@@ -63,6 +63,7 @@ files=(
   docs/journal.md
   docs/liblockdc-0.25.0-upgrade.md
   docs/patch-tool.md
+  docs/plugins.md
   examples/app.lua
   cli/main.c
   cai.rockspec.in
@@ -77,6 +78,7 @@ files=(
   lua/cai_app.exports
   lua/cai_lua_config.inc
   lua/cai_lua_skills.inc
+  lua/cai_lua_plugins.inc
   lua/cai_lua.exports
 )
 

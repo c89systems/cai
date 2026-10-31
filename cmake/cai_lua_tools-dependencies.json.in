@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "project": "libcai_lua_tools",
+  "version": "@CAI_PACKAGE_VERSION@",
+  "targetId": "@CAI_TARGET_ID@",
+  "abiVersion": 0,
+  "libcaiAbiVersion": @CAI_ABI_VERSION@,
+  "dependencies": [
+    {
+      "name": "Lua",
+      "version": "5.5.1",
+      "providedBy": "cpkt",
+      "providerVersion": "@CAI_CPKT_VERSION@",
+      "sourceUrl": "@CAI_CPKT_URL_FOR_PACKAGE@",
+      "sha256": "@CAI_CPKT_SHA256_FOR_PACKAGE@",
+      "licenseIdentifier": "MIT",
+      "bundled": false
+    }
+  ]
+}

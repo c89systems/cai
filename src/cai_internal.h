@@ -3,6 +3,7 @@
 
 #include <cai/cai.h>
 #include <cai/history.h>
+#include <cai/plugins.h>
 #include <cai/quota.h>
 #include <cai/session_store.h>
 #include <cai/skills.h>
@@ -12,6 +13,7 @@
 
 #include <curl/curl.h>
 #include <lonejson.h>
+#include <pthread.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <time.h>
@@ -121,6 +123,13 @@ typedef struct cai_agent_impl {
   lonejson *history_runtime;
   lonejson_object_array hosted_tools;
   cai_tool_registry *tools;
+  cai_plugins *plugins;
+  cai_plugin_call plugin_call;
+  char *plugin_workspace;
+  size_t plugins_base;
+  unsigned long plugins_generation;
+  int plugins_bound, plugins_lock_initialized;
+  pthread_mutex_t plugins_lock;
   cai_session *default_session;
 } cai_agent_impl;
 
@@ -565,6 +574,12 @@ int cai_stream_fuzz_sse(const unsigned char *data, size_t size);
 /* Mutate only while the registry is quiescent. */
 int cai_tool_registry_remove_internal(cai_tool_registry *registry,
                                       const char *name, cai_error *error);
+int cai_tool_registry_replace_tail_internal(cai_tool_registry *registry,
+                                            size_t prefix,
+                                            cai_tool_registry *replacement,
+                                            cai_error *error);
+void cai_tool_registry_promote_last_internal(cai_tool_registry *registry,
+                                             size_t index);
 /* Quiescent registry operations. Exchange preserves tool order and ownership.
  */
 int cai_tool_registry_exchange_internal(cai_tool_registry *registry,

@@ -7,6 +7,7 @@
 #include <cai/cai.h>
 #include <cai/chrome.h>
 #include <cai/history.h>
+#include <cai/plugins.h>
 #include <cai/session_store.h>
 #include <cai/skills.h>
 #include <cai/smith.h>
@@ -803,6 +804,11 @@ typedef struct cai_agent_runtime_config {
   int (*register_agent_tools)(void *context, cai_agent *agent,
                               cai_error *error);
   void *register_agent_tools_context;
+  /** Optional retained dynamic tool catalog. Native registration runs first.
+   * Updates publish before the next request, after the preceding response's
+   * calls finish. Executor/callback contexts outlive runtime close. Plugins
+   * are not inherited by children and are rejected by isolated review. */
+  struct cai_plugins *plugins;
   /** Enable run_review_and_fix; default off. Requires goal tools and the
    * built-in reviewer. The tool replaces the current conversation's goal and
    * queues repeated review/fix/verification. Availability is not authorization:

@@ -206,6 +206,11 @@ same board as a named application.
 
 ### Native custom tools
 
+For hot loading, use the [dynamic tool catalog](plugins.md), available in
+libcai and through `cai_app_config.plugins`. File packages and optional embedded
+Lua share that catalog. The registration hook below remains for static host
+capabilities, which are installed before a catalog is attached.
+
 Set `cai_app_config.register_agent_tools` to register host tools through the same
 `cai_agent_register_*` APIs used by the core runtime:
 

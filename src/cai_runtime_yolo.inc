@@ -99,6 +99,12 @@ int cai_agent_runtime_try_set_yolo(cai_agent_runtime *runtime, int enabled,
     (void)cai_tool_registry_exchange_internal(tools, replacement, NULL);
   if (rc == CAI_OK) {
     runtime->smith_yolo = enabled;
+    if (CAI_AGENT_IMPL(runtime->agent)->plugins != NULL) {
+      cai_agent_impl *agent = CAI_AGENT_IMPL(runtime->agent);
+      pthread_mutex_lock(&agent->plugins_lock);
+      agent->plugin_call.yolo = enabled;
+      pthread_mutex_unlock(&agent->plugins_lock);
+    }
     *applied = 1;
     if (!runtime->logger_disabled && runtime->logger != NULL &&
         runtime->logger->info != NULL)

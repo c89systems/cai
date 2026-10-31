@@ -5,6 +5,7 @@
   "targetId": "@CAI_TARGET_ID@",
   "abiVersion": 0,
   "libcaiAbiVersion": @CAI_ABI_VERSION@,
+  "luaTools": {"enabled": @CAI_LUA_TOOLS_JSON@, "version": "5.5.1", "providedBy": "cpkt"},
   "dependencies": [
     {"name":"softline","version":"@CAI_SOFTLINE_VERSION@","targetId":"@CAI_TARGET_ID@","sourceUrl":"https://github.com/sa6mwa/softline/releases/download/v@CAI_SOFTLINE_VERSION@/@_cai_softline_name@.tar.gz","sha256":"@_cai_softline_sha256@","bundled":false},
     {"name":"libmdf","version":"@CAI_LIBMDF_VERSION@","targetId":"@CAI_TARGET_ID@","sourceUrl":"https://github.com/sa6mwa/libmdf/releases/download/v@CAI_LIBMDF_VERSION@/@_cai_libmdf_name@.tar.gz","sha256":"@_cai_libmdf_sha256@","bundled":false},

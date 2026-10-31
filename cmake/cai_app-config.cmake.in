@@ -1,5 +1,8 @@
 include(CMakeFindDependencyMacro)
 find_dependency(cai CONFIG)
+if(@CAI_BUILD_LUA_TOOLS@)
+  find_dependency(cai_lua_tools CONFIG)
+endif()
 find_dependency(pslog @CAI_PSLOG_VERSION@ EXACT CONFIG)
 find_dependency(softline @CAI_SOFTLINE_VERSION@ EXACT CONFIG)
 find_dependency(libmdf @CAI_LIBMDF_VERSION@ EXACT CONFIG)

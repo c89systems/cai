@@ -52,6 +52,7 @@ if(CAI_BUILD_CLI)
   set(CAI_BUILD_APP ON)
 endif()
 option(CAI_BUILD_LUA "Build the Lua 5.5 binding and Lua tests." OFF)
+option(CAI_BUILD_LUA_TOOLS "Build the optional embedded Lua tool executor." ${CAI_BUILD_APP})
 option(CAI_BUILD_FUZZERS "Build fuzz harnesses." OFF)
 option(CAI_ENABLE_COVERAGE "Build tests with coverage instrumentation." OFF)
 option(CAI_ENABLE_VALGRIND_TESTS "Register native Valgrind memory-check tests." OFF)
@@ -704,6 +705,8 @@ endif()
 set(CAI_SOURCES
   src/cai_agent.c
   src/cai_agent_runtime.c
+  src/cai_plugins.c
+  src/cai_plugin_process.c
   src/cai_execution.c
   src/cai_terminal_text.c
   src/cai_session_store.c
@@ -896,6 +899,8 @@ function(cai_configure_cli_target target)
   cai_configure_c_target(${target})
 endfunction()
 
+include(CaiLuaTools)
+
 if(CAI_BUILD_APP)
   find_package(lockdc CONFIG REQUIRED COMPONENTS static)
   # The product and fixture entrypoints share these exact sources/options.
@@ -938,6 +943,7 @@ if(CAI_BUILD_CLI)
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/docs/model-metadata.md"
       "${CMAKE_CURRENT_SOURCE_DIR}/docs/chrome.md"
       "${CMAKE_CURRENT_SOURCE_DIR}/docs/embedding.md"
+      "${CMAKE_CURRENT_SOURCE_DIR}/docs/plugins.md"
       "${CMAKE_CURRENT_SOURCE_DIR}/docs/agent-messaging.md"
       "${CMAKE_CURRENT_SOURCE_DIR}/docs/kanban.md"
       "${CMAKE_CURRENT_SOURCE_DIR}/docs/journal.md"
@@ -965,6 +971,11 @@ if(CAI_BUILD_CLI)
         DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/third_party/${_cai_cli_core_dep}"
         COMPONENT cai-cli EXCLUDE_FROM_ALL)
     endforeach()
+    if(CAI_BUILD_LUA_TOOLS)
+      install(FILES "${CAI_CPKT_PREFIX}/share/doc/cpkt/core/third_party/lua/LICENSE"
+        DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/third_party/lua"
+        COMPONENT cai-cli EXCLUDE_FROM_ALL)
+    endif()
     install(DIRECTORY
       "${CAI_DEPS_DIR}/softline-${CAI_SOFTLINE_VERSION}-${CAI_TARGET_ID}/share/softline/licenses/"
       DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/third_party/softline/licenses"
@@ -983,6 +994,25 @@ if(CAI_BUILD_CLI)
     endif()
   endif()
   include(CaiCliTests)
+endif()
+
+if(CAI_BUILD_TESTS)
+  add_executable(cai_plugins_test tests/plugins_test.c)
+  add_executable(cai_plugin_process_test tests/plugin_process_test.c)
+  if(CAI_TARGET_ID MATCHES "-linux-musl$")
+    target_link_options(cai_plugins_test PRIVATE -static)
+    target_link_options(cai_plugin_process_test PRIVATE -static)
+  endif()
+  target_link_libraries(cai_plugin_process_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_c_target(cai_plugin_process_test)
+  target_compile_options(cai_plugin_process_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_plugin_process COMMAND cai_plugin_process_test "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(cai_plugin_process PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
+  target_link_libraries(cai_plugins_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_c_target(cai_plugins_test)
+  target_compile_options(cai_plugins_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_plugins COMMAND cai_plugins_test "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(cai_plugins PROPERTIES LABELS "unit;local;offline" TIMEOUT 10)
 endif()
 
 if(CAI_BUILD_LUA_RUNNER)
@@ -1031,6 +1061,21 @@ if(CAI_BUILD_LUA)
     set(_cai_lua_link_target cai_shared)
   endif()
   add_library(cai_lua MODULE lua/cai_lua.c lua/todo_lua.c)
+  if(CAI_BUILD_TESTS AND CAI_BUILD_LUA_TOOLS)
+    add_test(NAME cai_lua_plugins COMMAND "${CAI_LUA_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua/plugins_test.lua"
+      "${CMAKE_CURRENT_BINARY_DIR}")
+    set_tests_properties(cai_lua_plugins PROPERTIES LABELS "unit;local;offline"
+      TIMEOUT 5 ENVIRONMENT "${CAI_LUA_TEST_ENV}")
+  endif()
+  if(CAI_BUILD_LUA_TOOLS)
+    target_compile_definitions(cai_lua PRIVATE CAI_LUA_TOOLS=1)
+    if(TARGET cai_lua_tools_shared)
+      target_link_libraries(cai_lua PRIVATE cai_lua_tools_shared)
+    else()
+      target_link_libraries(cai_lua PRIVATE cai_lua_tools_static)
+    endif()
+  endif()
   if(CAI_BUILD_APP)
     if(NOT TARGET cai_app_shared)
       message(FATAL_ERROR "The cai.app Lua facade requires the public shared application library")
@@ -1436,7 +1481,7 @@ if(CAI_INSTALL)
     @ONLY)
 
   install(DIRECTORY "${CAI_PUBLIC_INCLUDE_DIR}/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-    PATTERN "app.h" EXCLUDE)
+    PATTERN "app.h" EXCLUDE PATTERN "lua_tools.h" EXCLUDE)
   install(DIRECTORY "${CAI_GENERATED_INCLUDE_DIR}/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
   install(FILES "${CAI_LIBYAML_LICENSE}"
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/third_party/libyaml")
@@ -1471,6 +1516,7 @@ if(CAI_INSTALL)
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/model-metadata.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/chrome.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/embedding.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/plugins.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/agent-messaging.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/kanban.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/journal.md"
@@ -1489,9 +1535,10 @@ if(CAI_INSTALL)
   if(TARGET cai_shared)
     list(APPEND _cai_package_deps cai_shared)
   endif()
-  foreach(_cai_app_target IN ITEMS cai_app_static cai_app_shared)
-    if(TARGET ${_cai_app_target})
-      list(APPEND _cai_package_deps ${_cai_app_target})
+  foreach(_cai_product_target IN ITEMS cai_app_static cai_app_shared
+      cai_lua_tools_static cai_lua_tools_shared)
+    if(TARGET ${_cai_product_target})
+      list(APPEND _cai_package_deps ${_cai_product_target})
     endif()
   endforeach()
   add_custom_target(cai_package_archive

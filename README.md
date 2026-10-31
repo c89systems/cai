@@ -3263,3 +3263,9 @@ CAI_INTEGRATION_SPEND_LIMIT_USD=0.05 CAI_INTEGRATION_CHATGPT_E2E=1 build/integra
 
 The generic cost estimator remains useful for the separate OpenRouter matrix.
 Subscription probes report token usage but do not spend an OpenAI API-key budget.
+
+Dynamic tool packages support process executors (shell, Python, Go and
+JavaScript) and the optional `libcai_lua_tools` embedded Lua adapter. Reloads
+publish at model request boundaries, preserving in-flight handlers. See
+[Dynamic tools](docs/plugins.md) for package format, policy, C/Lua embedding and
+`/tools reload` usage.

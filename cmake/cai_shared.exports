@@ -96,6 +96,7 @@ cai_agent_runtime_visit_tools
 cai_agent_runtime_wakeup_fd
 cai_agent_set_session_usage_limits
 cai_agent_usage
+cai_agent_use_plugins
 cai_apply_patch
 cai_chatgpt_auth_access_token
 cai_chatgpt_auth_close
@@ -273,6 +274,17 @@ cai_output_write_refusal
 cai_output_write_text
 cai_patch_render
 cai_patch_render_width
+cai_plugin_call_init
+cai_plugins_close
+cai_plugins_config_init
+cai_plugins_define
+cai_plugins_load
+cai_plugins_open
+cai_plugins_register_executor
+cai_plugins_reload
+cai_plugins_run
+cai_plugins_unload
+cai_plugins_visit
 cai_reasoning_tool_config_init
 cai_response_conversation_id
 cai_response_create_params_add_custom_tool

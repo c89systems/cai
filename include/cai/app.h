@@ -172,6 +172,11 @@ typedef struct cai_app_config {
   int (*register_agent_tools)(void *context, cai_agent *agent,
                               cai_error *error);
   void *register_agent_tools_context;
+  /** Optional host catalog, retained by each opened runtime. Borrowed for run;
+   * executor contexts must outlive run. NULL enables application-managed file
+   * packages from configured tool roots. --no-plugins disables either source.
+   * Host VM executors marshal calls to their owner thread themselves. */
+  struct cai_plugins *plugins;
   /** Optional owner-thread observers, alongside normal rendering and logging.
    * Events are borrowed only for the call. Return CAI_OK, or an error to abort
    * the run. Observers may call control/get_status, but must not reenter run,

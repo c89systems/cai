@@ -1,0 +1,13 @@
+{
+  "name": "increment",
+  "description": "Add one to an integer",
+  "parameters": {
+    "type": "object",
+    "properties": {"value": {"type": "integer"}},
+    "required": ["value"],
+    "additionalProperties": false
+  },
+  "strict": true,
+  "executor": "lua",
+  "entrypoint": "main.lua"
+}

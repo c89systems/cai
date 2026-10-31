@@ -1461,6 +1461,66 @@ void *cai_tool_registry_context_internal(cai_tool_registry *registry,
                                                             : NULL;
 }
 
+/* Quiescent insertion of a newly registered native tool before plugin slots. */
+void cai_tool_registry_promote_last_internal(cai_tool_registry *registry,
+                                             size_t index) {
+  cai_tool_registry_impl *impl = cai_tool_registry_impl_from_public(registry);
+  cai_tool_entry entry;
+  if (impl == NULL || index >= impl->count)
+    return;
+  entry = impl->entries[impl->count - 1U];
+  memmove(impl->entries + index + 1U, impl->entries + index,
+          (impl->count - index - 1U) * sizeof(entry));
+  impl->entries[index] = entry;
+}
+
+int cai_tool_registry_replace_tail_internal(cai_tool_registry *registry,
+                                            size_t prefix,
+                                            cai_tool_registry *replacement,
+                                            cai_error *error) {
+  cai_tool_registry_impl *current =
+      cai_tool_registry_impl_from_public(registry);
+  cai_tool_registry_impl *next =
+      cai_tool_registry_impl_from_public(replacement);
+  cai_tool_entry *entries, *retired;
+  size_t i, j, count;
+  if (current == NULL || next == NULL || current == next ||
+      prefix > current->count)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "invalid registry replacement");
+  for (i = 0U; i < prefix; i++)
+    for (j = 0U; j < next->count; j++)
+      if (strcmp(current->entries[i].name, next->entries[j].name) == 0)
+        return cai_set_error(error, CAI_ERR_INVALID,
+                             "plugin conflicts with native tool");
+  if (prefix > (size_t)-1 / sizeof(*entries) - 1U ||
+      next->count > (size_t)-1 / sizeof(*entries) - prefix - 1U)
+    return cai_set_error(error, CAI_ERR_LIMIT, "too many plugin tools");
+  count = prefix + next->count;
+  entries = cai_alloc(NULL, (count + 1U) * sizeof(*entries));
+  if (entries == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "prepare tool catalog replacement");
+  if (prefix != 0U)
+    memcpy(entries, current->entries, prefix * sizeof(*entries));
+  if (next->count != 0U)
+    memcpy(entries + prefix, next->entries, next->count * sizeof(*entries));
+  /* Return retired entries in replacement: destruction may call host code
+   * and must occur after the publication lock has been released. */
+  retired = current->entries;
+  if (current->count > prefix)
+    memmove(retired, retired + prefix,
+            (current->count - prefix) * sizeof(*retired));
+  cai_free_mem(NULL, next->entries);
+  next->entries = retired;
+  next->capacity = current->capacity;
+  next->count = current->count - prefix;
+  current->entries = entries;
+  current->count = count;
+  current->capacity = count + 1U;
+  return CAI_OK;
+}
+
 int cai_tool_registry_exchange_internal(cai_tool_registry *registry,
                                         cai_tool_registry *replacement,
                                         cai_error *error) {

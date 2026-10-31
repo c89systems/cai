@@ -29,6 +29,13 @@ typedef struct cli_field {
 #define B(s, k, m, d)                                                          \
   {s, k, offsetof(cai_cli_options, m), CAI_CONFIG_BOOL, 0U, NULL, d}
 static const cli_field fields[] = {
+    B("plugins", "enabled", plugins,
+      "Enable explicit hot loading of tool.json packages; no filesystem "
+      "polling."),
+    S("plugins", "directory", tools_dir, CAI_CONFIG_PATH,
+      "Global packages; empty uses data_dir/tools."),
+    S("plugins", "workspace_directory", workspace_tools_dir, CAI_CONFIG_PATH,
+      "Workspace packages; empty uses workspace/.program_name/tools."),
     S("paths", "home_dir", home_dir, CAI_CONFIG_PATH,
       "Unified application home; unset roots use its config, state, cache, "
       "data and run subdirectories. Individual paths take precedence. "
@@ -286,10 +293,11 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
   const char **children[7];
   const char *host_children[7];
   const char *parents[7];
-  const char **inputs[3];
+  const char **inputs[5];
   static const char *const input_sections[] = {"paths", "store.default",
-                                               "chrome"};
-  static const char *const input_keys[] = {"auth_json", "client_pem", "socket"};
+                                               "chrome", "plugins", "plugins"};
+  static const char *const input_keys[] = {"auth_json", "client_pem", "socket",
+                                           "directory", "workspace_directory"};
   static const char *const keys[] = {
       "clipboard_dir", "log_dir",    "pouch_key_file", "export_dir",
       "agents_md",     "skills_dir", "model_metadata"};
@@ -427,7 +435,9 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
   inputs[0] = &o->auth_json;
   inputs[1] = &o->lockd_client_pem;
   inputs[2] = &o->chrome_socket;
-  for (i = 0U; !document && i < 3U; i++) {
+  inputs[3] = &o->tools_dir;
+  inputs[4] = &o->workspace_tools_dir;
+  for (i = 0U; !document && i < 5U; i++) {
     if (*inputs[i] == NULL)
       continue;
     rc = default_string(cfg, input_sections[i], input_keys[i], *inputs[i],
@@ -699,6 +709,9 @@ static int tool_environment(cai_config *cfg, const char *prefix,
   size_t i;
   {
     static const char *const aliases[][3] = {
+        {"PLUGINS", "plugins", "enabled"},
+        {"TOOLS_DIR", "plugins", "directory"},
+        {"WORKSPACE_TOOLS_DIR", "plugins", "workspace_directory"},
         {"MODEL", "agent", "model"},
         {"THEME", "ui", "theme"},
         {"THEME_OFFSET", "ui", "theme_offset"},

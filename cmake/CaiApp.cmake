@@ -10,6 +10,16 @@ target_include_directories(cai_app_static PUBLIC
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(cai_app_static PUBLIC cai_static softline::softline_static
   libmdf::mdf_static lockdc::static)
+set(CAI_APP_LUA_TOOLS_PC "")
+set(CAI_LUA_TOOLS_JSON false)
+if(CAI_BUILD_LUA_TOOLS)
+  set(CAI_LUA_TOOLS_JSON true)
+  # Fixtures that compile app_run.c use the same executor selection as the app.
+  target_compile_definitions(cai_cli_support PUBLIC CAI_APP_LUA_TOOLS=1)
+  target_link_libraries(cai_cli_support PUBLIC cai_lua_tools_static)
+  target_link_libraries(cai_app_static PUBLIC cai_lua_tools_static)
+  set(CAI_APP_LUA_TOOLS_PC " cai-lua-tools")
+endif()
 if(CAI_BUILD_SHARED)
   find_package(lockdc CONFIG REQUIRED COMPONENTS shared)
   add_library(cai_app_shared SHARED $<TARGET_OBJECTS:cai_app_objects>
@@ -22,6 +32,9 @@ if(CAI_BUILD_SHARED)
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
   target_link_libraries(cai_app_shared PUBLIC cai_shared pslog::pslog_shared PRIVATE
     softline::softline libmdf::mdf_shared lockdc::shared)
+  if(CAI_BUILD_LUA_TOOLS)
+    target_link_libraries(cai_app_shared PRIVATE cai_lua_tools_shared)
+  endif()
   target_link_options(cai_app_shared PRIVATE -Wl,--no-undefined)
   cai_apply_export_policy(cai_app_shared "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cai_app.exports")
   cai_configure_c_target(cai_app_shared)
@@ -193,6 +206,13 @@ if(CAI_BUILD_TESTS)
       set(_app_lua_runner "$<TARGET_FILE:cai_lua_runner>")
     endif()
     set(_app_prefixes "${CAI_CPKT_PREFIX};${CAI_CPKTMISC_PREFIX};${CAI_LONEJSON_PREFIX};${_cai_softline_prefix};${_cai_libmdf_prefix};${_cai_lockdc_prefix};${_cai_liblql_prefix};${CAI_DEPS_DIR}/libpslog-${CAI_PSLOG_VERSION}-${CAI_TARGET_ID}")
+    if(CAI_BUILD_LUA_TOOLS)
+      add_test(NAME cai_plugins_install COMMAND "${CMAKE_COMMAND}"
+        "-DCAI_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}" "-DCAI_C_COMPILER=${CMAKE_C_COMPILER}"
+        "-DCAI_DEPENDENCY_PREFIXES=${_app_prefixes}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/plugins_install_test.cmake")
+      set_tests_properties(cai_plugins_install PROPERTIES LABELS "cli;local;offline;packaging" TIMEOUT 30)
+    endif()
     add_test(NAME cai_app_install COMMAND "${CMAKE_COMMAND}"
       "-DCAI_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}" "-DCAI_C_COMPILER=${CMAKE_C_COMPILER}"
       "-DCAI_DEPENDENCY_PREFIXES=${_app_prefixes}"
