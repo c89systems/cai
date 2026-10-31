@@ -29,9 +29,11 @@ contexts. Prompt history uses its own leased receiver. Retention changes,
 imports and deletion also use owned receivers. Committed reads, listing and
 export remain public; reader handles are separate from mutation authority.
 
-One store-context worker renews all its held leases every ten seconds with the
-SDK's thirty-second TTL. It runs independently of the journal mutex, UI,
-provider waits and tool execution. Renewals update ownership only. They do not
+CAI holds twenty-four-hour leases, released when the context closes. One
+store-context worker renews its held leases every twenty-three hours, leaving
+an hour of expiry margin without frequent ownership writes. It runs independently
+of the journal mutex, UI, provider waits and tool execution. Renewals update
+ownership only. They do not
 rewrite history, renew collection retention, create another SDK client, or
 acquire a state-object lease per event. Writers stop before release/close.
 UI health snapshots use a separate short mutex, so a slow renewal does not hold
@@ -73,7 +75,9 @@ rejection before writable restore, public reads, separate child ownership,
 renewal from a default-stack worker with the journal mutex held, forced
 takeover, stale writes/releases, wakeup/error propagation, foreign owners,
 damaged markers, failed release and immediate SIGKILL recovery. It uses
-barriers/direct renewal rather than sleeping out lease TTLs.
+barriers/direct renewal rather than sleeping out lease TTLs. It verifies the
+stored twenty-four-hour expiry and observes the real worker's twenty-three-hour
+wait deadline without waiting for either interval.
 
 `cai_cli_collection_ownership` and `cai_app_lua_collection_ownership` exercise
 the real C and Lua applications against loopback provider fixtures: a second

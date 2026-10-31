@@ -112,11 +112,12 @@ exports do not acquire a writer lease. New collections are created with their
 initial lease atomically; retention, import and deletion use credentialed
 receivers too.
 
-A store-context worker renews held leases every ten seconds with a thirty-second
-TTL, independently of journal writes and the UI. It does not acquire the journal
-mutex or create a worker/client per collection or append. Lease loss/renewal
-failure is sticky: stop the restored context, cancel active work, and reopen
-before further writes. A native liveness guard, held until SDK release/close,
+CAI holds twenty-four-hour leases until the conversation context closes. A
+store-context worker renews them every twenty-three hours, leaving an hour of
+expiry margin, independently of journal writes and the UI. It does not acquire
+the journal mutex or create a worker/client per collection or append. Lease
+loss/renewal failure is sticky: stop the restored context, cancel active work,
+and reopen before further writes. A native liveness guard, held until SDK release/close,
 permits immediate conditional takeover of CAI's own abandoned ownership. It is
 not a replacement for the SDK lease. Live or foreign owners are never silently
 replaced. Keepalive does not renew inactivity retention, and release does not

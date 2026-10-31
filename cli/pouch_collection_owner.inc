@@ -2,8 +2,10 @@
  * process liveness, allowing conditional takeover of our own abandoned lease.
  * The persisted random label bridges a crash during acquire/takeover itself;
  * neither a PID nor a common application name is evidence of ownership. */
-#define COLLECTION_LEASE_SECONDS 30L
-#define COLLECTION_RENEW_SECONDS 10L
+/* Keep ownership for the running context without frequent durable heartbeats.
+ * The liveness guard permits immediate recovery despite this long TTL. */
+#define COLLECTION_LEASE_SECONDS (24L * 3600L)
+#define COLLECTION_RENEW_SECONDS (23L * 3600L)
 
 typedef struct cai_cli_collection_owner {
   struct cai_cli_collection_owner *next;

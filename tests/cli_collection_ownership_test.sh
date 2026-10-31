@@ -32,7 +32,7 @@ exec 7>&-
 exec {terminal_event_fd}>&-
 terminal_events=
 unset CAI_TEST_TERMINAL_EVENT_FD
-# Recovery is immediate; no wait for the SDK's thirty-second lease expiry.
+# Recovery is immediate; no wait for CAI's twenty-four-hour lease expiry.
 before=$(requests)
 terminal_start --resume "$id"
 expect 'Conversation resumed.'

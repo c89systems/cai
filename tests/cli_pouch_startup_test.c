@@ -1,6 +1,17 @@
 /* Test the actual encrypted backend, including interrupted directory indexing.
  */
+#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
+#include <pthread.h>
+#include <time.h>
+
+static int observe_lease_wait(pthread_cond_t *condition, pthread_mutex_t *mutex,
+                              const struct timespec *deadline);
+/* Observe CAI's real renewal deadline without waiting for it. Calls compiled
+ * inside the dependency still use its unmodified system wait. */
+#define pthread_cond_timedwait observe_lease_wait
 #include "../cli/pouch.c"
+#undef pthread_cond_timedwait
 #include <assert.h>
 #include <poll.h>
 #include <signal.h>

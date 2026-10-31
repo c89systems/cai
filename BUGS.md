@@ -35,7 +35,8 @@ commit and verification evidence.
   reads and provide safe recovery after a crash without losing committed
   history or waiting for a long lease to expire.
 - **Resolution:** acquire before writable restoration and initial event IDs;
-  use owned receivers for journal/prompt mutations, with independent keepalive
+  hold twenty-four-hour leases, renewing every twenty-three hours; use owned
+  receivers for journal/prompt mutations, with independent keepalive
   and public committed reads. A native liveness guard permits conditional
   takeover of CAI's own abandoned lease without guessing from a PID/name.
   Live/foreign owners are rejected; renewal failure stops the restored context.
