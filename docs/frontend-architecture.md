@@ -386,15 +386,17 @@ selected transcript. Final replay bounds and current history generation must be
 known before rendering; do not hide a second scan behind the adapter interface.
 No full-journal buffer/spool may substitute for that read.
 
-This depends on the separately proposed storage changes: physically remove
+This depends on the separately specified storage changes: physically remove
 trimmed active records with a crash-safe replacement edit, make compaction
 commits independently restorable, and publish a small recovery/replay descriptor.
 The proposal is in the adjacent liblockdc checkout under
 `stash/cai-atomic-collection-edit-pr.md`; the measured range-read evidence is
 in CAI's `stash/collection-range-read-perf-2026-10-31.md`.
 
-These are prerequisites for declaring the fast single-pass startup complete,
-not existing liblockdc APIs. Controller/frontend separation can proceed without
+Liblockdc 0.26.0 now supplies atomic edits, recovery heads and expected-head
+read admission; CAI's use of them and the independent context baseline remain
+separate implementation work. These are prerequisites for declaring fast
+single-pass startup complete. Controller/frontend separation can proceed without
 waiting for them, but it must not duplicate the current multipass design into
 a new server-only recovery implementation. Application history generations and
 input-admission markers must stay coherent with storage edits and expiry.
@@ -647,8 +649,9 @@ different workloads with different guarantees.
 
 This specification selects the separation, ownership, initial single-controller
 role policy and lifecycle semantics. It does not claim that the required
-Softline bridge, liblockdc atomic edits or Kore listener integration exist.
-Dependency gaps need a public API resolution before their dependent phase.
+Softline bridge or Kore listener integration exist. Liblockdc 0.26.0 supplies
+the requested storage primitives; their consumer cutover remains required.
+Other dependency gaps need a public API resolution before their dependent phase.
 
 Remote PTY interaction, unattended approval policy beyond existing autoqueue,
 multi-controller collaborative editing, transparent daemon migration, remote
