@@ -176,12 +176,14 @@ held; unsubmitted edits remain local drafts. Reconnection shows the held item.
 Explicit cancel-edit restores its pre-edit approval/delivery state. Do not use a
 timeout to silently approve or execute a disconnected user's edited request.
 
-The runtime's execution queues are not a competing editable application queue.
-Claiming at the proper boundary transfers one identity into runtime admission.
-Admission and consumption must have a durable, queryable identity so a crash
-between owner admission and acknowledgement cannot enqueue it twice. Extend
-the core's existing input journal/admission contract as needed; do not add a
-second generic queue engine to libcai or infer consumption from rendered text.
+Core libcai exposes the generic pending-input receiver by refactoring its
+existing input journal/admission machinery. The controller owns that receiver
+for its conversation; the runtime uses the same authority for pending model
+input. Core-only SDK hosts can use it without libcai_app or Softline. Opaque
+host actions let libcai_app share admission without teaching core about slash
+commands. Claiming/consumption use durable identities; a crash before an
+acknowledgement cannot enqueue an input twice. Do not keep a second generic
+queue engine or infer consumption from rendered text.
 
 Incoming agent messages still use the next-turn path. Delivery acknowledgement
 means accepted by the receiving application, not human approval or completed
@@ -191,6 +193,14 @@ the absence of a human is not consent. Approval-required work can pause while
 unrelated permitted work continues according to the shared policy.
 
 ### 5.1 Softline integration dependency
+
+Softline retains its native local queue as the constructor default. A configured
+callback backend selects a remote/backend-backed queue instead, including for
+an in-process application. The native editor and bounded mirror remain local;
+accepted queue authority is in the backend. These are alternative queue modes,
+not two independently executable queues. The detailed constructor, request,
+acknowledgement, update and core-library contract is specified in
+[Local and backend-backed input queues](remote-input-queue.md).
 
 Retain Softline's native queue/editor behaviors: FIFO within its policy lanes,
 Q/S display, Alt-Enter steering, Alt-E editing, stopped backlog, approval and
@@ -210,6 +220,9 @@ and backend IDs/revisions. Local native IDs need not equal backend IDs. Updates
 must preserve active drafts, selection, undo and native queue order; stale
 acknowledgements must not clear a newer draft or recreate a consumed item.
 An echo of the client's own accepted update must reconcile, not enqueue again.
+Remote accepted text must not also be returned through the local prompt-delivery
+path. The bridge lives in libcai_app, with generic queue support in libcai;
+Softline itself depends on neither library nor the network transport.
 
 If the public dependency cannot express those semantics, produce a narrow
 upstream change request and gate the queue cutover on it. Do not claim that
