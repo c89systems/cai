@@ -863,7 +863,11 @@ int cai_agent_runtime_visit_history(cai_agent_runtime *runtime, size_t limit,
 /** Remove exactly count newest whole entries, including their tool calls,
  * results and steering. Zero is a no-op; an excessive count fails unchanged.
  * Owner-thread-only, idle runtime, no pending inputs or open shell execution.
- * The change is committed before success. Failure restores live history.
+ * The change is durably published before success. Persistent stores must
+ * provide their atomic trim callback: discarded events and dependent commits
+ * are removed together with a replacement retaining current metadata. Failure
+ * before publication restores live history; uncertain publication requires
+ * reopening before writing again.
  * Does not undo external effects, selected settings, or incurred usage/cost.
  * Compacted history is removed as a whole, without recovering older turns. */
 int cai_agent_runtime_trim_history(cai_agent_runtime *runtime, size_t count,

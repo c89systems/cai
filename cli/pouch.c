@@ -1088,10 +1088,13 @@ int cai_cli_pouch_set_retention(cai_cli_pouch *pouch, const char *id, long days,
 
 #include "pouch_journal_context.inc"
 #include "pouch_prompt.inc"
+#include "pouch_trim.inc"
 
-static int commit(void *context, const char *scope, const char *id,
-                  cai_source *state, unsigned long long sequence,
-                  cai_error *error) {
+static int commit_mode(void *context, const char *scope, const char *id,
+                       cai_source *state, unsigned long long sequence,
+                       const cai_agent_session_trim_request *cut_request,
+                       cai_agent_session_trim_source_fn make_replacement,
+                       void *replacement_context, cai_error *error) {
   cai_cli_pouch *pouch;
   cai_cli_session session;
   lc_lease *lease;
@@ -1103,6 +1106,8 @@ static int commit(void *context, const char *scope, const char *id,
   struct timespec now;
   cli_record record;
   cai_source *source = NULL;
+  cai_source *replacement_state = NULL;
+  pouch_cut *cut = NULL;
   int rc, durable = 0;
   memset(&record, 0, sizeof(record));
   pouch = (cai_cli_pouch *)context;
@@ -1137,6 +1142,13 @@ static int commit(void *context, const char *scope, const char *id,
   }
   if (rc == CAI_OK && clock_gettime(CLOCK_REALTIME, &now) != 0)
     rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "read commit timestamp");
+  if (rc == CAI_OK && cut_request != NULL) {
+    rc = pouch_cut_prepare(collection, cut_request, &cut, error);
+    if (rc == CAI_OK)
+      rc = make_replacement(replacement_context, cut->plan.revision,
+                            (size_t)cut->plan.bytes, &replacement_state, error);
+    state = replacement_state;
+  }
   if (rc == CAI_OK) {
     session.commit_ns = (lonejson_uint64)now.tv_sec * 1000000000ULL +
                         (lonejson_uint64)now.tv_nsec;
@@ -1153,15 +1165,20 @@ static int commit(void *context, const char *scope, const char *id,
       rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "prepare journal edit");
     if (rc == CAI_OK)
       rc = cai_cli_mapped_source(&commit_map, &record, &source, error);
-    if (rc == CAI_OK)
+    if (rc == CAI_OK && cut == NULL)
       rc = journal_append_source(pouch, &session, collection, append_id, source,
                                  &position, error);
+    else if (rc == CAI_OK)
+      rc = pouch_cut_publish(pouch, collection, &session, append_id, source,
+                             cut, &position, error);
     durable = rc == CAI_OK;
     session.commit_position = position;
     if (rc == CAI_OK)
       rc = update_session(lease, &session, error);
   }
   cai_source_close(source);
+  cai_source_close(replacement_state);
+  pouch_cut_close(cut);
   lonejson_json_value_cleanup(&record.state);
   rc = release(lease, rc, error);
   if (rc == CAI_OK && directory != NULL) {
@@ -1197,6 +1214,21 @@ static int commit(void *context, const char *scope, const char *id,
   }
   pthread_mutex_unlock(&pouch->journal_lock);
   return rc;
+}
+
+static int commit(void *context, const char *scope, const char *id,
+                  cai_source *state, unsigned long long sequence,
+                  cai_error *error) {
+  return commit_mode(context, scope, id, state, sequence, NULL, NULL, NULL,
+                     error);
+}
+static int trim_history(void *context, const char *scope, const char *id,
+                        const cai_agent_session_trim_request *request,
+                        cai_agent_session_trim_source_fn make_replacement,
+                        void *replacement_context, unsigned long long sequence,
+                        cai_error *error) {
+  return commit_mode(context, scope, id, NULL, sequence, request,
+                     make_replacement, replacement_context, error);
 }
 
 static int load_id_mode(void *context, const char *scope, const char *id,
@@ -2628,6 +2660,7 @@ int cai_cli_pouch_open_options(cai_cli_pouch *pouch,
     prepare_session_indexes(pouch);
   pouch->store.context = pouch;
   pouch->store.commit = commit;
+  pouch->store.trim = trim_history;
   pouch->store.load_latest = load_latest;
   pouch->store.load_id = load_owned_id;
   pouch->store.append_event = append_event;

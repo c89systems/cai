@@ -176,6 +176,8 @@ typedef struct cai_session_impl {
   char *state_model_compaction_hash;
   /** Last effective window for state_request_model, not a startup setting. */
   long long state_context_window_tokens;
+  /** Input acknowledgement boundary survives removal of marker events. */
+  unsigned long long input_ack_start_sequence;
   /** Imported active request settings, independent of history provenance. */
   char *state_request_model;
   char *state_reasoning_effort;
@@ -263,6 +265,10 @@ int cai_session_history_own_event(cai_session *session,
 int cai_session_journal_source(cai_session *session, cai_source **out,
                                cai_error *error);
 int cai_session_journal_seed_source(cai_session *session, cai_source **out,
+                                    cai_error *error);
+int cai_session_journal_trim_source(cai_session *session,
+                                    unsigned long long base_revision,
+                                    size_t base_bytes, cai_source **out,
                                     cai_error *error);
 int cai_session_journal_accept(cai_session *session, cai_error *error);
 

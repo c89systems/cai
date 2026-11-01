@@ -513,7 +513,9 @@ static void collection_regressions(cai_cli_pouch *pouch, cai_error *error) {
 
 #include "pouch_context_test.inc"
 #include "pouch_journal_fault_test.inc"
+
 #include "pouch_replay_read_test.inc"
+#include "pouch_trim_test.inc"
 
 #include "pouch_collection_lease_test.inc"
 
@@ -529,6 +531,25 @@ int main(int argc, char **argv) {
   unsigned long long sequence;
   char id[CAI_AGENT_SESSION_ID_MAX];
   int i;
+  if (argc == 5 && strcmp(argv[1], "--raw-journal") == 0) {
+    char bytes[2048];
+    size_t count;
+    FILE *output = fopen(argv[4], "wb");
+    assert(output != NULL);
+    cai_error_init(&error);
+    assert(cai_cli_pouch_open(&pouch, NULL, NULL, NULL, &error) == CAI_OK);
+    assert(cai_cli_pouch_read_id(&pouch, argv[2], argv[3], &source, &sequence,
+                                 &error) == CAI_OK);
+    assert(source != NULL);
+    while ((count = cai_source_read(source, bytes, sizeof(bytes), &error)) !=
+           0U)
+      assert(fwrite(bytes, 1U, count, output) == count);
+    assert(error.code == CAI_OK && fclose(output) == 0);
+    cai_source_close(source);
+    cai_cli_pouch_close(&pouch);
+    cai_error_cleanup(&error);
+    return 0;
+  }
   if (argc == 4 && strcmp(argv[1], "--oversized-replay-event") == 0) {
     cai_error_init(&error);
     assert(cai_cli_pouch_open(&pouch, NULL, NULL, NULL, &error) == CAI_OK);
@@ -537,15 +558,23 @@ int main(int argc, char **argv) {
     cai_error_cleanup(&error);
     return 0;
   }
-  assert(argc == 2 || (argc == 3 && strcmp(argv[2], "--leases") == 0));
+  assert(argc == 2 || (argc == 3 && (strcmp(argv[2], "--leases") == 0 ||
+                                     strcmp(argv[2], "--cuts") == 0)));
   assert(snprintf(directory, sizeof(directory), "%s/pouch-startup-XXXXXX",
                   argv[1]) > 0);
   assert(mkdtemp(directory) != NULL);
   assert(setenv("XDG_STATE_HOME", directory, 1) == 0);
-  if (argc == 3) {
+  if (argc == 3 && strcmp(argv[2], "--leases") == 0) {
     collection_lease_contracts();
     collection_lease_failures();
     collection_crash_takeover();
+    return 0;
+  }
+  if (argc == 3) {
+    pthread_t worker;
+    /* Real musl defaults: no fixture or production stack enlargement. */
+    assert(pthread_create(&worker, NULL, pouch_cut_worker, NULL) == 0);
+    assert(pthread_join(worker, NULL) == 0);
     return 0;
   }
   cai_error_init(&error);

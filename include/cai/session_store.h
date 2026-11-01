@@ -36,6 +36,37 @@ typedef int (*cai_agent_session_event_fn)(void *context,
                                           const cai_agent_session_event *event,
                                           cai_error *error);
 
+/** Inclusive event-sequence range removed by a history cut. These are logical
+ * event identities, not backend byte offsets or collection positions. */
+typedef struct cai_agent_session_event_range {
+  unsigned long long first, last;
+} cai_agent_session_event_range;
+
+/** Borrowed atomic-cut request. Remove selected events and the commit suffix
+ * depending on their context. Keep an earlier independently valid commit
+ * prefix, then append the replacement produced by make_replacement. */
+typedef struct cai_agent_session_trim_request {
+  /** First event of the earliest removed entry; remove its entire suffix. */
+  unsigned long long first_sequence;
+  /** Highest assigned event identity at the stable cut boundary. */
+  unsigned long long through_sequence;
+  /** Additional inclusive ranges, including owned inputs queued earlier than
+   * first_sequence. May also contain the main suffix; overlaps are allowed. */
+  const cai_agent_session_event_range *ranges;
+  size_t range_count;
+  /** Retained canonical context length, including internal record framing. */
+  size_t history_bytes;
+} cai_agent_session_trim_request;
+
+/** Called synchronously once with the last retained commit revision and its
+ * context length (both zero for an empty prefix). Produces an owned streaming
+ * state edit; the store closes it after consuming it. The edit supplies current
+ * metadata and only context bytes after base_bytes, not a full-state snapshot.
+ * base_bytes must not exceed the requested retained history length. */
+typedef int (*cai_agent_session_trim_source_fn)(
+    void *context, unsigned long long base_revision, size_t base_bytes,
+    cai_source **out, cai_error *error);
+
 /** Visit one resumable session in a local store. Timestamp is nanoseconds
  * since the Unix epoch and belongs to its newest complete commit. */
 typedef int (*cai_agent_local_session_visit_fn)(
@@ -100,6 +131,18 @@ typedef struct cai_agent_session_store {
   /** Host-owned callback context, valid until every using runtime has closed.
    */
   void *context;
+  /** Optional atomic removal from the active journal. Required for nonzero
+   * runtime trim when persistence is enabled; no logical-only fallback.
+   * Validate/prepare before publication. A success acknowledges one durable
+   * removal/replacement and must not depend on removed records for subsequent
+   * restoration. On uncertain publication, reject later writes until the store
+   * reopens. The watermark covers all handled inputs, including removed ones;
+   * event identities must never be reused. Callbacks/requests are borrowed. */
+  int (*trim)(void *context, const char *scope, const char *session_id,
+              const cai_agent_session_trim_request *request,
+              cai_agent_session_trim_source_fn make_replacement,
+              void *replacement_context,
+              unsigned long long applied_event_sequence, cai_error *error);
 } cai_agent_session_store;
 
 /** Session identifier capacity including NUL; at most 128 identifier bytes. */

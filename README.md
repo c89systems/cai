@@ -410,10 +410,12 @@ original turns. Boundaries are persisted as incremental journal metadata;
 steering records remain part of their turn.
 
 Listing and removal require an idle runtime with no queued work, open shell,
-pending settings, or review handoff. Removal commits the retained context
-and journal visibility together. A commit failure restores the live history.
+pending settings, or review handoff. Removal atomically deletes the selected
+events and dependent context commits, then appends an edit based on the retained
+commit prefix. A failure before publication restores the live history; an
+uncertain publication blocks writes until reopening.
 Restart, subsequent provider requests, and conversation exports exclude trimmed
-entries. Older journal records and diagnostic logs are not erased. Changes
+entries. Diagnostic logs and external tool stores are not erased. Changes
 to files, tool stores, selected settings, goals, and incurred usage are not undone.
 CAI clears provider continuation handles so discarded context cannot return via
 an earlier response or conversation ID.
@@ -932,7 +934,8 @@ encrypted liblockdc Pouch root at `$XDG_STATE_HOME/cai/pouch`, or
 `~/.local/state/cai/pouch`. Session metadata is indexed in `cai.sessions`;
 incremental state commits and observation events share one ordered collection
 per conversation, streamed through the native collections API. Ordinary commits
-append new context only; trim retains a prefix and compaction writes its new
+append new context only; trim physically removes discarded entries while
+reusing a retained commit prefix, and compaction writes its new
 replacement context once. There are no recurring full conversation snapshots.
 See [session journals](docs/journal.md) for the C/Lua store contract and exports.
 Session history requires Pouch; remote lockd collections are not available yet.

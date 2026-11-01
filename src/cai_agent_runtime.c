@@ -3042,10 +3042,35 @@ static int cai_runtime_reserve_commit_event(cai_agent_runtime *runtime,
   return rc;
 }
 
-static int cai_runtime_commit_reserved(cai_agent_runtime *runtime,
-                                       int emit_event,
-                                       cai_runtime_event_node *commit_event,
-                                       cai_error *error) {
+typedef struct cai_runtime_trim_source {
+  cai_session *session;
+  unsigned long long base_revision;
+  int prepared;
+} cai_runtime_trim_source;
+
+static int cai_runtime_make_trim_source(void *context,
+                                        unsigned long long base_revision,
+                                        size_t base_bytes, cai_source **out,
+                                        cai_error *error) {
+  cai_runtime_trim_source *trim = context;
+  int rc;
+  if (trim->prepared)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "trim replacement was requested more than once");
+  rc = cai_session_journal_trim_source(trim->session, base_revision, base_bytes,
+                                       out, error);
+  if (rc == CAI_OK) {
+    trim->base_revision = base_revision;
+    trim->prepared = 1;
+  }
+  return rc;
+}
+
+static int
+cai_runtime_commit_reserved_mode(cai_agent_runtime *runtime, int emit_event,
+                                 cai_runtime_event_node *commit_event,
+                                 const cai_agent_session_trim_request *cut,
+                                 cai_error *error) {
   cai_source *state;
   const char *commit_model;
   const char *commit_model_compaction_hash;
@@ -3053,6 +3078,7 @@ static int cai_runtime_commit_reserved(cai_agent_runtime *runtime,
   char *model_compaction_hash;
   unsigned long long applied_event_sequence;
   int preserve_history_model_metadata;
+  cai_runtime_trim_source trim;
   int rc;
 
   if (runtime->session_store == NULL) {
@@ -3109,8 +3135,26 @@ static int cai_runtime_commit_reserved(cai_agent_runtime *runtime,
   CAI_SESSION_IMPL(runtime->session)->state_model = model;
   CAI_SESSION_IMPL(runtime->session)->state_model_compaction_hash =
       model_compaction_hash;
-  rc = cai_session_journal_source(runtime->session, &state, error);
-  if (rc == CAI_OK) {
+  memset(&trim, 0, sizeof(trim));
+  trim.session = runtime->session;
+  CAI_SESSION_IMPL(runtime->session)->input_ack_start_sequence =
+      runtime->journal_v2_start_sequence == ULLONG_MAX
+          ? 0U
+          : runtime->journal_v2_start_sequence;
+  if (cut != NULL) {
+    rc = runtime->session_store->trim(
+        runtime->session_store->context, runtime->session_scope,
+        runtime->session_id, cut, cai_runtime_make_trim_source, &trim,
+        applied_event_sequence, error);
+    if (rc == CAI_OK && !trim.prepared)
+      rc = cai_set_error(error, CAI_ERR_INVALID,
+                         "store did not prepare a trim replacement");
+    if (rc == CAI_OK)
+      CAI_SESSION_IMPL(runtime->session)->journal_revision = trim.base_revision;
+  } else {
+    rc = cai_session_journal_source(runtime->session, &state, error);
+  }
+  if (rc == CAI_OK && cut == NULL) {
     rc = runtime->session_store->commit(
         runtime->session_store->context, runtime->session_scope,
         runtime->session_id, state, applied_event_sequence, error);
@@ -3129,6 +3173,14 @@ static int cai_runtime_commit_reserved(cai_agent_runtime *runtime,
     pthread_mutex_unlock(&runtime->lock);
   }
   return rc;
+}
+
+static int cai_runtime_commit_reserved(cai_agent_runtime *runtime,
+                                       int emit_event,
+                                       cai_runtime_event_node *commit_event,
+                                       cai_error *error) {
+  return cai_runtime_commit_reserved_mode(runtime, emit_event, commit_event,
+                                          NULL, error);
 }
 
 static int cai_runtime_commit(cai_agent_runtime *runtime, int emit_event,
@@ -7318,15 +7370,24 @@ int cai_agent_runtime_trim_history(cai_agent_runtime *runtime, size_t count,
   int changed = 0;
   int journal_replace;
   size_t journal_keep;
+  size_t hidden_before, i;
+  cai_agent_session_event_range *ranges = NULL;
+  cai_agent_session_trim_request cut;
   int rc = cai_runtime_owner(runtime, error);
   if (rc != CAI_OK || count == 0U)
     return rc;
+  if (runtime->session_store != NULL && runtime->session_store->trim == NULL)
+    return cai_set_error(
+        error, CAI_ERR_INVALID,
+        "session store does not support atomic history trimming");
   pthread_mutex_lock(&runtime->lock);
   rc = cai_runtime_history_ready(runtime, error);
   old_watermark = runtime->commit_event_sequence;
   through = runtime->next_event_sequence;
   journal_replace = CAI_SESSION_IMPL(runtime->session)->journal_replace;
   journal_keep = CAI_SESSION_IMPL(runtime->session)->journal_keep_bytes;
+  hidden_before =
+      CAI_SESSION_IMPL(runtime->session)->history_hidden_events.count;
   if (rc == CAI_OK) {
     runtime->settings_applying = 1;
     runtime->model_switching = 1;
@@ -7342,11 +7403,33 @@ int cai_agent_runtime_trim_history(cai_agent_runtime *runtime, size_t count,
   if (rc == CAI_OK) {
     rc = cai_runtime_refresh_goal_projection(runtime, error);
   }
+  memset(&cut, 0, sizeof(cut));
+  if (rc == CAI_OK) {
+    cai_session_impl *session = CAI_SESSION_IMPL(runtime->session);
+    const cai_history_hidden_range *hidden =
+        session->history_hidden_events.items;
+    cut.range_count = session->history_hidden_events.count - hidden_before;
+    if (cut.range_count != 0U)
+      ranges = cai_alloc(NULL, cut.range_count * sizeof(*ranges));
+    if (cut.range_count != 0U && ranges == NULL)
+      rc = cai_set_error(error, CAI_ERR_NOMEM, "allocate atomic history cut");
+    for (i = 0U; rc == CAI_OK && i < cut.range_count; i++) {
+      ranges[i].first = (unsigned long long)hidden[hidden_before + i].first;
+      ranges[i].last = (unsigned long long)hidden[hidden_before + i].last;
+    }
+    if (rc == CAI_OK) {
+      cut.first_sequence = cut.range_count != 0U ? ranges[0].first : 1U;
+      cut.through_sequence = through;
+      cut.ranges = ranges;
+      cut.history_bytes = session->history.size_fn(&session->history);
+    }
+  }
   if (rc == CAI_OK) {
     pthread_mutex_lock(&runtime->lock);
     cai_runtime_mark_commit_event_locked(runtime, through);
     pthread_mutex_unlock(&runtime->lock);
-    rc = cai_runtime_commit(runtime, 1, error);
+    rc = cai_runtime_commit_reserved_mode(
+        runtime, 1, NULL, runtime->session_store != NULL ? &cut : NULL, error);
   }
   if (rc != CAI_OK && changed) {
     int rollback_rc;
@@ -7370,6 +7453,7 @@ int cai_agent_runtime_trim_history(cai_agent_runtime *runtime, size_t count,
     cai_error_cleanup(&rollback_error);
   }
   cai_source_close(snapshot);
+  cai_free_mem(NULL, ranges);
   pthread_mutex_lock(&runtime->lock);
   if (rc != CAI_OK)
     runtime->commit_event_sequence = old_watermark;
@@ -8286,7 +8370,10 @@ int cai_agent_runtime_open(cai_client *client,
     if (rc == CAI_OK && runtime->session_store != NULL &&
         (config->resume_latest || config->resume_session_id != NULL)) {
       runtime->next_event_sequence = runtime->applied_event_sequence;
-      runtime->journal_v2_start_sequence = ULLONG_MAX;
+      runtime->journal_v2_start_sequence =
+          CAI_SESSION_IMPL(runtime->session)->input_ack_start_sequence != 0U
+              ? CAI_SESSION_IMPL(runtime->session)->input_ack_start_sequence
+              : ULLONG_MAX;
       if (rc == CAI_OK)
         rc = runtime->session_store->load_events_after(
             runtime->session_store->context, runtime->session_scope,

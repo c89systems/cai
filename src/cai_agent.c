@@ -150,6 +150,7 @@ LONEJSON_MAP_DEFINE(cai_history_owned_map, cai_history_owned_event,
 
 typedef struct cai_session_state_doc {
   long long version;
+  unsigned long long input_ack_start_sequence;
   char *model;
   char *model_compaction_hash;
   long long context_window_tokens;
@@ -212,6 +213,8 @@ static const lonejson_field cai_session_state_fields[] = {
         cai_history_owned_event, &cai_history_owned_map,
         LONEJSON_OVERFLOW_FAIL),
     LONEJSON_FIELD_I64_REQ(cai_session_state_doc, version, "version"),
+    LONEJSON_FIELD_U64(cai_session_state_doc, input_ack_start_sequence,
+                       "input_ack_start_sequence"),
     LONEJSON_FIELD_STRING_ALLOC_OMIT_NULL(cai_session_state_doc, model,
                                           "model"),
     LONEJSON_FIELD_STRING_ALLOC_OMIT_NULL(
@@ -7655,6 +7658,8 @@ cai_session_state_fill(cai_session *session, cai_session_state_doc *doc,
                        cai_error *error) {
   int rc;
   doc->version = 1LL;
+  doc->input_ack_start_sequence =
+      CAI_SESSION_IMPL(session)->input_ack_start_sequence;
   doc->history_blocks = CAI_SESSION_IMPL(session)->history_blocks;
   doc->history_hidden_events = CAI_SESSION_IMPL(session)->history_hidden_events;
   doc->history_owned_events = CAI_SESSION_IMPL(session)->history_owned_events;
@@ -8159,6 +8164,8 @@ static int cai_session_import_state(cai_session *session, cai_source *source,
     CAI_SESSION_IMPL(session)->state_model = next_state_model;
     CAI_SESSION_IMPL(session)->state_context_window_tokens =
         doc.context_window_tokens;
+    CAI_SESSION_IMPL(session)->input_ack_start_sequence =
+        doc.input_ack_start_sequence;
     CAI_SESSION_IMPL(session)->state_model_compaction_hash =
         next_state_model_compaction_hash;
     next_state_model = NULL;

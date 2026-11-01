@@ -1,4 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
+#ifndef LONEJSON_WITH_CURL
+#define LONEJSON_WITH_CURL
+#endif
 #include "../src/cai_internal.h"
 #include "session_journal_fixture.inc"
 #include <assert.h>
@@ -14,10 +18,10 @@ typedef struct fixture {
   size_t offset;
   unsigned long long watermark;
   int fail_commit;
-  int expect_prefix_edit;
   size_t seen;
   size_t entries;
   int reject;
+  int hide_marker, pending;
 } fixture;
 
 static size_t read_state(void *context, void *bytes, size_t count,
@@ -70,10 +74,6 @@ static int commit(void *context, const char *scope, const char *id,
     state[used] = '\0';
   }
   assert(state != NULL);
-  if (f->expect_prefix_edit) {
-    assert(strstr(state, "\"history_append\":\"\"") != NULL);
-    f->expect_prefix_edit = 0;
-  }
   {
     size_t old = f->journal != NULL ? strlen(f->journal) : 0U;
     if (strstr(state, "\"revision\":1,") != NULL)
@@ -101,6 +101,22 @@ static int append(void *context, const char *scope, const char *id,
   (void)event;
   (void)error;
   return CAI_OK;
+}
+/* This small fixture stores a single independently resumable commit. Real
+ * stores exercise prefix reuse and physical event removal separately. */
+static int trim(void *context, const char *scope, const char *id,
+                const cai_agent_session_trim_request *request,
+                cai_agent_session_trim_source_fn make_replacement,
+                void *replacement_context, unsigned long long watermark,
+                cai_error *error) {
+  cai_source *source = NULL;
+  int rc;
+  (void)request;
+  rc = make_replacement(replacement_context, 0U, 0U, &source, error);
+  if (rc == CAI_OK)
+    rc = commit(context, scope, id, source, watermark, error);
+  cai_source_close(source);
+  return rc;
 }
 static int events(void *context, const char *scope, const char *id,
                   unsigned long long after, cai_agent_session_event_fn callback,
@@ -141,10 +157,12 @@ static int events(void *context, const char *scope, const char *id,
   cai_agent_session_event event;
   size_t i;
   int rc;
-  (void)context;
+  fixture *f = context;
   (void)scope;
   (void)id;
   for (i = 0U; i < sizeof(types) / sizeof(types[0]); i++) {
+    if (i == 0U && f->hide_marker)
+      continue;
     event.sequence = (unsigned long long)i + 1U;
     if (event.sequence <= after)
       continue;
@@ -153,6 +171,21 @@ static int events(void *context, const char *scope, const char *id,
     rc = callback(visitor, &event, error);
     if (rc != CAI_OK)
       return rc;
+  }
+  if (f->pending) {
+    event.sequence = 100U;
+    event.type = "turn_queued";
+    event.data = "pending after trimming every turn";
+    if (event.sequence > after) {
+      rc = callback(visitor, &event, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
+    event.sequence = 101U;
+    event.type = "review_pending"; /* Hold the queued turn without inference. */
+    event.data = NULL;
+    if (event.sequence > after)
+      return callback(visitor, &event, error);
   }
   return CAI_OK;
 }
@@ -189,9 +222,19 @@ static size_t count(cai_agent_runtime *runtime, fixture *f, size_t limit,
 
 #include "journal_test.inc"
 
+#include "history_store_cut_test.inc"
+
+static void *history_cut_worker(void *context) {
+  (void)context;
+  history_cut_planner();
+  history_store_cuts();
+  return NULL;
+}
+
 int main(void) {
   const char *const initial[] = {
-      "{\"version\":1,\"model\":\"gpt-6-luna\",\"request_model\":\"gpt-6-"
+      "{\"version\":1,\"input_ack_start_sequence\":1,\"model\":\"gpt-6-luna\","
+      "\"request_model\":\"gpt-6-"
       "luna\","
       "\"reasoning_effort\":\"low\",\"previous_response_id\":\"old-response\","
       "\"history\":[{\"role\":\"user\",\"content\":\"keep-prompt\"},"
@@ -223,7 +266,10 @@ int main(void) {
   char *before;
   int protocol, i, rc;
   struct timespec delay;
+  pthread_t worker;
   test_journal_edits();
+  assert(pthread_create(&worker, NULL, history_cut_worker, NULL) == 0);
+  assert(pthread_join(worker, NULL) == 0);
   for (protocol = 0; protocol < 2; protocol++) {
     memset(&f, 0, sizeof(f));
     f.state = cai_alloc(NULL, 2048U);
@@ -238,6 +284,7 @@ int main(void) {
     store.load_latest = load;
     store.append_event = append;
     store.load_events_after = events;
+    store.trim = trim;
     cai_error_init(&error);
     cai_client_config_init(&client_config);
     client_config.api_key = "fixture";
@@ -270,6 +317,12 @@ int main(void) {
            CAI_ERR_TRANSPORT);
     clear(&error);
     f.reject = 0;
+    store.trim = NULL;
+    assert(cai_agent_runtime_trim_history(runtime, 1U, &error) ==
+           CAI_ERR_INVALID);
+    clear(&error);
+    assert(count(runtime, &f, 0U, &error) == 3U);
+    store.trim = trim;
     assert(cai_agent_runtime_trim_history(runtime, 4U, &error) ==
            CAI_ERR_INVALID);
     clear(&error);
@@ -279,7 +332,6 @@ int main(void) {
     clear(&error);
     assert(count(runtime, &f, 0U, &error) == 3U);
     f.fail_commit = 0;
-    f.expect_prefix_edit = 1;
     assert(cai_agent_runtime_trim_history(runtime, 1U, &error) == CAI_OK);
     assert(count(runtime, &f, 0U, &error) == 2U);
     assert(strstr(f.state, "shell-output") == NULL);
@@ -307,6 +359,18 @@ int main(void) {
     assert(cai_agent_runtime_open(client, &config, &runtime, &error) == CAI_OK);
     assert(f.seen == 0U && count(runtime, &f, 0U, &error) == 0U);
     cai_agent_runtime_close(runtime);
+    /* The marker itself was removed by trim. Pending input covered by a
+     * later commit watermark must still use explicit acknowledgements. */
+    f.hide_marker = f.pending = 1;
+    f.watermark = 101U;
+    config.turn_queue_limit = 1U;
+    assert(cai_agent_runtime_open(client, &config, &runtime, &error) == CAI_OK);
+    assert(cai_agent_runtime_submit_queued(runtime, "second queued prompt",
+                                           &error) == CAI_ERR_LIMIT);
+    clear(&error);
+    cai_agent_runtime_close(runtime);
+    f.hide_marker = f.pending = 0;
+    config.turn_queue_limit = 0U;
     config.resume_latest = 0;
     config.replay_callback = NULL;
     assert(cai_agent_runtime_open(client, &config, &runtime, &error) == CAI_OK);

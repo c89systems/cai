@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/cli_test_common.sh"
 chat_cli=${1:?chat fixture binary}
+journal_reader=${2:?raw journal reader}
 peer_start
 printf 'KEEP_TOOL_RESULT\n' >"$work/keep.txt"
 printf 'DROP_TOOL_RESULT\n' >"$work/drop.txt"
@@ -45,6 +46,19 @@ for chat in false true; do
   contains "$markdown" KEEPRESPONSE
   absent "$markdown" DROPRESPONSE
   original_id=$(basename "$journal" .jsonl)
+  # Export already filters visibility. Inspect the native collection too:
+  # removed context cannot survive inside older dependent commit records.
+  "$journal_reader" --raw-journal "$work" "$original_id" "$root/raw.jsonl"
+  contains "$root/raw.jsonl" KEEP_PROMPT
+  contains "$root/raw.jsonl" KEEP_TOOL_RESULT
+  contains "$root/raw.jsonl" KEEP_SHELL
+  absent "$root/raw.jsonl" DROP_PROMPT
+  absent "$root/raw.jsonl" DROPRESPONSE
+  absent "$root/raw.jsonl" DROP_STEERING
+  absent "$root/raw.jsonl" DROP_TOOL_RESULT
+  jq -se '[.[]|select(.record_type=="commit")|.state] as $c |
+    ($c|length)>1 and $c[-1].base_bytes>0 and $c[-1].history_append=="" and
+    all(range(0; $c|length); $c[.].revision==.+1)' "$root/raw.jsonl" >/dev/null
   # Imported journals preserve exact turn/steering/shell ownership boundaries.
   run --import "$journal"; ok
   plan "{\"chat\":$chat,\"plan\":[\"AFTERTRIM\"]}"

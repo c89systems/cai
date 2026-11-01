@@ -138,6 +138,8 @@ static void cai_journal_close(void *context) {
 }
 static int cai_session_journal_source_mode(cai_session *session,
                                            cai_source **out, int seed,
+                                           unsigned long long base_revision,
+                                           size_t base_bytes,
                                            cai_error *error) {
   cai_session_impl *impl = CAI_SESSION_IMPL(session);
   cai_journal_source *source = cai_alloc(NULL, sizeof(*source));
@@ -147,16 +149,20 @@ static int cai_session_journal_source_mode(cai_session *session,
   if (source == NULL)
     return cai_set_error(error, CAI_ERR_NOMEM, "allocate journal edit source");
   memset(source, 0, sizeof(*source));
-  if (!seed && impl->journal_revision == ULLONG_MAX) {
+  if ((!seed && impl->journal_revision == ULLONG_MAX) ||
+      (seed == 2 && base_revision == ULLONG_MAX)) {
     cai_free_mem(NULL, source);
     return cai_set_error(error, CAI_ERR_LIMIT,
                          "session journal revision exhausted");
   }
-  source->edit.revision = seed ? 1U : impl->journal_revision + 1U;
+  source->edit.revision = seed == 2 ? base_revision + 1U
+                          : seed    ? 1U
+                                    : impl->journal_revision + 1U;
   source->edit.accounting = impl->usage;
   source->edit.end_bytes = impl->history.size_fn(&impl->history);
   source->edit.base_bytes =
-      seed ? 0U
+      seed == 2 ? base_bytes
+      : seed    ? 0U
       : impl->journal_replace
           ? (impl->journal_keep_bytes < impl->journal_history_bytes
                  ? impl->journal_keep_bytes
@@ -169,7 +175,7 @@ static int cai_session_journal_source_mode(cai_session *session,
   }
   rc = cai_session_state_fill(session, &source->edit.metadata, source->board,
                               error);
-  if (rc == CAI_OK && !seed)
+  if (rc == CAI_OK && seed != 1)
     rc = cai_journal_prepare(session, error);
   source->edit.blocks_keep =
       seed ? 0U
@@ -221,11 +227,18 @@ static int cai_session_journal_source_mode(cai_session *session,
 }
 int cai_session_journal_source(cai_session *session, cai_source **out,
                                cai_error *error) {
-  return cai_session_journal_source_mode(session, out, 0, error);
+  return cai_session_journal_source_mode(session, out, 0, 0U, 0U, error);
 }
 int cai_session_journal_seed_source(cai_session *session, cai_source **out,
                                     cai_error *error) {
-  return cai_session_journal_source_mode(session, out, 1, error);
+  return cai_session_journal_source_mode(session, out, 1, 0U, 0U, error);
+}
+int cai_session_journal_trim_source(cai_session *session,
+                                    unsigned long long base_revision,
+                                    size_t base_bytes, cai_source **out,
+                                    cai_error *error) {
+  return cai_session_journal_source_mode(session, out, 2, base_revision,
+                                         base_bytes, error);
 }
 
 static int cai_journal_prepare(cai_session *session, cai_error *error) {

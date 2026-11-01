@@ -27,8 +27,9 @@ JSON is reported as a replay diagnostic, leaving the original JSONL available.
 
 A durable `commit` record contains an incremental state edit and the watermark
 of input/control events already reflected in that edit. Normal edits append only
-the new canonical context bytes. Trim records retain a prefix without copying
-it again. Model-context compaction explicitly replaces context with the new
+the new canonical context bytes. History trim atomically removes events and
+dependent commits, retaining an independently valid commit prefix.
+Model-context compaction explicitly replaces context with the new
 summary and retained provider items. Turn boundaries, hidden event ranges and
 event ownership are also prefix/append edits. Small commit metadata preserves
 settings, continuation handles, measured context usage and goal state.
@@ -67,11 +68,54 @@ An old crash-held child index lease can expire without blocking a new reviewer.
 
 The dependency-free `cai_agent_session_store` contract follows the same model.
 Its `commit` callback atomically appends an edit, and its load callbacks return
-the entire ordered journal. The built-in core backend uses append-only JSONL.
+the entire ordered journal. Its optional `trim` callback is required for persisted
+runtime trimming; stores without it reject nonzero trim without changing history.
+The built-in core backend appends JSONL for ordinary commits and events.
 `cai_session.restore_journal_source` and Lua `session:restore_journal(reader)`
 perform restoration without running tools. Explicit complete-state import/export
 APIs remain available for callers requesting snapshots; they are separate from
 runtime persistence and use spools.
+
+## Atomic history trim
+
+Trim removes the newest whole entries, including their tool results, reasoning,
+steering and child observations. Inputs queued before the turn they belong to
+are also removed, without removing the preceding turn's later output. Model
+compaction remains one indivisible entry; trim never reconstructs opaque history.
+
+The store streams record headers through discard sinks to select a valid
+retained commit prefix and position ranges. It then asks the runtime for one
+replacement edit, containing current settings, goals, cumulative usage and
+history indexes. The edit appends only context bytes absent from that prefix.
+Ordinary cuts therefore append an empty history suffix. An imported journal may
+have only one context initialization after all its events: without a reusable
+prefix, that cut writes the retained context fragment once. There are no recurring
+full-state snapshots. Provider continuation handles are cleared so deleted
+context cannot return through a provider-side response or conversation ID.
+Commit metadata also retains the explicit-input-acknowledgement boundary, so
+removing the original marker cannot discard queued inputs on a later restart.
+
+Pouch uses the held collection lease, an expected-head bounded read, and one
+native `edit` that deletes the selected ranges and appends the replacement.
+Surviving positions and event identities remain unchanged; replacement commit
+revisions continue consecutively from the retained prefix. The SDK allows at
+most 64 disjoint edit ranges; an excessive cut fails before publication.
+The collection keeps its configured inactivity retention. Entry removal changes
+logical visibility; physical disk reclamation follows Pouch maintenance rather
+than secure erasure. Diagnostic logs and external tool effects remain unchanged.
+
+The standalone file store streams retained records to a private sibling file,
+appends the replacement, syncs and atomically renames it, then syncs its parent.
+A stable per-session writer lock serializes both ordinary appends and replacement;
+readers already holding the prior inode can finish their pinned read. No full
+journal or retained context is materialized in memory by either cut planner.
+
+Failures before publication leave the original journal and live history intact.
+A published edit with a failed acknowledgement, or a rename whose directory sync
+fails, fences later writes until reopening. Edit-status receipts establish logical
+publication but do not override a failed durable-sync acknowledgement.
+
+## Pouch storage and ownership
 
 Pouch compression defaults to streaming zlib before encryption. Disable it with
 `--disable-compression`, `CAI_DISABLE_COMPRESSION=true`, or:

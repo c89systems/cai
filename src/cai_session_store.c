@@ -781,6 +781,27 @@ static int cai_store_repair_incomplete_tail(int fd, cai_error *error) {
   return CAI_OK;
 }
 
+static int cai_store_mutation_lock(int scope_fd, const char *filename, int *out,
+                                   cai_error *error) {
+  char name[CAI_STORE_SESSION_FILENAME_MAX + 8U];
+  int rc, fd;
+  *out = -1;
+  if (snprintf(name, sizeof(name), "%s.lock", filename) >= (int)sizeof(name))
+    return cai_set_error(error, CAI_ERR_INVALID, "session lock name too long");
+  fd = openat(scope_fd, name, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+  if (fd < 0)
+    return cai_set_error(error, CAI_ERR_TRANSPORT,
+                         "open session mutation lock");
+  rc = cai_store_validate_private_regular_fd(fd, error);
+  if (rc == CAI_OK && flock(fd, LOCK_EX) != 0)
+    rc = cai_set_error(error, CAI_ERR_TRANSPORT, "lock session mutation");
+  if (rc == CAI_OK)
+    *out = fd;
+  else
+    close(fd);
+  return rc;
+}
+
 static int cai_local_session_commit(void *context, const char *scope,
                                     const char *session_id, cai_source *state,
                                     unsigned long long applied_event_sequence,
@@ -795,6 +816,7 @@ static int cai_local_session_commit(void *context, const char *scope,
   int fd;
   int rc;
   int complete = 0;
+  int guard_fd = -1;
 
   if (context == NULL || state == NULL ||
       !cai_store_session_id_valid(session_id)) {
@@ -811,6 +833,10 @@ static int cai_local_session_commit(void *context, const char *scope,
   rc = cai_store_session_filename_from_id(session_id, filename, error);
   if (rc == CAI_OK)
     rc = cai_store_open_scope(store, scope, &scope_fd, hash, error);
+  if (rc == CAI_OK)
+    rc = cai_store_mutation_lock(scope_fd, filename, &guard_fd, error);
+  if (rc == CAI_OK)
+    rc = cai_store_can_write(store, error);
   if (rc == CAI_OK) {
     fd = openat(scope_fd, filename,
                 O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
@@ -876,6 +902,8 @@ static int cai_local_session_commit(void *context, const char *scope,
   }
   if (complete && rc != CAI_OK)
     cai_store_uncertain(store);
+  if (guard_fd >= 0)
+    close(guard_fd);
   return rc;
 }
 
@@ -890,6 +918,8 @@ static int cai_local_session_append_event(void *context, const char *scope,
   int scope_fd;
   int fd;
   int rc;
+
+  int guard_fd = -1;
 
   if (context == NULL || event == NULL || event->sequence == 0U ||
       event->type == NULL || event->type[0] == '\0' ||
@@ -937,6 +967,10 @@ static int cai_local_session_append_event(void *context, const char *scope,
   if (rc == CAI_OK) {
     rc = cai_store_open_scope(store, scope, &scope_fd, hash, error);
   }
+  if (rc == CAI_OK)
+    rc = cai_store_mutation_lock(scope_fd, filename, &guard_fd, error);
+  if (rc == CAI_OK)
+    rc = cai_store_can_write(store, error);
   if (rc == CAI_OK) {
     fd = openat(scope_fd, filename,
                 O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
@@ -975,8 +1009,12 @@ static int cai_local_session_append_event(void *context, const char *scope,
     close(scope_fd);
   }
   cai_free_mem(NULL, builder.data);
+  if (guard_fd >= 0)
+    close(guard_fd);
   return rc;
 }
+
+#include "cai_session_store_cut.inc"
 
 typedef struct cai_local_event_replay_context {
   unsigned long long after_sequence;
@@ -1802,6 +1840,7 @@ int cai_agent_local_session_store_open(
                          "failed to copy local session store path");
   }
   out->commit = cai_local_session_commit;
+  out->trim = cai_local_session_trim;
   out->load_latest = cai_local_session_load_latest;
   out->append_event = cai_local_session_append_event;
   out->load_events_after = cai_local_session_load_events_after;

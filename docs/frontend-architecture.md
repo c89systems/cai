@@ -394,8 +394,9 @@ The proposal is in the adjacent liblockdc checkout under
 in CAI's `stash/collection-range-read-perf-2026-10-31.md`.
 
 Liblockdc 0.26.0 now supplies atomic edits, recovery heads and expected-head
-read admission; CAI's use of them and the independent context baseline remain
-separate implementation work. These are prerequisites for declaring fast
+read admission. CAI uses atomic edits for physical history trim. The independent
+compaction context baseline and recovery descriptor remain separate
+implementation work. These are prerequisites for declaring fast
 single-pass startup complete. Controller/frontend separation can proceed without
 waiting for them, but it must not duplicate the current multipass design into
 a new server-only recovery implementation. Application history generations and
@@ -650,7 +651,8 @@ different workloads with different guarantees.
 This specification selects the separation, ownership, initial single-controller
 role policy and lifecycle semantics. It does not claim that the required
 Softline bridge or Kore listener integration exist. Liblockdc 0.26.0 supplies
-the requested storage primitives; their consumer cutover remains required.
+the requested storage primitives. Atomic trim is implemented; the independent
+compaction baseline and recovery descriptor still require a consumer cutover.
 Other dependency gaps need a public API resolution before their dependent phase.
 
 Remote PTY interaction, unattended approval policy beyond existing autoqueue,

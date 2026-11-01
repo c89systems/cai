@@ -196,7 +196,8 @@
     cai_cli_use_storage_fixture(cai_cli_shell_fixture)
     add_test(NAME cai_cli_trim
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_trim_test.sh"
-        "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_cli_shell_fixture>")
+        "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_cli_shell_fixture>"
+        "$<TARGET_FILE:cai_cli_pouch_startup_test>")
     set_tests_properties(cai_cli_trim PROPERTIES TIMEOUT 45)
     add_executable(cai_cli_settings_fixture tests/cli_settings_fixture.c)
     target_link_libraries(cai_cli_settings_fixture PRIVATE cai_cli_support)
@@ -391,6 +392,10 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pouch_startup_test.sh"
       "$<TARGET_FILE:cai_cli_pouch_startup_test>" "${CMAKE_CURRENT_BINARY_DIR}" --leases)
     set_tests_properties(cai_cli_collection_leases PROPERTIES TIMEOUT 15)
+    add_test(NAME cai_cli_atomic_trim COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pouch_startup_test.sh"
+      "$<TARGET_FILE:cai_cli_pouch_startup_test>" "${CMAKE_CURRENT_BINARY_DIR}" --cuts)
+    set_tests_properties(cai_cli_atomic_trim PROPERTIES TIMEOUT 10)
     add_test(NAME cai_cli_collection_ownership COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_collection_ownership_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")
