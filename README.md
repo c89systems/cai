@@ -1113,6 +1113,12 @@ application's softline, libmdf and liblockdc dependencies.
 The x86_64, aarch64 and armhf Linux SDK archives include both static and shared
 application libraries for glibc and musl.
 
+The proposed [attachable frontend architecture](docs/frontend-architecture.md)
+specifies a persistent headless controller, Softline/HTML adapters, detach and
+reconnect, shared command admission, and future framework-neutral HTTP/Kore
+integration. This is a design specification; the current application remains
+the synchronous terminal receiver described above.
+
 ### Configured MCP tools
 
 `/status` includes the local session ID, last retained provider response ID,
