@@ -14,6 +14,31 @@ Use `find_package(cai_app CONFIG REQUIRED)` and `cai::app_static` or
 `cai::app_shared`, or pkg-config `cai-app`. The application shared library has
 ABI 0; the core libcai ABI is 5.
 
+An agent invocation fails before provider access when its canonical workspace
+has no saved approval. Pass `-y` / `--yes` / `--force` to approve that directory
+and its descendants, or `-k` / `--insecure` for an invocation-only bypass.
+Saved approval applies to other conversations in that tree. Utility modes remain
+available without approval. The same argv parser is used by C and Lua hosts.
+Hosts may configure the bypass through the `agent.insecure` application setting;
+its default is false. Environment aliases follow `program_name`, such as
+`SMITH_INSECURE` for Smith. This is independent of `agent.yolo` and TLS settings.
+
+The explicit approval is durably journaled before its small authorization record
+is published in the configured scopes namespace. It is not stored in the derived
+latest-session index and requires no journal scan to look up. Records survive
+conversation deletion/expiry. Imported journal events are audit data and never
+grant authorization. Failed approval publication fails startup; bypass runs
+never save approval.
+
+Core runtime hosts opt in with `insecure = 1` (the working directory as root), or a
+host-authorized `workspace_approval_directory` containing the workspace.
+`record_workspace_approval = 1` additionally records an explicit approval when
+using a persistent session store. The approved root and bypass policy are inherited
+by child runtimes; the request to record a fresh approval is not. The lower-level
+preset constructor instead uses `workspace_instructions_root`. NULL roots and
+zero-initialized runtime configuration load global instructions only.
+Lua exposes the same runtime and preset fields in their constructor tables.
+
 ```c
 #include <cai/app.h>
 

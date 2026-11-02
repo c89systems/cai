@@ -1,6 +1,15 @@
 
 if(CAI_BUILD_TESTS)
   enable_testing()
+  add_executable(cai_workspace_approval_test tests/workspace_approval_test.c)
+  cai_link_internal_consumer(cai_workspace_approval_test)
+  cai_configure_c_target(cai_workspace_approval_test)
+  target_compile_options(cai_workspace_approval_test PRIVATE -UNDEBUG)
+  if(CAI_TARGET_ID MATCHES "-linux-musl$")
+    target_link_options(cai_workspace_approval_test PRIVATE -static)
+  endif()
+  add_test(NAME cai_workspace_approval COMMAND cai_workspace_approval_test "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(cai_workspace_approval PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   add_executable(cai_reasoning_tool_test tests/reasoning_tool_test.c)
   cai_link_internal_consumer(cai_reasoning_tool_test)
   cai_configure_c_target(cai_reasoning_tool_test)
@@ -1210,6 +1219,11 @@ if(CAI_BUILD_TESTS)
     add_test(NAME cai_lua_reasoning_tool COMMAND "${CAI_LUA_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua/reasoning_tool.lua"
       "${CMAKE_CURRENT_BINARY_DIR}")
+    add_test(NAME cai_lua_workspace_approval COMMAND "${CAI_LUA_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua/workspace_approval_test.lua"
+      "${CMAKE_CURRENT_BINARY_DIR}")
+    set_tests_properties(cai_lua_workspace_approval PROPERTIES
+      LABELS "unit;local;offline" ENVIRONMENT "${CAI_LUA_TEST_ENV}" TIMEOUT 5)
     set_tests_properties(cai_lua_reasoning_tool PROPERTIES
       LABELS "unit;local;offline" ENVIRONMENT "${CAI_LUA_TEST_ENV}" TIMEOUT 3)
     add_test(NAME cai_lua_yolo COMMAND bash

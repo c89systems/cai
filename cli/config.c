@@ -709,6 +709,7 @@ static int tool_environment(cai_config *cfg, const char *prefix,
   size_t i;
   {
     static const char *const aliases[][3] = {
+        {"INSECURE", "agent", "insecure"},
         {"PLUGINS", "plugins", "enabled"},
         {"TOOLS_DIR", "plugins", "directory"},
         {"WORKSPACE_TOOLS_DIR", "plugins", "workspace_directory"},
@@ -1068,6 +1069,8 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
     defaults.yield_time_ms = CAI_TERMINAL_DEFAULT_YIELD_TIME_MS;
   }
   defaults.yolo = cai_config_get_bool(cfg, "agent", "yolo", defaults.yolo);
+  defaults.insecure =
+      cai_config_get_bool(cfg, "agent", "insecure", defaults.insecure);
   defaults.review_subagent = cai_config_get_bool(
       cfg, "agent", "review_subagent", defaults.review_subagent);
   defaults.review_and_fix_tool = cai_config_get_bool(

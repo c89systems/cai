@@ -616,10 +616,12 @@ The Smith renderer produces, in order:
    `${XDG_CONFIG_HOME:-$HOME/.config}/cai/AGENTS.md`; a host may instead set
    an explicit agent configuration directory, exact file path, or a
    callback-backed global instruction store. CAI does not traverse workspace
-   ancestors by default and next reads the exact workspace file.
+   ancestors by default. Local files are skipped unless the host authorizes a
+   `workspace_instructions_root`; then it reads the exact workspace file.
    `codex_compat_agents_md` first appends `${CODEX_HOME}/AGENTS.md` (or
    `$HOME/.codex/AGENTS.md` when CODEX_HOME is unset/empty), then reads repository
-   files from the nearest `.git` ancestor through `workspace_directory`;
+   files from the nearest `.git` ancestor within the authorized root through
+   `workspace_directory`. Global sources do not require workspace approval;
 4. the optional global skills catalog, when the selected preset enables
    `CAI_AGENT_PRESET_TOOL_SKILLS` and discovery finds valid packages;
 5. host-supplied developer extension fragment, if configured;

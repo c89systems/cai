@@ -52,7 +52,10 @@ peer_start() {
   "${CAI_TEST_PYTHON:-python3}" "$support/fixtures/http_peer.py" "$root/peer" >"$root/peer/stdout" 2>"$root/peer/stderr" & peer_pid=$!
   wait_for test -s "$root/peer/port"
   endpoint="http://127.0.0.1:$(cat "$root/peer/port")/v1"
-  base=("$cli" -p custom --endpoint "$endpoint" -m gpt-5.6-luna --no-terminal --no-image-generation -C "$work")
+  base=("$cli" -p custom --endpoint "$endpoint" -m gpt-5.6-luna --no-terminal --no-image-generation)
+  # These fixtures create and control their instruction trees explicitly.
+  [[ "${CAI_TEST_REQUIRE_APPROVAL:-0}" == 1 ]] || base+=(--insecure)
+  base+=(-C "$work")
 }
 plan() {
   printf '%s\n' "$1" >"$root/peer/config.tmp"
@@ -65,11 +68,16 @@ prompt_history_dump() {
   "$history_reader" dump "${2:-$root/state/cai}" "$1"
 }
 release() { touch "$root/peer/release"; }
-run() { rc=0; "${base[@]}" "$@" >"$root/stdout" 2>"$root/stderr" || rc=$?; }
+fixture_approval_args() {
+  approval_args=()
+  [[ "${CAI_TEST_REQUIRE_APPROVAL:-0}" == 1 ]] || approval_args+=(--insecure)
+}
+run() { fixture_approval_args; rc=0; "${base[@]}" "${approval_args[@]}" "$@" >"$root/stdout" 2>"$root/stderr" || rc=$?; }
 ok() { [[ "$rc" == 0 ]] || fail "CLI exited $rc"; }
 bad() { [[ "$rc" != 0 ]] || fail 'CLI unexpectedly succeeded'; }
 stdout_text() { sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$root/stdout"; }
 terminal_launch() {
+  fixture_approval_args
   send_offset=0
   send_feed_offset=0
   term="$root/terminal-${terminal_sequence:-0}"
@@ -79,7 +87,7 @@ terminal_launch() {
   exec {terminal_event_fd}<>"$term/events"
   terminal_events=1
   export CAI_TEST_TERMINAL_EVENT_FD=$terminal_event_fd
-  "$CAI_TERMINAL_PEER" "$term" "${width:-120}" "${base[@]}" "$@" <"$term/input" & terminal_pid=$!
+  "$CAI_TERMINAL_PEER" "$term" "${width:-120}" "${base[@]}" "${approval_args[@]}" "$@" <"$term/input" & terminal_pid=$!
 }
 terminal_start() { terminal_launch "$@"; wait_for has "$term/text" 'Send /help for usage.'; }
 send() { send_offset=$(wc -c <"$term/text"); send_feed_offset=$(wc -c <"$term/feed"); printf '%b' "$1" >&7; }

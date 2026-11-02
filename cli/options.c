@@ -149,8 +149,14 @@ static int cli_read_options(int argc, char *const *argv,
       options->no_config = 1;
       continue;
     }
-    if (strcmp(flag, "--yes") == 0 || strcmp(flag, "--force") == 0) {
+    if (strcmp(flag, "--yes") == 0 || strcmp(flag, "--force") == 0 ||
+        strcmp(flag, "-y") == 0) {
       options->force = 1;
+      continue;
+    }
+    if (strcmp(flag, "--insecure") == 0 || strcmp(flag, "-k") == 0 ||
+        strcmp(flag, "--no-insecure") == 0) {
+      options->insecure = strcmp(flag, "--no-insecure") != 0;
       continue;
     }
     if (strcmp(flag, "--temp") == 0) {
@@ -338,6 +344,10 @@ static int cli_read_options(int argc, char *const *argv,
           options->verbosity++;
         else if (flag[j] == 'l')
           options->list = 1;
+        else if (flag[j] == 'k')
+          options->insecure = 1;
+        else if (flag[j] == 'y')
+          options->force = 1;
         else if (flag[j + 1U] == '\0' &&
                  cai_cli_short_value_option(flag) != 0) {
           short_flag[0] = '-';
@@ -701,11 +711,6 @@ int cai_cli_read_options(int argc, char *const *argv,
 int cai_cli_validate_options(cai_cli_options *options) {
   static const char *const providers[] = {"chatgpt", "openai", "openrouter",
                                           "berget",  "custom", NULL};
-  if (options->force && !options->temporary && options->install_skill == NULL) {
-    cai_cli_option_error(options, "%s",
-                         "--yes/--force requires --temp or --install-skill");
-    return -1;
-  }
   if (options->export_out != NULL && options->export_id == NULL) {
     cai_cli_option_error(options, "--export-out requires --export ID");
     return -1;

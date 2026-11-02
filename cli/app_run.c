@@ -197,6 +197,8 @@ typedef struct cli_state {
   sl_watch_id_t shell_watches[3];
   int shell_watched[3];
   char workspace[PATH_MAX];
+  char workspace_approval_root[PATH_MAX];
+  int workspace_approval_pending;
   char message_queue_override[129];
   char clipboard_directory[PATH_MAX];
 } cli_state;
@@ -2982,6 +2984,10 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     config.revgeo.response_spool_dir = state->temporary.private_dir;
   }
   cai_cli_apply_runtime_options(&state->options, &config, &preset, &skills);
+  config.workspace_approval_directory =
+      state->workspace_approval_root[0] != '\0' ? state->workspace_approval_root
+                                                : NULL;
+  config.record_workspace_approval = state->workspace_approval_pending;
   rc = cli_open_plugins(state, error);
   if (rc != CAI_OK)
     return rc;
@@ -3071,6 +3077,16 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     state->replay_order = NULL;
     state->replay_journal_v2 = 0;
     return rc;
+  }
+  /* The runtime has durably recorded approval before its directory lookup is
+   * published. A bypass must never become a saved authorization. */
+  if (state->workspace_approval_pending) {
+    rc = cai_cli_pouch_approve_workspace(
+        &state->pouch, state->workspace,
+        cai_agent_runtime_session_id(state->runtime), error);
+    if (rc != CAI_OK)
+      return rc;
+    state->workspace_approval_pending = 0;
   }
   rc = cli_replay_finish(state, error);
   if (rc != CAI_OK)
@@ -5994,6 +6010,29 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       cli_print_error(state, "import conversation", &error);
     result = rc == CAI_OK ? 0 : 1;
     goto cleanup;
+  }
+  if (!state->options.insecure) {
+    if (state->options.force) {
+      strcpy(state->workspace_approval_root, state->workspace);
+      state->workspace_approval_pending = 1;
+      rc = CAI_OK;
+    } else
+      rc = cai_cli_pouch_workspace_approval(
+          &state->pouch, state->workspace, state->workspace_approval_root,
+          sizeof(state->workspace_approval_root), &error);
+    if (rc != CAI_OK) {
+      cli_print_error(state, "read workspace approval", &error);
+      goto cleanup;
+    }
+    if (state->workspace_approval_root[0] == '\0') {
+      cai_cli_error(
+          &error, CAI_ERR_INVALID,
+          "Workspace is not approved. Use -y/--yes (or --force) to approve "
+          "this directory and its subdirectories, or -k/--insecure to bypass "
+          "approval for this invocation without saving it.");
+      cli_print_error(state, "workspace approval", &error);
+      goto cleanup;
+    }
   }
   auth_file = state->options.auth_json;
   if (strcmp(state->options.provider, "chatgpt") == 0) {

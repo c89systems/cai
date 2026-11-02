@@ -25850,6 +25850,7 @@ static void test_smith_profile(test_state *state) {
     write_file_or_die(policy_project_agents, "Ancestor policy.");
     write_file_or_die(policy_workspace_agents, "Workspace policy.");
     config.workspace_directory = policy_workspace;
+    config.workspace_instructions_root = policy_root;
     config.agent_config_directory = policy_dir;
     expect_int(state, "smith_global_instructions_open",
                cai_client_new_smith_agent(mock.client, &config, &agent, &error),
@@ -26049,6 +26050,7 @@ static void test_smith_profile(test_state *state) {
    * canonicalize it before walking parents. */
   config.workspace_directory = ".";
   config.agent_config_directory = NULL;
+  config.workspace_instructions_root = ".";
   config.global_instruction_store = NULL;
   config.codex_compat_agents_md = 1;
   expect_int(state, "smith_codex_compat_relative_workspace_open",
@@ -26078,6 +26080,7 @@ static void test_smith_profile(test_state *state) {
                 "failed to create repository instruction symlink");
     } else {
       config.workspace_directory = instructions_workspace;
+      config.workspace_instructions_root = instructions_workspace;
       config.agent_identity = "Vectis Agent Smith";
       config.model = CAI_MODEL_GPT_5_6_LUNA;
       expect_int(
@@ -26093,6 +26096,7 @@ static void test_smith_profile(test_state *state) {
   }
   config.workspace_directory = "/tmp";
   config.agent_identity = "Vectis Agent Smith";
+  config.workspace_instructions_root = "/tmp";
   config.model = CAI_MODEL_GPT_5_6_LUNA;
   expect_int(state, "smith_open",
              cai_client_new_smith_agent(mock.client, &config, &agent, &error),
@@ -26139,6 +26143,7 @@ static void test_smith_profile(test_state *state) {
   } else {
     write_file_or_die(review_agents_path, "Review workspace policy.");
     config.workspace_directory = review_workspace;
+    config.workspace_instructions_root = review_workspace;
     config.developer_instructions_extension = "Review host extension.";
     expect_int(
         state, "smith_review_repository_instructions_open",
@@ -26166,6 +26171,7 @@ static void test_smith_profile(test_state *state) {
   }
   config.workspace_directory = "/tmp";
   config.developer_instructions_extension = NULL;
+  config.workspace_instructions_root = "/tmp";
   expect_int(
       state, "smith_review_open",
       cai_client_new_smith_review_agent(mock.client, &config, &agent, &error),
@@ -41695,6 +41701,7 @@ static void test_smith_compaction_instructions(test_state *state) {
       client_config.api_protocol = CAI_API_PROTOCOL_CHAT_COMPLETIONS;
     cai_smith_config_init(&smith);
     smith.workspace_directory = workspace;
+    smith.workspace_instructions_root = workspace;
     smith.agent_config_directory = config_dir;
     smith.codex_compat_agents_md = 1;
     smith.disable_terminal = 1;

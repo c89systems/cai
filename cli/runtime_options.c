@@ -51,6 +51,7 @@ void cai_cli_apply_runtime_options(const cai_cli_options *options,
   config->agent_identity = options->identity;
   config->developer_instructions_extension = options->developer_instructions;
   config->codex_compat_agents_md = options->codex_agents_md;
+  config->insecure = options->insecure;
   config->shell_context_max_lines = options->shell_context_max_lines;
   config->shell_context_max_bytes = options->shell_context_max_bytes;
   config->enable_image_generation =

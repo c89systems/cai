@@ -511,6 +511,7 @@ static void collection_regressions(cai_cli_pouch *pouch, cai_error *error) {
   lc_error_cleanup(&local);
 }
 
+#include "pouch_approval_test.inc"
 #include "pouch_context_test.inc"
 #include "pouch_journal_fault_test.inc"
 
@@ -559,7 +560,8 @@ int main(int argc, char **argv) {
     return 0;
   }
   assert(argc == 2 || (argc == 3 && (strcmp(argv[2], "--leases") == 0 ||
-                                     strcmp(argv[2], "--cuts") == 0)));
+                                     strcmp(argv[2], "--cuts") == 0 ||
+                                     strcmp(argv[2], "--approvals") == 0)));
   assert(snprintf(directory, sizeof(directory), "%s/pouch-startup-XXXXXX",
                   argv[1]) > 0);
   assert(mkdtemp(directory) != NULL);
@@ -573,7 +575,11 @@ int main(int argc, char **argv) {
   if (argc == 3) {
     pthread_t worker;
     /* Real musl defaults: no fixture or production stack enlargement. */
-    assert(pthread_create(&worker, NULL, pouch_cut_worker, NULL) == 0);
+    assert(pthread_create(&worker, NULL,
+                          strcmp(argv[2], "--cuts") == 0
+                              ? pouch_cut_worker
+                              : pouch_approval_worker,
+                          NULL) == 0);
     assert(pthread_join(worker, NULL) == 0);
     return 0;
   }

@@ -14,7 +14,7 @@ printf '%s\n' '{"plan":[]}' >"$root/sender-peer/config.json"
 "${CAI_TEST_PYTHON:-python3}" "$support/fixtures/http_peer.py" "$root/sender-peer" >"$root/sender-peer/stdout" 2>"$root/sender-peer/stderr" & sender_pid=$!
 wait_for test -s "$root/sender-peer/port"
 sender_endpoint="http://127.0.0.1:$(cat "$root/sender-peer/port")/v1"
-sender_base=("$cli" -p custom --endpoint "$sender_endpoint" -m gpt-5.6-luna --no-terminal --no-image-generation --messaging --message-ack-timeout-ms 2000 --message-queue sender-workspace -C "$root/sender-work")
+sender_base=("$cli" --insecure -p custom --endpoint "$sender_endpoint" -m gpt-5.6-luna --no-terminal --no-image-generation --messaging --message-ack-timeout-ms 2000 --message-queue sender-workspace -C "$root/sender-work")
 plan '{"plan":["RECEIVER READY"]}'
 run -Nni 'receiver setup'; ok
 jq -e 'all(.tools[]?; .name != "agent_message")' "$root/peer/requests.jsonl" >/dev/null

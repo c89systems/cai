@@ -887,6 +887,7 @@ static int cai_smith_load_repository_instructions(
   struct stat marker;
   int dir_fd;
   int rc;
+  size_t root_length;
 
   *out = NULL;
   memset(status, 0, sizeof(*status));
@@ -985,6 +986,20 @@ static int cai_smith_load_repository_instructions(
       logger->info(logger,
                    "Codex AGENTS.md compatibility disabled by startup settings",
                    NULL, 0U);
+  }
+  if (config->workspace_instructions_root == NULL)
+    return CAI_OK;
+  if (realpath(config->workspace_instructions_root, resolved) == NULL ||
+      realpath(config->workspace_directory, canonical_workspace) == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "workspace instruction approval root must exist");
+  root_length = strlen(resolved);
+  if (strncmp(resolved, canonical_workspace, root_length) != 0 ||
+      (root_length != 1U && canonical_workspace[root_length] != '\0' &&
+       canonical_workspace[root_length] != '/'))
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "workspace is outside its instruction approval root");
+  if (!config->codex_compat_agents_md) {
     rc = cai_smith_load_workspace_instruction_file(
         allocator, config->workspace_directory, &part, error);
     status->repository_agents_md_count = part != NULL && part[0] != '\0';
@@ -1011,7 +1026,7 @@ static int cai_smith_load_repository_instructions(
     }
     rc = fstatat(dir_fd, ".git", &marker, AT_SYMLINK_NOFOLLOW) == 0 ? 1 : 0;
     (void)close(dir_fd);
-    if (rc || strcmp(cursor, "/") == 0) {
+    if (rc || strlen(cursor) <= root_length) {
       break;
     }
     part = strrchr(cursor, '/');

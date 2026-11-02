@@ -6,7 +6,7 @@ build_dir=$2
 fixture=$(mktemp -d "$build_dir/cli-sessions.XXXXXX")
 trap 'rm -rf "$fixture"' EXIT
 mkdir -p "$fixture/work-a" "$fixture/work-b" "$fixture/state"
-export XDG_STATE_HOME="$fixture/state" XDG_CACHE_HOME="$fixture/cache" XDG_DATA_HOME="$fixture/data" OPENAI_API_KEY=fixture
+export XDG_CONFIG_HOME="$fixture/config" XDG_STATE_HOME="$fixture/state" XDG_CACHE_HOME="$fixture/cache" XDG_DATA_HOME="$fixture/data" OPENAI_API_KEY=fixture CAI_INSECURE=true
 
 first=$(printf '/status\n/resume\n/quit\n' | "$cli" -p openai -N -C "$fixture/work-a")
 [[ "$first" == *"Status"* && "$first" == *"Model"* && "$first" == *"Reasoning effort"* ]]

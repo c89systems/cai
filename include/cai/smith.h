@@ -127,6 +127,11 @@ void cai_agent_preset_from_smith(cai_agent_preset *preset);
 typedef struct cai_agent_preset_config {
   /** Canonical workspace root used to constrain local file tools. */
   const char *workspace_directory;
+  /** Host-authorized instruction root. NULL disables automatic workspace and
+   * repository AGENTS.md loading. Must contain workspace_directory;
+   * instructions above this root are excluded. Global instruction sources are
+   * independent. */
+  const char *workspace_instructions_root;
   /**
    * Optional CAI agent configuration directory. NULL selects
    * $XDG_CONFIG_HOME/cai, or $HOME/.config/cai. CAI reads AGENTS.md directly
@@ -148,10 +153,11 @@ typedef struct cai_agent_preset_config {
   const cai_skill_config *skills;
   /**
    * Non-zero loads $CODEX_HOME/AGENTS.md (or $HOME/.codex/AGENTS.md when
-   * CODEX_HOME is unset/empty) after CAI global policy, then repository files
-   * from the nearest .git ancestor through workspace_directory. The default
-   * omits Codex global policy and reads only workspace_directory/AGENTS.md
-   * after CAI global policy, without traversing workspace ancestors.
+   * CODEX_HOME is unset/empty) after CAI global policy. When workspace
+   * instructions are authorized, loads repository files from the nearest .git
+   * ancestor within workspace_instructions_root through workspace_directory.
+   * The default omits Codex global policy and, if authorized, reads only the
+   * workspace_directory/AGENTS.md file without traversing ancestors.
    */
   int codex_compat_agents_md;
   /** Optional visible identity; NULL selects preset->default_identity. */

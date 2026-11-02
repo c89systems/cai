@@ -3054,6 +3054,8 @@ static int cai_lua_client_new_smith_agent(lua_State *L) {
   }
   config.global_agents_md_path =
       cai_lua_opt_string_field(L, 2, "global_agents_md_path", NULL);
+  config.workspace_instructions_root =
+      cai_lua_opt_string_field(L, 2, "workspace_instructions_root", NULL);
   config.codex_compat_agents_md =
       cai_lua_opt_bool_field(L, 2, "codex_compat_agents_md", 0);
   lua_getfield(L, 2, "global_instruction_store");
@@ -3743,6 +3745,11 @@ static int cai_lua_client_new_smith_runtime_common(lua_State *L,
       cai_lua_opt_string_field(L, 2, "global_agents_md_path", NULL);
   config.codex_compat_agents_md =
       cai_lua_opt_bool_field(L, 2, "codex_compat_agents_md", 0);
+  config.insecure = cai_lua_opt_bool_field(L, 2, "insecure", 0);
+  config.workspace_approval_directory =
+      cai_lua_opt_string_field(L, 2, "workspace_approval_directory", NULL);
+  config.record_workspace_approval =
+      cai_lua_opt_bool_field(L, 2, "record_workspace_approval", 0);
   lua_getfield(L, 2, "global_instruction_store");
   if (!lua_isnil(L, -1)) {
     native_instruction_store =

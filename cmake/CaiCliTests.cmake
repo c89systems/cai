@@ -1,4 +1,12 @@
   if(CAI_BUILD_TESTS)
+    add_test(NAME cai_cli_workspace_approval COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_workspace_approval_test.sh"
+      "$<TARGET_FILE:cai_cli_mock_fixture>")
+    set_tests_properties(cai_cli_workspace_approval PROPERTIES TIMEOUT 20)
+    add_test(NAME cai_app_workspace_approval COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_workspace_approval_test.sh"
+      "$<TARGET_FILE:cai_app_worker_stack_host>")
+    set_tests_properties(cai_app_workspace_approval PROPERTIES TIMEOUT 20 LABELS "cli;local;offline")
     add_library(cai_cli_storage_fixture OBJECT tests/cli_storage_fixture.c)
     target_link_libraries(cai_cli_storage_fixture PRIVATE cai_cli_support)
     cai_configure_cli_target(cai_cli_storage_fixture)
@@ -396,6 +404,10 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pouch_startup_test.sh"
       "$<TARGET_FILE:cai_cli_pouch_startup_test>" "${CMAKE_CURRENT_BINARY_DIR}" --cuts)
     set_tests_properties(cai_cli_atomic_trim PROPERTIES TIMEOUT 10)
+    add_test(NAME cai_cli_workspace_approval_storage COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pouch_startup_test.sh"
+      "$<TARGET_FILE:cai_cli_pouch_startup_test>" "${CMAKE_CURRENT_BINARY_DIR}" --approvals)
+    set_tests_properties(cai_cli_workspace_approval_storage PROPERTIES TIMEOUT 5)
     add_test(NAME cai_cli_collection_ownership COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_collection_ownership_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")

@@ -569,6 +569,15 @@ typedef struct cai_agent_runtime_config {
   const cai_agent_preset *preset_descriptor;
   /** Canonical workspace root. Required by smith file tools. */
   const char *workspace_directory;
+  /** Bypass workspace-instruction approval for this runtime and its children.
+   * Defaults to false. Does not save approval or alter TLS/sandbox policy. */
+  int insecure;
+  /** Host-approved canonical ancestor of the workspace. NULL disables local
+   * AGENTS.md loading unless insecure is set. Copied; inherited by children. */
+  const char *workspace_approval_directory;
+  /** Journal an explicit host approval during open. Requires an approved
+   * directory; ignored for insecure runs. Not inherited by child runtimes. */
+  int record_workspace_approval;
   /** Optional CAI agent configuration directory for the global AGENTS.md. */
   const char *agent_config_directory;
   /** Optional exact global AGENTS.md path overriding the config directory. */

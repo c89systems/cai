@@ -715,6 +715,8 @@ struct cai_agent_runtime {
   char *smith_developer_instructions_extension;
   char *smith_agent_config_directory;
   char *smith_global_agents_md_path;
+  char *smith_workspace_approval_directory;
+  int smith_insecure;
   cai_blob_store smith_global_instruction_store;
   int smith_has_global_instruction_store;
   cai_skill_config smith_skills;
@@ -2144,6 +2146,7 @@ static void cai_runtime_clear_smith_profile(cai_agent_runtime *runtime) {
   cai_free_mem(NULL, runtime->smith_developer_instructions_extension);
   cai_free_mem(NULL, runtime->smith_agent_config_directory);
   cai_free_mem(NULL, runtime->smith_global_agents_md_path);
+  cai_free_mem(NULL, runtime->smith_workspace_approval_directory);
   cai_free_mem(NULL, runtime->smith_skills_directory);
   cai_free_mem(NULL, runtime->preset_name);
   cai_free_mem(NULL, runtime->preset_prompt_version);
@@ -2167,6 +2170,8 @@ static void cai_runtime_clear_smith_profile(cai_agent_runtime *runtime) {
   runtime->smith_developer_instructions_extension = NULL;
   runtime->smith_agent_config_directory = NULL;
   runtime->smith_global_agents_md_path = NULL;
+  runtime->smith_workspace_approval_directory = NULL;
+  runtime->smith_insecure = 0;
   runtime->smith_skills_directory = NULL;
   memset(&runtime->smith_global_instruction_store, 0,
          sizeof(runtime->smith_global_instruction_store));
@@ -2353,6 +2358,10 @@ static int cai_runtime_capture_preset_profile(
     runtime->smith_global_instruction_store = *config->global_instruction_store;
     runtime->smith_has_global_instruction_store = 1;
   }
+  if (rc == CAI_OK)
+    rc = cai_runtime_copy_optional_string(
+        config->workspace_approval_directory,
+        &runtime->smith_workspace_approval_directory, error);
   if (rc == CAI_OK && config->skills != NULL) {
     runtime->smith_skills = *config->skills;
     rc = cai_runtime_copy_optional_string(config->skills->skills_directory,
@@ -2389,6 +2398,7 @@ static int cai_runtime_capture_preset_profile(
   if (rc == CAI_OK) {
     runtime->smith_disable_terminal = config->disable_terminal ? 1 : 0;
     runtime->smith_yolo = config->yolo;
+    runtime->smith_insecure = config->insecure;
     runtime->smith_disable_default_session_store =
         config->disable_default_session_store;
     runtime->smith_codex_compat_agents_md =
@@ -8000,6 +8010,9 @@ int cai_agent_runtime_open(cai_client *client,
   }
   cai_smith_config_init(&smith);
   smith.workspace_directory = config->workspace_directory;
+  smith.workspace_instructions_root =
+      config->insecure ? config->workspace_directory
+                       : config->workspace_approval_directory;
   smith.agent_config_directory = config->agent_config_directory;
   smith.global_agents_md_path = config->global_agents_md_path;
   smith.global_instruction_store = config->global_instruction_store;
@@ -8426,6 +8439,20 @@ int cai_agent_runtime_open(cai_client *client,
      */
     if (rc == CAI_OK && runtime->session_store != NULL && !resumed_commit) {
       rc = cai_runtime_commit(runtime, 0, error);
+    }
+    if (rc == CAI_OK && runtime->session_store != NULL && !config->insecure &&
+        config->record_workspace_approval &&
+        config->workspace_approval_directory != NULL) {
+      unsigned long long sequence;
+      pthread_mutex_lock(&runtime->lock);
+      rc = cai_runtime_append_journal_event_locked(
+          runtime, "workspace_approved", config->workspace_approval_directory,
+          &sequence, error);
+      if (rc == CAI_OK)
+        cai_runtime_mark_commit_event_locked(runtime, sequence);
+      pthread_mutex_unlock(&runtime->lock);
+      if (rc == CAI_OK)
+        rc = cai_runtime_commit(runtime, 0, error);
     }
   }
   /* Settle replayed controls before hosts inspect the goal and decide whether
@@ -10259,6 +10286,9 @@ int cai_agent_runtime_start_review(cai_agent_runtime *parent,
           : NULL;
   config.skills = parent->smith_has_skills ? &parent->smith_skills : NULL;
   config.codex_compat_agents_md = parent->smith_codex_compat_agents_md;
+  config.insecure = parent->smith_insecure;
+  config.workspace_approval_directory =
+      parent->smith_workspace_approval_directory;
   config.agent_identity = parent->smith_identity;
   config.model = parent->smith_review_model != NULL ? parent->smith_review_model
                                                     : parent->smith_model;
@@ -10841,6 +10871,9 @@ static int cai_runtime_open_tool_subagent(
           : NULL;
   config.skills = parent->smith_has_skills ? &parent->smith_skills : NULL;
   config.codex_compat_agents_md = parent->smith_codex_compat_agents_md;
+  config.insecure = parent->smith_insecure;
+  config.workspace_approval_directory =
+      parent->smith_workspace_approval_directory;
   config.agent_identity = parent->smith_identity;
   config.model = model;
   config.reasoning_effort = effort;

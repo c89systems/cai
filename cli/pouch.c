@@ -1578,6 +1578,8 @@ static int latest_open(cai_cli_pouch *pouch, const char *scope, lc_lease **out,
   return latest_open_wait(pouch, scope, 5L, out, index, error);
 }
 
+#include "pouch_approval.inc"
+
 static int load_latest_mode(void *context, const char *scope, char *id,
                             size_t capacity, cai_source **out,
                             unsigned long long *sequence, int writable,

@@ -150,6 +150,24 @@ runtime, review, storage, and presentation contracts.
 
 ## Cai terminal agent
 
+Agent startup requires workspace approval. On first use, run `cai -y`
+(`--yes` or `--force`) to approve the current directory and its descendants for
+this and future conversations. Approval is recorded in the conversation journal
+and in a small authorization record in the configured session store. It survives
+conversation expiry/deletion; clearing the store removes it. Imports and model
+output cannot grant approval. Help, listing, export, login, and standalone
+message delivery do not require approval.
+
+`-k` / `--insecure` bypasses this gate for one invocation and allows automatic
+local instruction loading without saving approval, even with `--yes`. It also
+accepts `[agent] insecure = true` or `CAI_INSECURE=true` (using the configured
+application environment prefix). `--no-insecure` overrides those defaults.
+This setting does not change TLS verification or the execution sandbox.
+Approval follows canonical directory ancestry: siblings and symlinks resolving
+outside the approved tree do not inherit it. Repository instructions above the
+authorized root are excluded. Global instruction files keep their existing
+settings. An old conversation does not implicitly approve its workspace.
+
 The musl SDK presets build the terminal coding agent as a statically linked
 Linux x86_64, aarch64 or armhf executable. The `cai` convenience preset selects
 the same x86_64 musl producer. It adds pinned softline 0.15.0 for the prompt and
@@ -649,7 +667,7 @@ response/tool boundary. Softline's theme, ASCII output and `NO_COLOR` are
 preserved, including during replay. Settings and slash-command changes apply
 to this invocation without rewriting history or configuration.
 
-`cai --temp` starts a new conversation in a unique
+`cai --temp -k` starts a new conversation in a unique
 `cache_dir/temp/chat-XXXXXX/workspace` directory. Its sibling `private/`
 contains the encrypted conversation pouch and key, prompt history, clipboard,
 exports, and app-owned logs. The normal global or explicit `--config` file is
@@ -662,7 +680,8 @@ history/state is deleted. The
 plain terminal question `Remove temporary workspace …? [y/N]` controls whether
 the workspace files are also deleted. No, empty input, EOF, interruption, host
 STOP, and non-interactive runs preserve the workspace and report its location.
-`--yes` / `--force` are equivalent and delete it without asking, including on
+Use `--temp -y` instead to approve the fresh workspace and delete it without
+asking. `--yes` / `--force` are equivalent and delete it without asking, including on
 failure. Crashes can leave the cache directory behind. `-T` still selects review
 output type. `[ui] temporary` / `CAI_TEMP` also select this mode; `--no-temp`
 overrides them. A supplied logger or explicit `LOG_OUTPUT` keeps its own sink.
@@ -1615,7 +1634,11 @@ Smith loads cai's global `AGENTS.md` from
 `${XDG_CONFIG_HOME:-$HOME/.config}/cai/AGENTS.md` when it exists;
 `--agents-md PATH` overrides that file. `--codex-agents-md` additionally
 loads `${CODEX_HOME:-$HOME/.codex}/AGENTS.md` after the cai global file and
-before repository ancestor `AGENTS.md` files. `-I TEXT` or
+before authorized repository ancestor `AGENTS.md` files. Workspace files are
+disabled by default in core libcai: a host must supply
+`cai_agent_preset_config.workspace_instructions_root`, or use runtime
+`workspace_approval_directory` / `insecure`. `libcai_app` supplies the approved
+root after its startup gate. `-I TEXT` or
 `--developer-instructions TEXT` appends developer instructions.
 Loaded AGENTS.md sources are explicitly framed as the current user's instructions
 and working context, including any stated role or preferences. Their complete

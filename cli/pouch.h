@@ -91,6 +91,13 @@ int cai_cli_pouch_open_at(cai_cli_pouch *pouch, const char *state_directory,
                           const char *endpoint, const char *client_pem,
                           pslog_logger *logger, cai_error *error);
 void cai_cli_pouch_close(cai_cli_pouch *pouch);
+/* Exact canonical workspace or nearest approved canonical ancestor; empty
+ * root means no approval. Public committed metadata only, no journal scan. */
+int cai_cli_pouch_workspace_approval(cai_cli_pouch *pouch,
+                                     const char *workspace, char *root,
+                                     size_t capacity, cai_error *error);
+int cai_cli_pouch_approve_workspace(cai_cli_pouch *pouch, const char *workspace,
+                                    const char *session_id, cai_error *error);
 /* Read committed history without acquiring writable runtime ownership. */
 int cai_cli_pouch_read_id(cai_cli_pouch *pouch, const char *scope,
                           const char *id, cai_source **out,

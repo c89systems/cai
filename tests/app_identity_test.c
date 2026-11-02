@@ -141,10 +141,18 @@ int main(void) {
          loaded != NULL);
   cai_source_close(loaded);
   loaded = NULL;
+  /* Sharing a client does not grant a second writer for an owned conversation.
+   * Namespace visibility is inspected through the public committed reader. */
   assert(shared.store.load_latest(&shared, "/workspace", id, sizeof(id),
-                                  &loaded, &sequence, &error) == CAI_OK &&
+                                  &loaded, &sequence,
+                                  &error) == CAI_ERR_INVALID);
+  assert(strstr(error.message, "another live CAI context") != NULL);
+  cai_error_cleanup(&error);
+  cai_error_init(&error);
+  assert(cai_cli_pouch_read_id(&shared, "/workspace", "first", &loaded,
+                               &sequence, &error) == CAI_OK &&
          loaded != NULL);
-  assert(strcmp(id, "first") == 0);
+  assert(sequence == 1U);
   cai_source_close(loaded);
   cai_cli_pouch_close(&first);
   /* The first context exiting cannot close the remaining borrower's client. */

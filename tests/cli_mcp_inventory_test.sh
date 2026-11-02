@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/cli_test_common.sh"
+# Keep complete aliases visible; wrapping belongs to the rendering fixtures.
+width=240
 peer_start
 protocol=${1:-responses}
 origin=${endpoint%/v1}

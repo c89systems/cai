@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/cli_test_common.sh"
 protocol=${1:-responses}
+export CAI_TEST_REQUIRE_APPROVAL=1
 peer_start
 config="$root/config/cai/config.ini"
 mkdir -p "$(dirname "$config")" "$root/.codex" "$root/custom-codex" "$work/.git" "$work/nested"
@@ -37,6 +38,8 @@ turn() {
   contains "$root/instructions" WORKSPACE_MARKER
 }
 write_config false
+plan "$(jq -nc --argjson chat "$([[ "$protocol" == chat_completions ]] && printf true || printf false)" '{chat:$chat,plan:["FIXTURE APPROVED"]}')"
+run -y -C "$work" -Nni 'Approve the fixture instruction tree'; ok
 turn -Nni 'before enabling Codex instructions'
 absent "$root/instructions" CODEX_DEFAULT_MARKER
 absent "$root/instructions" ANCESTOR_MARKER

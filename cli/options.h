@@ -81,7 +81,7 @@ typedef struct cai_cli_options {
   int plugins;
   const char *tools_dir, *workspace_tools_dir;
   const char *install_skill;
-  int force, temporary;
+  int force, temporary, insecure;
   const char *identity;
   const char *developer_instructions;
   const char *goal;

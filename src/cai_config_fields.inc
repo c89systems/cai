@@ -142,7 +142,10 @@ F("agent", "developer_instructions", STR, RUNTIME,
   developer_instructions_extension, 0, NULL,
   "Instructions appended to the preset.")
 F("agent", "codex_agents_md", BOOL, RUNTIME, codex_compat_agents_md, 0, NULL,
-  "Load Codex global and ancestor AGENTS.md.")
+  "Load Codex global and authorized ancestor AGENTS.md.")
+F("agent", "insecure", BOOL, RUNTIME, insecure, 0, NULL,
+  "Bypass workspace approval for this invocation without saving approval. "
+  "Allows local AGENTS.md below the working directory. Default false.")
 F("runtime", "shell_context_max_lines", SIZE, RUNTIME, shell_context_max_lines,
   0, NULL, "Sanitized shell context tail; zero selects 5000 logical lines.")
 F("runtime", "shell_context_max_bytes", SIZE, RUNTIME, shell_context_max_bytes,

@@ -13,7 +13,7 @@ finish() {
 }
 trap finish EXIT
 peer_start
-base=("$cli" -p custom --endpoint "$endpoint" -m gpt-5.6-luna --no-image-generation -C "$work")
+base=("$cli" --insecure -p custom --endpoint "$endpoint" -m gpt-5.6-luna --no-image-generation -C "$work")
 if [[ "$mode" == producer ]]; then
   export CAI_TEST_RESIZE_READY="$root/resize-ready" CAI_TEST_RESIZE_RELEASE="$root/resize-release"
   mkfifo "$CAI_TEST_RESIZE_RELEASE"; exec 8<>"$CAI_TEST_RESIZE_RELEASE"
