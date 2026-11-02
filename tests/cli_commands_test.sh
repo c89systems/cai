@@ -63,7 +63,7 @@ for colors in yes no; do
     fi
     # The receipt reports submission, never a deferred outcome. Errors follow
     # it, and no result/diagnostic emits another copy of the input.
-    tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/receipt"
+    tail -c +$((send_feed_offset+1)) "$term/feed" | without_dtg >"$root/receipt"
     awk -v command="\$ $command" '
       index($0, command) { count++; seen=1 }
       /\* ERROR:/ { if (!seen) exit 1 }
@@ -71,7 +71,7 @@ for colors in yes no; do
     ' "$root/receipt"
   done
   send '/status\r'; expect 'Use /tools for the full inventory.'
-  tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/receipt"
+  tail -c +$((send_feed_offset+1)) "$term/feed" | without_dtg >"$root/receipt"
   awk '/\$ \/status/ { count++; seen=1 } /## Status/ { if (!seen) exit 1 }
        END { if (count != 1) exit 1 }' "$root/receipt"
   # An invalid command containing Markdown punctuation remains literal, wraps,
@@ -95,7 +95,7 @@ for colors in yes no; do
   # The peer publishes its sticky-row snapshot before appending the matching
   # text frame. A pending Worked-for redraw can therefore arrive after send's
   # offset. Check from the applied quit command, not the input write.
-  tail -c +$((send_offset+1)) "$term/text" |
+  tail -c +$((send_offset+1)) "$term/text" | without_dtg |
     awk -v marker="\$ $command" 'index($0, marker) { applied=1 } applied' >"$root/farewell"
   contains "$root/farewell" "\$ $command"
   contains "$root/farewell" '! Goodbye.'
