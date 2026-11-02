@@ -493,6 +493,52 @@ static int cai_cli_table_row(char *out, size_t capacity, size_t *used,
   return 0;
 }
 
+int cai_cli_status_log_markdown(const char *path, int table,
+                                int (*write)(void *, const char *, size_t),
+                                void *context) {
+  const unsigned char *p;
+  char buffer[256];
+  size_t ticks = 1U, run = 0U, i, used = 0U;
+  int available = path != NULL && path[0] != '\0';
+  if (write == NULL)
+    return -1;
+  if (!available) {
+    static const char missing[] = "No session log file is configured.\n\n";
+    return table ? 0 : write(context, missing, sizeof(missing) - 1U);
+  }
+  /* A code span preserves spaces and Markdown punctuation in actual paths.
+   * Pick a delimiter longer than every embedded backtick run. */
+  for (p = (const unsigned char *)path; *p; p++) {
+    run = *p == '`' ? run + 1U : 0U;
+    if (run >= ticks)
+      ticks = run + 1U;
+  }
+  if (table && write(context, "| Log file | ", 13U) != 0)
+    return -1;
+  for (i = 0U; i < ticks; i++)
+    if (write(context, "`", 1U) != 0)
+      return -1;
+  if (write(context, " ", 1U) != 0)
+    return -1;
+  for (p = (const unsigned char *)path; *p; p++) {
+    if (used + 2U > sizeof(buffer)) {
+      if (write(context, buffer, used) != 0)
+        return -1;
+      used = 0U;
+    }
+    if (table && *p == '|')
+      buffer[used++] = '\\';
+    buffer[used++] = *p < 32U || *p == 127U ? ' ' : (char)*p;
+  }
+  if ((used != 0U && write(context, buffer, used) != 0) ||
+      write(context, " ", 1U) != 0)
+    return -1;
+  for (i = 0U; i < ticks; i++)
+    if (write(context, "`", 1U) != 0)
+      return -1;
+  return write(context, table ? " |\n" : "\n\n", table ? 3U : 2U);
+}
+
 int cai_cli_status_ids_markdown(const cai_agent_runtime_ids *ids,
                                 int (*write)(void *, const char *, size_t),
                                 void *context) {

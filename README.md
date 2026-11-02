@@ -1163,11 +1163,17 @@ the synchronous terminal receiver described above.
 
 `/status` includes the local session ID, last retained provider response ID,
 provider conversation ID when available, instruction-file loading,
-local/hosted/MCP tool counts, and
-MCP server availability in its main metrics table. `/tools` shows
+the full session log path when file logging is configured,
+local/hosted/MCP tool counts, and MCP server availability in its main metrics
+table. `/tools` shows
 their names, descriptions, input formats and server ownership, plus disabled
 or unavailable servers and discovery errors. Both render through libmdf and
 remain available during a turn.
+
+`/log` prints only the active conversation's full log path through the formatted
+feed, or explains that no file log is configured (for example, when an embedding
+host supplies its own logger). The path follows `/new` and `/resume` and honors
+the configured log directory.
 
 Add a named Streamable HTTP server to `config.ini`:
 

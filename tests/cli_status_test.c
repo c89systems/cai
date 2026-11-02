@@ -69,6 +69,44 @@ static int test_ids(void) {
   return failures;
 }
 
+static int test_log_path(void) {
+  ids_capture out;
+  char path[4096];
+  int failures = 0;
+  memset(&out, 0, sizeof(out));
+  failures +=
+      check(cai_cli_status_log_markdown(NULL, 1, ids_write, &out) == 0 &&
+                out.used == 0U,
+            "status omits unconfigured log path");
+  failures += check(
+      cai_cli_status_log_markdown("", 0, ids_write, &out) == 0 &&
+          strcmp(out.bytes, "No session log file is configured.\n\n") == 0,
+      "log query explains unconfigured logging");
+  memset(&out, 0, sizeof(out));
+  failures += check(
+      cai_cli_status_log_markdown("/tmp/log_[x]|`*\n\033.log", 1, ids_write,
+                                  &out) == 0 &&
+          strcmp(out.bytes, "| Log file | `` /tmp/log_[x]\\|`*  .log `` |\n") ==
+              0,
+      "log paths cannot inject table cells, Markdown or terminal controls");
+  memset(&out, 0, sizeof(out));
+  memset(path, 'x', sizeof(path) - 1U);
+  path[0] = '/';
+  path[sizeof(path) - 1U] = '\0';
+  failures +=
+      check(cai_cli_status_log_markdown(path, 0, ids_write, &out) == 0 &&
+                out.used == strlen(path) + 6U &&
+                strncmp(out.bytes + 2U, path, strlen(path)) == 0,
+            "long log paths are emitted completely");
+  out.fail = 1;
+  failures +=
+      check(cai_cli_status_log_markdown(path, 0, ids_write, &out) != 0 &&
+                cai_cli_status_log_markdown(path, 1, ids_write, &out) != 0 &&
+                cai_cli_status_log_markdown(path, 0, NULL, &out) != 0,
+            "log path writer propagates output errors");
+  return failures;
+}
+
 static int test_debounce(const char *directory) {
   cai_cli_status status;
   char head[4096];
@@ -241,7 +279,7 @@ int main(int argc, char **argv) {
   }
   if (argc == 3 && strcmp(argv[1], "--debounce") == 0)
     return test_debounce(argv[2]) != 0;
-  failures = test_ids() + test_fields();
+  failures = test_ids() + test_log_path() + test_fields();
   memset(&goal, 0, sizeof(goal));
   memset(&metrics, 0, sizeof(metrics));
   memset(&quota, 0, sizeof(quota));

@@ -1175,6 +1175,7 @@ static const struct cli_command_definition {
 } cli_command_definitions[] = {
     {"/help", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
     {"/status", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
+    {"/log", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
     {"/tools", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
     {"/skills", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
     {"/quit", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
@@ -5230,6 +5231,8 @@ static int cli_handle_command(cli_state *state, const char *line,
         "| `/status` | Show model, reasoning, context, and available cost or "
         "quota metrics and the tool summary. Refresh ChatGPT quota "
         "immediately. |\n"
+        "| `/log` | Show the full path of this conversation's log file, when "
+        "configured. Also shown in `/status`. |\n"
         "| `/tools` | List installed tools, MCP servers, discovery errors and "
         "tool descriptions. |\n",
         "| `/tools reload [PATH]` | Reload configured tool packages or one "
@@ -5379,6 +5382,15 @@ static int cli_handle_command(cli_state *state, const char *line,
       rc = CAI_ERR_TRANSPORT;
     return rc;
   }
+  if (strcmp(line, "/log") == 0) {
+    if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0 ||
+        cai_cli_status_log_markdown(
+            state->log != NULL && state->log->fd >= 0 ? state->log->path : NULL,
+            0, cli_tools_write, state) != 0 ||
+        cli_finish_response(state) != 0)
+      return CAI_ERR_TRANSPORT;
+    return CAI_OK;
+  }
   if (strcmp(line, "/status") == 0) {
     cai_agent_runtime_ids ids;
     cai_agent_instruction_status instructions;
@@ -5435,6 +5447,9 @@ static int cli_handle_command(cli_state *state, const char *line,
         cli_text(state, markdown, strlen(markdown)) != 0 ||
         cli_tools_write(state, policy_row, strlen(policy_row)) != 0 ||
         cai_cli_status_ids_markdown(&ids, cli_tools_write, state) != 0 ||
+        cai_cli_status_log_markdown(
+            state->log != NULL && state->log->fd >= 0 ? state->log->path : NULL,
+            1, cli_tools_write, state) != 0 ||
         cli_text(state, mailbox_row, strlen(mailbox_row)) != 0 ||
         cai_cli_todo_status(state->runtime, cli_tools_write, state, error) !=
             CAI_OK ||

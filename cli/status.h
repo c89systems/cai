@@ -69,6 +69,11 @@ int cai_cli_status_markdown(char *out, size_t capacity,
 int cai_cli_status_ids_markdown(const cai_agent_runtime_ids *ids,
                                 int (*write)(void *, const char *, size_t),
                                 void *context);
+/* Render an optional log path literally, as a status row or standalone reply.
+ * Missing paths omit the row and produce an explicit standalone explanation. */
+int cai_cli_status_log_markdown(const char *path, int table,
+                                int (*write)(void *, const char *, size_t),
+                                void *context);
 /** Format the active summary or most recent turn duration for softline. */
 int cai_cli_turn_status_message(char *out, size_t capacity,
                                 const char *reasoning_summary,

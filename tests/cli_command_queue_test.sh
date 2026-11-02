@@ -23,7 +23,7 @@ for command in '/review custom review scope' '/review-and-fix uncommitted' \
   '/m some-model high' '/r low' '/t dracula' \
   '/todo new other' '/todo layout list' '/reasoning-tool on' '/trim 1' \
   '/new' '/resume 1' '/export' '/shell' '/shellshare' '!sh' '!sh+' \
-  '!touch must-not-exist' '/no-such-command' '/help' '/status' '/m' '/r' '/t'; do
+  '!touch must-not-exist' '/no-such-command' '/help' '/status' '/log' '/m' '/r' '/t'; do
   send "$command\r\033e"; expect_prompt "$command"
   tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/admission-feed"
   absent "$root/admission-feed" "\$ $command"

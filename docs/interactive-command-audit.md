@@ -39,6 +39,7 @@ global delivery-mode workaround or queue removal/reinsertion.
 | --- | --- | --- |
 | `/help` | Feed | Local help. |
 | `/status` | Feed | Runtime/status snapshots and tool inventory. |
+| `/log` | Feed | Active conversation's log file path, when configured. |
 | `/tools` | Feed | Tool/MCP inventory. |
 | `/skills` | Feed | Skill catalog. |
 | `/model` | Feed | Model and reasoning choices. |
