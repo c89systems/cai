@@ -35,7 +35,7 @@ grep -qx VERSION "$scratch/source-extract/cai-$version/RELEASE_MANIFEST"
 bash "$fixture/scripts/package_lua.sh" "$version"
 rockspec="$fixture/dist/cai-$version-1.rockspec"
 rock="$fixture/dist/cai-$version-1.src.rock"
-grep -Fq "https://github.com/sa6mwa/cai/releases/download/v$version/cai-lua-$version.tar.gz" "$rockspec"
+grep -Fq "https://github.com/c89systems/cai/releases/download/v$version/cai-lua-$version.tar.gz" "$rockspec"
 luarocks lint "$rockspec"
 # A public source URL still permits offline unpacking of the embedded source rock.
 mkdir "$scratch/unpack"
@@ -57,7 +57,7 @@ done
     if (verify_no_private_text "$scratch/text") >"$scratch/out" 2>"$scratch/err"; then exit 1; fi
     grep -q 'artifact contains host-specific' "$scratch/err"
   done
-  sed "s|https://github.com/sa6mwa/cai/releases/download/v$version/|file://|" "$rockspec" >"$scratch/private.rockspec"
+  sed "s|https://github.com/c89systems/cai/releases/download/v$version/|file://|" "$rockspec" >"$scratch/private.rockspec"
   if (verify_rockspec_file "$scratch/private.rockspec") >"$scratch/out" 2>"$scratch/err"; then exit 1; fi
   grep -q 'rockspec contains host-specific' "$scratch/err"
   mkdir "$scratch/private-rock"

@@ -9,7 +9,7 @@ fi
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 version="$1"
 output_path="$2"
-source_url="git+https://github.com/sa6mwa/cai.git"
+source_url="git+https://github.com/c89systems/cai.git"
 source_tag=""
 tag_line=""
 dir_line=""

@@ -363,7 +363,7 @@ if(CAI_BUILD_APP)
     "${_cai_liblql_sha256}"
     _cai_liblql_archive)
   cai_download_tarball("liblql ${CAI_LIBLQL_VERSION} ${CAI_TARGET_ID}"
-    "https://github.com/sa6mwa/liblql/releases/download/v${CAI_LIBLQL_VERSION}/${_cai_liblql_name}.tar.gz"
+    "https://github.com/c89systems/liblql/releases/download/v${CAI_LIBLQL_VERSION}/${_cai_liblql_name}.tar.gz"
     "${_cai_liblql_archive}" "${_cai_liblql_prefix}"
     "${_cai_liblql_sha256}"
     "${_cai_liblql_prefix}/include/lql/lql.h")
@@ -373,7 +373,7 @@ if(CAI_BUILD_APP)
     "${_cai_lockdc_sha256}"
     _cai_lockdc_archive)
   cai_download_tarball("liblockdc ${CAI_LOCKDC_VERSION} ${CAI_TARGET_ID}"
-    "https://github.com/sa6mwa/liblockdc/releases/download/v${CAI_LOCKDC_VERSION}/${_cai_lockdc_name}.tar.gz"
+    "https://github.com/c89systems/liblockdc/releases/download/v${CAI_LOCKDC_VERSION}/${_cai_lockdc_name}.tar.gz"
     "${_cai_lockdc_archive}" "${_cai_lockdc_prefix}"
     "${_cai_lockdc_sha256}"
     "${_cai_lockdc_prefix}/include/lc/lc.h")
@@ -404,7 +404,7 @@ if(CAI_BUILD_APP)
     _cai_libmdf_archive)
   cai_download_tarball(
     "libmdf ${CAI_LIBMDF_VERSION} ${CAI_TARGET_ID}"
-    "https://github.com/sa6mwa/libmdf/releases/download/v${CAI_LIBMDF_VERSION}/${_cai_libmdf_name}.tar.gz"
+    "https://github.com/c89systems/libmdf/releases/download/v${CAI_LIBMDF_VERSION}/${_cai_libmdf_name}.tar.gz"
     "${_cai_libmdf_archive}" "${_cai_libmdf_prefix}"
     "${_cai_libmdf_sha256}"
     "${_cai_libmdf_prefix}/include/libmdf/mdf.h")
@@ -459,7 +459,7 @@ if(CAI_RESOLVED_DEPENDENCY_MODE STREQUAL "cpkt")
   cai_pslog_pkg_sha256("${CAI_TARGET_ID}" CAI_PSLOG_PKG_SHA256)
   set(CAI_PSLOG_PKG_NAME "libpslog-${CAI_PSLOG_VERSION}-${CAI_TARGET_ID}")
   set(CAI_PSLOG_PKG_URL
-      "https://github.com/sa6mwa/libpslog/releases/download/v${CAI_PSLOG_VERSION}/${CAI_PSLOG_PKG_NAME}.tar.gz")
+      "https://github.com/c89systems/libpslog/releases/download/v${CAI_PSLOG_VERSION}/${CAI_PSLOG_PKG_NAME}.tar.gz")
   cai_dependency_archive_path(
     "${CAI_PSLOG_PKG_NAME}.tar.gz" "${CAI_PSLOG_PKG_SHA256}"
     CAI_PSLOG_PKG_ARCHIVE)

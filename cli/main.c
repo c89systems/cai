@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
   config.introduction_margin_right = 0;
   config.introduction_markdown =
       "`cai` is an example of embedding `libcai_app`: "
-      "<https://github.com/sa6mwa/libcai/>.  \n"
+      "<https://github.com/c89systems/cai/>.  \n"
       "**Enter** sends or queues; **Alt-Enter** steers. `/help` or `cai -h` "
       "for "
       "options.\n";

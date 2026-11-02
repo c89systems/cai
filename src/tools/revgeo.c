@@ -171,7 +171,7 @@ static int cai_revgeo_context_new(const cai_revgeo_tool_config *config,
                                 CAI_REVGEO_DEFAULT_REVERSE_PATH);
   user_agent = cai_revgeo_default_string(
       config != NULL ? config->user_agent : NULL,
-      "cai-revgeo-tool/1 (https://github.com/sa6mwa/cai)");
+      "cai-revgeo-tool/1 (https://github.com/c89systems/cai)");
   language =
       cai_revgeo_default_string(config != NULL ? config->language : NULL, "en");
   ctx = (cai_revgeo_context *)cai_alloc(NULL, sizeof(*ctx));

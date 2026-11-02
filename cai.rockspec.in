@@ -12,7 +12,7 @@ Lua 5.5 binding for cai. It wraps the public C SDK facade: clients, agents,
 sessions, response/output handles, tool registries, tool presets, and the
 transport-neutral MCP Streamable HTTP handler and client.
 ]],
-  homepage = "https://github.com/sa6mwa/cai",
+  homepage = "https://github.com/c89systems/cai",
   license = "MIT",
 }
 dependencies = {

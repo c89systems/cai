@@ -7,8 +7,8 @@ run -Nni 'STARTUP USER'; ok
 [[ $(stdout_text) == 'STARTUP ANSWER' ]]
 banner='CAI Smith (C) 2026 C89 Systems AB https://c89.systems'
 introduction='Enter sends or queues; Alt-Enter steers.'
-repo='https://github.com/sa6mwa/libcai/'
-cai_intro=$'cai is an example of embedding libcai_app: https://github.com/sa6mwa/libcai/.\nEnter sends or queues; Alt-Enter steers. /help or cai -h for options.'
+repo='https://github.com/c89systems/cai/'
+cai_intro=$'cai is an example of embedding libcai_app: https://github.com/c89systems/cai/.\nEnter sends or queues; Alt-Enter steers. /help or cai -h for options.'
 layout() {
   awk -v banner="$1" -v intro="$2" '
     BEGIN {count=split(intro,lines,"\n")}
