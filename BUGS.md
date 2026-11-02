@@ -5,6 +5,22 @@ needed to close each issue. An upstream cause must be reproduced independently
 before it is attributed to a dependency. Keep resolved entries with their fix
 commit and verification evidence.
 
+## BUG-075: Live answer occasionally loses its two-column margin
+
+- **Status:** open, not reproduced; investigation stopped at the user's request.
+- **Reported:** default theme, directly in a terminal, during live generation.
+  Following reasoning, the answer beginning "Yes—the API..." and subsequent
+  paragraphs appeared at column zero instead of the normal two-column margin.
+- **Evidence:** real-PTY probes against native Debug and static musl preserved
+  the margin at widths 48, 100 and 120, with fragmented reasoning/answer text,
+  bold spans and code blocks. Further probes covered prior tool output,
+  subsequent turns, session resume and editing a draft during generation.
+  Captured terminal writes positioned the answer at column three as expected.
+  No cause has been established in CAI, libmdf or Softline; no rendering fix
+  was applied.
+- **Next evidence:** a raw terminal recording of an affected run, so emitted
+  indentation and cursor movements can be examined together.
+
 ## BUG-074: Embedded application/export exceed a default worker stack
 
 - **Status:** fixed; constrained-worker regression added.
