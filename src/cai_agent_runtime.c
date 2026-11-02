@@ -1,4 +1,5 @@
 #include <cai/agent_runtime.h>
+#include <cai/dtg.h>
 #include <cai/mcp.h>
 #include <cai/smith.h>
 #include <cai/tools/goal.h>
@@ -1266,6 +1267,18 @@ static int cai_runtime_require_event_capacity_locked(cai_agent_runtime *runtime,
   return CAI_OK;
 }
 
+static void cai_runtime_timestamp(unsigned long long *ns, long long *offset) {
+  struct timespec now;
+  cai_dtg parts;
+  *ns = 0U;
+  *offset = 0;
+  if (clock_gettime(CLOCK_REALTIME, &now) != 0 || now.tv_sec < 0)
+    return;
+  *ns = (unsigned long long)now.tv_sec * 1000000000ULL +
+        (unsigned long long)now.tv_nsec;
+  if (cai_dtg_time_parts(now.tv_sec, 0, &parts) == CAI_DTG_OK)
+    *offset = parts.offset_seconds;
+}
 static int cai_runtime_event_node_new(int type, const char *data,
                                       size_t data_length, const char *tool_name,
                                       const char *tool_call_id,
@@ -1285,6 +1298,8 @@ static int cai_runtime_event_node_new(int type, const char *data,
                          "failed to allocate agent runtime event");
   }
   memset(node, 0, sizeof(*node));
+  cai_runtime_timestamp(&node->event.timestamp_ns,
+                        &node->event.utc_offset_seconds);
   if (data != NULL && data_length > 0U) {
     node->data = cai_strndup(NULL, data, data_length);
     if (node->data == NULL) {
@@ -1504,6 +1519,8 @@ static int cai_runtime_forward_subagent_event(
   }
   if (rc == CAI_OK) {
     node->event.tool_action = event->tool_action;
+    node->event.timestamp_ns = event->timestamp_ns;
+    node->event.utc_offset_seconds = event->utc_offset_seconds;
     node->event.tool_path_count = event->tool_path_count;
     node->event.terminal_command_id = event->terminal_command_id;
     node->event.terminal_has_exit_code = event->terminal_has_exit_code;
@@ -2775,6 +2792,7 @@ static int cai_runtime_append_journal_event_locked(
   event.sequence = runtime->next_event_sequence + 1U;
   event.type = type;
   event.data = data;
+  cai_runtime_timestamp(&event.timestamp_ns, &event.utc_offset_seconds);
   pthread_mutex_unlock(&runtime->lock);
   rc = runtime->session_store->append_event(runtime->session_store->context,
                                             runtime->session_scope,

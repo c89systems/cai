@@ -163,7 +163,7 @@ static void retention_test(cai_cli_pouch *pouch, cai_error *error) {
   lc_collection_read_res result;
   lc_sink sink;
   lc_error local;
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   cai_cli_session *sessions = NULL;
   cai_source *source = NULL;
   char id[CAI_AGENT_SESSION_ID_MAX];

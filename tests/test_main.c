@@ -291,6 +291,8 @@ typedef struct runtime_goal_commit_race_state {
 typedef struct session_event_capture_state {
   int count;
   unsigned long long sequence;
+  unsigned long long timestamp_ns;
+  long long utc_offset_seconds;
   char type[64];
   char data[256];
 } session_event_capture_state;
@@ -2592,7 +2594,7 @@ static int test_runtime_session_store_load_events_after(
     unsigned long long after_sequence, cai_agent_session_event_fn callback,
     void *callback_context, cai_error *error) {
   runtime_session_store_state *store;
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   size_t index;
   int rc;
 
@@ -2638,6 +2640,8 @@ static int test_session_event_capture(void *context,
   }
   state->count++;
   state->sequence = event->sequence;
+  state->timestamp_ns = event->timestamp_ns;
+  state->utc_offset_seconds = event->utc_offset_seconds;
   (void)snprintf(state->type, sizeof(state->type), "%s",
                  event->type != NULL ? event->type : "");
   (void)snprintf(state->data, sizeof(state->data), "%s",
@@ -29889,6 +29893,8 @@ static void test_agent_runtime_auto_compaction_boundaries(test_state *state) {
   struct timespec delay;
   char image_workspace[] =
       CAI_TEST_BINARY_DIR "/test-tmp/cai-runtime-auto-compact-image-XXXXXX";
+  char tool_workspace[] =
+      CAI_TEST_BINARY_DIR "/test-tmp/cai-runtime-auto-compact-tool-XXXXXX";
   char image_path[PATH_MAX];
   char image_tool_response[1024];
   int i;
@@ -29900,9 +29906,17 @@ static void test_agent_runtime_auto_compaction_boundaries(test_state *state) {
   events.owner = pthread_self();
   delay.tv_sec = 0;
   delay.tv_nsec = 10000000L;
+  /* Tool output must not depend on the host's shared temporary directory;
+   * a large listing can exceed the wire fixture's bounded request buffer. */
+  if (mkdtemp(tool_workspace) == NULL) {
+    test_fail(state, "runtime_auto_compact_tool_workspace", "mkdtemp failed");
+    cai_error_cleanup(&error);
+    return;
+  }
   if (http_mock_client_open_script(
           state, "runtime_auto_compact_tool", tool_script,
           sizeof(tool_script) / sizeof(tool_script[0]), &mock) != 0) {
+    rmdir(tool_workspace);
     cai_error_cleanup(&error);
     return;
   }
@@ -29916,7 +29930,7 @@ static void test_agent_runtime_auto_compaction_boundaries(test_state *state) {
   cai_agent_runtime_config_init(&runtime_config);
   runtime_config.developer_instructions_extension =
       "AUTO_COMPACTION_POLICY_MARKER";
-  runtime_config.workspace_directory = "/tmp";
+  runtime_config.workspace_directory = tool_workspace;
   runtime_config.model = CAI_MODEL_GPT_5_NANO;
   runtime_config.disable_default_session_store = 1;
   runtime_config.disable_terminal = 1;
@@ -29954,6 +29968,7 @@ static void test_agent_runtime_auto_compaction_boundaries(test_state *state) {
     client = NULL;
   }
   http_mock_client_close(state, "runtime_auto_compact_tool", &mock);
+  rmdir(tool_workspace);
 
   if (mkdtemp(image_workspace) == NULL) {
     test_fail(state, "runtime_auto_compact_image_workspace", "mkdtemp failed");
@@ -30971,7 +30986,7 @@ static void test_agent_runtime_goal_replace(test_state *state) {
   cai_agent_session_store store;
   runtime_session_store_state storage;
   runtime_event_state events;
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   cai_agent_runtime *runtime = NULL;
   cai_client *client = NULL;
   cai_error error;
@@ -31758,7 +31773,7 @@ static void test_agent_local_session_store(test_state *state) {
   cai_source *source;
   cai_source *loaded;
   read_state reader;
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   session_event_capture_state event_capture;
   session_list_capture_state list_capture;
   cai_error error;
@@ -31859,6 +31874,8 @@ static void test_agent_local_session_store(test_state *state) {
   event.sequence = 8U;
   event.type = "steering_queued";
   event.data = "resume this steering input";
+  event.timestamp_ns = 1793622600123456789ULL;
+  event.utc_offset_seconds = 20700;
   expect_int(state, "local_session_store_append_event",
              store.append_event(store.context,
                                 CAI_TEST_BINARY_DIR
@@ -31954,6 +31971,10 @@ static void test_agent_local_session_store(test_state *state) {
              "steering_queued");
   expect_str(state, "local_session_store_replay_data", event_capture.data,
              "resume this steering input");
+  expect_int(state, "local_session_store_replay_original_time",
+             event_capture.timestamp_ns == 1793622600123456789ULL, 1L);
+  expect_int(state, "local_session_store_replay_original_offset",
+             (long)event_capture.utc_offset_seconds, 20700L);
   cai_source_close(loaded);
   loaded = NULL;
   reader.text = "{\n"

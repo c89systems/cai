@@ -5,7 +5,7 @@ static void test_execution_record(test_state *state) {
   static const char valid[] =
       "{\"kind\":\"tool.partial_output\",\"session_"
       "id\":\"session\",\"tool_name\":\"probe\\u001b[31m\","
-      "\"call_id\":\"call\",\"timestamp_ns\":1,"
+      "\"call_id\":\"call\",\"timestamp_ns\":1,\"utc_offset_seconds\":20700,"
       "\"offset\":0,\"final\":true,\"line_start\":true,"
       "\"data\":\"first\\n```\\u001b[31m\\u009bλ\"}";
   static const char *invalid[] = {
@@ -34,6 +34,8 @@ static void test_execution_record(test_state *state) {
   expect_int(state, "execution_parse",
              cai_execution_record_parse(valid, &record, &error), CAI_OK);
   expect_str(state, "execution_id", record.call_id, "call");
+  expect_int(state, "execution_original_offset",
+             (long)record.utc_offset_seconds, 20700L);
   expect_str(state, "execution_original_controls", record.data,
              "first\n```\033[31m\302\233λ");
   memset(&output, 0, sizeof(output));
@@ -289,6 +291,8 @@ static int execution_test_append(void *context, const char *scope,
   }
   s->records++;
   if (strcmp(id, record.session_id) != 0 || record.timestamp_ns == 0U ||
+      event->timestamp_ns == 0U || event->utc_offset_seconds <= -86400 ||
+      event->utc_offset_seconds >= 86400 ||
       record.source_sequence != event->sequence)
     s->invalid = 1;
   if ((s->mode == 2 && strcmp(record.kind, "tool.arguments") == 0) ||

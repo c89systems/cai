@@ -9,8 +9,8 @@ chat=false
 last_request() { tail -1 "$root/peer/requests.jsonl" >"$root/request"; }
 ordered_feed() {
   local first second
-  first=$(grep -bnFm1 -- "$1" "${3:-$term/feed}" | cut -d: -f1)
-  second=$(grep -bnFm1 -- "$2" "${3:-$term/feed}" | cut -d: -f1)
+  first=$(without_dtg "${3:-$term/feed}" | grep -bnF -- "$1" | sed -n '1p' | cut -d: -f1)
+  second=$(without_dtg "${3:-$term/feed}" | grep -bnF -- "$2" | sed -n '1p' | cut -d: -f1)
   [[ -n "$first" && -n "$second" && "$first" -lt "$second" ]] || fail "Feed order: $1 before $2"
 }
 terminal_start -N

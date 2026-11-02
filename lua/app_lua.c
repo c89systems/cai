@@ -265,6 +265,8 @@ static int observe_call(lua_State *L) {
 #undef EVENT_TEXT
 #define EVENT_INT(field) integer_field(L, #field, (lua_Integer)e->field)
     EVENT_INT(tool_action);
+    EVENT_INT(timestamp_ns);
+    EVENT_INT(utc_offset_seconds);
     EVENT_INT(tool_path_count);
     EVENT_INT(terminal_command_id);
     EVENT_INT(terminal_has_exit_code);
@@ -281,6 +283,8 @@ static int observe_call(lua_State *L) {
     text_field(L, "type", e->type);
     text_field(L, "data", e->data);
     integer_field(L, "sequence", (lua_Integer)e->sequence);
+    integer_field(L, "timestamp_ns", (lua_Integer)e->timestamp_ns);
+    integer_field(L, "utc_offset_seconds", (lua_Integer)e->utc_offset_seconds);
   }
   lua_call(L, 1, 0);
   return 0;

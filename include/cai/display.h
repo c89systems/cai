@@ -31,6 +31,11 @@ typedef struct cai_tool_display_config {
    * Without it the renderer separates its own activity blocks. */
   int (*begin_block)(void *context, cai_error *error);
   void *begin_block_context;
+  /** Prefix headings with original event DTGs. Zero timestamps stay absent.
+   * utc selects Zulu; otherwise use host local time, including historical DST.
+   * Color-enabled timestamps are dim gray independently of the palette. */
+  int timestamps;
+  int utc;
 } cai_tool_display_config;
 
 /** Create an owner-thread renderer. No sink ownership is transferred.

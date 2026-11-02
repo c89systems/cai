@@ -232,6 +232,10 @@ typedef struct cai_agent_runtime_event {
   int state;
   /** Monotonic sequence within this runtime. */
   unsigned long long sequence;
+  /** Wall-clock creation time, Unix nanoseconds; zero means unavailable. */
+  unsigned long long timestamp_ns;
+  /** Recording host's local offset, seconds east of UTC. */
+  long long utc_offset_seconds;
   /**
    * UTF-8 event payload; not NUL-terminated. Its exact meaning depends on
    * type: text/reasoning bytes, a tool receipt/error, terminal output, or a

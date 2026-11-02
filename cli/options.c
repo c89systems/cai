@@ -167,6 +167,10 @@ static int cli_read_options(int argc, char *const *argv,
       options->temporary = 0;
       continue;
     }
+    if (strcmp(flag, "--utc") == 0 || strcmp(flag, "--no-utc") == 0) {
+      options->utc = strcmp(flag, "--utc") == 0;
+      continue;
+    }
     if (strcmp(flag, "--plugins") == 0 || strcmp(flag, "--no-plugins") == 0) {
       options->plugins = strcmp(flag, "--plugins") == 0;
       continue;

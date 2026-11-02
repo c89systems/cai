@@ -27,7 +27,7 @@ for mode in compact full; do
   expect 'REPLAY FINAL ANSWER'
   contains "$term/text" 'REPLAY ORIGINAL PROMPT'
   contains "$term/text" 'REPLAY FINAL ANSWER'
-  [[ $(grep -Ec '\* Ran sh replay-command.sh \([0-9hms]+\)' "$term/text") == 1 ]]
+  [[ $(without_dtg "$term/text" | grep -Ec '\* Ran sh replay-command.sh \([0-9hms]+\)') == 1 ]]
   contains "$term/text" 'REPLAY01'; contains "$term/text" 'REPLAY05'
   contains "$term/text" 'exit=7 signal=0'
   contains "$term/text" '* Read source.txt'

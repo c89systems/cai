@@ -272,6 +272,36 @@ hook. It is not inherited by child agents and is rejected in isolated review,
 matching the core runtime's extension policy.
 Precedence is defaults, file/environment, explicit settings, then arguments.
 Environment entries retain the normal `config_env_has_precedence` policy.
+
+Interactive DTG timestamps use `ui.utc` (default `false`), `--utc`/`--no-utc`,
+and the application's environment prefix plus `UTC` (`CAI_UTC` by default).
+Runtime events, journal events and execution records expose `timestamp_ns`
+(UTC Unix nanoseconds; zero means unknown) and `utc_offset_seconds` (seconds
+east of UTC on the originating host). These are presentation/diagnostic
+metadata, never model input. Replay preserves the original instant, including
+when child events are forwarded into the parent. Rendering uses the viewing
+host's local timezone at that instant unless UTC is selected. Missing original
+times are omitted, not replaced with the replay clock. Noninteractive output
+is unaffected. Softline's quoted-prompt metadata extension is still required
+for an independently dimmed timestamp beside `>`.
+The completed status message includes its DTG but shares Softline's status
+style until an independently styled status metadata slot is available.
+
+`<cai/dtg.h>` provides an allocation-free parser/formatter independent of
+runtime objects. `cai_dtg_parse` returns calendar fields with a two-digit year
+and does not infer centuries or convert incomplete dates into Unix time.
+`cai_dtg_format_time(when, reference, utc, out, capacity)` selects the short
+form only when both full calendar year and month match. Local formatting
+honors historical DST without changing the process timezone. `src/cai_dtg.c`
+contains only syntax/zone logic; `src/cai_dtg_time.c` is the POSIX time adapter.
+Lua exports `dtg_parse`, `dtg_format`, `dtg_format_time`, and `dtg_zone`;
+invalid values return `nil, error`. For example,
+`cai.dtg_format(assert(cai.dtg_parse("091630tjul11")))` returns
+`091630TJUL11`. `J` has an unknown offset when parsed; stored event metadata
+retains the exact offset. Whole-hour letters and ASCII star codes follow the
+[USNO/HMNAO chart](https://aa.usno.navy.mil/downloads/TimeZoneMap_2021.pdf);
+Unicode chart designators and unmapped offsets use `J`.
+
 Prompt and Markdown themes use the application setting `ui.theme` (default
 `default`). For example, pass `{"ui", "theme", "synthwave"}` in the C
 `config.settings` array, or `settings = {ui = {theme = "synthwave"}}` in Lua.

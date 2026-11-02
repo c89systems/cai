@@ -1,6 +1,16 @@
 
 if(CAI_BUILD_TESTS)
   enable_testing()
+  # Compile the extractable DTG units without libcai or its dependencies.
+  add_executable(cai_dtg_test tests/dtg_test.c src/cai_dtg.c src/cai_dtg_time.c)
+  target_include_directories(cai_dtg_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  cai_configure_c_target(cai_dtg_test)
+  target_compile_options(cai_dtg_test PRIVATE -UNDEBUG -pedantic-errors)
+  if(CAI_TARGET_ID MATCHES "-linux-musl$")
+    target_link_options(cai_dtg_test PRIVATE -static)
+  endif()
+  add_test(NAME cai_dtg COMMAND cai_dtg_test)
+  set_tests_properties(cai_dtg PROPERTIES LABELS "unit;local;offline" TIMEOUT 3)
   add_executable(cai_workspace_approval_test tests/workspace_approval_test.c)
   cai_link_internal_consumer(cai_workspace_approval_test)
   cai_configure_c_target(cai_workspace_approval_test)

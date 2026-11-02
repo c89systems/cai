@@ -8,7 +8,7 @@ trap 'printf "packaging regression failed at line %s: %s\n" "$LINENO" "$BASH_COM
 fixture="$scratch/source"
 mkdir -p "$fixture/scripts" "$fixture/cmake" "$fixture/lua" "$fixture/include" "$fixture/docs" "$fixture/examples" "$fixture/cli"
 cp "$repo/"{LICENSE,README.md,cai.rockspec.in} "$fixture/"
-cp "$repo/docs/"{model-metadata,embedding,agent-messaging,kanban}.md "$fixture/docs/"
+cp "$repo/docs/"{model-metadata,embedding,agent-messaging,kanban,journal,liblockdc-0.25.0-upgrade,liblockdc-0.26.0-upgrade,patch-tool,plugins}.md "$fixture/docs/"
 cp "$repo/cli/main.c" "$fixture/cli/"
 cp "$repo/examples/app.lua" "$fixture/examples/"
 cp "$repo/scripts/"{package_lua,stage_lua_rock_sources,stage_release_sources,render_release_rockspec,build_lua_rock}.sh "$fixture/scripts/"
@@ -20,7 +20,7 @@ exec "$(dirname "$0")/stage_release_sources_real.sh" "$@"
 SH
 chmod +x "$fixture/scripts/stage_release_sources.sh"
 cp "$repo/cmake/cai-export-policy.cmake" "$fixture/cmake/"
-cp "$repo/lua/"{CMakeLists.txt,cai_lua.c,cai_lua_config.inc,cai_lua_skills.inc,cai_lua.exports,app_lua.c,todo_lua.c,todo_lua.h,cai_app.exports} "$fixture/lua/"
+cp "$repo/lua/"{CMakeLists.txt,cai_lua.c,cai_lua_config.inc,cai_lua_dtg.inc,cai_lua_skills.inc,cai_lua_plugins.inc,cai_lua.exports,app_lua.c,todo_lua.c,todo_lua.h,cai_app.exports} "$fixture/lua/"
 cp -r "$repo/include/cai" "$fixture/include/"
 (cd "$fixture" && find . -type f -print | sed 's|^./||' | sort >RELEASE_MANIFEST)
 version=1.2.3
@@ -41,7 +41,7 @@ luarocks lint "$rockspec"
 mkdir "$scratch/unpack"
 (cd "$scratch/unpack" && luarocks unpack "$rock")
 cmp "$fixture/lua/cai_lua.c" "$scratch/unpack/cai-$version-1/cai-$version/lua/cai_lua.c"
-for path in docs/agent-messaging.md docs/kanban.md lua/todo_lua.c lua/todo_lua.h; do
+for path in docs/agent-messaging.md docs/kanban.md lua/todo_lua.c lua/todo_lua.h lua/cai_lua_dtg.inc include/cai/dtg.h; do
   cmp "$fixture/$path" "$scratch/unpack/cai-$version-1/cai-$version/$path"
 done
 [[ ! -e "$fixture/build/lua-package" ]]

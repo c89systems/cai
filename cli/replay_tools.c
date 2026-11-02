@@ -400,6 +400,8 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
     cai_agent_runtime_event event;
     memset(&event, 0, sizeof(event));
     event.type = CAI_AGENT_EVENT_REASONING_TOOL_RESULT;
+    event.timestamp_ns = record->timestamp_ns;
+    event.utc_offset_seconds = record->utc_offset_seconds;
     event.runtime_session_id = record->session_id;
     event.tool_call_id = record->call_id;
     event.data = record->data;
@@ -415,6 +417,8 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
   c->error = error;
   c->rc = CAI_OK;
   event_init(c);
+  c->event.timestamp_ns = record->timestamp_ns;
+  c->event.utc_offset_seconds = record->utc_offset_seconds;
   if (same(c->name, "set_reasoning") && !c->failed)
     return CAI_OK;
   /* The runner's failure message is a diagnostic. Only its captured output
@@ -437,6 +441,8 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
   if (command) {
     event_init(origin);
     c->event = origin->event;
+    c->event.timestamp_ns = record->timestamp_ns;
+    c->event.utc_offset_seconds = record->utc_offset_seconds;
     origin->display = display;
     if ((same(record->kind, "tool.output") ||
          same(record->kind, "tool.partial_output")) &&

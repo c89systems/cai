@@ -23,7 +23,7 @@ static int ordered_emit(void *context, const cai_agent_session_event *event,
 }
 static void test_order(cai_error *error) {
   cai_cli_replay_order *order = NULL;
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   ordered_output out;
   memset(&out, 0, sizeof(out));
   assert(cai_cli_replay_order_open(1, &order, error) == CAI_OK);
@@ -85,7 +85,7 @@ static void test_order(cai_error *error) {
 
 static void feed(cai_cli_replay *r, unsigned long long sequence,
                  const char *type, const char *data, cai_error *error) {
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   event.sequence = sequence;
   event.type = type;
   event.data = data;

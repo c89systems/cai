@@ -608,9 +608,26 @@ do not enter the feed. Any remaining body streams through libmdf as Markdown
 blockquotes, without a separate reasoning label or injected `?` row prefixes.
 Quote markers and body styling come from the active libmdf theme. Before a
 summary arrives, the bar says
-`Working` with elapsed time. At completion it shows `Worked for 13m 32s -
-252243`, where the final six digits are the local day, hour, and minute.
+`Working` with elapsed time. At completion it shows `252243 Worked for 13m 32s`,
+with the settled turn's date-time group (DTG) first.
 The live timer advances while the turn is active and stops when it settles.
+
+Interactive activity headings, command receipts, diagnostics and Markdown
+blocks use dim gray DTGs. Same month and year: `DDHHMM` in local time, or
+`DDHHMMZ` with `--utc`. Older entries use `DDHHMMZONEMMMYY`, for example
+`021230ANOV26`. Months are JAN through DEC; years are always two digits.
+Local zones follow the [USNO/HMNAO chart](https://aa.usno.navy.mil/downloads/TimeZoneMap_2021.pdf),
+using ASCII letters and star codes (`E*` for +05:30, `M*` for +13:00).
+Offsets requiring Unicode chart symbols, or having no listed code, use `J`
+(local time); exact UTC offsets remain in event metadata. Time is never rounded.
+`CAI_UTC=true`, `[ui] utc=true`, or the application `ui.utc` setting selects
+Zulu time; `--no-utc` restores local display. Batch stdout stays unchanged.
+Replay uses original event times; entries without recorded times stay unstamped.
+User-prompt stamps beside `>` await a Softline quoted-prompt metadata API;
+prompt quoting continues through Softline without embedding presentation text
+in drafts, prompt history, or model context.
+The sticky status DTG currently shares Softline's status-message style;
+independent metadata styling there needs the same upstream extension.
 
 Theme selection belongs to `libcai_app`, including its C and Lua embedders.
 `cai --list-themes` lists softline themes, their default libmdf pairings, and

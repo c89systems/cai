@@ -561,14 +561,14 @@ int main(int argc, char **argv) {
   failures +=
       check(cai_cli_turn_status_message(turn_message, sizeof(turn_message),
                                         "ignored", &metrics) == 0 &&
-                strcmp(turn_message, "Worked for 13m 32s - 252243") == 0,
+                strcmp(turn_message, "Worked for 13m 32s") == 0,
             "completed local DTG");
   failures += check(setenv("TZ", "UTC-2", 1) == 0, "shift test timezone");
   tzset();
   failures +=
       check(cai_cli_turn_status_message(turn_message, sizeof(turn_message),
                                         "ignored", &metrics) == 0 &&
-                strcmp(turn_message, "Worked for 13m 32s - 260043") == 0,
+                strcmp(turn_message, "Worked for 13m 32s") == 0,
             "completed DTG uses local timezone and date rollover");
   return failures > 0 ? 1 : 0;
 }

@@ -24,6 +24,8 @@ static const lonejson_field execution_fields[] = {
                                           "call_id"),
     LONEJSON_FIELD_STRING_ALLOC_OMIT_NULL(cai_execution_record, field, "field"),
     LONEJSON_FIELD_U64_REQ(cai_execution_record, timestamp_ns, "timestamp_ns"),
+    LONEJSON_FIELD_I64(cai_execution_record, utc_offset_seconds,
+                       "utc_offset_seconds"),
     LONEJSON_FIELD_U64(cai_execution_record, source_sequence,
                        "source_sequence"),
     LONEJSON_FIELD_U64_REQ(cai_execution_record, offset, "offset"),

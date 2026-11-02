@@ -117,7 +117,7 @@ release; expect 'goal=paused'; expect 'Worked for'
 contains "$term/feed" '$ /goal pause'
 absent "$term/feed" '$ /goal clear'
 end_line=$(grep -nF SteerGoalEnd "$term/feed" | cut -d: -f1)
-pause_line=$(grep -nF '$ /goal pause' "$term/feed" | cut -d: -f1)
+pause_line=$(without_dtg "$term/feed" | grep -nF '$ /goal pause' | cut -d: -f1)
 [[ "$end_line" -lt "$pause_line" ]]
 [[ $(requests) == $((before+2)) ]]
 tail -1 "$root/peer/requests.jsonl" >"$root/request"

@@ -246,7 +246,7 @@ static void todo_transactions(cai_cli_pouch *pouch, cai_error *error) {
 
 static void oversized_events(cai_cli_pouch *pouch, const char *scope,
                              const char *id, cai_error *error) {
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   lonejson_config config = lonejson_default_config();
   char *data = malloc(config.max_dynamic_string_bytes + 2U);
   assert(data != NULL);
@@ -359,6 +359,8 @@ static int collection_range_event(void *context,
   assert(event->sequence > *last);
   assert(event->sequence == 30U || event->sequence == 90U);
   assert(strcmp(event->data, "collection event") == 0);
+  assert(event->timestamp_ns == 1793622600123456789ULL);
+  assert(event->utc_offset_seconds == -12600);
   *last = event->sequence;
   return CAI_OK;
 }
@@ -379,7 +381,7 @@ static int unavailable_collections(lc_client *client,
   return LC_OK;
 }
 static void collection_regressions(cai_cli_pouch *pouch, cai_error *error) {
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   cai_cli_session before, after;
   cai_source_callbacks callbacks;
   cai_source *source = NULL;
@@ -402,6 +404,8 @@ static void collection_regressions(cai_cli_pouch *pouch, cai_error *error) {
   numbers[2] = 90U;
   event.type = "assistant_text_delta";
   event.data = "collection event";
+  event.timestamp_ns = 1793622600123456789ULL;
+  event.utc_offset_seconds = -12600;
   for (i = 0U; i < 3U; i++) {
     event.sequence = numbers[i];
     assert(append_event(pouch, "/work/collections", "collection-test", &event,
@@ -527,7 +531,7 @@ int main(int argc, char **argv) {
   lc_lease *lease = NULL;
   latest_index index;
   cai_cli_session session;
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   cai_source *source = NULL;
   unsigned long long sequence;
   char id[CAI_AGENT_SESSION_ID_MAX];

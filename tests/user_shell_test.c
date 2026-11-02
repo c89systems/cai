@@ -150,7 +150,7 @@ static int replay(void *context, const char *scope, const char *id,
                   void *callback_context, cai_error *error) {
   fixture *f = context;
   size_t i, count = f->count;
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   int rc;
   (void)scope;
   (void)id;

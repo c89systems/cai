@@ -70,10 +70,10 @@ release; expect 'REVIEW TOOL DONE'; expect 'Worked for'
 grep -Eq $'\033\\[(0;)?38;5;141mCompleted' "$term/raw"
 palette restored
 cmp "$root/parent.palette" "$root/restored.palette"
-start=$(grep -nFm1 '* Starting run_review' "$term/text" | cut -d: -f1)
-handoff=$(grep -nFm1 'Review handoff' "$term/text" | cut -d: -f1)
-end=$(grep -nFm1 '* Completed run_review' "$term/text" | cut -d: -f1)
-finished=$(grep -nFm1 '  Review finished' "$term/text" | cut -d: -f1)
+start=$(without_dtg "$term/text" | grep -nF '* Starting run_review' | sed -n '1p' | cut -d: -f1)
+handoff=$(without_dtg "$term/text" | grep -nF 'Review handoff' | sed -n '1p' | cut -d: -f1)
+end=$(without_dtg "$term/text" | grep -nF '* Completed run_review' | sed -n '1p' | cut -d: -f1)
+finished=$(without_dtg "$term/text" | grep -nF '  Review finished' | sed -n '1p' | cut -d: -f1)
 [[ "$start" -lt "$handoff" && "$handoff" -lt "$finished" && "$finished" -lt "$end" ]]
 # Failed preparation still has a start receipt, and never changes the palette.
 plan "$(jq -nc --argjson chat "$chat" '{chat:$chat,plan:[

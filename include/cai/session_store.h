@@ -25,6 +25,11 @@ typedef struct cai_agent_session_event {
   const char *type;
   /** Optional UTF-8 payload; borrowed for the callback duration. */
   const char *data;
+  /** Original wall-clock event time, Unix nanoseconds; zero means unknown.
+   * Presentation metadata only, never model context. */
+  unsigned long long timestamp_ns;
+  /** Recording host's exact local UTC offset, seconds east of UTC. */
+  long long utc_offset_seconds;
 } cai_agent_session_event;
 
 /**

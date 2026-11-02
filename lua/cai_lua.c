@@ -4,6 +4,7 @@
 #include <cai/cai.h>
 #include <cai/config.h>
 #include <cai/display.h>
+#include <cai/dtg.h>
 #include <cai/execution.h>
 #include <cai/mcp.h>
 #include <cai/plugins.h>
@@ -3491,6 +3492,10 @@ static int cai_lua_agent_runtime_event(void *context,
   lua_setfield(L, -2, "state");
   lua_pushinteger(L, (lua_Integer)event->sequence);
   lua_setfield(L, -2, "sequence");
+  lua_pushinteger(L, (lua_Integer)event->timestamp_ns);
+  lua_setfield(L, -2, "timestamp_ns");
+  lua_pushinteger(L, (lua_Integer)event->utc_offset_seconds);
+  lua_setfield(L, -2, "utc_offset_seconds");
   if (event->runtime_session_id != NULL) {
     lua_pushstring(L, event->runtime_session_id);
     lua_setfield(L, -2, "runtime_session_id");
@@ -12116,6 +12121,8 @@ static void cai_lua_display_config(lua_State *L, int index,
   config->mode = cai_lua_display_mode(
       L, cai_lua_opt_string_field(L, index, "mode", "compact"));
   config->color = cai_lua_opt_bool_field(L, index, "color", 0);
+  config->timestamps = cai_lua_opt_bool_field(L, index, "timestamps", 0);
+  config->utc = cai_lua_opt_bool_field(L, index, "utc", 0);
   config->preview_lines = cai_lua_opt_size_field(L, index, "preview_lines", 0U);
 }
 static int cai_lua_display_close(lua_State *L) {
@@ -12728,6 +12735,7 @@ static const luaL_Reg cai_lua_conversation_params_methods[] = {
     {NULL, NULL}};
 
 #include "cai_lua_config.inc"
+#include "cai_lua_dtg.inc"
 #include "cai_lua_skills.inc"
 
 static void cai_lua_metatable(lua_State *L, const char *name,
@@ -12780,6 +12788,8 @@ static int cai_lua_execution_record(lua_State *L) {
   lua_setfield(L, -2, "data");
   lua_pushinteger(L, (lua_Integer)record.timestamp_ns);
   lua_setfield(L, -2, "timestamp_ns");
+  lua_pushinteger(L, (lua_Integer)record.utc_offset_seconds);
+  lua_setfield(L, -2, "utc_offset_seconds");
   lua_pushinteger(L, (lua_Integer)record.source_sequence);
   lua_setfield(L, -2, "source_sequence");
   lua_pushinteger(L, (lua_Integer)record.offset);
@@ -12860,6 +12870,14 @@ int luaopen_cai(lua_State *L) {
   lua_setfield(L, -2, "open");
   lua_pushcfunction(L, cai_lua_execution_record);
   lua_setfield(L, -2, "execution_record");
+  lua_pushcfunction(L, cai_lua_dtg_parse);
+  lua_setfield(L, -2, "dtg_parse");
+  lua_pushcfunction(L, cai_lua_dtg_format);
+  lua_setfield(L, -2, "dtg_format");
+  lua_pushcfunction(L, cai_lua_dtg_format_time);
+  lua_setfield(L, -2, "dtg_format_time");
+  lua_pushcfunction(L, cai_lua_dtg_zone);
+  lua_setfield(L, -2, "dtg_zone");
   lua_pushcfunction(L, cai_lua_config_new);
   lua_setfield(L, -2, "config");
   lua_pushcfunction(L, cai_lua_todo_new);

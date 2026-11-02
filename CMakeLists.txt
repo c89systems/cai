@@ -708,6 +708,8 @@ set(CAI_SOURCES
   src/cai_plugins.c
   src/cai_plugin_process.c
   src/cai_execution.c
+  src/cai_dtg.c
+  src/cai_dtg_time.c
   src/cai_terminal_text.c
   src/cai_session_store.c
   src/cai_skills.c
@@ -994,6 +996,13 @@ if(CAI_BUILD_CLI)
     endif()
   endif()
   include(CaiCliTests)
+endif()
+
+if(CAI_BUILD_TESTS AND CAI_BUILD_LUA)
+  add_test(NAME cai_lua_dtg COMMAND cai_lua_runner
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua/dtg_test.lua")
+  set_tests_properties(cai_lua_dtg PROPERTIES LABELS "unit;local;offline"
+    TIMEOUT 3 ENVIRONMENT "${CAI_LUA_TEST_ENV}")
 endif()
 
 if(CAI_BUILD_TESTS)

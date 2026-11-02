@@ -180,7 +180,8 @@ static cai_agent_session_store native_agent_session_store = {
     native_agent_session_append_event,
     native_agent_session_load_events_after,
     NULL,
-    &native_session_store};
+    &native_session_store,
+    NULL};
 
 static size_t native_blob_store_read(void *context, void *buffer, size_t count,
                                      cai_error *error) {

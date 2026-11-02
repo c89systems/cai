@@ -26,8 +26,13 @@ export HOME="$root" XDG_CONFIG_HOME="$root/config" XDG_STATE_HOME="$root/state" 
 export CAI_API_KEY=fixture NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost TERM=xterm-256color
 export SHELL=/bin/sh
 fail() { printf '%s\n' "$*" >&2; exit 1; }
-contains() { grep -Fq -- "$2" "$1" || fail "Missing '$2' in $1"; }
-absent() { if grep -Fq -- "$2" "$1"; then fail "Unexpected '$2' in $1"; fi; }
+# Assertions unrelated to timestamp layout compare the transcript body. Raw
+# text/feed remain intact; cli_timestamps_test verifies metadata independently.
+without_dtg() {
+  sed -E 's/^([*$!>] )[0-9]{6}(Z|[A-Z](\*)?[A-Z]{3}[0-9]{2})? /\1/; s/^  [0-9]{6}(Z|[A-Z](\*)?[A-Z]{3}[0-9]{2})?$//' "$@"
+}
+contains() { without_dtg "$1" | grep -F -- "$2" >/dev/null || fail "Missing '$2' in $1"; }
+absent() { if without_dtg "$1" | grep -F -- "$2" >/dev/null; then fail "Unexpected '$2' in $1"; fi; }
 json() { jq -e "$2" "$1" >/dev/null || fail "JSON assertion failed: $2 ($1)"; }
 wait_for() {
   local wait_deadline=$((SECONDS+10)) progress_byte
@@ -43,8 +48,8 @@ wait_for() {
 }
 has() {
   [[ -f "$1" ]] || return 1
-  grep -Fq -- "$2" "$1" ||
-    { tr '\n\r\t' '   ' <"$1" | sed 's/[[:space:]][[:space:]]*/ /g' | grep -F -- "$2" >/dev/null; }
+  without_dtg "$1" | grep -F -- "$2" >/dev/null ||
+    { without_dtg "$1" | tr '\n\r\t' '   ' | sed 's/[[:space:]][[:space:]]*/ /g' | grep -F -- "$2" >/dev/null; }
 }
 peer_start() {
   mkdir -p "$root/peer"
@@ -92,9 +97,9 @@ terminal_launch() {
 terminal_start() { terminal_launch "$@"; wait_for has "$term/text" 'Send /help for usage.'; }
 send() { send_offset=$(wc -c <"$term/text"); send_feed_offset=$(wc -c <"$term/feed"); printf '%b' "$1" >&7; }
 has_since() {
-  tail -c +$(($1+1)) "$term/text" | tr '\n\r\t' '   ' |
+  tail -c +$(($1+1)) "$term/text" | without_dtg | tr '\n\r\t' '   ' |
     sed 's/[[:space:]][[:space:]]*/ /g' | grep -F -- "$2" >/dev/null ||
-    tail -c +$((${3:-0}+1)) "$term/feed" | tr '\n\r\t' '   ' |
+    tail -c +$((${3:-0}+1)) "$term/feed" | without_dtg | tr '\n\r\t' '   ' |
     sed 's/[[:space:]][[:space:]]*/ /g' | grep -F -- "$2" >/dev/null
 }
 expect() { wait_for has_since "${send_offset:-0}" "$1" "${send_feed_offset:-0}"; }
@@ -117,7 +122,7 @@ turn_finished() {
     sed 's/[[:space:]][[:space:]]*/ /g' | grep -F -- "$2" >/dev/null || return 1
   # Inspect the current sticky row, not historical redraws interleaved with
   # feed text. Earlier goal turns can also have displayed "Worked for".
-  grep -Eq '^! Worked for' "$term/message"
+  without_dtg "$term/message" | grep -E '^! Worked for' >/dev/null
 }
 expect_turn() { wait_for turn_finished "$1" "$2" "${send_feed_offset:-0}"; }
 prompt() { local offset=$(wc -c <"$term/text"); send "$1\r"; expect_turn "$offset" "$2"; }

@@ -154,7 +154,7 @@ static int events(void *context, const char *scope, const char *id,
       "<user_shell_command>shell-output</user_shell_command>",
       "14",
       NULL};
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   size_t i;
   int rc;
   fixture *f = context;

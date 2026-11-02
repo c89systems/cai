@@ -38,7 +38,10 @@ typedef struct cai_execution_record {
   const char *base_url;
   /** Most recently committed provider response, when available. */
   const char *last_response_id;
+  /** Original observation time, UTC Unix nanoseconds; zero means unknown. */
   unsigned long long timestamp_ns;
+  /** Source host's offset in seconds east of UTC; not rounded to a zone. */
+  long long utc_offset_seconds;
   /** Journal sequence in session_id; zero when no source store is configured.
    * A copy forwarded to a parent has its own outer journal sequence. */
   unsigned long long source_sequence;

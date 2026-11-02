@@ -206,6 +206,11 @@ cai_conversation_items_params_add_text_spooled
 cai_conversation_items_params_destroy
 cai_conversation_items_params_new
 cai_conversation_object
+cai_dtg_format
+cai_dtg_format_time
+cai_dtg_parse
+cai_dtg_time_parts
+cai_dtg_zone
 cai_error_cleanup
 cai_error_init
 cai_execution_record_cleanup

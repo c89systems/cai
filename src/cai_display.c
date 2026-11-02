@@ -1,6 +1,7 @@
 #define _XOPEN_SOURCE 700
 #include "cai_internal.h"
 #include <cai/display.h>
+#include <cai/dtg.h>
 #include <time.h>
 #include <wchar.h>
 
@@ -28,6 +29,7 @@ typedef struct cai_display_call {
   int command_active;
   int running_shown;
   unsigned long long command_started_ms;
+  unsigned long long timestamp_ns;
   int replay;
   size_t lines;
   int partial_line;
@@ -74,6 +76,7 @@ struct cai_tool_display {
   unsigned int breaks;
   int ansi;
   char activity_foreground[32], label_foreground[32];
+  unsigned long long timestamp_ns;
 };
 
 typedef struct display_mcp_result {
@@ -274,6 +277,23 @@ static int display_marker_suffix(cai_tool_display *d, int result,
   }
   if (rc == CAI_OK)
     rc = display_text(d, star, error);
+  if (rc == CAI_OK && d->config.timestamps && d->timestamp_ns != 0U) {
+    char stamp[CAI_DTG_CAPACITY];
+    unsigned long long seconds = d->timestamp_ns / 1000000000ULL;
+    time_t when = (time_t)seconds;
+    if ((unsigned long long)when == seconds &&
+        cai_dtg_format_time(when, time(NULL), d->config.utc, stamp,
+                            sizeof(stamp)) == CAI_DTG_OK) {
+      if (d->config.color)
+        rc = display_text(d, "\033[0;2;90m", error);
+      if (rc == CAI_OK)
+        rc = display_text(d, stamp, error);
+      if (rc == CAI_OK && d->config.color)
+        rc = display_text(d, "\033[0m", error);
+      if (rc == CAI_OK)
+        rc = display_text(d, " ", error);
+    }
+  }
   if (rc == CAI_OK && d->config.color)
     rc = display_heading_style(d, 0, error);
   if (rc == CAI_OK)
@@ -333,6 +353,7 @@ static int display_call_new(cai_tool_display *d,
   if (c == NULL)
     return cai_set_error(error, CAI_ERR_NOMEM, "cannot allocate tool display");
   memset(c, 0, sizeof(*c));
+  c->timestamp_ns = e->timestamp_ns;
   c->id = cai_strdup(NULL, e->tool_call_id != NULL ? e->tool_call_id : "");
   c->session = cai_strdup(
       NULL, e->runtime_session_id != NULL ? e->runtime_session_id : "");
@@ -1269,10 +1290,13 @@ static int display_now(unsigned long long *milliseconds, cai_error *error) {
 }
 static int display_running(cai_tool_display *d, cai_display_call *c,
                            cai_error *error) {
+  unsigned long long saved = d->timestamp_ns;
   int rc;
   if (!c->command_active || c->running_shown || c->replay)
     return CAI_OK;
+  d->timestamp_ns = c->timestamp_ns;
   rc = display_marker(d, -1, "Running", c->command, strlen(c->command), error);
+  d->timestamp_ns = saved;
   if (rc == CAI_OK)
     c->running_shown = 1;
   return rc;
@@ -1318,6 +1342,7 @@ int cai_tool_display_event(cai_tool_display *d,
   int rc, ok;
   if (d == NULL || e == NULL || (e->data == NULL && e->data_length != 0U))
     return cai_set_error(error, CAI_ERR_INVALID, "invalid tool display event");
+  d->timestamp_ns = e->timestamp_ns;
   if (e->type == CAI_AGENT_EVENT_REASONING_TOOL_RESULT)
     return display_marker(d, 1, "Reasoning", e->data != NULL ? e->data : "",
                           e->data_length, error);
@@ -1509,6 +1534,7 @@ int cai_tool_display_summary(cai_tool_display *d,
     return cai_set_error(error, CAI_ERR_INVALID,
                          "tool summary requires a completion and plain labels");
   call = display_find(d, e);
+  d->timestamp_ns = e->timestamp_ns;
   rc = display_marker(d, success != 0, verb, label, strlen(label), error);
   if (call != NULL)
     display_remove(d, call);
@@ -1528,6 +1554,7 @@ int cai_tool_display_replay_begin(cai_tool_display *d,
     return cai_set_error(error, CAI_ERR_INVALID,
                          "replay requires a completion and plain labels");
   call = display_find(d, e);
+  d->timestamp_ns = e->timestamp_ns;
   if (call != NULL)
     display_remove(d, call);
   rc = display_call_new(d, e, &call, error);

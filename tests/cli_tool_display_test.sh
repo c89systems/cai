@@ -186,13 +186,14 @@ contains "$root/later" OUT05; absent "$root/later" OUT06
 grep -Eq 'Ran sh command.sh \([0-9hms]+\)' "$root/later"; contains "$root/later" exit=3
 contains "$term/raw" $'\033[91m*\033[0m'
 # The committed feed has real block boundaries regardless of terminal redraws.
-# Strip only presentation controls for assertions; never alter command bytes.
-sed -E $'s/\033\[[0-?]*[ -/]*[@-~]//g' "$term/feed" >"$root/feed"
+# Ignore presentation controls/DTGs for block-boundary assertions; the raw
+# feed and the separate timestamp regression retain and check that metadata.
+sed -E $'s/\033\[[0-?]*[ -/]*[@-~]//g' "$term/feed" | without_dtg >"$root/feed"
 awk '/^\* (Running|Ran|Edited|Added|Deleted)/ {if (NR>1 && previous!="") exit 1; seen++} {previous=$0} END {if (seen<4) exit 1}' "$root/feed"
 # A preamble in a tool response exercises the assistant-to-tool transition.
 plan '{"plan":[{"tool":"exec_command","arguments":{"cmd":"printf PARTIAL","yield_time_ms":1000},"text":"Assistant before a command"},{"tool":"exec_command","arguments":{"cmd":"true","yield_time_ms":1000}},"SPACING DONE"]}'
 prompt 'check spacing' 'SPACING DONE'
-sed -E $'s/\033\[[0-?]*[ -/]*[@-~]//g' "$term/feed" >"$root/feed"
+sed -E $'s/\033\[[0-?]*[ -/]*[@-~]//g' "$term/feed" | without_dtg >"$root/feed"
 awk '
   /^\* (Running|Ran|Edited|Added|Deleted)/ {
     if (NR>1 && previous!="") exit 1

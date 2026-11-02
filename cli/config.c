@@ -29,6 +29,9 @@ typedef struct cli_field {
 #define B(s, k, m, d)                                                          \
   {s, k, offsetof(cai_cli_options, m), CAI_CONFIG_BOOL, 0U, NULL, d}
 static const cli_field fields[] = {
+    B("ui", "utc", utc,
+      "Show DTG timestamps in UTC (Zulu); false uses local time. Default "
+      "false."),
     B("plugins", "enabled", plugins,
       "Enable explicit hot loading of tool.json packages; no filesystem "
       "polling."),
@@ -715,6 +718,7 @@ static int tool_environment(cai_config *cfg, const char *prefix,
         {"WORKSPACE_TOOLS_DIR", "plugins", "workspace_directory"},
         {"MODEL", "agent", "model"},
         {"THEME", "ui", "theme"},
+        {"UTC", "ui", "utc"},
         {"THEME_OFFSET", "ui", "theme_offset"},
         {"SUBAGENT_THEME_OFFSET", "subagent", "theme_offset"},
         {"REVIEW_THEME_OFFSET", "review", "theme_offset"},

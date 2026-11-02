@@ -2,6 +2,7 @@
 #include "../src/cai_utf8.h"
 #include <assert.h>
 #include <cai/display.h>
+#include <cai/dtg.h>
 #include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1219,6 +1220,51 @@ static void command_delay(capture *c) {
   (void)c;
 #endif
 }
+static void timestamps(capture *c) {
+  cai_tool_display_config config;
+  cai_tool_display *display = NULL;
+  cai_sink_callbacks callbacks;
+  cai_sink *sink = NULL;
+  cai_agent_runtime_event e;
+  cai_error error;
+  char stamp[CAI_DTG_CAPACITY], expected[128];
+  time_t when = (time_t)1793622600;
+  int color;
+  memset(&callbacks, 0, sizeof(callbacks));
+  callbacks.context = c;
+  callbacks.write = write_capture;
+  cai_error_init(&error);
+  assert(cai_sink_from_callbacks(&callbacks, &sink, &error) == CAI_OK);
+  for (color = 0; color < 2; color++) {
+    memset(&config, 0, sizeof(config));
+    memset(&e, 0, sizeof(e));
+    config.sink = sink;
+    config.color = color;
+    config.timestamps = config.utc = 1;
+    assert(cai_tool_display_new(&config, &display, &error) == CAI_OK);
+    c->length = 0U;
+    e.type = CAI_AGENT_EVENT_REASONING_TOOL_RESULT;
+    e.timestamp_ns = 1793622600123456789ULL;
+    e.data = "requested high";
+    e.data_length = strlen(e.data);
+    assert(cai_tool_display_event(display, &e, &error) == CAI_OK);
+    assert(cai_dtg_format_time(when, time(NULL), 1, stamp, sizeof(stamp)) ==
+           CAI_DTG_OK);
+    snprintf(expected, sizeof(expected), "%s%s%s", color ? "\033[0;2;90m" : "",
+             stamp, color ? "\033[0m" : "");
+    assert(strstr(c->bytes, expected) != NULL);
+    assert(strstr(c->bytes, "requested high") != NULL);
+    if (!color)
+      assert(strchr(c->bytes, 27) == NULL);
+    c->length = 0U;
+    e.timestamp_ns = 0U; /* Legacy entries must never use the replay clock. */
+    assert(cai_tool_display_event(display, &e, &error) == CAI_OK);
+    assert(strstr(c->bytes, stamp) == NULL);
+    cai_tool_display_close(display);
+  }
+  cai_sink_close(sink);
+  cai_error_cleanup(&error);
+}
 int main(void) {
   capture c;
   memset(&c, 0, sizeof(c));
@@ -1233,6 +1279,7 @@ int main(void) {
   command_durations(&c);
   command_delay(&c);
   command_controls();
+  timestamps(&c);
   free(c.bytes);
   puts("patch rendering, live previews, status, mode capture and failure "
        "checks passed");

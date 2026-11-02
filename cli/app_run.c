@@ -37,6 +37,7 @@
 #include <cai/agent_runtime.h>
 #include <cai/auth.h>
 #include <cai/display.h>
+#include <cai/dtg.h>
 #include <cai/execution.h>
 #include <cai/quota.h>
 #include <cai/session_store.h>
@@ -192,6 +193,8 @@ typedef struct cli_state {
   int notice_open;
   int notice_first_row;
   int command_input;
+  unsigned long long presentation_timestamp_ns;
+  int presentation_event;
   char command_foreground[MDF_THEME_FOREGROUND_SIZE];
   cai_cli_shell shell;
   sl_watch_id_t shell_watches[3];
@@ -398,6 +401,49 @@ static int cli_tool_begin_block(void *context, cai_error *error) {
   }
   return CAI_OK;
 }
+/* Event scope prevents old records without timestamps from acquiring the
+ * replay clock. Outside an observation, commands/notices use their display
+ * time. No timestamp text enters the model, editable draft, or prompt history.
+ */
+static int cli_timestamp(cli_state *state, char *out, size_t capacity) {
+  time_t when;
+  time_t now = time(NULL);
+  unsigned long long seconds;
+  if (!state->interactive || state->batch || now == (time_t)-1)
+    return 0;
+  when = now;
+  if (state->presentation_event) {
+    if (state->presentation_timestamp_ns == 0U)
+      return 0;
+    seconds = state->presentation_timestamp_ns / 1000000000ULL;
+    when = (time_t)seconds;
+    if ((unsigned long long)when != seconds)
+      return 0;
+  }
+  return cai_dtg_format_time(when, now, state->options.utc, out, capacity) ==
+         CAI_DTG_OK;
+}
+static int cli_timestamp_write(cli_state *state, const char *stamp) {
+  int color = !state->theme.ascii && getenv("NO_COLOR") == NULL;
+  if (color && cli_sink(state, "\033[0;2;90m", 9U) != 0)
+    return -1;
+  if (cli_sink(state, stamp, strlen(stamp)) != 0)
+    return -1;
+  return color ? cli_sink(state, "\033[0m", 4U) : 0;
+}
+static int cli_timestamp_header(cli_state *state) {
+  char stamp[CAI_DTG_CAPACITY];
+  if (!cli_timestamp(state, stamp, sizeof(stamp)))
+    return 0;
+  while (state->feed_breaks < 2)
+    if (cli_sink(state, "\n", 1U) != 0)
+      return -1;
+  if (cli_sink(state, "  ", 2U) != 0 ||
+      cli_timestamp_write(state, stamp) != 0 || cli_sink(state, "\n", 1U) != 0)
+    return -1;
+  state->block_spacing_pending = 0;
+  return 0;
+}
 /* Prefix visible renderer rows without retaining body text or inserting a
  * marker inside an ANSI sequence split across writes. Blank rows stay blank. */
 static int cli_notice_sink(void *context, const char *bytes, size_t count) {
@@ -424,6 +470,20 @@ static int cli_notice_sink(void *context, const char *bytes, size_t count) {
       if (cli_sink(state, bytes + start, i - start) != 0 ||
           cli_sink(state, prefix, strlen(prefix)) != 0)
         return -1;
+      if (state->notice_first_row) {
+        char stamp[CAI_DTG_CAPACITY];
+        if (cli_timestamp(state, stamp, sizeof(stamp))) {
+          if (cli_timestamp_write(state, stamp) != 0 ||
+              cli_sink(state, " ", 1U) != 0)
+            return -1;
+          if (state->command_input && state->interactive &&
+              !state->theme.ascii && getenv("NO_COLOR") == NULL &&
+              (cli_sink(state, "\033[0;1m", 6U) != 0 ||
+               cli_sink(state, state->command_foreground,
+                        strlen(state->command_foreground)) != 0))
+            return -1;
+        }
+      }
       start = i;
       state->row_line_start = 0;
       state->notice_first_row = 0;
@@ -504,6 +564,8 @@ static int cli_tool_display_create(cli_state *state, const cai_cli_theme *theme,
       state->interactive && !theme->ascii && getenv("NO_COLOR") == NULL;
   config.begin_block = cli_tool_begin_block;
   config.begin_block_context = state;
+  config.timestamps = state->interactive;
+  config.utc = state->options.utc;
   rc = cai_tool_display_new(&config, out, error);
   if (rc == CAI_OK)
     rc = cai_cli_theme_tools(theme, *out, error);
@@ -587,11 +649,15 @@ static int cli_reasoning_markdown(void *context, const char *data,
 
 static int cli_reasoning_body(void *context, const char *data, size_t length) {
   cli_state *state = context;
+  if (length == 0U)
+    return 0;
   if (cli_finish_response(state) != 0 || cli_geometry(state) != 0)
     return -1;
   if (!state->reasoning_open) {
     if (state->documents_rendered > 0 &&
         state->renderer->begin_document(state->renderer) != MDF_OK)
+      return -1;
+    if (cli_timestamp_header(state) != 0)
       return -1;
     state->reasoning_open = 1;
     cai_cli_reasoning_quote_init(&state->reasoning_quote);
@@ -601,6 +667,8 @@ static int cli_reasoning_body(void *context, const char *data, size_t length) {
 }
 
 static int cli_text(cli_state *state, const char *data, size_t length) {
+  if (length == 0U)
+    return 0;
   if (cli_finish_reasoning(state) != 0) {
     return -1;
   }
@@ -612,6 +680,8 @@ static int cli_text(cli_state *state, const char *data, size_t length) {
         state->renderer->begin_document(state->renderer) != MDF_OK) {
       return -1;
     }
+    if (cli_timestamp_header(state) != 0)
+      return -1;
     state->response_open = 1;
   }
   return state->renderer->feed(state->renderer, data, length) == MDF_OK ? 0
@@ -657,6 +727,8 @@ static int cli_introduction(cli_state *state, const cai_app_config *config) {
 static int cli_literal_prepare(cli_state *state) {
   mdf_options options;
   mdf_sink sink;
+  char stamp[CAI_DTG_CAPACITY];
+  int available = state->width - 2;
   if (state->notice_renderer == NULL) {
     mdf_options_init(&options);
     options.width = state->width;
@@ -671,9 +743,11 @@ static int cli_literal_prepare(cli_state *state) {
         MDF_OK)
       return -1;
   }
-  return state->notice_renderer->set_geometry(
-             state->notice_renderer, state->width >= 5 ? state->width - 2 : 3,
-             0, 0) == MDF_OK
+  if (cli_timestamp(state, stamp, sizeof(stamp)))
+    available -= (int)strlen(stamp) + 1;
+  return state->notice_renderer->set_geometry(state->notice_renderer,
+                                              available >= 3 ? available : 3, 0,
+                                              0) == MDF_OK
              ? 0
              : -1;
 }
@@ -1652,8 +1726,8 @@ static void cli_log_event(cli_state *state,
   }
 }
 
-static int cli_event(void *context, const cai_agent_runtime_event *event,
-                     cai_error *error) {
+static int cli_event_body(void *context, const cai_agent_runtime_event *event,
+                          cai_error *error) {
   cli_state *state;
   state = (cli_state *)context;
   if (state->application != NULL &&
@@ -1936,6 +2010,20 @@ static int cli_event(void *context, const cai_agent_runtime_event *event,
   return CAI_OK;
 }
 
+static int cli_event(void *context, const cai_agent_runtime_event *event,
+                     cai_error *error) {
+  cli_state *state = context;
+  unsigned long long saved = state->presentation_timestamp_ns;
+  int active = state->presentation_event;
+  int rc;
+  state->presentation_timestamp_ns = event->timestamp_ns;
+  state->presentation_event = 1;
+  rc = cli_event_body(context, event, error);
+  state->presentation_timestamp_ns = saved;
+  state->presentation_event = active;
+  return rc;
+}
+
 static int cli_review_event(void *context, const cai_agent_runtime_event *event,
                             cai_error *error) {
   cai_agent_runtime_event forwarded = *event;
@@ -2092,6 +2180,17 @@ static int cli_sync_status(cli_state *state, cai_error *error) {
     return CAI_ERR_TRANSPORT;
   if (state->show_welcome && !metrics.turn_active)
     strcpy(turn_message, state->welcome);
+  else if (!busy && turn_metrics->has_last_turn &&
+           turn_metrics->last_turn_finished_unix_seconds > 0) {
+    char stamp[CAI_DTG_CAPACITY], message[sizeof(turn_message)];
+    if (cai_dtg_format_time(
+            (time_t)turn_metrics->last_turn_finished_unix_seconds, time(NULL),
+            state->options.utc, stamp, sizeof(stamp)) == CAI_DTG_OK) {
+      snprintf(message, sizeof(message), "%s %.*s", stamp,
+               (int)(sizeof(message) - sizeof(stamp) - 2U), turn_message);
+      strcpy(turn_message, message);
+    }
+  }
   rc = cai_agent_runtime_get_goal(state->runtime, &goal, error);
   if (rc != CAI_OK) {
     return rc;
@@ -2316,9 +2415,9 @@ static int cli_replay_child_heading(cli_state *state,
   return cli_markdown(state, "### Subagent\n");
 }
 
-static int cli_replay_output_raw(cli_state *state,
-                                 const cai_agent_session_event *event,
-                                 int render, int logging, cai_error *error) {
+static int cli_replay_output_body(cli_state *state,
+                                  const cai_agent_session_event *event,
+                                  int render, int logging, cai_error *error) {
   /* This is the durable acknowledgement of an already-presented handoff,
    * not another subagent ending. Host replay observers still receive it. */
   if (strcmp(event->type, "subagent_handoff_committed") == 0 &&
@@ -2383,6 +2482,8 @@ static int cli_replay_output_raw(cli_state *state,
     int rc;
     cai_execution_record_init(&record);
     rc = cai_execution_record_parse(event->data, &record, error);
+    if (rc == CAI_OK)
+      state->presentation_timestamp_ns = record.timestamp_ns;
     if (rc == CAI_OK && strcmp(event->type, "subagent") == 0 &&
         (record.subagent == NULL || record.parent_session_id == NULL ||
          record.parent_call_id == NULL || record.source_sequence == 0U))
@@ -2637,6 +2738,20 @@ static int cli_replay_output_raw(cli_state *state,
     return rc;
   }
   return CAI_OK;
+}
+
+static int cli_replay_output_raw(cli_state *state,
+                                 const cai_agent_session_event *event,
+                                 int render, int logging, cai_error *error) {
+  unsigned long long saved = state->presentation_timestamp_ns;
+  int active = state->presentation_event;
+  int rc;
+  state->presentation_timestamp_ns = event->timestamp_ns;
+  state->presentation_event = 1;
+  rc = cli_replay_output_body(state, event, render, logging, error);
+  state->presentation_timestamp_ns = saved;
+  state->presentation_event = active;
+  return rc;
 }
 
 static int cli_replay_ordered_output(void *context,
@@ -5202,7 +5317,11 @@ static int cli_handle_command(cli_state *state, const char *line,
              "%s %-31s # run non-interactively\n%s %-31s # review against "
              "default branch\n```\n\n"
              "Run `%s --help` for all startup options; see the application's "
-             "manual.\n",
+             "manual.\n\n"
+             "Dim timestamps are date-time groups: `DDHHMM` (day, 24-hour "
+             "hour, minute) in local time. Older months/years add a zone, "
+             "month and two-digit year, e.g. `021230ANOV26`. Use `--utc` "
+             "for Zulu time (`Z`).\n",
              invocation, "-N -C ./project", invocation,
              "-i 'Explain this project'", invocation,
              "-Nni 'Fix the failing tests'", invocation, "--review",

@@ -230,6 +230,8 @@ LONEJSON_MAP_DEFINE(scope_map, scope_query, scope_fields);
 typedef struct cli_record {
   char record_type[24];
   lonejson_uint64 sequence;
+  lonejson_uint64 timestamp_ns;
+  lonejson_int64 utc_offset_seconds;
   lonejson_uint64 applied_event_sequence;
   lonejson_uint64 commit_created_at_ns;
   const char *type;
@@ -241,6 +243,8 @@ static const lonejson_field event_fields[] = {
     LONEJSON_FIELD_STRING_FIXED_REQ(cli_record, record_type, "record_type",
                                     LONEJSON_OVERFLOW_FAIL),
     LONEJSON_FIELD_U64_REQ(cli_record, sequence, "sequence"),
+    LONEJSON_FIELD_U64(cli_record, timestamp_ns, "timestamp_ns"),
+    LONEJSON_FIELD_I64(cli_record, utc_offset_seconds, "utc_offset_seconds"),
     LONEJSON_FIELD_STRING_ALLOC_REQ(cli_record, type, "type"),
     LONEJSON_FIELD_STRING_ALLOC(cli_record, data, "data")};
 LONEJSON_MAP_DEFINE(event_map, cli_record, event_fields);
@@ -251,6 +255,8 @@ static const lonejson_field journal_event_fields[] = {
      * the authenticated collection boundary instead of filtering/decrypting
      * every entry in LQL before parsing the same body again. */
     LONEJSON_FIELD_U64(cli_record, sequence, "sequence"),
+    LONEJSON_FIELD_U64(cli_record, timestamp_ns, "timestamp_ns"),
+    LONEJSON_FIELD_I64(cli_record, utc_offset_seconds, "utc_offset_seconds"),
     LONEJSON_FIELD_STRING_ALLOC(cli_record, type, "type"),
     LONEJSON_FIELD_STRING_ALLOC(cli_record, data, "data"),
     LONEJSON_FIELD_JSON_VALUE(cli_record, state, "state")};
@@ -1702,6 +1708,8 @@ static int append_event(void *context, const char *scope, const char *id,
   memset(&record, 0, sizeof(record));
   strcpy(record.record_type, "event");
   record.sequence = event->sequence;
+  record.timestamp_ns = event->timestamp_ns;
+  record.utc_offset_seconds = event->utc_offset_seconds;
   record.type = event->type;
   record.data = event->data;
   snprintf(name, sizeof(name), "event-%020llu", event->sequence);
@@ -1977,6 +1985,8 @@ collection_event_boundary(void *context,
     read->previous = sequence;
     read->position = metadata->position;
     event.sequence = sequence;
+    event.timestamp_ns = read->record.timestamp_ns;
+    event.utc_offset_seconds = read->record.utc_offset_seconds;
     event.type = read->limited ? "replay_event_omitted" : read->record.type;
     event.data = read->limited ? NULL : read->record.data;
     if (sequence > read->after &&

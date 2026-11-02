@@ -210,7 +210,7 @@ static void separate_messaging_store(cai_cli_pouch *sessions, const char *root,
 int main(int argc, char **argv) {
   char root[PATH_MAX], id[CAI_AGENT_SESSION_ID_MAX], *name;
   cai_cli_pouch pouch;
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   cai_cli_session metadata;
   cai_error error;
   cai_source *source = NULL;

@@ -1,4 +1,8 @@
   if(CAI_BUILD_TESTS)
+    add_test(NAME cai_cli_timestamps COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_timestamps_test.sh"
+      "$<TARGET_FILE:cai_cli_mock_fixture>")
+    set_tests_properties(cai_cli_timestamps PROPERTIES TIMEOUT 25)
     add_test(NAME cai_cli_workspace_approval COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_workspace_approval_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")

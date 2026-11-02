@@ -490,7 +490,7 @@ static int test_output_failure(int operation) {
   mdf_options options;
   mdf_sink sink;
   cai_agent_runtime_event event;
-  cai_agent_session_event replay;
+  cai_agent_session_event replay = {0};
   int pipe_fd[2];
   int rc = -1;
   int handled = 0;
@@ -877,7 +877,7 @@ static int test_reasoning_replay(void) {
                                        "**Title only**",
                                        NULL};
   cli_state state;
-  cai_agent_session_event event;
+  cai_agent_session_event event = {0};
   reasoning_capture capture;
   mdf_options options;
   mdf_sink sink;
@@ -919,6 +919,68 @@ static int test_reasoning_replay(void) {
   return 0;
 }
 
+static int test_timestamps(void) {
+  cli_state *state = calloc(1U, sizeof(*state));
+  cai_error error;
+  char output[4096], stamp[CAI_DTG_CAPACITY], expected[128];
+  int pipes[2], saved, rc = 0;
+  ssize_t count;
+  if (state == NULL || pipe(pipes) != 0)
+    return 1;
+  saved = dup(STDOUT_FILENO);
+  if (saved < 0 || dup2(pipes[1], STDOUT_FILENO) < 0)
+    return 1;
+  close(pipes[1]);
+  state->sl = sl_create();
+  state->interactive = 1;
+  state->width = 80;
+  state->options.utc = 1;
+  state->presentation_event = 1;
+  state->presentation_timestamp_ns = 1793622600123456789ULL;
+  cai_error_init(&error);
+  if (cai_cli_theme_parse("default", &state->theme) != NULL ||
+      sl_output_stream_begin(state->sl) != SL_OK ||
+      cli_renderer_create(state, &state->theme, &state->renderer, &error) !=
+          CAI_OK ||
+      cli_timestamp(state, stamp, sizeof(stamp)) == 0 ||
+      cli_command_input(state, "/status") != 0 ||
+      cli_text(state, "Visible answer.", 15U) != 0 ||
+      cli_finish_response(state) != 0)
+    rc = 1;
+  state->presentation_timestamp_ns = 0U;
+  if (cli_timestamp(state, expected, sizeof(expected)) != 0)
+    rc = 1;
+  state->interactive = 0;
+  state->presentation_event = 0;
+  if (cli_timestamp(state, expected, sizeof(expected)) != 0)
+    rc = 1;
+  state->renderer->destroy(state->renderer);
+  if (state->notice_renderer != NULL)
+    state->notice_renderer->destroy(state->notice_renderer);
+  (void)sl_output_stream_end(state->sl);
+  sl_destroy(state->sl);
+  fflush(stdout);
+  (void)dup2(saved, STDOUT_FILENO);
+  close(saved);
+  count = read(pipes[0], output, sizeof(output) - 1U);
+  close(pipes[0]);
+  if (count < 0)
+    rc = 1;
+  else {
+    output[count] = '\0';
+    snprintf(expected, sizeof(expected), "$ %s /status", stamp);
+    if (memchr(output, '\0', (size_t)count) != NULL ||
+        strstr(output, expected) == NULL || strstr(output, "/status") == NULL ||
+        strstr(output, "Visible answer.") == NULL)
+      rc = 1;
+    if (rc != 0)
+      fprintf(stderr, "timestamp rendering failed: %s\n", output);
+  }
+  cai_error_cleanup(&error);
+  free(state);
+  return rc;
+}
+
 int main(void) {
   cli_state state;
   cai_agent_runtime_event event;
@@ -950,7 +1012,7 @@ int main(void) {
       test_command_timer_boundary() != 0 || test_shared_auth() != 0 ||
       test_event_logging() != 0 || test_reasoning_sections() != 0 ||
       test_literal_tokens() != 0 || test_reasoning_quotes() != 0 ||
-      test_reasoning_replay() != 0)
+      test_reasoning_replay() != 0 || test_timestamps() != 0)
     return 1;
   memset(&state, 0, sizeof(state));
   if (!cai_cli_quota_due(0, start, start, 0) ||
@@ -993,6 +1055,7 @@ int main(void) {
       cli_prompt(&state, "Next") != 0)
     return 1;
   state.interactive = 1;
+  state.presentation_event = 1; /* Legacy fixture has no original time. */
   if (unsetenv("NO_COLOR") != 0)
     return 1;
   if (cli_notice(&state, "* WARN: colored diagnostic") != 0)

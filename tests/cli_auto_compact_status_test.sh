@@ -22,7 +22,7 @@ for mode in success error cancel; do
   release
   if [[ "$mode" == success ]]; then expect_assistant 'AUTO RESUMED'
   elif [[ "$mode" == error ]]; then expect 'AUTO COMPACTION ERROR'; fi
-  wait_for grep -Eq '^! Worked for' "$term/message"
+  wait_for has "$term/message" '! Worked for'
   absent "$term/message" 'Compacting context'
 done
 terminal_close

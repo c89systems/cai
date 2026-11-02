@@ -14,7 +14,6 @@ static void cai_runtime_execution_init(cai_runtime_execution_stream *s,
                                        cai_agent_runtime *runtime,
                                        const char *kind, const char *tool,
                                        const char *call, const char *field) {
-  struct timespec now;
   memset(s, 0, sizeof(*s));
   s->runtime = runtime;
   s->record.kind = kind;
@@ -32,9 +31,7 @@ static void cai_runtime_execution_init(cai_runtime_execution_stream *s,
     s->record.last_response_id =
         CAI_SESSION_IMPL(runtime->session)->previous_response_id;
   s->next_line_start = 1;
-  if (clock_gettime(CLOCK_REALTIME, &now) == 0)
-    s->record.timestamp_ns = (unsigned long long)now.tv_sec * 1000000000ULL +
-                             (unsigned long long)now.tv_nsec;
+  cai_runtime_timestamp(&s->record.timestamp_ns, &s->record.utc_offset_seconds);
 }
 
 static int cai_runtime_execution_emit_locked(cai_runtime_execution_stream *s,
@@ -371,7 +368,6 @@ cai_runtime_mirror_journal_locked(cai_agent_runtime *child,
                                   cai_error *error) {
   cai_agent_runtime *parent = child->journal_parent;
   cai_runtime_execution_stream s;
-  struct timespec now;
   int rc;
   /* Admission can run concurrently with inference. Envelope identity is
    * immutable; unlike worker-generated execution records it must not inspect
@@ -383,9 +379,8 @@ cai_runtime_mirror_journal_locked(cai_agent_runtime *child,
   s.record.parent_call_id = child->execution_parent_call;
   s.record.subagent = child->execution_subagent;
   s.next_line_start = 1;
-  if (clock_gettime(CLOCK_REALTIME, &now) == 0)
-    s.record.timestamp_ns = (unsigned long long)now.tv_sec * 1000000000ULL +
-                            (unsigned long long)now.tv_nsec;
+  s.record.timestamp_ns = event->timestamp_ns;
+  s.record.utc_offset_seconds = event->utc_offset_seconds;
   s.runtime = parent;
   s.record.source_sequence = event->sequence;
   s.journal_type = "subagent";

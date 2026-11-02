@@ -668,8 +668,6 @@ int cai_cli_turn_status_message(char *out, size_t capacity,
   unsigned long long days;
   char duration[64];
   char summary[512];
-  struct tm local_time;
-  time_t finished;
   int written;
   if (out == NULL || capacity == 0U || metrics == NULL)
     return -1;
@@ -710,12 +708,7 @@ int cai_cli_turn_status_message(char *out, size_t capacity,
     written = snprintf(out, capacity, "%s (%s)",
                        summary[0] != '\0' ? summary : "Working", duration);
   } else {
-    finished = (time_t)metrics->last_turn_finished_unix_seconds;
-    if (localtime_r(&finished, &local_time) == NULL)
-      return -1;
-    written =
-        snprintf(out, capacity, "Worked for %s - %02d%02d%02d", duration,
-                 local_time.tm_mday, local_time.tm_hour, local_time.tm_min);
+    written = snprintf(out, capacity, "Worked for %s", duration);
   }
   return written < 0 || (size_t)written >= capacity ? -1 : 0;
 }

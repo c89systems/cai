@@ -84,6 +84,8 @@ typedef struct cai_local_commit_source {
 typedef struct cai_local_event_doc {
   char *record_type;
   unsigned long long sequence;
+  unsigned long long timestamp_ns;
+  long long utc_offset_seconds;
   char *type;
   char *data;
 } cai_local_event_doc;
@@ -92,6 +94,9 @@ static const lonejson_field cai_local_event_fields[] = {
     LONEJSON_FIELD_STRING_ALLOC_REQ(cai_local_event_doc, record_type,
                                     "record_type"),
     LONEJSON_FIELD_U64_REQ(cai_local_event_doc, sequence, "sequence"),
+    LONEJSON_FIELD_U64(cai_local_event_doc, timestamp_ns, "timestamp_ns"),
+    LONEJSON_FIELD_I64(cai_local_event_doc, utc_offset_seconds,
+                       "utc_offset_seconds"),
     LONEJSON_FIELD_STRING_ALLOC_REQ(cai_local_event_doc, type, "type"),
     LONEJSON_FIELD_STRING_ALLOC_OMIT_NULL(cai_local_event_doc, data, "data")};
 LONEJSON_MAP_DEFINE(cai_local_event_map, cai_local_event_doc,
@@ -938,9 +943,12 @@ static int cai_local_session_append_event(void *context, const char *scope,
                               "\"sequence\":",
                               error);
   if (rc == CAI_OK) {
-    char number[32];
+    char number[160];
 
-    (void)snprintf(number, sizeof(number), "%llu", event->sequence);
+    (void)snprintf(number, sizeof(number),
+                   "%llu,\"timestamp_ns\":%llu,\"utc_offset_seconds\":%lld",
+                   event->sequence, event->timestamp_ns,
+                   event->utc_offset_seconds);
     rc = cai_buffer_append_cstr(&builder, number, error);
   }
   if (rc == CAI_OK) {
@@ -1116,6 +1124,8 @@ static int cai_local_replay_complete_event(void *context, int fd,
     event.sequence = doc.sequence;
     event.type = doc.type;
     event.data = doc.data;
+    event.timestamp_ns = doc.timestamp_ns;
+    event.utc_offset_seconds = doc.utc_offset_seconds;
     rc = replay->callback(replay->callback_context, &event, error);
   }
   CAI_LJ->cleanup(CAI_LJ, &cai_local_event_map, &doc);
