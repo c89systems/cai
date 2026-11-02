@@ -33,9 +33,9 @@ static const char chrome_description[] =
 static const char chrome_description_tail[] =
     "scroll uses x/y and delta_y. evaluate runs text as JavaScript; cdp uses "
     "method "
-    "and params for advanced browser operations. keep marks a tab deliverable "
-    "so "
-    "it survives turn cleanup; close closes only an owned tab. Re-observe "
+    "and params for advanced browser operations. Tabs stay open by default; "
+    "do not close them as routine cleanup. keep reaffirms preservation; "
+    "close closes only an owned tab. Re-observe "
     "after "
     "navigation: page loading is asynchronous. All actions except tabs/open "
     "need tab_id.";
@@ -330,11 +330,19 @@ static int chrome_callback(void *context, const void *arguments, void *output,
       rc = cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "Chrome returned an invalid tab", je.message);
     if (rc == CAI_OK) {
+      char *kept = NULL;
       char *attached = NULL;
       op.tab = tab.id;
       op.has_tab = 1;
       op.target.tab = tab.id;
-      rc = operation(c, &op, "attach", NULL, &attached, error);
+      /* Preserve the tab before debugger setup or navigation can fail. Turn
+       * cleanup still detaches and releases ownership, without closing it. */
+      op.status = "deliverable";
+      rc = operation(c, &op, "markTab", NULL, &kept, error);
+      cai_free_mem(NULL, kept);
+      op.status = NULL;
+      if (rc == CAI_OK)
+        rc = operation(c, &op, "attach", NULL, &attached, error);
       cai_free_mem(NULL, attached);
     }
     if (rc == CAI_OK && strcmp(a->action, "open") == 0 && a->url != NULL) {

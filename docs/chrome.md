@@ -142,8 +142,8 @@ The model receives a `chrome` function tool:
 | Action | Parameters and behavior |
 | --- | --- |
 | `tabs` | List user tabs. |
-| `open` | Create and attach a tab; optional HTTP(S) `url`. |
-| `claim` | Claim and attach an existing `tab_id`. |
+| `open` | Create, keep and attach a tab; optional HTTP(S) `url`. |
+| `claim` | Claim, keep and attach an existing `tab_id`. |
 | `navigate` | Navigate owned `tab_id` to HTTP(S) `url`. |
 | `snapshot` | Return URL, title, bounded visible text, and links. |
 | `screenshot` | Attach a PNG screenshot of `tab_id` as typed image input. |
@@ -153,7 +153,7 @@ The model receives a `chrome` function tool:
 | `scroll` | Scroll at `x`, `y` using `delta_y`. |
 | `evaluate` | Evaluate JavaScript in `text`; return its value. |
 | `cdp` | Execute advanced CDP `method` with object `params`. |
-| `keep` | Mark an owned tab deliverable so it survives cleanup. |
+| `keep` | Explicitly reaffirm preservation; open/claim already keep tabs. |
 | `close` | Close an owned tab. |
 
 Navigation is asynchronous: observe the page again before acting on it.
@@ -164,9 +164,14 @@ that browser session. CAI does not introduce per-origin flags or approval UI.
 
 The runtime issues `turnEnded` after success, failure, or cancellation. The
 native host first detaches the tabs successfully attached for that session,
-then forwards `turnEnded` to release ownership. Agent-created tabs close unless
-marked to keep; detaching a kept tab does not close it. A user-cancelled debugger
-may already be detached: cleanup still attempts the remaining tabs and sends
+then forwards `turnEnded` to release ownership. The tool marks opened and
+claimed tabs deliverable before attaching or navigating, so tabs remain open
+by default, including when later debugger setup or navigation fails. Routine
+cleanup does not close them; the explicit `close` action still does. A failure
+to mark a tab is reported before attachment/navigation proceeds. Raw
+`cai_chrome_request` callers must mark created tabs themselves to preserve them.
+A user-cancelled debugger may already be detached: cleanup still attempts the
+remaining tabs and sends
 `turnEnded`, logging any detach failures. The host uses the same sequence if a
 client disconnects, waiting for an in-flight operation to return first.
 The cleanup sequence has one five-second budget, not a separate budget per tab.

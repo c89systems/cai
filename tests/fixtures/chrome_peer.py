@@ -55,6 +55,34 @@ def record(request):
     with (root/'calls.jsonl').open('a') as output:
         output.write(json.dumps(request)+'\n')
 
+# Model the extension's tab disposition independently of debugger attachment.
+# turnEnded closes created tabs unless markTab made them deliverable/handoff.
+turn_tabs={}
+def track_tabs(request, reply):
+    params=request.get('params', {})
+    if 'error' in reply or not params.get('session_id'): return
+    key=(params['session_id'], params.get('turn_id'))
+    state=turn_tabs.setdefault(key, {'created':set(), 'kept':set(), 'closed':set()})
+    method=request.get('method')
+    if method=='createTab' and isinstance(reply.get('result'), dict):
+        state['created'].add(reply['result']['id'])
+    elif method=='markTab' and params.get('status') in ('deliverable','handoff'):
+        state['kept'].add(params['tabId'])
+    elif method=='executeCdp' and params.get('method')=='Page.close':
+        tab=params['target']['tabId']
+        state['created'].discard(tab)
+        state['kept'].discard(tab)
+        state['closed'].add(tab)
+    elif method=='turnEnded':
+        state['closed'].update(state['created']-state['kept'])
+        state['created'].intersection_update(state['kept'])
+        with (root/'tab-lifecycle.jsonl').open('a') as output:
+            output.write(json.dumps({'session_id':key[0], 'turn_id':key[1],
+                'remaining_created_tabs':sorted(state['created']),
+                'kept_tabs':sorted(state['kept']),
+                'closed_tabs':sorted(state['closed'])})+'\n')
+        del turn_tabs[key]
+
 if mode=='wire':
     sys.stdout.buffer.write(wire(json.loads(sys.argv[3])))
     sys.exit(0)
@@ -89,6 +117,7 @@ if mode=='extension':
             value['error']={'code':-32000,'message':'Debugger is not attached'}
             with (root/'cleanup-errors.jsonl').open('a') as output:
                 output.write(json.dumps(value)+'\n')
+        track_tabs(request,value)
         if void_scenario and request.get('method')=='attach':
             sys.stdout.buffer.write(wire({'jsonrpc':'2.0','id':'extension-ping','method':'ping','params':{}}))
             sys.stdout.buffer.write(wire({'jsonrpc':'2.0','method':'onCDPEvent','params':{'source':{'tabId':7},'method':'Page.loadEventFired','params':{}}}))
@@ -143,6 +172,11 @@ else:
                         connection.sendall(wire({'jsonrpc':'2.0','method':'onCDPEvent','params':{}}))
                         for byte in wire(value): connection.sendall(bytes([byte]))
                         continue
+                if scenario=='mark-error' and method=='markTab':
+                    value={'jsonrpc':'2.0','id':request['id'],'error':{'code':-32000,'message':'Cannot keep fixture tab'}}
+                if scenario=='navigate-error' and method=='executeCdp' and request['params'].get('method')=='Page.navigate':
+                    value={'jsonrpc':'2.0','id':request['id'],'error':{'code':-32000,'message':'Cannot navigate fixture tab'}}
+                track_tabs(request,value)
                 connection.sendall(wire(value))
         except (EOFError,BrokenPipeError,ConnectionResetError): pass
     listener.close()

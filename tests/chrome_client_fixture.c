@@ -259,6 +259,9 @@ int main(int argc, char **argv) {
     if (rc == CAI_OK)
       rc = cai_tool_registry_run(CAI_AGENT_IMPL(agent)->tools, "chrome",
                                  argv[3], sink, &error);
+    if (rc == CAI_OK && argc > 4)
+      rc = cai_tool_registry_run(CAI_AGENT_IMPL(agent)->tools, "chrome",
+                                 argv[4], sink, &error);
   } else if (rc == CAI_OK && strcmp(argv[2], "discover") != 0 &&
              strcmp(argv[2], "open") != 0) {
     if (strcmp(argv[2], "cancel") == 0) {

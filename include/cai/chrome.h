@@ -103,8 +103,10 @@ int cai_chrome_begin_turn(cai_chrome *chrome, const char *session_id,
 /** Release tab leases/debuggers using turnEnded, when browser tools ran.
  * No-op for an unused turn. Works after cancellation with a bounded cleanup
  * deadline of five seconds. The CAI native host detaches tracked tabs before
- * forwarding turnEnded. Agent-created tabs close unless marked deliverable
- * or handoff; detaching alone does not close them.
+ * forwarding turnEnded. The chrome tool automatically marks opened/claimed
+ * tabs deliverable before attaching, preserving them through cleanup. Raw
+ * request callers must mark created tabs deliverable or handoff to keep them;
+ * detaching alone does not close them. Explicit close still closes a tab.
  */
 int cai_chrome_end_turn(cai_chrome *chrome, cai_error *error);
 /** Close; attempts bounded turn cleanup. NULL is accepted. */

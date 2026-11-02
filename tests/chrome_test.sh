@@ -7,7 +7,7 @@ unset CHROME_CONFIG_HOME CODEX_HOME
 mkdir -m700 "$XDG_RUNTIME_DIR"
 chrome="$root/chrome"; mkdir "$chrome"
 scenario() {
-  rm -f "$chrome/ready" "$chrome/mock.sock" "$chrome/calls.jsonl"
+  rm -f "$chrome/ready" "$chrome/mock.sock" "$chrome/calls.jsonl" "$chrome/tab-lifecycle.jsonl"
   "${CAI_TEST_PYTHON:-python3}" "$support/fixtures/chrome_peer.py" socket "$chrome" "$1" >"$chrome/stdout" 2>"$chrome/stderr" & chrome_pid=$!
   wait_for test -s "$chrome/ready"
 }
@@ -48,6 +48,12 @@ if [[ "$mode" == client ]]; then
       (.params | has("params") | not))' "$chrome/calls.jsonl" >/dev/null
     action=$(jq -r .action <<<"$args")
     case "$action" in
+      open|claim)
+        jq -se '[.[] | select(.method == "markTab" or .method == "attach") | .method] == ["markTab","attach"] and any(.[]; .method == "markTab" and .params.tabId == 7 and .params.status == "deliverable")' "$chrome/calls.jsonl" >/dev/null
+        jq -se '.[-1].kept_tabs == [7] and .[-1].closed_tabs == []' "$chrome/tab-lifecycle.jsonl" >/dev/null
+        if [[ "$action" == open ]]; then
+          jq -se '.[-1].remaining_created_tabs == [7]' "$chrome/tab-lifecycle.jsonl" >/dev/null
+        fi ;;
       snapshot|evaluate|cdp)
         contains "$root/stdout" 'Fixture page text'
         jq -se 'any(.[]; .method == "executeCdp" and .params.method == "Runtime.evaluate" and (.params.commandParams.expression | type == "string"))' "$chrome/calls.jsonl" >/dev/null ;;
@@ -61,6 +67,19 @@ if [[ "$mode" == client ]]; then
         jq -se 'any(.[]; .method == "executeCdp" and .params.commandParams == {})' "$chrome/calls.jsonl" >/dev/null ;;
     esac
   done
+  # A failed attach must not undo preservation; a failed mark must be reported
+  # before debugger attachment/navigation, without silently continuing.
+  scenario void-error; client_run tool '{"action":"open"}'; bad
+  contains "$root/stderr" 'Debugger unattached'
+  jq -se '.[-1].remaining_created_tabs == [7] and .[-1].closed_tabs == []' "$chrome/tab-lifecycle.jsonl" >/dev/null
+  scenario navigate-error; client_run tool '{"action":"open","url":"https://example.test/"}'; bad
+  contains "$root/stderr" 'Cannot navigate fixture tab'
+  jq -se '.[-1].remaining_created_tabs == [7] and .[-1].closed_tabs == []' "$chrome/tab-lifecycle.jsonl" >/dev/null
+  scenario mark-error; client_run tool '{"action":"open"}'; bad
+  contains "$root/stderr" 'Cannot keep fixture tab'
+  jq -se 'any(.[]; .method=="markTab") and all(.[]; .method!="attach" and .method!="executeCdp")' "$chrome/calls.jsonl" >/dev/null
+  scenario success; client_run tool '{"action":"open"}' '{"action":"close","tab_id":7}'; ok
+  jq -se '.[-1].remaining_created_tabs == [] and .[-1].closed_tabs == [7]' "$chrome/tab-lifecycle.jsonl" >/dev/null
   for args in '{"action":"click","tab_id":1}' '{"action":"open","url":"file:///etc/passwd"}' '{"action":"navigate","tab_id":1,"url":"file:///etc/passwd"}' '{"action":"nonsense"}' '{"action":null}' '{}' '[]' 'null' '{"action":"key","tab_id":7,"text":null}' '{"action":"cdp","tab_id":7,"method":"Runtime.evaluate","params":null}'; do
     scenario success; client_run tool "$args"; bad
   done
@@ -129,10 +148,11 @@ if [[ "$mode" == host || "$mode" == cli ]]; then
     client=${2:?compiled Chrome client fixture}
     "$client" "$root" default >"$root/stdout" 2>"$root/stderr"
     contains "$root/stdout" Fixture
-    plan '{"plan":[{"tool":"chrome","arguments":{"action":"open","url":"https://example.test/"}},{"tool":"chrome","arguments":{"action":"screenshot","tab_id":7}},{"tool":"chrome","arguments":{"action":"keep","tab_id":7}},"Chrome final response"]}'
+    plan '{"plan":[{"tool":"chrome","arguments":{"action":"open","url":"https://example.test/"}},{"tool":"chrome","arguments":{"action":"screenshot","tab_id":7}},{"tool":"chrome","arguments":{"action":"tabs"}},"Chrome final response"]}'
     run -Nni 'Inspect the browser' --chrome; ok
     [[ $(stdout_text) == 'Chrome final response' ]]
-    jq -se '[.[].method] == ["getInfo","getUserTabs","getInfo","createTab","attach","executeCdp","executeCdp","markTab","detach","turnEnded"]' "$chrome/calls.jsonl" >/dev/null
+    jq -se '[.[].method] == ["getInfo","getUserTabs","getInfo","createTab","markTab","attach","executeCdp","executeCdp","getUserTabs","detach","turnEnded"]' "$chrome/calls.jsonl" >/dev/null
+    jq -se '.[-1].remaining_created_tabs == [7] and .[-1].closed_tabs == []' "$chrome/tab-lifecycle.jsonl" >/dev/null
     jq -se 'all(.[] | select(.method == "executeCdp"); .params.commandParams | type == "object")' "$chrome/calls.jsonl" >/dev/null
     sed -n '3p' "$root/peer/requests.jsonl" >"$root/image-request"; contains "$root/image-request" 'data:image/png;base64,'
     sed -n '4p' "$root/peer/requests.jsonl" >"$root/durable-request"; absent "$root/durable-request" 'data:image/png;base64,'
@@ -154,8 +174,9 @@ if [[ "$mode" == lua ]]; then
   # Lua owns API assertions in the existing compiled facade scenario.
   scenario void
   peer_start
-  plan '{"plan":[{"tool":"chrome","arguments":{"action":"open","url":"https://example.test/"}},{"tool":"chrome","arguments":{"action":"screenshot","tab_id":7}},{"tool":"chrome","arguments":{"action":"keep","tab_id":7}},"Chrome final response"]}'
+  plan '{"plan":[{"tool":"chrome","arguments":{"action":"open","url":"https://example.test/"}},{"tool":"chrome","arguments":{"action":"screenshot","tab_id":7}},{"tool":"chrome","arguments":{"action":"tabs"}},"Chrome final response"]}'
   "$cli" "$support/lua/e2e_chrome.lua" "$chrome/mock.sock" "$endpoint" "$root" close
   wait "$chrome_pid"; chrome_pid=
   jq -se '.[-1].method == "turnEnded"' "$chrome/calls.jsonl" >/dev/null
+  jq -se '.[-1].remaining_created_tabs == [7] and .[-1].closed_tabs == []' "$chrome/tab-lifecycle.jsonl" >/dev/null
 fi
