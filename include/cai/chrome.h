@@ -113,6 +113,9 @@ int cai_chrome_end_turn(cai_chrome *chrome, cai_error *error);
 void cai_chrome_close(cai_chrome *chrome);
 /** Register the chrome tool, including typed screenshot delivery.
  * chrome is borrowed until agent close. Only one agent may use it at a time.
+ * Tab actions claim, keep and attach once per turn; explicit claim forces
+ * preparation. Another session's ownership is respected. Sent CDP commands
+ * are never automatically retried.
  */
 int cai_agent_register_chrome_tool(cai_agent *agent, cai_chrome *chrome,
                                    cai_error *error);

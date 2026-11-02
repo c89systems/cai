@@ -157,8 +157,13 @@ The model receives a `chrome` function tool:
 | `close` | Close an owned tab. |
 
 Navigation is asynchronous: observe the page again before acting on it.
-Existing tabs must be claimed before debugger operations. The extension
-rejects tabs owned by another browser session. Browser actions use CAI's
+Tab actions automatically claim, keep and attach their target once per turn;
+explicit `claim` forces fresh preparation. Keeping a tab does not retain its
+ownership after `turnEnded`, so reuse in a later turn prepares it again.
+Preparation is also invalidated after a failed browser request or explicit
+close. CAI never automatically retries a sent CDP command. The extension
+rejects tabs owned by another browser session; CAI does not force takeover.
+Browser actions use CAI's
 normal tool execution behavior; enabling Chrome grants the agent access to
 that browser session. CAI does not introduce per-origin flags or approval UI.
 
@@ -227,7 +232,9 @@ This integration implements the extension's internal browser protocol,
 researched from the official extension and a supplied browser bundle. It is
 not a documented, stable OpenAI SDK. Extension updates may require adapting
 CAI's implementation.
-The research baseline is ChatGPT extension version `1.26.901.11451`.
+The research baseline is ChatGPT extension version `1.26.1020.11845`.
+Its deliverable-tab cleanup releases the tab lease; later use must claim and
+attach the tab again even though the browser tab itself is still open.
 
 Offline tests simulate the extension over the actual native-host stdio pipes,
 then exercise the full CAI runtime and model transport. They cover registration

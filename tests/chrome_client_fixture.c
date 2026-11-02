@@ -259,6 +259,16 @@ int main(int argc, char **argv) {
     if (rc == CAI_OK)
       rc = cai_tool_registry_run(CAI_AGENT_IMPL(agent)->tools, "chrome",
                                  argv[3], sink, &error);
+    if (rc == CAI_OK && argc > 4 && strcmp(argv[2], "tool-next-turn") == 0) {
+      rc = cai_chrome_end_turn(chrome, &error);
+      if (rc == CAI_OK)
+        rc = cai_chrome_begin_turn(chrome, "fixture", "2", &error);
+    }
+    if (rc == CAI_OK && argc > 4 && strcmp(argv[2], "tool-detach") == 0)
+      rc = cai_chrome_request(chrome, "detach",
+                              "{\"session_id\":\"fixture\",\"turn_id\":\"1\","
+                              "\"session_context\":\"live\",\"tabId\":7}",
+                              &result, &error);
     if (rc == CAI_OK && argc > 4)
       rc = cai_tool_registry_run(CAI_AGENT_IMPL(agent)->tools, "chrome",
                                  argv[4], sink, &error);

@@ -23,6 +23,22 @@ client_run() {
   absent "$root/stderr" AddressSanitizer; absent "$root/stderr" 'runtime error:'
 }
 if [[ "$mode" == client ]]; then
+  # Kept tabs survive, but their ownership does not survive turnEnded.
+  scenario ownership; client_run tool-next-turn '{"action":"open"}' '{"action":"snapshot","tab_id":7}'; ok
+  jq -se '[.[] | select(.method=="claimUserTab" and .params.turn_id=="2")] | length==1' "$chrome/calls.jsonl" >/dev/null
+  contains "$root/stdout" 'Fixture page text'
+  scenario ownership; client_run tool '{"action":"snapshot","tab_id":7}' '{"action":"snapshot","tab_id":7}'; ok
+  jq -se '[.[]|select(.method=="claimUserTab")]|length==1' "$chrome/calls.jsonl" >/dev/null
+  jq -se '[.[]|select(.method=="attach")]|length==1' "$chrome/calls.jsonl" >/dev/null
+  scenario ownership; client_run tool-detach '{"action":"snapshot","tab_id":7}' '{"action":"snapshot","tab_id":7}'; ok
+  jq -se '[.[]|select(.method=="claimUserTab")]|length==2' "$chrome/calls.jsonl" >/dev/null
+  jq -se '[.[]|select(.method=="attach")]|length==2' "$chrome/calls.jsonl" >/dev/null
+  scenario ownership-conflict; client_run tool '{"action":"snapshot","tab_id":7}'; bad
+  contains "$root/stderr" 'already part of browser session other-session'
+  jq -se 'all(.[]; .method!="executeCdp" and .method!="attach" and .method!="markTab")' "$chrome/calls.jsonl" >/dev/null
+  scenario ownership-lost; client_run tool '{"action":"open"}' '{"action":"click","tab_id":7,"x":12,"y":20}'; bad
+  contains "$root/stderr" 'is not part of browser session fixture'
+  jq -se '[.[]|select(.method=="executeCdp")]|length==1' "$chrome/calls.jsonl" >/dev/null
   for fault in fragment null failure wrong-id missing-result limit oversized malformed truncated timeout cancel identity identity-missing-result; do
     scenario "$fault"
     operation=request; [[ "$fault" != limit ]] || operation=limit
@@ -116,8 +132,10 @@ if [[ "$mode" == host || "$mode" == cli ]]; then
   # Bash owns host execution. The extension fixture only responds on stdio.
   mkfifo "$chrome/host-input" "$chrome/extension-input"
   exec 8<>"$chrome/host-input" 9<>"$chrome/extension-input"
+  extension_scenario=${3:-void}
+  [[ "$mode" != cli ]] || extension_scenario=ownership
   LOG_LEVEL=info "$cli" chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/ <"$chrome/host-input" >"$chrome/extension-input" 2>"$chrome/host-stderr" 8>&- 9>&- & host_pid=$!
-  "${CAI_TEST_PYTHON:-python3}" "$support/fixtures/chrome_peer.py" extension "$chrome" "${3:-void}" <"$chrome/extension-input" >"$chrome/host-input" 8>&- 9>&- & extension_pid=$!
+  "${CAI_TEST_PYTHON:-python3}" "$support/fixtures/chrome_peer.py" extension "$chrome" "$extension_scenario" <"$chrome/extension-input" >"$chrome/host-input" 8>&- 9>&- & extension_pid=$!
   if [[ "$mode" == host ]]; then
     # A compiled host-only fixture follows the same entry point.
     wait_for test -d "$root/run/cai/chrome"
@@ -156,6 +174,10 @@ if [[ "$mode" == host || "$mode" == cli ]]; then
     jq -se 'all(.[] | select(.method == "executeCdp"); .params.commandParams | type == "object")' "$chrome/calls.jsonl" >/dev/null
     sed -n '3p' "$root/peer/requests.jsonl" >"$root/image-request"; contains "$root/image-request" 'data:image/png;base64,'
     sed -n '4p' "$root/peer/requests.jsonl" >"$root/durable-request"; absent "$root/durable-request" 'data:image/png;base64,'
+    plan '{"plan":[{"tool":"chrome","arguments":{"action":"snapshot","tab_id":7}},"Chrome reused response"]}'
+    run -ni 'Inspect the same tab again' --chrome; ok
+    [[ $(stdout_text) == 'Chrome reused response' ]]
+    jq -se '[.[]|select(.method=="claimUserTab")]|length==1' "$chrome/calls.jsonl" >/dev/null
   fi
   jq -se 'any(.[]; .id == "extension-ping" and .result == "pong")' "$chrome/host-replies.jsonl" >/dev/null
   jq -se 'length > 0 and all(.[]; .tabs == [])' "$chrome/active-tabs.jsonl" >/dev/null
@@ -172,11 +194,12 @@ if [[ "$mode" == host || "$mode" == cli ]]; then
 fi
 if [[ "$mode" == lua ]]; then
   # Lua owns API assertions in the existing compiled facade scenario.
-  scenario void
+  scenario ownership
   peer_start
-  plan '{"plan":[{"tool":"chrome","arguments":{"action":"open","url":"https://example.test/"}},{"tool":"chrome","arguments":{"action":"screenshot","tab_id":7}},{"tool":"chrome","arguments":{"action":"tabs"}},"Chrome final response"]}'
+  plan '{"plan":[{"tool":"chrome","arguments":{"action":"open","url":"https://example.test/"}},{"tool":"chrome","arguments":{"action":"screenshot","tab_id":7}},{"tool":"chrome","arguments":{"action":"tabs"}},"Chrome final response",{"tool":"chrome","arguments":{"action":"snapshot","tab_id":7}},"Chrome reused response"]}'
   "$cli" "$support/lua/e2e_chrome.lua" "$chrome/mock.sock" "$endpoint" "$root" close
   wait "$chrome_pid"; chrome_pid=
   jq -se '.[-1].method == "turnEnded"' "$chrome/calls.jsonl" >/dev/null
-  jq -se '.[-1].remaining_created_tabs == [7] and .[-1].closed_tabs == []' "$chrome/tab-lifecycle.jsonl" >/dev/null
+  jq -se 'length==2 and .[0].remaining_created_tabs==[7] and .[1].kept_tabs==[7] and all(.[]; .closed_tabs==[])' "$chrome/tab-lifecycle.jsonl" >/dev/null
+  jq -se '[.[]|select(.method=="claimUserTab" and .params.turn_id=="2")]|length==1' "$chrome/calls.jsonl" >/dev/null
 fi

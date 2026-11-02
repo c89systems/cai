@@ -116,6 +116,9 @@ int cai_chrome_request(cai_chrome *c, const char *method, const char *params,
                          "object params and output");
   if (strlen(params) > CAI_CHROME_REQUEST_LIMIT)
     return cai_set_error(error, CAI_ERR_LIMIT, "Chrome request is too large");
+  if (c->fd < 0 || strcmp(method, "turnEnded") == 0 ||
+      strcmp(method, "detach") == 0)
+    cai_chrome_clear_tool_tabs(c);
   if (c->fd < 0 && c->lazy) {
     cai_chrome_config config;
     cai_chrome *connected = NULL;
@@ -177,6 +180,8 @@ int cai_chrome_request(cai_chrome *c, const char *method, const char *params,
     frame = NULL;
     if (rc == CAI_OK && reply.method != NULL) {
       /* The native host answers server requests, so these are notifications. */
+      if (strcmp(reply.method, "onCDPDetach") == 0)
+        cai_chrome_clear_tool_tabs(c);
       if (reply.has_id)
         rc = cai_set_error(error, CAI_ERR_PROTOCOL,
                            "Unexpected request from Chrome native host");
@@ -210,6 +215,8 @@ int cai_chrome_request(cai_chrome *c, const char *method, const char *params,
     CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_rpc_map, &reply);
     break;
   }
+  if (rc != CAI_OK)
+    cai_chrome_clear_tool_tabs(c);
   if (rc != CAI_OK && rc != CAI_ERR_SERVER) {
     close(c->fd);
     c->fd = -1;
@@ -339,6 +346,13 @@ int cai_chrome_open(const cai_chrome_config *config, cai_chrome **out,
   *out = c;
   return CAI_OK;
 }
+void cai_chrome_clear_tool_tabs(cai_chrome *c) {
+  while (c->tool_tabs != NULL) {
+    cai_chrome_tool_tab *tab = c->tool_tabs;
+    c->tool_tabs = tab->next;
+    cai_free_mem(NULL, tab);
+  }
+}
 int cai_chrome_begin_turn(cai_chrome *c, const char *session, const char *turn,
                           cai_error *error) {
   char *s, *t;
@@ -357,6 +371,7 @@ int cai_chrome_begin_turn(cai_chrome *c, const char *session, const char *turn,
   }
   cai_free_mem(NULL, c->session_id);
   cai_free_mem(NULL, c->turn_id);
+  cai_chrome_clear_tool_tabs(c);
   c->session_id = s;
   c->turn_id = t;
   return CAI_OK;
@@ -439,7 +454,10 @@ int cai_chrome_end_turn(cai_chrome *c, cai_error *error) {
   chrome_turn doc;
   char *params, *result = NULL;
   int rc;
-  if (c == NULL || !c->used)
+  if (c == NULL)
+    return CAI_OK;
+  cai_chrome_clear_tool_tabs(c);
+  if (!c->used)
     return CAI_OK;
   c->used = 0;
   cai_free_mem(NULL, c->pending_image);

@@ -27,6 +27,13 @@ assert(table.concat(chunks) == "Chrome final response")
 local ids = assert(runtime:ids())
 assert(ids.session_id == initial_ids.session_id)
 assert(ids.response_id:match("^resp_fixture_") and ids.conversation_id == nil)
+chunks = {}
+assert(runtime:submit("Inspect the same tab again"))
+repeat
+  state = assert(runtime:pump(50))
+until state == "completed" or state == "failed" or state == "cancelled"
+assert(state == "completed", state)
+assert(table.concat(chunks) == "Chrome reused response")
 if finish == "gc" then
   runtime = nil
   collectgarbage("collect")

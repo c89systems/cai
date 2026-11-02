@@ -58,12 +58,27 @@ def record(request):
 # Model the extension's tab disposition independently of debugger attachment.
 # turnEnded closes created tabs unless markTab made them deliverable/handoff.
 turn_tabs={}
+tab_owners={}
+def ownership_error(request):
+    params=request.get('params', {})
+    method=request.get('method')
+    tab=params.get('target',{}).get('tabId') if method=='executeCdp' else params.get('tabId')
+    session=params.get('session_id')
+    owner=tab_owners.get(tab)
+    if method=='claimUserTab' and owner is not None and owner!=session:
+        return {'code':1,'message':f'Tab {tab} is already part of browser session {owner}'}
+    if method in ('executeCdp','markTab','attach') and owner!=session:
+        return {'code':1,'message':f'Tab {tab} is not part of browser session {session}'}
+    return None
+
 def track_tabs(request, reply):
     params=request.get('params', {})
     if 'error' in reply or not params.get('session_id'): return
     key=(params['session_id'], params.get('turn_id'))
     state=turn_tabs.setdefault(key, {'created':set(), 'kept':set(), 'closed':set()})
     method=request.get('method')
+    if method in ('createTab','claimUserTab') and isinstance(reply.get('result'),dict):
+        tab_owners[reply['result']['id']]=key[0]
     if method=='createTab' and isinstance(reply.get('result'), dict):
         state['created'].add(reply['result']['id'])
     elif method=='markTab' and params.get('status') in ('deliverable','handoff'):
@@ -74,6 +89,8 @@ def track_tabs(request, reply):
         state['kept'].discard(tab)
         state['closed'].add(tab)
     elif method=='turnEnded':
+        for tab, owner in list(tab_owners.items()):
+            if owner==key[0]: del tab_owners[tab]
         state['closed'].update(state['created']-state['kept'])
         state['created'].intersection_update(state['kept'])
         with (root/'tab-lifecycle.jsonl').open('a') as output:
@@ -88,7 +105,7 @@ if mode=='wire':
     sys.exit(0)
 if mode=='extension':
     scenario=sys.argv[3] if len(sys.argv)>3 else 'success'
-    void_scenario=scenario in ('void','manual-detach')
+    void_scenario=scenario in ('void','manual-detach','ownership')
     attached=set()
     while True:
         try: request=receive(sys.stdin.buffer)
@@ -102,6 +119,7 @@ if mode=='extension':
         if scenario=='stop-cleanup-fail' and request.get('method')=='turnEnded':
             value.pop('result'); value['error']={'code':-32000,'message':'Cleanup fixture rejected turnEnded'}
         failure=command_error(request)
+        if failure is None and scenario=='ownership': failure=ownership_error(request)
         if failure is not None:
             value.pop('result'); value['error']=failure
         if request.get('method')=='attach':
@@ -131,6 +149,7 @@ if mode=='extension':
             sys.stdout.buffer.flush()
 else:
     scenario=sys.argv[3]
+    if scenario=='ownership-conflict': tab_owners[7]='other-session'
     path=root/'mock.sock'
     listener=socket.socket(socket.AF_UNIX)
     listener.bind(str(path)); path.chmod(0o600); listener.listen(4)
@@ -143,6 +162,12 @@ else:
                 request=receive(connection); record(request)
                 method=request.get('method')
                 value={'jsonrpc':'2.0','id':request.get('id'),'result':result(request,scenario)}
+                if scenario.startswith('ownership'):
+                    if scenario=='ownership-lost' and method=='executeCdp':
+                        tab_owners.pop(request['params']['target']['tabId'],None)
+                    failure=ownership_error(request)
+                    if failure is not None:
+                        value={'jsonrpc':'2.0','id':request['id'],'error':failure}
                 failure=command_error(request)
                 if failure is not None and scenario=='success':
                     value.pop('result'); value['error']=failure

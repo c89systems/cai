@@ -60,6 +60,11 @@ typedef struct cai_chrome_stop_request {
 } cai_chrome_stop_request;
 extern const lonejson_map cai_chrome_stop_map;
 /* Tool state lives in the connection, borrowed by a registry. */
+typedef struct cai_chrome_tool_tab {
+  struct cai_chrome_tool_tab *next;
+  int64_t id;
+} cai_chrome_tool_tab;
+void cai_chrome_clear_tool_tabs(cai_chrome *chrome);
 struct cai_chrome {
   int fd;
   long timeout_ms;
@@ -69,6 +74,7 @@ struct cai_chrome {
   char *session_id;
   char *turn_id;
   char *pending_image;
+  cai_chrome_tool_tab *tool_tabs;
   int used;
   int cleanup;
   int lazy;

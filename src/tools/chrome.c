@@ -24,7 +24,8 @@ static const char chrome_description[] =
     "lists "
     "user tabs; open creates a blank tab and optionally navigates url; claim "
     "owns "
-    "and attaches tab_id. Claim an existing tab before other actions. navigate "
+    "and attaches tab_id. Tab actions acquire ownership and attach once per "
+    "turn automatically; claim explicitly reacquires a tab. navigate "
     "uses "
     "url. snapshot returns visible page text and links; screenshot attaches a "
     "PNG "
@@ -162,6 +163,75 @@ static int operation(cai_chrome *c, chrome_operation *op, const char *method,
   c->used = 1;
   rc = cai_chrome_request(c, method, json, out, error);
   cai_free_mem(NULL, json);
+  return rc;
+}
+static void forget_tab(cai_chrome *c, int64_t id) {
+  cai_chrome_tool_tab **link = &c->tool_tabs;
+  while (*link != NULL) {
+    cai_chrome_tool_tab *tab = *link;
+    if (tab->id == id) {
+      *link = tab->next;
+      cai_free_mem(NULL, tab);
+      return;
+    }
+    link = &tab->next;
+  }
+}
+/* Ownership is turn-scoped even for kept tabs. Prepare before executing the
+ * requested action; never retry a CDP command that has already been sent. */
+static int prepare_tab(cai_chrome *c, int64_t id, int claimed,
+                       cai_error *error) {
+  cai_chrome_tool_tab *tab;
+  chrome_operation op;
+  chrome_tab_result result;
+  lonejson_error je;
+  char *reply = NULL;
+  int rc = CAI_OK;
+  if (c->fd < 0)
+    cai_chrome_clear_tool_tabs(c);
+  for (tab = c->tool_tabs; !claimed && tab != NULL; tab = tab->next)
+    if (tab->id == id)
+      return CAI_OK;
+  tab = cai_alloc(NULL, sizeof(*tab));
+  if (tab == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "Cannot track Chrome tab");
+  memset(&op, 0, sizeof(op));
+  op.has_tab = 1;
+  op.tab = id;
+  if (!claimed) {
+    rc = operation(c, &op, "claimUserTab", NULL, &reply, error);
+    if (rc == CAI_OK) {
+      memset(&result, 0, sizeof(result));
+      lonejson_error_init(&je);
+      if (CAI_LJ_CHROME->parse_cstr(CAI_LJ_CHROME, &tab_map, &result, reply,
+                                    &je) != LONEJSON_STATUS_OK ||
+          result.id != id)
+        rc = cai_set_error(error, CAI_ERR_PROTOCOL,
+                           "Chrome claim returned a different or invalid tab");
+    }
+    cai_free_mem(NULL, reply);
+    reply = NULL;
+  }
+  if (rc == CAI_OK) {
+    op.status = "deliverable";
+    rc = operation(c, &op, "markTab", NULL, &reply, error);
+    cai_free_mem(NULL, reply);
+    reply = NULL;
+    op.status = NULL;
+  }
+  if (rc == CAI_OK) {
+    rc = operation(c, &op, "attach", NULL, &reply, error);
+    cai_free_mem(NULL, reply);
+  }
+  if (rc == CAI_OK) {
+    forget_tab(c, id);
+    tab->id = id;
+    tab->next = c->tool_tabs;
+    c->tool_tabs = tab;
+  } else {
+    cai_free_mem(NULL, tab);
+    cai_chrome_clear_tool_tabs(c);
+  }
   return rc;
 }
 static int chrome_callback(void *context, const void *arguments, void *output,
@@ -320,7 +390,14 @@ static int chrome_callback(void *context, const void *arguments, void *output,
     if (params == NULL)
       return CAI_ERR_NOMEM;
   }
-  rc = operation(c, &op, method, params, &reply, error);
+  if (op.has_tab && strcmp(a->action, "claim") != 0)
+    rc = prepare_tab(c, op.tab, 0, error);
+  if (rc == CAI_OK)
+    rc = operation(c, &op, method, params, &reply, error);
+  if (rc == CAI_OK && op.method != NULL &&
+      (strcmp(op.method, "Page.close") == 0 ||
+       strcmp(op.method, "Target.closeTarget") == 0))
+    forget_tab(c, op.tab);
   if (rc == CAI_OK &&
       (strcmp(a->action, "open") == 0 || strcmp(a->action, "claim") == 0)) {
     chrome_tab_result tab;
@@ -330,20 +407,10 @@ static int chrome_callback(void *context, const void *arguments, void *output,
       rc = cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "Chrome returned an invalid tab", je.message);
     if (rc == CAI_OK) {
-      char *kept = NULL;
-      char *attached = NULL;
       op.tab = tab.id;
       op.has_tab = 1;
       op.target.tab = tab.id;
-      /* Preserve the tab before debugger setup or navigation can fail. Turn
-       * cleanup still detaches and releases ownership, without closing it. */
-      op.status = "deliverable";
-      rc = operation(c, &op, "markTab", NULL, &kept, error);
-      cai_free_mem(NULL, kept);
-      op.status = NULL;
-      if (rc == CAI_OK)
-        rc = operation(c, &op, "attach", NULL, &attached, error);
-      cai_free_mem(NULL, attached);
+      rc = prepare_tab(c, tab.id, 1, error);
     }
     if (rc == CAI_OK && strcmp(a->action, "open") == 0 && a->url != NULL) {
       char *navigated = NULL;
