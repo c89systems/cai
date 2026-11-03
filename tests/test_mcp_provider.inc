@@ -155,6 +155,67 @@ static void test_mcp_search_index(test_state *state) {
   cai_error_cleanup(&error);
 }
 
+static void test_mcp_search_plural_normalization(test_state *state) {
+  static const struct {
+    const char *metadata, *query;
+    size_t matches;
+  } cases[] = {
+      {"company", "companies", 1U},
+      {"companies", "company", 1U},
+      {"companies", "companies", 1U},
+      {"company", "COMPANIES", 1U},
+      {"searchCompanies", "company", 1U},
+      {"search_company", "companies", 1U},
+      {"(POLICIES)", "policy", 1U},
+      {"policy", "policies", 1U},
+      {"queries", "query", 1U},
+      {"query", "queries", 1U},
+      {"flies", "fly", 1U},
+      {"fly", "flies", 1U},
+      {"ties", "tie", 1U},
+      {"tie", "ties", 1U},
+      {"files", "file", 1U},
+      {"class", "class", 1U},
+      {"status", "status", 1U},
+      {"ies", "ies", 1U},
+      {"company", "companie", 0U},
+      {"status", "statu", 0U},
+      {"class", "clas", 0U},
+      {"ies", "ie", 0U},
+  };
+  cai_mcp_client_tool tool;
+  cai_error error;
+  size_t i;
+  memset(&tool, 0, sizeof(tool));
+  tool.name = "lookup";
+  cai_error_init(&error);
+  for (i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    cai_mcp_search *search = NULL;
+    cai_mcp_search_match match;
+    char label[128];
+    size_t count;
+    expect_int(state, "plural_search_open", cai_mcp_search_new(&search, &error),
+               CAI_OK);
+    if (search == NULL)
+      break;
+    tool.description = cases[i].metadata;
+    expect_int(state, "plural_search_add",
+               cai_mcp_search_add(search, 41U, &tool, NULL, NULL, NULL, &error),
+               CAI_OK);
+    count = cai_mcp_search_find(search, cases[i].query, &match, 1U, &error);
+    snprintf(label, sizeof(label), "plural_%s_matches_%s", cases[i].metadata,
+             cases[i].query);
+    expect_int(state, label, (long)count, (long)cases[i].matches);
+    if (count == 1U) {
+      expect_int(state, "plural_search_target", (long)match.index, 41L);
+      expect_int(state, "plural_search_score", match.score > 0.0, 1L);
+    }
+    expect_int(state, "plural_search_success", error.code, CAI_OK);
+    cai_mcp_search_destroy(search);
+  }
+  cai_error_cleanup(&error);
+}
+
 typedef struct test_mcp_provider_state {
   int headers, refreshes, version, bad;
 } test_mcp_provider_state;

@@ -54185,6 +54185,7 @@ static const test_entry test_entries[] = {
      test_mcp_streamable_http_client_oauth2_client_credentials},
     {"mcp_provider_credentials", test_mcp_provider_credentials},
     {"mcp_search_index", test_mcp_search_index},
+    {"mcp_search_plural_normalization", test_mcp_search_plural_normalization},
     {"mcp_tool_aliases", test_mcp_tool_aliases},
     {"mcp_provider_validation", test_mcp_provider_validation},
     {"mcp_provider_refresh_bounded", test_mcp_provider_refresh_bounded},

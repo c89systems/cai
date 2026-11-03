@@ -213,6 +213,7 @@ if(CAI_BUILD_TESTS)
     mcp_streamable_http_client_oauth2_client_credentials
     mcp_provider_credentials
     mcp_search_index
+    mcp_search_plural_normalization
     mcp_tool_aliases
     mcp_provider_validation
     mcp_provider_refresh_bounded
@@ -775,6 +776,7 @@ if(CAI_BUILD_TESTS)
         lonejson_nested_mapped_array_stream
         client_open
         mike_mind_prompt_contract
+        mcp_search_plural_normalization
         patch_tool)
     set_tests_properties(cai_tests.valgrind PROPERTIES
       LABELS "valgrind;local;memory-check"

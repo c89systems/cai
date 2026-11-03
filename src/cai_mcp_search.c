@@ -58,7 +58,7 @@ static int tokenize(search_document *doc, const char *text, cai_error *error) {
                     : (char)start[i];
     /* Conservative plural normalization; do not alter identifiers like status.
      */
-    if (n > 4U && strcmp(word + n - 3U, "ies") == 0) {
+    if (n > 4U && memcmp(word + n - 3U, "ies", 3U) == 0) {
       word[n - 3U] = 'y';
       n -= 2U;
     } else if (n > 3U && word[n - 1U] == 's' && word[n - 2U] != 's' &&
