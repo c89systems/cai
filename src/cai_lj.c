@@ -21,6 +21,8 @@ static cai_lj_global_runtime cai_lj_stream_runtime = {
     PTHREAD_ONCE_INIT, NULL, {0}};
 static cai_lj_global_runtime cai_lj_chrome_runtime = {
     PTHREAD_ONCE_INIT, NULL, {0}};
+static cai_lj_global_runtime cai_lj_catalog_runtime = {
+    PTHREAD_ONCE_INIT, NULL, {0}};
 static pthread_once_t cai_lj_cleanup_once = PTHREAD_ONCE_INIT;
 
 static void cai_lj_cleanup_all(void) {
@@ -28,6 +30,7 @@ static void cai_lj_cleanup_all(void) {
   cai_lonejson_runtime_close(&cai_lj_preserve_runtime.runtime);
   cai_lonejson_runtime_close(&cai_lj_stream_runtime.runtime);
   cai_lonejson_runtime_close(&cai_lj_chrome_runtime.runtime);
+  cai_lonejson_runtime_close(&cai_lj_catalog_runtime.runtime);
 }
 
 static void cai_lj_register_cleanup(void) { (void)atexit(cai_lj_cleanup_all); }
@@ -96,6 +99,25 @@ lonejson *cai_lonejson_runtime_stream(void) {
   pthread_once(&cai_lj_cleanup_once, cai_lj_register_cleanup);
   pthread_once(&cai_lj_stream_runtime.once, cai_lj_init_runtime_stream);
   return cai_lj_require_runtime(&cai_lj_stream_runtime);
+}
+
+static void cai_lj_init_runtime_catalog(void) {
+  lonejson_config config = lonejson_default_config();
+  /* Catalog maps own their parsed fields and require normal destination
+   * initialization, unlike the incremental response parser. */
+  config.max_alloc_bytes = CAI_LJ_STREAM_LIMIT;
+  config.max_dynamic_string_bytes = CAI_LJ_STREAM_LIMIT;
+  config.json_value_max_total_bytes = CAI_LJ_STREAM_LIMIT;
+  config.json_value_max_string_bytes = CAI_LJ_STREAM_LIMIT;
+  lonejson_error_init(&cai_lj_catalog_runtime.error);
+  cai_lj_catalog_runtime.runtime =
+      lonejson_new(&config, &cai_lj_catalog_runtime.error);
+}
+
+lonejson *cai_lonejson_runtime_catalog(void) {
+  pthread_once(&cai_lj_cleanup_once, cai_lj_register_cleanup);
+  pthread_once(&cai_lj_catalog_runtime.once, cai_lj_init_runtime_catalog);
+  return cai_lj_require_runtime(&cai_lj_catalog_runtime);
 }
 
 int cai_lonejson_runtime_open(const lonejson_config *config,

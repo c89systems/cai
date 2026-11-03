@@ -41,6 +41,8 @@ global delivery-mode workaround or queue removal/reinsertion.
 | `/status` | Feed | Runtime/status snapshots and tool inventory. |
 | `/log` | Feed | Active conversation's log file path, when configured. |
 | `/tools` | Feed | Tool/MCP inventory. |
+| `/mcp`, `/mcp list`, `/mcp NAME`, `/mcp help` | Feed | Inspect configured connections without network work. |
+| `/mcp enable [NAME\|all]`, `/mcp disable [NAME\|all]`, `/mcp refresh [NAME\|all]` | Request | Update connection tools on the worker before subsequent inference; never change config.ini. |
 | `/skills` | Feed | Skill catalog. |
 | `/model` | Feed | Model and reasoning choices. |
 | `/model MODEL [EFFORT]`, `/model EFFORT` | Request | Settings for subsequent inference. |
@@ -127,9 +129,10 @@ standalone `--review` option retain their separate documented APIs.
 
 ## Synchronous work and verification
 
-Admission and execution are distinct. Safely admitted `/model`, `/tools`,
-`/status` and `/resume` can still synchronously load catalogs, discover MCP tools
-or read storage. This audit does not make those operations asynchronous.
+Admission and execution are distinct. Safely admitted `/model`, `/status` and
+`/resume` can still synchronously load catalogs or read storage. MCP discovery
+and refresh use the runtime worker. `/tools` waits for pending discovery in
+Softline's editable queue; `/mcp` queries can inspect its progress immediately.
 
 Focused Debug checks cover every command class and query/mutation split with
 both modes, same-burst editing across command boundaries and aliases,

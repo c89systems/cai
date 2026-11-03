@@ -217,7 +217,10 @@ typedef enum cai_agent_runtime_event_type {
   /** User-facing set_reasoning receipt: requested mode/mapped effort and
    * actual before/after outcome, as plain text in data. Never model context.
    * The tool's model-facing acknowledgement remains opaque. */
-  CAI_AGENT_EVENT_REASONING_TOOL_RESULT = 38
+  CAI_AGENT_EVENT_REASONING_TOOL_RESULT = 38,
+  /** Worker completed a requested MCP catalog refresh. data is a receipt;
+   * observation only, never model context. */
+  CAI_AGENT_EVENT_MCP_UPDATED = 39
 } cai_agent_runtime_event_type;
 
 /**
@@ -555,6 +558,17 @@ typedef struct cai_reasoning_tool_config {
 } cai_reasoning_tool_config;
 void cai_reasoning_tool_config_init(cai_reasoning_tool_config *config);
 
+/** Per-connection tool discovery. Catalogs are cached locally; lazy tools are
+ * exposed to inference only after tool_search selects them. */
+typedef struct cai_agent_mcp_options {
+  /** Stable source name; NULL uses a numbered MCP source. */
+  const char *name;
+  /** Optional source hint for discovery, not an instruction. */
+  const char *description;
+  /** Nonzero exposes all tools immediately. Default zero (lazy). */
+  int eager;
+} cai_agent_mcp_options;
+
 /** Configuration for a host-neutral CAI agent runtime. */
 typedef struct cai_agent_runtime_config {
   /**
@@ -667,9 +681,12 @@ typedef struct cai_agent_runtime_config {
   cai_mcp_client *const *mcp_clients;
   /** Number of entries in mcp_clients. */
   size_t mcp_client_count;
+  /** Optional parallel array of mcp_client_count discovery settings. NULL
+   * uses lazy loading for every connection. Strings are copied at open. */
+  const struct cai_agent_mcp_options *mcp_options;
   /**
    * Optional common registration policy for the configured MCP clients. CAI
-   * snapshots its scalar values and name prefix during open.
+   * snapshots its scalar values, prefix and raw-input mappings during open.
    */
   const cai_mcp_tool_registration_config *mcp_tool_config;
   /** Enable OpenAI's hosted image_generation tool for this Smith runtime. */
@@ -1223,6 +1240,8 @@ typedef struct cai_agent_tool_info {
   cai_agent_tool_source source;
   /** Index in config.mcp_clients for MCP tools; otherwise (size_t)-1. */
   size_t mcp_client_index;
+  /** Nonzero when installed but not yet exposed by tool_search. */
+  int deferred;
 } cai_agent_tool_info;
 typedef int (*cai_agent_tool_visitor)(void *context,
                                       const cai_agent_tool_info *tool,
@@ -1234,6 +1253,12 @@ typedef int (*cai_agent_tool_visitor)(void *context,
 int cai_agent_runtime_visit_tools(cai_agent_runtime *runtime,
                                   cai_agent_tool_visitor visitor, void *context,
                                   cai_error *error);
+/** Refresh the configured MCP clients on the worker before the next request.
+ * Connections remain borrowed and independent of the inference client. An
+ * owner may change a thread-safe connection's operational state, then request
+ * this refresh. Current tool calls finish first; catalog publication is atomic.
+ * Idle runtimes perform the refresh without starting an inference turn. */
+int cai_agent_runtime_refresh_mcp(cai_agent_runtime *runtime, cai_error *error);
 /** Visit the skills actually loaded into this runtime's developer catalog.
  * Owner-thread-only, including during a turn. Does no discovery, resource
  * reads or model requests; unavailable/disabled skills yield no entries.

@@ -109,6 +109,25 @@ The initialized config selects CAI defaults, including automatic XDG paths and
 ChatGPT/provider/model defaults. `config_file`, `config_directory`, `no_config`
 select startup configuration. The `settings` array accepts the full INI schema,
 including `[mcp.NAME]` and `[env]`, without duplicating its validation rules.
+
+MCP connections belong to the application, independently of the active
+inference provider. Saved ChatGPT authentication enables the built-in
+`chatgpt` app connection by default. `[mcp.NAME] provider = chatgpt` selects
+that authentication for another configured endpoint; ordinary connections can
+use `api_key_env`. Discovery and `/mcp` updates run on the runtime worker.
+`/mcp enable`, `/mcp disable` and `/mcp refresh` update only this invocation,
+including subsequent session switches, and never edit the configuration file.
+Core embedders can implement other credential sources through
+`cai_mcp_client_auth_provider` and schedule attached-catalog replacement with
+`cai_agent_runtime_refresh_mcp()`.
+All connections default to lazy tool schemas. The local `tool_search` function
+advertises source hints, searches the cached catalog with BM25, and exposes
+selected schemas on the next model request; it works with either inference
+protocol. `[mcp.NAME] lazy = false` opts a connection into eager exposure;
+`description` supplies its discovery hint. Catalog discovery still runs once
+on the worker, with explicit refresh afterward. Core hosts can set the parallel
+`cai_agent_runtime_config.mcp_options` array for source names/descriptions and
+per-client `eager` mode; strings and registration-policy mappings are copied.
 Values use INI's parsed value form: e.g. `true`, without surrounding quotes.
 
 Sessions use an incremental ordered collection journal, with Pouch zlib

@@ -211,6 +211,14 @@ if(CAI_BUILD_TESTS)
     mcp_streamable_http_client_api_key_rejects_userinfo_loopback
     mcp_streamable_http_client_api_key_rejects_short_url
     mcp_streamable_http_client_oauth2_client_credentials
+    mcp_provider_credentials
+    mcp_search_index
+    mcp_tool_aliases
+    mcp_provider_validation
+    mcp_provider_refresh_bounded
+    mcp_runtime_refresh
+    mcp_notification_204_opt_in
+    mcp_large_catalog
     mcp_streamable_http_client_oauth2_rejects_remote_http_token
     mcp_streamable_http_client_oauth2_rejects_discovered_remote_http_token
     mcp_streamable_http_client_oauth2_rejects_loopback_http_oidc_discovery

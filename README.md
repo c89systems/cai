@@ -1181,31 +1181,81 @@ Add a named Streamable HTTP server to `config.ini`:
 ```ini
 [mcp.example]
 enabled = true
+lazy = true
+description = Workspace document search and editing
 endpoint = https://example.com/mcp
 api_key_env = EXAMPLE_MCP_API_KEY
 discovery_timeout_ms = 3000
 timeout_ms = 30000
 ```
 
-The endpoint is required for enabled servers. `api_key_env` is optional; when
+Tool loading is lazy by default, including ChatGPT apps. CAI fetches and caches
+the catalog on its worker, but does not send those tool schemas to inference
+until the model calls `tool_search`. That portable function searches names,
+descriptions, source hints and parameter names with local BM25 ranking. It
+returns up to eight matches by default (maximum 32), installs their schemas
+for the next request, and makes no discovery network call. Results contain
+names, source identities and short descriptions; complete schemas appear once in the next
+request's tool list. Source names and
+short descriptions are included in the discovery tool so the model can find
+apps without already knowing their tool names. Provider connector metadata
+supplies app hints; ordinary servers can use `description` above.
+
+Set `lazy = false` on an individual connection to expose all its tools from
+startup. Selected lazy tools remain exposed for that runtime; a new runtime
+starts with deferred schemas again. Refresh preserves selected aliases that
+still exist, while disabling a connection removes its tools from discovery
+and inference. `/tools` marks unselected tools as deferred; `/mcp` shows the
+connection's lazy/eager mode and available catalog size.
+
+The endpoint is required for enabled servers without a provider default.
+`api_key_env` is optional; when
 set, its environment variable supplies a Bearer token. `[env]` can supply that
 variable under the normal configuration precedence rules. Server names accept
 ASCII letters, digits, underscores and hyphens. Tools are exposed as
 `mcp_7_example_TOOL`: the number is the server name's byte length, making the
 server/tool boundary unambiguous even with underscores in either name. The
-complete alias must fit 64 bytes and use the same characters. The existing
+complete alias fits 64 bytes. Longer names and names containing other characters
+receive stable `mcp_h…_t…` aliases; calls retain the exact remote name. The existing
 raw-input bridge honors server metadata for Responses
 and supplies ordinary JSON function arguments for Chat Completions.
 
-Discovery runs once when the first runtime opens. Each server's default
+Discovery runs on the runtime worker when the first runtime opens, keeping the
+editor responsive. Each server's default
 three-second budget covers initialization and all tools-list pages together;
 normal tool calls use the separate `timeout_ms`. Transport, authentication or
 catalog failures warn and leave that server unavailable while other tools
 remain usable. Catalogs are cached for this invocation, including across
-session switches; restart to rediscover. Utility commands and isolated
+session switches. `/mcp` lists connections as a Markdown table; `/mcp NAME`
+shows details. `/mcp enable NAME`, `/mcp disable NAME` and `/mcp refresh NAME`
+update the catalog at the next request boundary, or while idle. Omit NAME or use
+`all` for every connection. These commands use Softline's editable queue and
+never write `config.ini`. Their changes last for this application invocation,
+including `/new` and `/resume`. Utility commands and isolated
 `--review` runs do not connect MCP servers. `[agent] mcp = false`, `CAI_MCP=false`
 or `--no-mcp` disables configured servers; `--mcp` explicitly enables them.
 The generated template contains a commented `[mcp.example]` section to copy.
+
+Authenticated ChatGPT accounts also expose their connected apps through the
+`chatgpt` connection, enabled by default. This connection uses the account's
+saved ChatGPT authentication independently of the inference provider: changing
+`--provider` does not disable its app tools or send its credentials to inference.
+Only already-connected apps are discovered; CAI does not install apps or start
+connector authorization. Missing or expired authentication leaves the connection
+unavailable while other inference and tools continue. Log in, then refresh it.
+An explicit connection can override the endpoint or default enabled state:
+
+```ini
+[mcp.chatgpt]
+provider = chatgpt
+enabled = true
+# endpoint defaults to https://chatgpt.com/backend-api/ps/mcp
+```
+
+`provider = chatgpt` can also authenticate a differently named connection.
+Provider credentials and `api_key_env` are mutually exclusive. The app's TLS
+trust settings apply to MCP connections too. `/mcp disable chatgpt` disables it
+for this invocation; `enabled = false` persists that choice in configuration.
 
 CAI creates `${XDG_CONFIG_HOME:-$HOME/.config}/cai/config.ini` on first
 startup (help/version do not create it). The private file is the configuration
@@ -2554,10 +2604,59 @@ initialization and pagination. Zero preserves per-request timeouts. A positive
 budget does not change subsequent tool-call timeouts. Lua `cai.mcp_client`
 accepts the same field.
 
+`cai_mcp_streamable_http_client_config.auth_provider` accepts a copied native
+`cai_mcp_client_auth_provider` descriptor whose borrowed context outlives the
+connection. Its `headers` callback supplies credentials for each request, and
+optional `refresh` renews them after HTTP 401. Rewindable JSON-RPC requests retry
+once; raw uploads are not replayed. Headers are validated and cannot override
+transport-owned headers. Use HTTPS, or loopback HTTP for local development.
+This interface is independent of inference and reusable by other providers.
+`cai_mcp_chatgpt_auth_provider_init` adapts a borrowed `cai_chatgpt_auth` with
+Bearer authentication, optional account routing, product SKU and originator.
+For this gateway, also set `allow_notification_204 = 1`: it acknowledges
+notifications with an empty HTTP 204 instead of MCP's 202. Other connections
+retain strict validation by default. libcai_app and Lua's `chatgpt_auth`
+constructor select this compatibility setting automatically.
+
+Lua `cai.mcp_client({chatgpt_auth = auth})` uses the same native adapter and
+defaults to the ChatGPT app gateway when `url` is omitted. It pins the auth
+userdata until the client closes. Lua callbacks are not accepted as native
+credential providers. `auth:account_id()` returns the optional account route.
+
+`cai_agent_runtime_refresh_mcp()` (Lua `runtime:refresh_mcp()`) schedules an
+atomic replacement of attached MCP tools on the runtime worker. Existing
+non-MCP tools remain installed; preparation failure preserves the old registry.
+`CAI_AGENT_EVENT_MCP_UPDATED` reports completion without adding model context.
+Runtime clients default to lazy schema exposure through the built-in
+`tool_search` function on both Responses and Chat Completions. An optional
+`cai_agent_runtime_config.mcp_options` array, parallel to `mcp_clients`, provides
+source names/descriptions and per-connection `eager = 1` opt-in. The runtime
+copies these settings and the complete registration policy at open; client
+objects remain borrowed. Tool visitors report `deferred` for schemas not yet
+selected. Search results and subsequent MCP calls use the ordinary journal,
+replay and tool-result presentation paths.
+
+Lua takes the same parallel array:
+
+```lua
+mcp_clients = { apps, documents },
+mcp_options = {
+  { name = "ChatGPT apps" }, -- lazy, connector hints from the gateway
+  { name = "Documents", description = "Search workspace files", eager = true },
+},
+```
+
+Clients remain borrowed for the runtime's lifetime; hosts serialize access to
+shared clients, including credential callbacks, across attached runtimes.
+
 Remote MCP tools can be registered into a local `cai_tool_registry` with
 `cai_mcp_client_register_tools`. The registry keeps a non-owning client pointer,
 so callers must keep the MCP client alive for as long as those registered tools
-can run.
+can run. Names that exceed the provider's 64-byte limit or contain unsupported
+characters receive stable aliases without changing the remote call name.
+`cai_mcp_tool_alias(prefix, remote_name, out, error)` (Lua
+`cai.mcp_tool_alias(prefix, remote_name)`) computes the same alias used by the
+registry and application; ordinary valid prefix+name combinations are retained.
 
 ### Raw input for MCP tools
 

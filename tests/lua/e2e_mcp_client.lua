@@ -355,14 +355,36 @@ local runtime = assert_ok(runtime_client:new_smith_runtime({
   disable_terminal = true,
   disable_default_session_store = true,
   mcp_clients = { client },
+  mcp_options = { { name = "Documents", description = "Read and search documents" } },
   mcp_tool_config = { name_prefix = "runtime_" },
 }), nil, "runtime MCP attachment")
+local deferred_count, saw_search = 0, false
+for _, tool in ipairs(assert_ok(runtime:tools())) do
+  if tool.source == "mcp" then
+    assert(tool.deferred, "MCP tool schemas default to lazy")
+    deferred_count = deferred_count + 1
+  elseif tool.name == "tool_search" then
+    saw_search = true
+    contains("Lua discovery source", tool.description, "Documents")
+  end
+end
+assert(deferred_count > 0 and saw_search, "Lua native lazy discovery inventory")
 close_ok, close_err = client:close()
 close_err = assert_not_ok(close_ok, close_err,
   "runtime-attached MCP client close")
 contains("runtime-attached MCP client close error",
   tostring(close_err.message or ""), "registered tools")
 runtime:close()
+local eager_runtime = assert_ok(runtime_client:new_smith_runtime({
+  workspace_directory = ".", disable_terminal = true,
+  disable_default_session_store = true, mcp_clients = { client },
+  mcp_options = { { name = "Documents", eager = true } },
+}))
+for _, tool in ipairs(assert_ok(eager_runtime:tools())) do
+  assert(tool.name ~= "tool_search", "eager-only runtime needs no discovery tool")
+  if tool.source == "mcp" then assert(not tool.deferred, "explicit eager tool") end
+end
+eager_runtime:close()
 assert_ok(client:close(), nil, "runtime MCP client release")
 runtime_client:close()
 

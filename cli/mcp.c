@@ -13,6 +13,7 @@ typedef struct server_tool_storage {
   size_t count;
   const char **properties, **required;
   int failed;
+  const char *remote_name;
 } server_tool_storage;
 
 struct cai_cli_mcp_server {
@@ -26,7 +27,22 @@ struct cai_cli_mcp_server {
   int enabled, attempted;
   cai_error error;
   pslog_logger *logger;
+  cai_cli_mcp *owner;
+  cai_mcp_streamable_http_client_config config;
+  cai_mcp_chatgpt_auth_context chatgpt;
+  cai_mcp_client_auth_provider auth_provider;
+  const char *provider;
+  const char *key_env;
+  int refresh_requested, applied_enabled, busy, visible_code;
+  size_t visible_count;
+  char diagnostic[640];
 };
+/* Preserve ordinary readable aliases. Other MCP names are mapped losslessly
+ * through a separate alias domain, never by replacing punctuation with '_'. */
+static int server_alias(cai_cli_mcp_server *server, const char *remote,
+                        char out[65], cai_error *error) {
+  return cai_mcp_tool_alias(server->prefix, remote, out, error);
+}
 static void server_warn(cai_cli_mcp_server *server) {
   if (server->logger != NULL)
     server->logger->warnf(server->logger, "MCP server tools unavailable",
@@ -79,19 +95,21 @@ static int server_tool_copy(cai_cli_mcp_server *server, size_t index,
   cai_mcp_client_tool *tool = &server->tools[index];
   server_tool_storage *owned = &server->storage[index];
   const cai_mcp_client_schema *schema = remote->input_schema;
-  size_t i, length = strlen(server->prefix) + strlen(remote->name) + 1U;
-  char *name = malloc(length);
-  if (name == NULL || schema == NULL) {
-    free(name);
-    return cai_cli_error(error,
-                         schema == NULL ? CAI_ERR_PROTOCOL : CAI_ERR_NOMEM,
+  size_t i;
+  char name[65];
+  int rc;
+  if (schema == NULL)
+    return cai_cli_error(error, CAI_ERR_PROTOCOL,
                          "cannot copy MCP tool input contract");
-  }
-  snprintf(name, length, "%s%s", server->prefix, remote->name);
+  rc = server_alias(server, remote->name, name, error);
+  if (rc != CAI_OK)
+    return rc;
   tool->name = tool_text(owned, name);
-  free(name);
+  owned->remote_name = tool_text(owned, remote->name);
   tool->title = tool_text(owned, remote->title);
   tool->description = tool_text(owned, remote->description);
+  tool->source_name = tool_text(owned, remote->source_name);
+  tool->source_description = tool_text(owned, remote->source_description);
   tool->input_schema_json = tool_text(owned, remote->input_schema_json);
   owned->schema = *schema;
   owned->schema.schema_uri = tool_text(owned, schema->schema_uri);
@@ -123,26 +141,56 @@ static int server_tool_copy(cai_cli_mcp_server *server, size_t index,
              ? cai_cli_error(error, CAI_ERR_NOMEM, "copy MCP tool catalog")
              : CAI_OK;
 }
-static int tool_name_valid(const char *name) {
-  const unsigned char *p = (const unsigned char *)name;
-  if (p == NULL || *p == '\0')
-    return 0;
-  for (; *p; p++)
-    if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-          (*p >= '0' && *p <= '9') || *p == '_' || *p == '-'))
-      return 0;
-  return 1;
+static int server_initialize(cai_mcp_client *client, cai_error *error) {
+  /* Construction borrows a snapshot; discovery runs on the runtime worker. */
+  (void)client;
+  (void)error;
+  return CAI_OK;
 }
 static int server_refresh(cai_mcp_client *client, cai_error *error) {
   cai_cli_mcp_server *server = client->impl;
-  size_t i, prefix_length;
+  size_t i;
   int rc;
   (void)error;
-  if (server->attempted)
+  pthread_mutex_lock(&server->owner->lock);
+  if (!server->owner->discovery_started ||
+      (server->attempted && !server->refresh_requested)) {
+    pthread_mutex_unlock(&server->owner->lock);
     return CAI_OK;
+  }
+  server->refresh_requested = 0;
+  server->busy = 1;
   server->attempted = 1;
-  rc = cai_mcp_client_refresh_tools(server->remote, &server->error);
-  prefix_length = strlen(server->prefix);
+  server->applied_enabled = server->enabled;
+  pthread_mutex_unlock(&server->owner->lock);
+  server_tools_clear(server);
+  cai_error_cleanup(&server->error);
+  cai_error_init(&server->error);
+  rc = CAI_OK;
+  if (!server->applied_enabled) {
+    cai_mcp_client_destroy(server->remote);
+    server->remote = NULL;
+    goto published;
+  }
+  if (server->provider != NULL && strcmp(server->provider, "chatgpt") == 0 &&
+      server->chatgpt.auth == NULL)
+    rc = cai_cli_error(&server->error, CAI_ERR_INVALID,
+                       "ChatGPT authentication unavailable; log in and refresh "
+                       "this connection");
+  if (rc == CAI_OK && server->config.url == NULL)
+    rc = cai_cli_error(&server->error, CAI_ERR_INVALID,
+                       "MCP endpoint is not configured");
+  if (rc == CAI_OK && server->key_env != NULL && server->key_env[0] != '\0') {
+    server->config.api_key = getenv(server->key_env);
+    if (server->config.api_key == NULL || server->config.api_key[0] == '\0')
+      rc = cai_cli_error(&server->error, CAI_ERR_INVALID,
+                         "MCP API-key environment variable is unset");
+  }
+  if (rc == CAI_OK && server->remote == NULL)
+    rc = cai_mcp_streamable_http_client_open(&server->config, &server->remote,
+                                             &server->error);
+  if (rc == CAI_OK)
+    rc = cai_mcp_client_refresh_tools(server->remote, &server->error);
   if (rc == CAI_OK) {
     server->count = cai_mcp_client_tool_count(server->remote);
     if (server->count != 0U) {
@@ -157,15 +205,13 @@ static int server_refresh(cai_mcp_client *client, cai_error *error) {
       const cai_mcp_client_tool *remote =
           cai_mcp_client_tool_at(server->remote, i);
       size_t j;
-      if (remote == NULL || !tool_name_valid(remote->name) ||
-          prefix_length + strlen(remote->name) > 64U) {
+      if (remote == NULL || remote->name == NULL || remote->name[0] == '\0') {
         rc = cai_cli_error(&server->error, CAI_ERR_INVALID,
-                           "MCP tool name must use letters, digits, _ or - "
-                           "and fit 64 bytes including its server prefix");
+                           "MCP tool name must not be empty");
         break;
       }
       for (j = 0U; j < i; j++)
-        if (strcmp(server->tools[j].name + prefix_length, remote->name) == 0) {
+        if (strcmp(server->storage[j].remote_name, remote->name) == 0) {
           rc = cai_cli_error(&server->error, CAI_ERR_INVALID,
                              "MCP server advertised a duplicate tool name");
           break;
@@ -173,6 +219,10 @@ static int server_refresh(cai_mcp_client *client, cai_error *error) {
       if (rc != CAI_OK)
         break;
       rc = server_tool_copy(server, i, remote, &server->error);
+      for (j = 0U; rc == CAI_OK && j < i; ++j)
+        if (strcmp(server->tools[j].name, server->tools[i].name) == 0)
+          rc = cai_cli_error(&server->error, CAI_ERR_INVALID,
+                             "MCP tool aliases collide");
     }
   }
   if (rc != CAI_OK) {
@@ -182,6 +232,14 @@ static int server_refresh(cai_mcp_client *client, cai_error *error) {
     server->logger->debugf(server->logger, "cai.mcp.discovered",
                            "server=%s tools=%lu", server->name,
                            (unsigned long)server->count);
+published:
+  pthread_mutex_lock(&server->owner->lock);
+  server->busy = 0;
+  server->visible_code = server->error.code;
+  server->visible_count = server->count;
+  snprintf(server->diagnostic, sizeof(server->diagnostic), "%s",
+           server->error.message != NULL ? server->error.message : "");
+  pthread_mutex_unlock(&server->owner->lock);
   /* An unavailable optional server contributes no tools; other servers and
    * the agent remain usable. Its diagnostic is retained for /tools. */
   return CAI_OK;
@@ -195,10 +253,11 @@ static const cai_mcp_client_tool *server_at(const cai_mcp_client *client,
   return index < server->count ? &server->tools[index] : NULL;
 }
 static const char *remote_name(cai_cli_mcp_server *server, const char *name) {
-  size_t length = strlen(server->prefix);
-  return name != NULL && strncmp(name, server->prefix, length) == 0
-             ? name + length
-             : NULL;
+  size_t i;
+  for (i = 0U; name != NULL && i < server->count; ++i)
+    if (strcmp(server->tools[i].name, name) == 0)
+      return server->storage[i].remote_name;
+  return NULL;
 }
 static int server_call(cai_mcp_client *client, const char *name,
                        struct lonejson_spooled *arguments, cai_sink *output,
@@ -232,45 +291,83 @@ void cai_cli_mcp_close(cai_cli_mcp *mcp) {
   }
   free(mcp->servers);
   free(mcp->clients);
+  free(mcp->options);
+  if (mcp->lock_initialized)
+    pthread_mutex_destroy(&mcp->lock);
   memset(mcp, 0, sizeof(*mcp));
 }
 int cai_cli_mcp_open(cai_cli_mcp *mcp, const cai_config *config,
                      const char *program_name, int enabled,
-                     pslog_logger *logger, cai_error *error) {
+                     cai_chatgpt_auth *chatgpt_auth, pslog_logger *logger,
+                     cai_error *error) {
   size_t i, count = cai_config_section_count(config);
+  int configured_chatgpt = 0;
   memset(mcp, 0, sizeof(*mcp));
-  if (count == 0U)
-    return CAI_OK;
-  mcp->servers = calloc(count, sizeof(*mcp->servers));
-  mcp->clients = calloc(count, sizeof(*mcp->clients));
-  if (mcp->servers == NULL || mcp->clients == NULL) {
+  if (pthread_mutex_init(&mcp->lock, NULL) != 0)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "initialize MCP connections");
+  mcp->lock_initialized = 1;
+  for (i = 0U; i < count; ++i) {
+    const char *section = cai_config_section_at(config, i);
+    const char *provider = cai_config_get(config, section, "provider");
+    if (strncmp(section, "mcp.", 4U) == 0 &&
+        (strcmp(section, "mcp.chatgpt") == 0 ||
+         (provider != NULL && strcmp(provider, "chatgpt") == 0)))
+      configured_chatgpt = 1;
+  }
+  mcp->servers = calloc(count + 1U, sizeof(*mcp->servers));
+  mcp->clients = calloc(count + 1U, sizeof(*mcp->clients));
+  mcp->options = calloc(count + 1U, sizeof(*mcp->options));
+  if (mcp->servers == NULL || mcp->clients == NULL || mcp->options == NULL) {
     cai_cli_mcp_close(mcp);
     return cai_cli_error(error, CAI_ERR_NOMEM, "allocate MCP servers");
   }
-  for (i = 0U; i < count; i++) {
-    const char *section = cai_config_section_at(config, i);
-    const char *endpoint, *key_env, *key;
+  for (i = 0U; i <= count; i++) {
+    const char *section =
+        i == count ? "mcp.chatgpt" : cai_config_section_at(config, i);
+    const char *endpoint, *provider;
     long long timeout, discovery;
     cai_mcp_streamable_http_client_config client_config;
     cai_cli_mcp_server *server;
     size_t length;
-    int rc, prefix_length;
+    int prefix_length;
+    if (i == count && (configured_chatgpt || chatgpt_auth == NULL))
+      continue;
     if (strncmp(section, "mcp.", 4U) != 0)
       continue;
     server = &mcp->servers[mcp->count++];
     server->name = section + 4U;
+    mcp->options[mcp->client_count].name = server->name;
+    mcp->options[mcp->client_count].description =
+        cai_config_get(config, section, "description");
+    mcp->options[mcp->client_count].eager =
+        !cai_config_get_bool(config, section, "lazy", 1);
+    server->owner = mcp;
     server->logger = logger;
     cai_error_init(&server->error);
     server->enabled =
         enabled && cai_config_get_bool(config, section, "enabled", 1);
-    if (!server->enabled)
-      continue;
+    provider = cai_config_get(config, section, "provider");
+    if ((provider == NULL || provider[0] == '\0') &&
+        strcmp(section, "mcp.chatgpt") == 0)
+      provider = "chatgpt";
+    if (provider != NULL && provider[0] != '\0' &&
+        strcmp(provider, "chatgpt") != 0) {
+      cai_cli_mcp_close(mcp);
+      return cai_cli_error(error, CAI_ERR_INVALID,
+                           "Unknown MCP authentication provider");
+    }
+    server->provider =
+        provider != NULL && provider[0] != '\0' ? provider : NULL;
     endpoint = cai_config_get(config, section, "endpoint");
+    if ((endpoint == NULL || endpoint[0] == '\0') && server->provider != NULL)
+      endpoint = CAI_CHATGPT_APPS_MCP_URL;
     timeout = cai_config_get_integer(config, section, "timeout_ms", 30000);
     discovery =
         cai_config_get_integer(config, section, "discovery_timeout_ms", 3000);
-    if (endpoint == NULL || endpoint[0] == '\0' || timeout <= 0 ||
-        discovery <= 0 || timeout > LONG_MAX || discovery > LONG_MAX) {
+    if (((endpoint == NULL || endpoint[0] == '\0') && server->enabled) ||
+        timeout <= 0 || discovery <= 0 || timeout > LONG_MAX ||
+        discovery > LONG_MAX) {
       char message[256];
       snprintf(message, sizeof(message),
                "[%s] requires an endpoint and positive HTTP/discovery timeouts",
@@ -303,34 +400,65 @@ int cai_cli_mcp_open(cai_cli_mcp *mcp, const cai_config *config,
     client_config.timeout_ms = (long)timeout;
     client_config.discovery_timeout_ms = (long)discovery;
     client_config.logger = logger;
-    key_env = cai_config_get(config, section, "api_key_env");
-    key = key_env != NULL && key_env[0] != '\0' ? getenv(key_env) : NULL;
-    if (key_env != NULL && key_env[0] != '\0' &&
-        (key == NULL || key[0] == '\0')) {
-      cai_cli_error(&server->error, CAI_ERR_INVALID,
-                    "MCP API-key environment variable is unset");
-      server_warn(server);
-      server->attempted = 1;
-      continue;
+    client_config.ca_bundle_path =
+        cai_config_get(config, "client", "ca_bundle_path");
+    client_config.ca_path = cai_config_get(config, "client", "ca_path");
+    client_config.insecure_skip_verify =
+        cai_config_get_bool(config, "client", "insecure_skip_verify", 0);
+    server->key_env = cai_config_get(config, section, "api_key_env");
+    if (server->provider != NULL) {
+      if (server->key_env != NULL && server->key_env[0] != '\0') {
+        cai_cli_mcp_close(mcp);
+        return cai_cli_error(
+            error, CAI_ERR_INVALID,
+            "Provider MCP credentials cannot also use api_key_env");
+      }
+      server->chatgpt.auth = chatgpt_auth;
+      server->chatgpt.originator = program_name;
+      cai_mcp_chatgpt_auth_provider_init(&server->auth_provider,
+                                         &server->chatgpt);
+      client_config.auth_provider = &server->auth_provider;
+      client_config.allow_notification_204 = 1;
     }
-    client_config.api_key = key;
-    rc = cai_mcp_streamable_http_client_open(&client_config, &server->remote,
-                                             &server->error);
-    if (rc != CAI_OK) {
-      server_warn(server);
-      server->attempted = 1;
-      continue;
-    }
+    server->config = client_config;
     server->client.impl = server;
-    server->client.initialize = server_refresh;
+    server->client.initialize = server_initialize;
     server->client.refresh_tools = server_refresh;
     server->client.tool_count = server_count;
     server->client.tool_at = server_at;
     server->client.call_tool = server_call;
     server->client.call_tool_raw = server_call_raw;
     mcp->clients[mcp->client_count++] = &server->client;
+    if (server->enabled)
+      mcp->catalog_pending = 1;
   }
   return CAI_OK;
+}
+
+int cai_cli_mcp_ready(cai_cli_mcp *mcp) {
+  int ready;
+  pthread_mutex_lock(&mcp->lock);
+  ready = !mcp->catalog_pending;
+  pthread_mutex_unlock(&mcp->lock);
+  return ready;
+}
+
+void cai_cli_mcp_start(cai_cli_mcp *mcp) {
+  pthread_mutex_lock(&mcp->lock);
+  mcp->discovery_started = 1;
+  pthread_mutex_unlock(&mcp->lock);
+}
+
+void cai_cli_mcp_applied(cai_cli_mcp *mcp) {
+  size_t i;
+  int pending = 0;
+  pthread_mutex_lock(&mcp->lock);
+  for (i = 0U; i < mcp->count; ++i)
+    if (mcp->servers[i].busy || mcp->servers[i].refresh_requested ||
+        (mcp->servers[i].enabled && !mcp->servers[i].attempted))
+      pending = 1;
+  mcp->catalog_pending = pending;
+  pthread_mutex_unlock(&mcp->lock);
 }
 
 typedef struct inventory_output {
@@ -405,6 +533,8 @@ static int inventory_tool(void *context, const cai_agent_tool_info *tool,
     rc = literal(out, " | ", error);
   if (rc == CAI_OK)
     rc = cell(out, tool->input_format, error);
+  if (rc == CAI_OK && tool->deferred)
+    rc = literal(out, " (deferred)", error);
   if (rc == CAI_OK)
     rc = literal(out, " | ", error);
   if (rc == CAI_OK)
@@ -421,12 +551,13 @@ static int inventory_names(void *context, const cai_agent_tool_info *tool,
     rc = literal(out, ", ", error);
   return rc == CAI_OK ? identifier(out, tool->name, error) : rc;
 }
-int cai_cli_tools_markdown(const cai_cli_mcp *mcp, cai_agent_runtime *runtime,
+int cai_cli_tools_markdown(cai_cli_mcp *mcp, cai_agent_runtime *runtime,
                            int detailed, cai_cli_tools_write write,
                            void *context, cai_error *error) {
   inventory_output out;
   char row[512];
-  size_t i, ready = 0U, failed = 0U, disabled = 0U;
+  size_t i, ready = 0U, failed = 0U, disabled = 0U, connecting = 0U;
+  char pending[64];
   int rc;
   memset(&out, 0, sizeof(out));
   out.mcp = mcp;
@@ -441,23 +572,34 @@ int cai_cli_tools_markdown(const cai_cli_mcp *mcp, cai_agent_runtime *runtime,
                  error);
   if (rc == CAI_OK)
     rc = cai_agent_runtime_visit_tools(runtime, inventory_tool, &out, error);
+  if (mcp->lock_initialized)
+    pthread_mutex_lock(&mcp->lock);
   for (i = 0U; i < mcp->count; i++) {
-    if (!mcp->servers[i].enabled)
+    if (mcp->servers[i].enabled &&
+        (!mcp->servers[i].attempted ||
+         (mcp->servers[i].busy && mcp->servers[i].visible_count == 0U &&
+          mcp->servers[i].visible_code == CAI_OK)))
+      connecting++;
+    else if (!mcp->servers[i].applied_enabled)
       disabled++;
-    else if (mcp->servers[i].error.code != CAI_OK)
+    else if (mcp->servers[i].visible_code != CAI_OK)
       failed++;
     else
       ready++;
   }
   if (rc == CAI_OK && !detailed) {
+    pending[0] = '\0';
+    if (connecting != 0U)
+      snprintf(pending, sizeof(pending), ", %lu connecting",
+               (unsigned long)connecting);
     snprintf(row, sizeof(row),
              "| Local tools | %lu |\n"
              "| Hosted tools | %lu |\n| MCP tools | %lu |\n"
-             "| MCP servers | %lu ready, %lu unavailable, %lu disabled |\n\n"
+             "| MCP servers | %lu ready, %lu unavailable, %lu disabled%s |\n\n"
              "Use `/tools` for the full inventory.\n",
              (unsigned long)out.counts[0], (unsigned long)out.counts[1],
              (unsigned long)out.counts[2], (unsigned long)ready,
-             (unsigned long)failed, (unsigned long)disabled);
+             (unsigned long)failed, (unsigned long)disabled, pending);
     rc = literal(&out, row, error);
     if (rc == CAI_OK)
       rc = literal(&out, "\nAgent tools: ", error);
@@ -473,13 +615,13 @@ int cai_cli_tools_markdown(const cai_cli_mcp *mcp, cai_agent_runtime *runtime,
         rc = literal(&out, ", ", error);
       if (rc == CAI_OK)
         rc = identifier(&out, server->name, error);
-      if (!server->enabled)
+      if (!server->applied_enabled)
         snprintf(row, sizeof(row), " (disabled)");
-      else if (server->error.code != CAI_OK)
+      else if (server->visible_code != CAI_OK)
         snprintf(row, sizeof(row), " (unavailable)");
       else
         snprintf(row, sizeof(row), " (%lu tools)",
-                 (unsigned long)server->count);
+                 (unsigned long)server->visible_count);
       if (rc == CAI_OK)
         rc = literal(&out, row, error);
     }
@@ -493,10 +635,9 @@ int cai_cli_tools_markdown(const cai_cli_mcp *mcp, cai_agent_runtime *runtime,
                  error);
     for (i = 0U; rc == CAI_OK && i < mcp->count; i++) {
       const cai_cli_mcp_server *server = &mcp->servers[i];
-      const char *status = !server->enabled ? "disabled"
-                           : server->error.code != CAI_OK
-                               ? server->error.message
-                               : "ready";
+      const char *status = !server->applied_enabled         ? "disabled"
+                           : server->visible_code != CAI_OK ? server->diagnostic
+                                                            : "ready";
       rc = literal(&out, "| ", error);
       if (rc == CAI_OK)
         rc = identifier(&out, server->name, error);
@@ -504,12 +645,131 @@ int cai_cli_tools_markdown(const cai_cli_mcp *mcp, cai_agent_runtime *runtime,
         rc = literal(&out, " | ", error);
       if (rc == CAI_OK)
         rc = cell(&out, status, error);
-      snprintf(row, sizeof(row), " | %lu |\n", (unsigned long)server->count);
+      snprintf(row, sizeof(row), " | %lu |\n",
+               (unsigned long)server->visible_count);
       if (rc == CAI_OK)
         rc = literal(&out, row, error);
     }
     if (rc == CAI_OK && mcp->count == 0U)
       rc = literal(&out, "| — | No MCP servers configured | 0 |\n", error);
   }
+  if (mcp->lock_initialized)
+    pthread_mutex_unlock(&mcp->lock);
+  return rc;
+}
+
+int cai_cli_mcp_command(cai_cli_mcp *mcp, const char *arguments,
+                        cai_agent_runtime *runtime, cai_cli_tools_write write,
+                        void *context, cai_error *error) {
+  inventory_output out;
+  char operation[129], name[129], extra[2], row[96];
+  const char *selected = NULL;
+  size_t i, found = 0U;
+  int fields, mutate = 0, enabled = -1, rc = CAI_OK;
+  memset(&out, 0, sizeof(out));
+  out.write = write;
+  out.context = context;
+  fields = sscanf(arguments, "%128s %128s %1s", operation, name, extra);
+  if (fields >= 1 && strcmp(operation, "help") == 0)
+    return literal(&out,
+                   "Use `/mcp` or `/mcp list`; `/mcp NAME` shows details. "
+                   "Use `/mcp enable NAME`, `/mcp disable NAME`, or "
+                   "`/mcp refresh NAME`. Omit NAME or use `all` to select "
+                   "all connections. Changes affect this invocation only; "
+                   "config.ini is unchanged.\n",
+                   error);
+  if (fields >= 1 &&
+      (strcmp(operation, "enable") == 0 || strcmp(operation, "disable") == 0 ||
+       strcmp(operation, "refresh") == 0)) {
+    mutate = 1;
+    enabled = strcmp(operation, "enable") == 0    ? 1
+              : strcmp(operation, "disable") == 0 ? 0
+                                                  : -1;
+    if (fields > 2)
+      return cai_cli_error(error, CAI_ERR_INVALID,
+                           "Use /mcp help for command syntax.");
+    selected = fields == 2 && strcmp(name, "all") != 0 ? name : NULL;
+  } else if (fields >= 1 && strcmp(operation, "list") != 0) {
+    if (fields != 1)
+      return cai_cli_error(error, CAI_ERR_INVALID,
+                           "Use /mcp NAME to inspect one connection.");
+    selected = operation;
+  } else if (fields > 1)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "Use /mcp list without arguments.");
+  pthread_mutex_lock(&mcp->lock);
+  for (i = 0U; i < mcp->count; ++i)
+    if (selected == NULL || strcmp(selected, mcp->servers[i].name) == 0)
+      found++;
+  if (selected != NULL && found == 0U) {
+    pthread_mutex_unlock(&mcp->lock);
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "No configured MCP connection with that name.");
+  }
+  if (mutate) {
+    for (i = 0U; i < mcp->count; ++i) {
+      cai_cli_mcp_server *server = &mcp->servers[i];
+      if (selected != NULL && strcmp(selected, server->name) != 0)
+        continue;
+      if (enabled >= 0)
+        server->enabled = enabled;
+      server->refresh_requested = 1;
+    }
+    mcp->catalog_pending = 1;
+    pthread_mutex_unlock(&mcp->lock);
+    return cai_agent_runtime_refresh_mcp(runtime, error);
+  }
+  rc = literal(
+      &out,
+      "## MCP connections\n\n| Connection | Provider | Status | Tools |\n"
+      "| --- | --- | --- | --- |\n",
+      error);
+  for (i = 0U; rc == CAI_OK && i < mcp->count; ++i) {
+    const cai_cli_mcp_server *server = &mcp->servers[i];
+    const char *status = server->enabled && !server->attempted ? "connecting"
+                         : server->refresh_requested      ? "pending update"
+                         : server->busy                   ? "refreshing"
+                         : !server->applied_enabled       ? "disabled"
+                         : server->visible_code != CAI_OK ? server->diagnostic
+                                                          : "ready";
+    if (selected != NULL && strcmp(selected, server->name) != 0)
+      continue;
+    rc = literal(&out, "| ", error);
+    if (rc == CAI_OK)
+      rc = identifier(&out, server->name, error);
+    if (rc == CAI_OK)
+      rc = literal(&out, " | ", error);
+    if (rc == CAI_OK)
+      rc = cell(&out, server->provider != NULL ? server->provider : "MCP",
+                error);
+    if (rc == CAI_OK)
+      rc = literal(&out, " | ", error);
+    if (rc == CAI_OK)
+      rc = cell(&out, status, error);
+    if (rc == CAI_OK)
+      rc = literal(&out, mcp->options[i].eager ? " (eager)" : " (lazy)", error);
+    snprintf(row, sizeof(row), " | %lu |\n",
+             (unsigned long)server->visible_count);
+    if (rc == CAI_OK)
+      rc = literal(&out, row, error);
+  }
+  if (rc == CAI_OK && mcp->count == 0U)
+    rc = literal(&out, "| — | — | No connections configured | 0 |\n", error);
+  if (rc == CAI_OK && selected != NULL) {
+    for (i = 0U; rc == CAI_OK && i < mcp->count; ++i)
+      if (strcmp(mcp->servers[i].name, selected) == 0) {
+        rc = literal(&out, "\nEndpoint: ", error);
+        if (rc == CAI_OK)
+          rc = cell(&out, mcp->servers[i].config.url, error);
+        if (rc == CAI_OK)
+          rc = literal(&out, "\n", error);
+      }
+  }
+  if (rc == CAI_OK)
+    rc = literal(&out,
+                 "\nUse `/mcp help` for controls. Runtime changes leave "
+                 "config.ini unchanged.\n",
+                 error);
+  pthread_mutex_unlock(&mcp->lock);
   return rc;
 }

@@ -121,6 +121,7 @@ typedef struct cli_state {
   int has_review_metrics;
   cai_cli_mcp mcp;
   int mcp_initialized;
+  int mcp_notice_pending;
   cai_cli_messages *messages;
   sl_watch_id_t message_watch_id;
   int has_message_watch;
@@ -317,6 +318,19 @@ static int cli_auth_refresh(cai_chatgpt_auth *auth, cai_error *error) {
   int rc;
   pthread_mutex_lock(&state->auth_lock);
   rc = state->auth->refresh(state->auth, error);
+  pthread_mutex_unlock(&state->auth_lock);
+  return rc;
+}
+
+static int cli_auth_account(cai_chatgpt_auth *auth, char **out,
+                            cai_error *error) {
+  cli_state *state = auth->impl;
+  int rc;
+  pthread_mutex_lock(&state->auth_lock);
+  *out = NULL;
+  rc = state->auth->account_id != NULL
+           ? state->auth->account_id(state->auth, out, error)
+           : CAI_OK;
   pthread_mutex_unlock(&state->auth_lock);
   return rc;
 }
@@ -1177,6 +1191,7 @@ static const struct cli_command_definition {
     {"/status", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
     {"/log", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
     {"/tools", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
+    {"/mcp", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
     {"/skills", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
     {"/quit", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
     {"/exit", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
@@ -1256,6 +1271,11 @@ static cli_command_boundary cli_command_delivery(const char *line) {
   while (arg_length > 0U && strchr(" \t", arg[arg_length - 1U]) != NULL)
     arg_length--;
   word_length = strcspn(arg, " \t");
+  if (cli_word_is(name, length, "/mcp") &&
+      !cli_word_is(arg, word_length, "enable") &&
+      !cli_word_is(arg, word_length, "disable") &&
+      !cli_word_is(arg, word_length, "refresh"))
+    return CLI_COMMAND_FEED;
   if (cli_word_is(name, length, "/goal") &&
       (cli_word_is(arg, arg_length, "status") ||
        cli_word_is(arg, arg_length, "help")))
@@ -1379,6 +1399,9 @@ static int cli_prompt_ready(cli_state *state, const char *text,
   int rc;
   *ready = 0;
   if (cli_command_at_feed_boundary(text)) {
+    if (strcmp(text, "/tools") == 0 && state->mcp_initialized &&
+        !cai_cli_mcp_ready(&state->mcp))
+      return CAI_OK;
     *ready = 1;
     return CAI_OK;
   }
@@ -1624,7 +1647,8 @@ static void cli_log_event(cli_state *state,
                                       "execution_record",
                                       "request_retry",
                                       "request_retry_started",
-                                      "reasoning_tool_result"};
+                                      "reasoning_tool_result",
+                                      "mcp_updated"};
   pslog_field fields[16];
   size_t count;
   const char *name;
@@ -1801,6 +1825,18 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
     themed = scope < 0 ? CAI_OK : cli_set_theme_scope(state, scope, error);
     if (themed != CAI_OK)
       return themed;
+  }
+  if (event->type == CAI_AGENT_EVENT_MCP_UPDATED) {
+    cai_cli_mcp_applied(&state->mcp);
+    if (cai_cli_mcp_ready(&state->mcp) && state->mcp_notice_pending) {
+      state->mcp_notice_pending = 0;
+      return cli_markdown(state, event->data != NULL
+                                     ? event->data
+                                     : "MCP connections updated.") == 0
+                 ? CAI_OK
+                 : CAI_ERR_TRANSPORT;
+    }
+    return CAI_OK;
   }
   if (event->type == CAI_AGENT_EVENT_SUBAGENT_STARTED)
     state->foreground_subagent = 1;
@@ -3161,15 +3197,19 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     state->pouch.replay_scope = state->workspace;
   }
   if (!state->mcp_initialized) {
-    rc = cai_cli_mcp_open(
-        &state->mcp, state->configuration, state->options.program_name,
-        state->options.mcp && !state->options.review, cli_logger(state), error);
+    rc = cai_cli_mcp_open(&state->mcp, state->configuration,
+                          state->options.program_name,
+                          state->options.mcp && !state->options.review,
+                          state->auth != NULL ? &state->shared_auth : NULL,
+                          cli_logger(state), error);
     if (rc != CAI_OK)
       return rc;
     state->mcp_initialized = 1;
   }
   config.mcp_clients = state->mcp.clients;
-  config.mcp_client_count = state->mcp.client_count;
+  config.mcp_options = state->mcp.options;
+  config.mcp_client_count =
+      state->options.review ? 0U : state->mcp.client_count;
   if (config.replay_callback != NULL && !state->batch &&
       state->options.replay_turns != 0L &&
       cai_cli_replay_open(state->options.replay_turns < 0L
@@ -3179,6 +3219,11 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     return error->code;
   cai_cli_pouch_begin_use(&state->pouch);
   rc = cai_agent_runtime_open(state->client, &config, &state->runtime, error);
+  if (rc == CAI_OK && !state->options.review) {
+    cai_cli_mcp_start(&state->mcp);
+    if (!cai_cli_mcp_ready(&state->mcp))
+      rc = cai_agent_runtime_refresh_mcp(state->runtime, error);
+  }
   state->pouch.capture_session = 0;
   state->pouch.replay_begin = NULL;
   state->pouch.replay_event = NULL;
@@ -5235,6 +5280,9 @@ static int cli_handle_command(cli_state *state, const char *line,
         "configured. Also shown in `/status`. |\n"
         "| `/tools` | List installed tools, MCP servers, discovery errors and "
         "tool descriptions. |\n",
+        "| `/mcp [COMMAND]` | List connections, inspect NAME, enable/disable "
+        "NAME or all, or refresh [NAME]. Updates apply at request boundaries; "
+        "config.ini is unchanged. |\n",
         "| `/tools reload [PATH]` | Reload configured tool packages or one "
         "package. |\n"
         "| `/tools unload NAME` | Retire a plugin before the next request. |\n"
@@ -5361,6 +5409,22 @@ static int cli_handle_command(cli_state *state, const char *line,
           "Use /tools, /tools reload [PATH], or /tools unload NAME.");
     if (rc == CAI_OK && (cli_text(state, message, strlen(message)) != 0 ||
                          cli_finish_response(state) != 0))
+      rc = CAI_ERR_TRANSPORT;
+    return rc;
+  }
+  if (strcmp(line, "/mcp") == 0 || strncmp(line, "/mcp ", 5U) == 0) {
+    if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0)
+      return CAI_ERR_TRANSPORT;
+    arg = line + 4U;
+    arg += strspn(arg, " \t");
+    rc = cai_cli_mcp_command(&state->mcp, arg, state->runtime, cli_tools_write,
+                             state, error);
+    if (rc == CAI_OK &&
+        (strncmp(arg, "enable", 6U) == 0 || strncmp(arg, "disable", 7U) == 0 ||
+         strncmp(arg, "refresh", 7U) == 0) &&
+        !cai_cli_mcp_ready(&state->mcp))
+      state->mcp_notice_pending = 1;
+    if (rc == CAI_OK && cli_finish_response(state) != 0)
       rc = CAI_ERR_TRANSPORT;
     return rc;
   }
@@ -6169,7 +6233,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     }
   }
   auth_file = state->options.auth_json;
-  if (strcmp(state->options.provider, "chatgpt") == 0) {
+  if (strcmp(state->options.provider, "chatgpt") == 0 ||
+      !state->options.review) {
     auth_store =
         cli_named_store(state, state->normal_options.auth_store, 1, &error);
     if (auth_store == NULL) {
@@ -6186,8 +6251,14 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     if (auth_file != NULL) {
       rc = cai_cli_pouch_seed_auth(auth_store, auth_file, &error);
       if (rc != CAI_OK) {
-        cli_print_error(state, "import ChatGPT auth", &error);
-        goto cleanup;
+        if (strcmp(state->options.provider, "chatgpt") == 0) {
+          cli_print_error(state, "import ChatGPT auth", &error);
+          goto cleanup;
+        }
+        cai_cli_log_error(cli_logger(state), "ChatGPT apps auth import",
+                          &error);
+        cai_error_cleanup(&error);
+        cai_error_init(&error);
       }
     }
   }
@@ -6301,19 +6372,25 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     goto cleanup;
   }
   client_config.model_metadata_json = metadata_json;
-  if (strcmp(state->options.provider, "chatgpt") == 0) {
+  if (auth_store != NULL) {
     cai_chatgpt_auth_config_init(&auth_config);
     auth_config.logger = state->log->logger;
     auth_config.storage = &auth_store->credentials;
     rc = cai_chatgpt_auth_open(&auth_config, &state->auth, &error);
     if (rc != CAI_OK) {
-      char hint[640];
-      cli_print_error(state, "open ChatGPT auth", &error);
-      snprintf(hint, sizeof(hint), "run %s --login to authenticate",
-               state->options.invocation_name);
-      cli_diagnostic(state, PSLOG_LEVEL_ERROR, hint);
-      goto cleanup;
+      if (strcmp(state->options.provider, "chatgpt") == 0) {
+        char hint[640];
+        cli_print_error(state, "open ChatGPT auth", &error);
+        snprintf(hint, sizeof(hint), "run %s --login to authenticate",
+                 state->options.invocation_name);
+        cli_diagnostic(state, PSLOG_LEVEL_ERROR, hint);
+        goto cleanup;
+      }
+      cai_error_cleanup(&error);
+      cai_error_init(&error);
     }
+  }
+  if (state->auth != NULL) {
     if (pthread_mutex_init(&state->auth_lock, NULL) != 0) {
       cai_cli_error(&error, CAI_ERR_TRANSPORT, "initialize shared auth lock");
       cli_print_error(state, "open ChatGPT auth", &error);
@@ -6322,7 +6399,10 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     state->has_auth_lock = 1;
     state->shared_auth.access_token = cli_auth_token;
     state->shared_auth.refresh = cli_auth_refresh;
+    state->shared_auth.account_id = cli_auth_account;
     state->shared_auth.impl = state;
+  }
+  if (strcmp(state->options.provider, "chatgpt") == 0) {
     client_config.chatgpt_auth = &state->shared_auth;
   } else if (strcmp(state->options.provider, "openrouter") == 0) {
     cai_client_config_use_openrouter(&client_config);
@@ -6368,7 +6448,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     cli_print_error(state, "open model catalog client", &error);
     goto cleanup;
   }
-  if (state->auth != NULL) {
+  if (state->auth != NULL && strcmp(state->options.provider, "chatgpt") == 0) {
     cai_error quota_error;
     cai_client_config quota_config;
     cai_error_init(&quota_error);

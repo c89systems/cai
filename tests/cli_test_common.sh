@@ -57,7 +57,8 @@ peer_start() {
   "${CAI_TEST_PYTHON:-python3}" "$support/fixtures/http_peer.py" "$root/peer" >"$root/peer/stdout" 2>"$root/peer/stderr" & peer_pid=$!
   wait_for test -s "$root/peer/port"
   endpoint="http://127.0.0.1:$(cat "$root/peer/port")/v1"
-  base=("$cli" -p custom --endpoint "$endpoint" -m gpt-5.6-luna --no-terminal --no-image-generation)
+  # Network capabilities must be explicitly pointed at the local fixture.
+  base=("$cli" -p custom --endpoint "$endpoint" -m gpt-5.6-luna --no-terminal --no-image-generation --no-mcp)
   # These fixtures create and control their instruction trees explicitly.
   [[ "${CAI_TEST_REQUIRE_APPROVAL:-0}" == 1 ]] || base+=(--insecure)
   base+=(-C "$work")

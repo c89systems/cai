@@ -3,6 +3,7 @@ source "$(dirname "$0")/cli_test_common.sh"
 # Keep complete aliases visible; wrapping belongs to the rendering fixtures.
 width=240
 peer_start
+base+=(--mcp)
 protocol=${1:-responses}
 origin=${endpoint%/v1}
 mkdir -p "$root/config/cai"
@@ -13,10 +14,12 @@ cat >"$config" <<INI
 [client]
 api_protocol = $protocol
 [mcp.alpha]
+lazy = false
 endpoint = "$origin/mcp/alpha"
 api_key_env = MCP_FIXTURE_KEY
 discovery_timeout_ms = 1000
 [mcp.beta]
+lazy = false
 endpoint = "$origin/mcp/beta"
 [mcp.disabled]
 enabled = false
@@ -27,6 +30,11 @@ INI
 unset MCP_UNSET_FIXTURE_KEY
 plan "$(jq -n --argjson chat "$([[ "$protocol" == chat_completions ]] && printf true || printf false)" '{chat:$chat,plan:[{pause:true,text:"INVENTORY TURN DONE"}]}')"
 terminal_start -N
+mcp_discovered() {
+  logs
+  jq -se 'any(.[]; .event == "mcp_updated")' "$root/logs.jsonl" >/dev/null
+}
+wait_for mcp_discovered
 contains "$root/mcp-config" "$origin/mcp/alpha timeout=30000 discovery=1000"
 contains "$root/mcp-config" "$origin/mcp/beta timeout=30000 discovery=3000"
 send '/status\r'; expect 'MCP servers'; expect 'Agent tools'
@@ -95,8 +103,10 @@ cat >"$config" <<INI
 [client]
 api_protocol = $protocol
 [mcp.a_b]
+lazy = false
 endpoint = "$origin/mcp/a_b"
 [mcp.a]
+lazy = false
 endpoint = "$origin/mcp/a"
 [mcp.alpha]
 endpoint = "$origin/mcp/alpha"
@@ -120,14 +130,16 @@ tail -4 "$root/peer/requests.jsonl" | jq -se 'all(.[];
   ($names | index("mcp_1_a_b_c")) != null)' >/dev/null
 
 # The new prefix counts toward the provider's limit. A 64-byte alias works;
-# an overlong optional server warns without disabling the valid one.
+# an overlong name gets a bounded lossless alias without disabling its server.
 printf -v max_name '%053d' 0
 cat >"$config" <<INI
 [client]
 api_protocol = $protocol
 [mcp.edge]
+lazy = false
 endpoint = "$origin/mcp/edge"
 [mcp.over]
+lazy = false
 endpoint = "$origin/mcp/over"
 INI
 plan "$(jq -n --arg name "$max_name" --argjson chat "$([[ "$protocol" == chat_completions ]] && printf true || printf false)" '
@@ -137,9 +149,10 @@ plan "$(jq -n --arg name "$max_name" --argjson chat "$([[ "$protocol" == chat_co
   },plan:[{tool:("mcp_4_edge_"+$name),arguments:{}},"MCP NAME BOUNDARY DONE"]}')"
 run -Nni 'exercise alias size limit'; ok
 [[ $(stdout_text) == 'MCP NAME BOUNDARY DONE' ]]
-contains "$root/stderr" 'fit 64 bytes including its server prefix'
+absent "$root/stderr" 'fit 64 bytes including its server prefix'
 tail -2 "$root/peer/requests.jsonl" | jq -se 'all(.[];
   [.tools[] | (.function.name // .name) | select(type == "string")] |
   all(.[]; length <= 64))' >/dev/null
 jq -se 'any(.[]; .server == "edge" and .request.method == "tools/call") and
         all(.[]; .server != "over" or .request.method != "tools/call")' "$root/peer/mcp_requests.jsonl" >/dev/null
+tail -1 "$root/peer/requests.jsonl" | jq -e '[.tools[] | .function.name // .name | select(type == "string") | select(startswith("mcp_h"))] | length == 1' >/dev/null

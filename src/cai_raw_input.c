@@ -2,7 +2,8 @@
 #include <cai/mcp.h>
 #include <string.h>
 
-/* Metadata and schemas are small control documents, never tool payloads. */
+/* Raw-input hints are small control fields. Surrounding provider metadata can
+ * include long instructions and must not be parsed as part of that hint. */
 typedef struct cai_raw_input_doc {
   char *field;
   char *framing;
@@ -240,6 +241,7 @@ int cai_raw_input_parse_meta(const lonejson_json_value *meta,
   lonejson_path_value_visitor visitor;
   cai_tool_raw_input mapping;
   lonejson_error json_error;
+  size_t first;
   int rc = CAI_OK;
   memset(out, 0, sizeof(*out));
   if (meta == NULL || meta->kind == LONEJSON_JSON_VALUE_NULL)
@@ -247,6 +249,13 @@ int cai_raw_input_parse_meta(const lonejson_json_value *meta,
   if (meta->kind != LONEJSON_JSON_VALUE_BUFFER)
     return cai_set_error(error, CAI_ERR_PROTOCOL,
                          "MCP raw-input metadata must be captured JSON");
+  for (first = 0U;
+       first < meta->len && strchr(" \t\r\n", meta->json[first]) != NULL;
+       ++first) {
+  }
+  if (first == meta->len || meta->json[first] != '{')
+    return cai_set_error(error, CAI_ERR_PROTOCOL,
+                         "MCP raw-input metadata must be an object");
   memset(&presence, 0, sizeof(presence));
   visitor = lonejson_default_path_value_visitor();
   visitor.object_key_begin = cai_raw_meta_key_begin;
@@ -259,6 +268,8 @@ int cai_raw_input_parse_meta(const lonejson_json_value *meta,
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "invalid MCP raw-input metadata",
                                 json_error.message);
+  if (!presence.advertised)
+    return CAI_OK;
   memset(&doc, 0, sizeof(doc));
   lonejson_error_init(&json_error);
   if (CAI_LJ->parse_buffer(CAI_LJ, &cai_raw_meta_map, &doc, meta->json,

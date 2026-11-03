@@ -106,6 +106,7 @@ int cai_cli_tool_result_open(const cai_agent_runtime_event *e,
   if (e->data == NULL || (e->tool_action != CAI_AGENT_TOOL_ACTION_MCP &&
                           e->tool_action != CAI_AGENT_TOOL_ACTION_EXECUTE &&
                           !same(e->tool_name, "run_review_and_fix") &&
+                          !same(e->tool_name, "tool_search") &&
                           !same(e->tool_name, "agent_message") &&
                           !same(e->tool_name, "todo_kanban") &&
                           !same(e->tool_name, "searxng_search") &&
@@ -148,6 +149,13 @@ int cai_cli_tool_result_open(const cai_agent_runtime_event *e,
       r->success = !r->doc.is_error;
       r->verb = r->success ? "MCP" : "MCP failed";
       r->label = e->tool_name != NULL ? e->tool_name : "tool";
+    } else if (same(e->tool_name, "tool_search")) {
+      if (!r->doc.has_ok || r->doc.message == NULL)
+        goto unrecognized;
+      r->verb = "Discovered";
+      r->label = "MCP tools";
+      r->markdown = r->doc.message;
+      r->markdown_length = strlen(r->markdown);
     } else if (same(e->tool_name, "run_review_and_fix")) {
       if (!same(r->doc.status, "queued"))
         goto unrecognized;

@@ -1,4 +1,7 @@
 local cai = require("cai")
+assert(cai.mcp_tool_alias("prefix_", "echo") == "prefix_echo")
+local dotted_alias = assert(cai.mcp_tool_alias("apps_", "mail.search"))
+assert(#dotted_alias <= 64 and dotted_alias ~= cai.mcp_tool_alias("apps_", "mail/search"))
 assert(not pcall(cai.open, {api_protocol="unsupported"}),
   "unknown wire protocols must be rejected")
 local pslog = require("pslog")
@@ -1455,6 +1458,7 @@ do
         tool_capabilities = cai.AGENT_PRESET_TOOL_READ_FILE,
       },
       mcp_clients = { rejected_mcp },
+      mcp_options = { { name = "Rejected connection", eager = true } },
     })
     local rejection = assert_not_ok(rejected_runtime, rejected_error,
       "custom preset without MCP capability")
@@ -1771,6 +1775,21 @@ do
   assert_eq(assert_ok(standalone_auth:access_token(), nil,
     "Lua standalone ChatGPT access token"), future_token,
     "Lua standalone ChatGPT token")
+  assert_eq(assert_ok(standalone_auth:account_id()), "acct_lua",
+    "Lua standalone account routing")
+  local apps = assert_ok(cai.mcp_client({chatgpt_auth=standalone_auth}))
+  local closed, close_err = standalone_auth:close()
+  assert_not_ok(closed, close_err,
+    "MCP client pins its independent authentication")
+  assert_eq(apps:tool_count(), 0, "app discovery is explicit")
+  assert_ok(apps:close())
+  assert_ok(apps:close())
+  local conflict, conflict_err = cai.mcp_client({
+    chatgpt_auth=standalone_auth, api_key="other-auth"})
+  assert_not_ok(conflict, conflict_err, "provider authentication is exclusive")
+  assert_throws(function()
+    cai.mcp_client({auth_provider=function() end})
+  end, "Lua callbacks cannot enter the runtime worker")
   standalone_auth:close()
   assert_throws(function()
     standalone_auth:access_token()

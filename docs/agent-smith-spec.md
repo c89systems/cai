@@ -91,6 +91,11 @@ registration policy. The selected preset must include
 `CAI_AGENT_PRESET_TOOL_MCP`; review runtimes reject MCP attachment. CAI retains
 the Lua clients until the runtime closes, so an attached client cannot be
 closed early and its discovered tools cannot outlive their transport.
+Tool schemas are lazy by default. `tool_search` advertises source hints and
+selects cached tools for the next request, using local BM25 ranking on either
+API protocol. The optional parallel `mcp_options` table supplies `name`,
+`description` and `eager` per client; the C equivalent is
+`cai_agent_mcp_options`. Discovery does not itself expose every schema.
 
 This first delivery deliberately does **not** implement Codex-style
 multi-agent/worktree coordination or a `wait_agent` tool. Remote capabilities
@@ -1134,16 +1139,23 @@ contract.
 
 ### 7.3 MCP
 
-MCP remains the remote/plugin integration mechanism. CAI opens and initializes
-configured MCP clients before a session becomes ready, discovers tools,
-resources, resource templates, and prompts, and registers tools with stable
-server-qualified names such as `mcp.<server>.<tool>`. It must reject collisions
-with Smith built-ins and preserve the original server/tool name in metadata.
+MCP remains the remote/plugin integration mechanism. Core runtimes register
+borrowed configured clients during construction. libcai_app initially provides
+cached connection views and discovers their tools on the runtime worker.
+The app registers stable server-qualified aliases such as `mcp_7_example_echo`,
+using bounded hash aliases for names outside model syntax. It rejects collisions
+and preserves the original server/tool mapping. Resource, resource-template and
+prompt discovery remain available through the core MCP client API.
 
 MCP calls participate in Smith’s one-at-a-time dispatch rule. A progress
 notification becomes `TOOL_CALL_PROGRESS`; a bounded final result becomes a
 normal function-call output. Existing CAI Streamable HTTP MCP client support is
-reused. stdio MCP and plugin installation are out of this initial scope.
+reused. `cai_agent_runtime_refresh_mcp` replaces the attached MCP catalog at
+request boundaries, preserving native tools. Application `/mcp` controls
+configured connections without changing config.ini. Authentication belongs to
+the connection rather than the inference provider; the built-in ChatGPT app
+adapter uses saved account authentication. stdio MCP and app installation are
+out of this scope.
 
 ## 8. Single-terminal design
 

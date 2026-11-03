@@ -6,6 +6,7 @@
 lonejson *cai_lonejson_runtime(void);
 lonejson *cai_lonejson_runtime_preserve(void);
 lonejson *cai_lonejson_runtime_stream(void);
+lonejson *cai_lonejson_runtime_catalog(void);
 lonejson *cai_lonejson_runtime_chrome(void);
 int cai_lonejson_runtime_open(const lonejson_config *config,
                               lonejson **out_runtime, cai_error *error);
@@ -15,5 +16,6 @@ void cai_lonejson_runtime_close(lonejson **runtime);
 #define CAI_LJ_PRESERVE cai_lonejson_runtime_preserve()
 #define CAI_LJ_CHROME cai_lonejson_runtime_chrome()
 #define CAI_LJ_STREAM cai_lonejson_runtime_stream()
+#define CAI_LJ_CATALOG cai_lonejson_runtime_catalog()
 
 #endif

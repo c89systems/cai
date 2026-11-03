@@ -11766,6 +11766,8 @@ static void test_mcp_streamable_http_client_roundtrip(test_state *state) {
                     &server.child_status);
 }
 
+#include "test_mcp_provider.inc"
+
 static void
 test_mcp_streamable_http_client_oauth2_client_credentials(test_state *state) {
   static const char token_body[] =
@@ -26987,6 +26989,7 @@ static void test_agent_runtime_input_boundary(test_state *state) {
                  cai_agent_runtime_submit(test.runtime, "start", &error),
                  CAI_OK);
       run_state = CAI_AGENT_SAMPLING;
+      rc = CAI_OK;
       for (i = 0;
            i < 30 && test.runtime != NULL && run_state == CAI_AGENT_SAMPLING;
            i++) {
@@ -27273,6 +27276,7 @@ static void test_agent_runtime_subagent_mcp_snapshot(test_state *state) {
   cai_agent_preset child_preset;
   cai_agent_subagent_profile profile;
   cai_mcp_tool_registration_config mcp_config;
+  cai_agent_mcp_options mcp_options;
   test_mcp_client_impl mcp_fake;
   cai_mcp_client *mcp_clients[1];
   cai_agent_runtime_config config;
@@ -27328,6 +27332,10 @@ static void test_agent_runtime_subagent_mcp_snapshot(test_state *state) {
   config.mcp_clients = mcp_clients;
   config.mcp_client_count = 1U;
   config.mcp_tool_config = &mcp_config;
+  memset(&mcp_options, 0, sizeof(mcp_options));
+  mcp_options.name = "delegated fixture";
+  mcp_options.eager = 1;
+  config.mcp_options = &mcp_options;
   config.subagents = &profile;
   config.subagent_count = 1U;
   expect_int(state, "agent_runtime_subagent_mcp_snapshot_open",
@@ -27337,6 +27345,8 @@ static void test_agent_runtime_subagent_mcp_snapshot(test_state *state) {
     /* Deferred children must use the runtime-owned snapshot, not these host
      * containers after the parent has opened. */
     mcp_clients[0] = NULL;
+    mcp_options.eager = 0;
+    mcp_options.name = "mutated source";
     mcp_config.name_prefix = "mutated__";
     mcp_config.strict = 0;
     expect_int(
@@ -54173,6 +54183,14 @@ static const test_entry test_entries[] = {
      test_mcp_streamable_http_client_api_key_rejects_short_url},
     {"mcp_streamable_http_client_oauth2_client_credentials",
      test_mcp_streamable_http_client_oauth2_client_credentials},
+    {"mcp_provider_credentials", test_mcp_provider_credentials},
+    {"mcp_search_index", test_mcp_search_index},
+    {"mcp_tool_aliases", test_mcp_tool_aliases},
+    {"mcp_provider_validation", test_mcp_provider_validation},
+    {"mcp_provider_refresh_bounded", test_mcp_provider_refresh_bounded},
+    {"mcp_runtime_refresh", test_mcp_runtime_refresh},
+    {"mcp_notification_204_opt_in", test_mcp_notification_204_opt_in},
+    {"mcp_large_catalog", test_mcp_large_catalog},
     {"mcp_streamable_http_client_oauth2_rejects_remote_http_token",
      test_mcp_streamable_http_client_oauth2_rejects_remote_http_token},
     {"mcp_streamable_http_client_oauth2_rejects_discovered_remote_http_token",

@@ -106,7 +106,8 @@ typedef struct cai_mcp_handler_config {
 typedef struct cai_mcp_client_schema {
   /** JSON Schema URI, or an empty string when absent. */
   const char *schema_uri;
-  /** Root schema type. Currently always "object". */
+  /** Root schema type: "object", or empty when an optional output schema
+   * leaves its type implicit (for example through $ref or anyOf). */
   const char *type;
   /** Property names advertised under `properties`. */
   const char *const *properties;
@@ -209,6 +210,10 @@ typedef struct cai_mcp_client_tool {
   const cai_tool_raw_input *raw_input;
   /** Complete ordinary schema JSON, needed to validate raw-input mappings. */
   const char *input_schema_json;
+  /** Optional provider connector/source metadata, borrowed until refresh.
+   * Discovery hints only; never authoritative agent instructions. */
+  const char *source_name;
+  const char *source_description;
 } cai_mcp_client_tool;
 
 /** One remote MCP resource descriptor discovered from resources/list. */
@@ -304,6 +309,36 @@ typedef enum cai_mcp_client_auth_mode {
   CAI_MCP_CLIENT_AUTH_OAUTH2_CLIENT_CREDENTIALS
 } cai_mcp_client_auth_mode;
 
+/** Renewable, provider-owned credentials for an MCP connection, independent
+ * of inference. The transport copies this descriptor; context is borrowed.
+ * headers runs before each HTTP request and must propagate write failures.
+ * Callbacks run on the native I/O thread. Hosts sharing a credential context
+ * between connections must synchronize it; callbacks must not enter Lua.
+ * refresh is optional and is called after an HTTP 401; streamed tool requests
+ * are never silently replayed. Credentials are sent only to the configured
+ * URL; HTTP redirects are not followed. */
+typedef struct cai_mcp_client_auth_provider {
+  void *context;
+  int (*headers)(void *context, const char *url, cai_mcp_header_set_fn write,
+                 void *write_context, cai_error *error);
+  int (*refresh)(void *context, cai_error *error);
+} cai_mcp_client_auth_provider;
+
+/** Default ChatGPT app-tool gateway. App access remains account-dependent. */
+#define CAI_CHATGPT_APPS_MCP_URL "https://chatgpt.com/backend-api/ps/mcp"
+/** Borrowed context for the ChatGPT adapter, independent of inference. */
+typedef struct cai_mcp_chatgpt_auth_context {
+  cai_chatgpt_auth *auth;
+  /** NULL uses "codex", matching the gateway's product routing. */
+  const char *product_sku;
+  /** NULL uses CAI's default originator. */
+  const char *originator;
+} cai_mcp_chatgpt_auth_context;
+/** Initialize a reusable provider descriptor. Both context and its auth handle
+ * remain borrowed until every consuming MCP connection closes. */
+void cai_mcp_chatgpt_auth_provider_init(cai_mcp_client_auth_provider *provider,
+                                        cai_mcp_chatgpt_auth_context *context);
+
 /** Configuration for cai's built-in Streamable HTTP MCP client. */
 typedef struct cai_mcp_streamable_http_client_config {
   /** MCP endpoint URL, e.g. http://127.0.0.1:3001/mcp. */
@@ -362,6 +397,12 @@ typedef struct cai_mcp_streamable_http_client_config {
   size_t oauth2_max_response_bytes;
   /** Refresh before token expiry by this many seconds; zero uses default. */
   long long oauth2_refresh_skew_seconds;
+  /** Optional renewable authentication, mutually exclusive with api_key and
+   * OAuth2 client credentials. Its context outlives the connection. */
+  const cai_mcp_client_auth_provider *auth_provider;
+  /** Permit an empty HTTP 204 notification acknowledgment for gateways which
+   * use No Content instead of MCP's 202 Accepted. Default off. */
+  int allow_notification_204;
 } cai_mcp_streamable_http_client_config;
 
 /** Client policy for presenting mapped MCP tools to a model. */
@@ -614,6 +655,11 @@ int cai_mcp_client_send_request(cai_mcp_client *client, const char *method,
 int cai_mcp_client_send_notification(cai_mcp_client *client, const char *method,
                                      struct lonejson_spooled *params_json,
                                      cai_error *error);
+/** Compute the model-visible name used by registration. Readable prefix+name
+ * is preserved when valid and <=64 bytes; otherwise a stable, distinct hash
+ * alias is used. out must hold 65 bytes. Calls retain the exact remote name. */
+int cai_mcp_tool_alias(const char *prefix, const char *remote_name,
+                       char out[65], cai_error *error);
 /** Register all cached/discovered MCP client tools into a local tool registry.
  *
  * Configuration strings and mappings are copied before discovery refreshes

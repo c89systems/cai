@@ -157,6 +157,14 @@ int main(void) {
   assert(result(&c, "run_review_and_fix", "{\"status\":\"queued\"}"));
   assert(strstr(c.text, "Queued ") && strstr(c.text, "review-and-fix goal"));
   assert(!strstr(c.text, "{\"status\""));
+  assert(result(
+      &c, "tool_search",
+      "{\"ok\":true,\"message\":\"Loaded 1 MCP tool(s) for the next request.\","
+      "\"tools\":[{\"name\":\"mail_search\",\"input_schema\":{\"type\":"
+      "\"object\"}}]}"));
+  assert(strstr(c.text, "Discovered ") && strstr(c.text, "MCP tools"));
+  assert(strstr(c.text, "Loaded 1 MCP tool(s)"));
+  assert(!strstr(c.text, "input_schema") && !strstr(c.text, "{\""));
   assert(result(&c, "agent_message",
                 "## Message queues\n\n| Queue | Workspace | Conversation |\n| "
                 "--- | --- | --- |\n| cai.y | /work | session |\n"));

@@ -792,8 +792,9 @@ static int plugins_sync_agent_update(cai_agent *agent, cai_error *error) {
   }
   pthread_mutex_lock(&impl->plugins_lock);
   if (rc == CAI_OK)
-    rc = cai_tool_registry_replace_tail_internal(
-        impl->tools, impl->plugins_base, next, error);
+    rc = cai_tool_registry_replace_range_internal(
+        impl->tools, impl->plugins_base,
+        cai_tool_registry_count(impl->tools) - impl->plugins_base, next, error);
   if (rc == CAI_OK) {
     impl->plugins_generation = generation;
     impl->plugins_bound = 1;

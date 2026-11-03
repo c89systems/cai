@@ -210,6 +210,8 @@ typedef struct cai_lua_mcp_client {
   size_t active_calls;
   size_t registered_tool_refs;
   int has_logger_ref;
+  int chatgpt_auth_ref;
+  cai_mcp_chatgpt_auth_context *chatgpt_auth;
 } cai_lua_mcp_client;
 
 typedef struct cai_lua_chatgpt_auth {
@@ -218,6 +220,7 @@ typedef struct cai_lua_chatgpt_auth {
   int storage_ref;
   size_t active_calls;
   int has_logger_ref;
+  size_t mcp_refs;
 } cai_lua_chatgpt_auth;
 
 typedef struct cai_lua_chatgpt_login {
@@ -364,9 +367,9 @@ static int cai_lua_write_stack_json_or_stream(lua_State *L, int index,
                                               cai_sink *output,
                                               cai_error *error);
 static int cai_lua_agent_register_mcp_client_tools(lua_State *L);
-static int cai_lua_runtime_mcp_clients_prepare(lua_State *L, int config_index,
-                                               cai_mcp_client ***out_clients,
-                                               size_t *out_count, int *out_ref);
+static int cai_lua_runtime_mcp_clients_prepare(
+    lua_State *L, int config_index, cai_mcp_client ***out_clients,
+    cai_agent_mcp_options **out_options, size_t *out_count, int *out_ref);
 static void cai_lua_runtime_mcp_clients_release(lua_State *L,
                                                 cai_lua_agent_runtime *runtime);
 static void
@@ -1544,6 +1547,7 @@ static void cai_lua_push_mcp_client(lua_State *L, cai_mcp_client *client) {
   ud = (cai_lua_mcp_client *)lua_newuserdata(L, sizeof(*ud));
   memset(ud, 0, sizeof(*ud));
   ud->ptr = client;
+  ud->chatgpt_auth_ref = LUA_NOREF;
   luaL_getmetatable(L, CAI_LUA_MCP_CLIENT);
   lua_setmetatable(L, -2);
 }
@@ -2521,7 +2525,7 @@ static int cai_lua_chatgpt_auth_new(lua_State *L) {
 static int cai_lua_chatgpt_auth_gc(lua_State *L) {
   cai_lua_chatgpt_auth *self;
   self = (cai_lua_chatgpt_auth *)luaL_checkudata(L, 1, CAI_LUA_CHATGPT_AUTH);
-  if (self->active_calls != 0U) {
+  if (self->active_calls != 0U || self->mcp_refs != 0U) {
     return 0;
   }
   if (self->ptr != NULL) {
@@ -2547,12 +2551,13 @@ static int cai_lua_chatgpt_auth_close(lua_State *L) {
   cai_error error;
 
   self = (cai_lua_chatgpt_auth *)luaL_checkudata(L, 1, CAI_LUA_CHATGPT_AUTH);
-  if (self->active_calls != 0U) {
+  if (self->active_calls != 0U || self->mcp_refs != 0U) {
     cai_error_init(&error);
     return cai_lua_fail(
         L,
-        cai_lua_set_error(&error, CAI_ERR_INVALID,
-                          "cai ChatGPT auth has an active operation"),
+        cai_lua_set_error(
+            &error, CAI_ERR_INVALID,
+            "cai ChatGPT auth has an active operation or MCP connection"),
         &error);
   }
   return cai_lua_chatgpt_auth_gc(L);
@@ -2590,6 +2595,23 @@ static int cai_lua_chatgpt_auth_refresh(lua_State *L) {
   rc = self->ptr->refresh(self->ptr, &error);
   cai_lua_chatgpt_auth_leave(self);
   return cai_lua_bool_result(L, rc, &error);
+}
+
+static int cai_lua_chatgpt_auth_account_id(lua_State *L) {
+  cai_lua_chatgpt_auth *self = cai_lua_check_chatgpt_auth(L, 1);
+  cai_error error;
+  char *account = NULL;
+  int rc;
+  cai_error_init(&error);
+  cai_lua_chatgpt_auth_enter(self);
+  rc = self->ptr->account_id(self->ptr, &account, &error);
+  cai_lua_chatgpt_auth_leave(self);
+  if (rc != CAI_OK)
+    return cai_lua_fail(L, rc, &error);
+  lua_pushstring(L, account);
+  cai_string_destroy(account);
+  cai_error_cleanup(&error);
+  return 1;
 }
 
 static int cai_lua_chatgpt_login_new(lua_State *L) {
@@ -3612,6 +3634,7 @@ static int cai_lua_client_new_smith_runtime_common(lua_State *L,
   cai_agent_preset preset;
   cai_mcp_client **mcp_clients;
   cai_mcp_tool_registration_config mcp_tool_config;
+  cai_agent_mcp_options *mcp_options = NULL;
   cai_lua_subagent_config subagent_config;
   pslog_lua_logger_ref logger_ref;
   cai_error error;
@@ -3922,11 +3945,12 @@ static int cai_lua_client_new_smith_runtime_common(lua_State *L,
   luaL_getmetatable(L, CAI_LUA_AGENT_RUNTIME);
   lua_setmetatable(L, -2);
   (void)cai_lua_runtime_mcp_clients_prepare(
-      L, 2, &mcp_clients, &mcp_client_count, &mcp_clients_ref);
+      L, 2, &mcp_clients, &mcp_options, &mcp_client_count, &mcp_clients_ref);
   runtime->mcp_clients_ref = mcp_clients_ref;
   config.mcp_clients = mcp_clients;
   config.mcp_client_count = mcp_client_count;
   config.mcp_tool_config = mcp_client_count > 0U ? &mcp_tool_config : NULL;
+  config.mcp_options = mcp_options;
   runtime->parent_ref = cai_lua_ref_parent(L, 1);
   lua_getfield(L, 2, "event_callback");
   if (!lua_isnil(L, -1)) {
@@ -3999,6 +4023,7 @@ static int cai_lua_client_new_smith_runtime_common(lua_State *L,
   }
   cai_lua_subagent_config_cleanup(&subagent_config);
   free(mcp_clients);
+  free(mcp_options);
   if (rc != CAI_OK) {
     cai_chrome_close(runtime->chrome);
     plugins_release_runtime_ref(L, &runtime->plugins_ref);
@@ -5779,6 +5804,8 @@ static int cai_lua_tool_inventory_build(lua_State *L) {
   if (tool->source == CAI_AGENT_TOOL_MCP) {
     lua_pushinteger(L, (lua_Integer)tool->mcp_client_index + 1);
     lua_setfield(L, -2, "mcp_client_index");
+    lua_pushboolean(L, tool->deferred);
+    lua_setfield(L, -2, "deferred");
   }
   lua_rawseti(L, 1, index);
   return 0;
@@ -9556,20 +9583,22 @@ cai_lua_mcp_registration_config(lua_State *L, int index,
     lua_pop(L, 1);
 }
 
-static int cai_lua_runtime_mcp_clients_prepare(lua_State *L, int config_index,
-                                               cai_mcp_client ***out_clients,
-                                               size_t *out_count,
-                                               int *out_ref) {
+static int cai_lua_runtime_mcp_clients_prepare(
+    lua_State *L, int config_index, cai_mcp_client ***out_clients,
+    cai_agent_mcp_options **out_options, size_t *out_count, int *out_ref) {
   cai_mcp_client **clients;
+  cai_agent_mcp_options *options = NULL;
   cai_lua_mcp_client *client;
   size_t count;
   size_t i;
-  int clients_index;
+  int clients_index, options_index;
 
-  if (out_clients == NULL || out_count == NULL || out_ref == NULL) {
+  if (out_clients == NULL || out_options == NULL || out_count == NULL ||
+      out_ref == NULL) {
     return luaL_error(L, "runtime MCP client outputs are required");
   }
   *out_clients = NULL;
+  *out_options = NULL;
   *out_count = 0U;
   *out_ref = LUA_NOREF;
   config_index = lua_absindex(L, config_index);
@@ -9581,7 +9610,8 @@ static int cai_lua_runtime_mcp_clients_prepare(lua_State *L, int config_index,
   luaL_checktype(L, -1, LUA_TTABLE);
   clients_index = lua_absindex(L, -1);
   count = (size_t)lua_rawlen(L, clients_index);
-  if (count > (size_t)INT_MAX || count > (size_t)-1 / sizeof(*clients)) {
+  if (count > (size_t)INT_MAX || count > (size_t)-1 / sizeof(*clients) ||
+      count > (size_t)-1 / sizeof(*options)) {
     lua_pop(L, 1);
     return luaL_error(L, "mcp_clients has too many entries");
   }
@@ -9592,17 +9622,46 @@ static int cai_lua_runtime_mcp_clients_prepare(lua_State *L, int config_index,
     (void)cai_lua_check_mcp_client(L, -1);
     lua_pop(L, 1);
   }
+  lua_getfield(L, config_index, "mcp_options");
+  options_index = lua_absindex(L, -1);
+  if (!lua_isnil(L, options_index)) {
+    luaL_checktype(L, options_index, LUA_TTABLE);
+    if ((size_t)lua_rawlen(L, options_index) != count)
+      return luaL_error(L, "mcp_options must have one entry per mcp_client");
+    for (i = 0U; i < count; ++i) {
+      lua_rawgeti(L, options_index, (lua_Integer)i + 1);
+      luaL_checktype(L, -1, LUA_TTABLE);
+      (void)cai_lua_opt_string_field(L, -1, "name", NULL);
+      (void)cai_lua_opt_string_field(L, -1, "description", NULL);
+      (void)cai_lua_opt_bool_field(L, -1, "eager", 0);
+      lua_pop(L, 1);
+    }
+  }
   lua_createtable(L, (int)count, 0);
   if (count == 0U) {
     clients = NULL;
   } else {
+    if (!lua_isnil(L, options_index)) {
+      options = calloc(count, sizeof(*options));
+      if (options == NULL)
+        return luaL_error(L, "allocate MCP discovery settings");
+    }
     clients = (cai_mcp_client **)calloc(count, sizeof(*clients));
     if (clients == NULL) {
-      lua_pop(L, 2);
+      free(options);
+      lua_pop(L, 3);
       return luaL_error(L, "failed to allocate runtime MCP clients");
     }
   }
   for (i = 0U; i < count; i++) {
+    if (options != NULL) {
+      lua_rawgeti(L, options_index, (lua_Integer)i + 1);
+      options[i].name = cai_lua_opt_string_field(L, -1, "name", NULL);
+      options[i].description =
+          cai_lua_opt_string_field(L, -1, "description", NULL);
+      options[i].eager = cai_lua_opt_bool_field(L, -1, "eager", 0);
+      lua_pop(L, 1);
+    }
     lua_rawgeti(L, clients_index, (lua_Integer)i + 1);
     client = cai_lua_check_mcp_client(L, -1);
     clients[i] = client->ptr;
@@ -9611,8 +9670,9 @@ static int cai_lua_runtime_mcp_clients_prepare(lua_State *L, int config_index,
     lua_pop(L, 1);
   }
   *out_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-  lua_pop(L, 1);
+  lua_pop(L, 2);
   *out_clients = clients;
+  *out_options = options;
   *out_count = count;
   return 0;
 }
@@ -9984,6 +10044,20 @@ static int cai_lua_push_mcp_prompt(lua_State *L,
   return 1;
 }
 
+static int cai_lua_mcp_tool_alias(lua_State *L) {
+  const char *prefix = luaL_optstring(L, 1, NULL);
+  const char *name = luaL_checkstring(L, 2);
+  char alias[65];
+  cai_error error;
+  int rc;
+  cai_error_init(&error);
+  rc = cai_mcp_tool_alias(prefix, name, alias, &error);
+  if (rc != CAI_OK)
+    return cai_lua_fail(L, rc, &error);
+  cai_lua_error_cleanup(&error);
+  lua_pushstring(L, alias);
+  return 1;
+}
 static int cai_lua_mcp_client_new(lua_State *L) {
   cai_mcp_streamable_http_client_config config;
   cai_mcp_client *client;
@@ -9991,10 +10065,20 @@ static int cai_lua_mcp_client_new(lua_State *L) {
   cai_error error;
   int has_logger_ref;
   int rc;
+  cai_lua_chatgpt_auth *auth = NULL;
+  cai_mcp_chatgpt_auth_context *auth_context = NULL;
+  cai_mcp_client_auth_provider provider;
+  int auth_index = 0;
 
   memset(&logger_ref, 0, sizeof(logger_ref));
   has_logger_ref = 0;
   luaL_checktype(L, 1, LUA_TTABLE);
+  lua_getfield(L, 1, "chatgpt_auth");
+  if (!lua_isnil(L, -1)) {
+    auth = cai_lua_check_chatgpt_auth(L, -1);
+    auth_index = lua_gettop(L);
+  } else
+    lua_pop(L, 1);
   cai_error_init(&error);
   cai_mcp_streamable_http_client_config_init(&config);
   config.url = cai_lua_opt_string_field(L, 1, "url", config.url);
@@ -10038,6 +10122,9 @@ static int cai_lua_mcp_client_new(lua_State *L) {
       cai_lua_opt_bool_field(L, 1, "logger_disabled", config.logger_disabled);
   cai_lua_reject_logger_field(L, 1, "allocator");
   cai_lua_reject_logger_field(L, 1, "receiver");
+  cai_lua_reject_logger_field(L, 1, "auth_provider");
+  config.allow_notification_204 = cai_lua_opt_bool_field(
+      L, 1, "allow_notification_204", config.allow_notification_204);
   cai_lua_reject_logger_field(L, 1, "notification");
   rc = cai_lua_logger_field(L, 1, &logger_ref, &has_logger_ref, &config.logger,
                             &error);
@@ -10045,12 +10132,36 @@ static int cai_lua_mcp_client_new(lua_State *L) {
     return cai_lua_fail(L, rc, &error);
   }
 
+  if (auth != NULL) {
+    auth_context = calloc(1U, sizeof(*auth_context));
+    if (auth_context == NULL) {
+      cai_lua_unref_pslog_logger(&logger_ref, &has_logger_ref);
+      return cai_lua_fail(L,
+                          cai_lua_set_error(&error, CAI_ERR_NOMEM,
+                                            "allocate MCP ChatGPT context"),
+                          &error);
+    }
+    auth_context->auth = auth->ptr;
+    cai_mcp_chatgpt_auth_provider_init(&provider, auth_context);
+    config.auth_provider = &provider;
+    config.allow_notification_204 = 1;
+    if (config.url == NULL || config.url[0] == '\0')
+      config.url = CAI_CHATGPT_APPS_MCP_URL;
+  }
   rc = cai_mcp_streamable_http_client_open(&config, &client, &error);
   if (rc != CAI_OK) {
+    free(auth_context);
     cai_lua_unref_pslog_logger(&logger_ref, &has_logger_ref);
     return cai_lua_fail(L, rc, &error);
   }
   cai_lua_push_mcp_client(L, client);
+  if (auth_context != NULL) {
+    cai_lua_mcp_client *ud = lua_touserdata(L, -1);
+    ud->chatgpt_auth = auth_context;
+    lua_pushvalue(L, auth_index);
+    ud->chatgpt_auth_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    auth->mcp_refs++;
+  }
   if (has_logger_ref) {
     cai_lua_mcp_client *ud;
     ud = (cai_lua_mcp_client *)lua_touserdata(L, -1);
@@ -10062,6 +10173,22 @@ static int cai_lua_mcp_client_new(lua_State *L) {
   return 1;
 }
 
+static void cai_lua_mcp_client_release_auth(lua_State *L,
+                                            cai_lua_mcp_client *self) {
+  if (self->chatgpt_auth_ref != LUA_NOREF) {
+    cai_lua_chatgpt_auth *auth;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, self->chatgpt_auth_ref);
+    auth = luaL_testudata(L, -1, CAI_LUA_CHATGPT_AUTH);
+    if (auth != NULL && auth->mcp_refs != 0U)
+      auth->mcp_refs--;
+    lua_pop(L, 1);
+    luaL_unref(L, LUA_REGISTRYINDEX, self->chatgpt_auth_ref);
+    self->chatgpt_auth_ref = LUA_NOREF;
+  }
+  free(self->chatgpt_auth);
+  self->chatgpt_auth = NULL;
+}
+
 static int cai_lua_mcp_client_gc(lua_State *L) {
   cai_lua_mcp_client *self;
   self = (cai_lua_mcp_client *)luaL_checkudata(L, 1, CAI_LUA_MCP_CLIENT);
@@ -10071,6 +10198,7 @@ static int cai_lua_mcp_client_gc(lua_State *L) {
   if (self->ptr != NULL && self->registered_tool_refs == 0U) {
     cai_mcp_client_destroy(self->ptr);
     self->ptr = NULL;
+    cai_lua_mcp_client_release_auth(L, self);
     cai_lua_unref_pslog_logger(&self->logger_ref, &self->has_logger_ref);
   }
   return 0;
@@ -10103,6 +10231,7 @@ static int cai_lua_mcp_client_close(lua_State *L) {
   }
   cai_mcp_client_destroy(self->ptr);
   self->ptr = NULL;
+  cai_lua_mcp_client_release_auth(L, self);
   cai_lua_unref_pslog_logger(&self->logger_ref, &self->has_logger_ref);
   lua_pushboolean(L, 1);
   return 1;
@@ -12395,7 +12524,19 @@ static const luaL_Reg cai_lua_client_methods[] = {
     {"close", cai_lua_client_close},
     {NULL, NULL}};
 
+static int cai_lua_agent_runtime_refresh_mcp(lua_State *L) {
+  cai_lua_agent_runtime *self = cai_lua_check_agent_runtime(L, 1);
+  cai_error error;
+  int rc;
+  cai_error_init(&error);
+  cai_lua_agent_runtime_enter(self);
+  rc = cai_agent_runtime_refresh_mcp(self->ptr, &error);
+  cai_lua_agent_runtime_leave(self);
+  return cai_lua_bool_result(L, rc, &error);
+}
+
 static const luaL_Reg cai_lua_agent_runtime_methods[] = {
+    {"refresh_mcp", cai_lua_agent_runtime_refresh_mcp},
     {"can_compact", cai_lua_agent_runtime_can_compact},
     {"compact", cai_lua_agent_runtime_compact},
     {"history", cai_lua_agent_runtime_history},
@@ -12631,6 +12772,7 @@ static const luaL_Reg cai_lua_mcp_client_methods[] = {
     {NULL, NULL}};
 
 static const luaL_Reg cai_lua_chatgpt_auth_methods[] = {
+    {"account_id", cai_lua_chatgpt_auth_account_id},
     {"access_token", cai_lua_chatgpt_auth_access_token},
     {"refresh", cai_lua_chatgpt_auth_refresh},
     {"close", cai_lua_chatgpt_auth_close},
@@ -12904,6 +13046,8 @@ int luaopen_cai(lua_State *L) {
   lua_setfield(L, -2, "mcp_handler");
   lua_pushcfunction(L, cai_lua_mcp_client_new);
   lua_setfield(L, -2, "mcp_client");
+  lua_pushcfunction(L, cai_lua_mcp_tool_alias);
+  lua_setfield(L, -2, "mcp_tool_alias");
   lua_pushcfunction(L, cai_lua_schema_new);
   lua_setfield(L, -2, "tool_schema");
   lua_pushcfunction(L, cai_lua_params_new);
@@ -12995,6 +13139,7 @@ int luaopen_cai(lua_State *L) {
                       CAI_AGENT_EVENT_REQUEST_RETRY_STARTED);
   CAI_LUA_SET_INTEGER("AGENT_EVENT_REASONING_TOOL_RESULT",
                       CAI_AGENT_EVENT_REASONING_TOOL_RESULT);
+  CAI_LUA_SET_INTEGER("AGENT_EVENT_MCP_UPDATED", CAI_AGENT_EVENT_MCP_UPDATED);
   CAI_LUA_SET_INTEGER("AGENT_EVENT_EXECUTION_RECORD",
                       CAI_AGENT_EVENT_EXECUTION_RECORD);
   CAI_LUA_SET_INTEGER("AGENT_TOOL_ACTION_MCP", CAI_AGENT_TOOL_ACTION_MCP);

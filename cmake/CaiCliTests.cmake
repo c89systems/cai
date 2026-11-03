@@ -166,6 +166,14 @@
           "$<TARGET_FILE:cai_cli_mock_fixture>" "${_cai_mcp_protocol}")
       set_tests_properties(cai_cli_mcp_inventory_${_cai_mcp_protocol}
         PROPERTIES TIMEOUT 45)
+      add_test(NAME cai_cli_mcp_apps_${_cai_mcp_protocol}
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_mcp_apps_test.sh"
+          "$<TARGET_FILE:cai_cli_mock_fixture>" "${_cai_mcp_protocol}")
+      set_tests_properties(cai_cli_mcp_apps_${_cai_mcp_protocol} PROPERTIES TIMEOUT 45)
+      add_test(NAME cai_cli_mcp_lazy_${_cai_mcp_protocol}
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_mcp_lazy_test.sh"
+          "$<TARGET_FILE:cai_cli_mock_fixture>" "${_cai_mcp_protocol}")
+      set_tests_properties(cai_cli_mcp_lazy_${_cai_mcp_protocol} PROPERTIES TIMEOUT 45)
     endforeach()
     foreach(_cai_agents_protocol responses chat_completions)
       add_test(NAME cai_cli_tool_policy_${_cai_agents_protocol}

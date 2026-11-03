@@ -10,6 +10,7 @@
 #include "cai_decimal.h"
 #include "cai_execution.h"
 #include "cai_internal.h"
+#include "cai_mcp_search.h"
 #include "cai_terminal_text.h"
 
 #include <ctype.h>
@@ -796,10 +797,14 @@ struct cai_agent_runtime {
   unsigned long chrome_turn_sequence;
   cai_mcp_client **mcp_clients;
   size_t mcp_client_count;
+  cai_agent_mcp_options *mcp_options;
+  cai_mcp_search *mcp_search;
+  size_t mcp_search_tool;
   size_t mcp_tool_begin;
+  int mcp_refresh_pending;
   size_t *mcp_tool_ends;
   cai_mcp_tool_registration_config mcp_tool_config;
-  char *mcp_tool_name_prefix;
+  cai_mcp_registration_snapshot mcp_policy_snapshot;
   int has_mcp_tool_config;
   int reasoning_summary_start_pending;
 };
@@ -853,6 +858,10 @@ static void cai_runtime_reasoning_warn(cai_agent_runtime *runtime,
                                        int high);
 static int cai_runtime_apply_pending_settings(cai_agent_runtime *runtime,
                                               cai_error *error);
+static int cai_runtime_apply_pending_mcp(cai_agent_runtime *runtime,
+                                         cai_error *error);
+static int cai_runtime_collect_owner_input(cai_agent_runtime *runtime,
+                                           cai_error *error);
 static int
 cai_runtime_reasoning_receipt_locked(cai_agent_runtime *runtime, int mode,
                                      const char *requested, const char *before,
@@ -1799,6 +1808,8 @@ static void cai_runtime_set_state(cai_agent_runtime *runtime,
   cai_error_cleanup(&ignored);
 }
 
+#include "cai_runtime_mcp.inc"
+
 static int cai_runtime_copy_string(const char *value, char **out,
                                    cai_error *error) {
   *out = NULL;
@@ -2221,13 +2232,26 @@ static void cai_runtime_clear_smith_profile(cai_agent_runtime *runtime) {
  * caller's stack- or language-owned configuration container. */
 static void cai_runtime_clear_mcp_config(cai_agent_runtime *runtime) {
   cai_free_mem(NULL, runtime->mcp_clients);
+  if (runtime->mcp_options != NULL) {
+    size_t i;
+    for (i = 0U; i < runtime->mcp_client_count; ++i) {
+      void *owned;
+      memcpy(&owned, &runtime->mcp_options[i].name, sizeof(owned));
+      cai_free_mem(NULL, owned);
+      memcpy(&owned, &runtime->mcp_options[i].description, sizeof(owned));
+      cai_free_mem(NULL, owned);
+    }
+    cai_free_mem(NULL, runtime->mcp_options);
+  }
+  cai_mcp_search_destroy(runtime->mcp_search);
+  runtime->mcp_search = NULL;
+  runtime->mcp_options = NULL;
   cai_free_mem(NULL, runtime->mcp_tool_ends);
-  cai_free_mem(NULL, runtime->mcp_tool_name_prefix);
+  cai_mcp_registration_snapshot_cleanup(&runtime->mcp_policy_snapshot);
   runtime->mcp_clients = NULL;
   runtime->mcp_tool_ends = NULL;
   runtime->mcp_client_count = 0U;
   memset(&runtime->mcp_tool_config, 0, sizeof(runtime->mcp_tool_config));
-  runtime->mcp_tool_name_prefix = NULL;
   runtime->has_mcp_tool_config = 0;
 }
 
@@ -2243,7 +2267,8 @@ cai_runtime_capture_mcp_config(cai_agent_runtime *runtime,
         error, CAI_ERR_INVALID,
         "MCP client array is required when MCP clients are configured");
   }
-  if (config->mcp_client_count > (size_t)-1 / sizeof(*runtime->mcp_clients)) {
+  if (config->mcp_client_count > (size_t)-1 / sizeof(*runtime->mcp_clients) ||
+      config->mcp_client_count > (size_t)-1 / sizeof(*runtime->mcp_options)) {
     return cai_set_error(error, CAI_ERR_LIMIT, "MCP client array is too large");
   }
   if (config->mcp_client_count > 0U) {
@@ -2255,6 +2280,37 @@ cai_runtime_capture_mcp_config(cai_agent_runtime *runtime,
     }
     memcpy(runtime->mcp_clients, config->mcp_clients, bytes);
     runtime->mcp_client_count = config->mcp_client_count;
+    runtime->mcp_options = cai_alloc(NULL, config->mcp_client_count *
+                                               sizeof(*runtime->mcp_options));
+    if (runtime->mcp_options == NULL)
+      return cai_set_error(error, CAI_ERR_NOMEM,
+                           "allocate MCP discovery settings");
+    memset(runtime->mcp_options, 0,
+           config->mcp_client_count * sizeof(*runtime->mcp_options));
+    {
+      size_t i;
+      for (i = 0U; i < config->mcp_client_count; ++i) {
+        char fallback[64];
+        const cai_agent_mcp_options *options =
+            config->mcp_options != NULL ? &config->mcp_options[i] : NULL;
+        snprintf(fallback, sizeof(fallback), "MCP %lu",
+                 (unsigned long)(i + 1U));
+        runtime->mcp_options[i].eager = options != NULL && options->eager;
+        runtime->mcp_options[i].name =
+            cai_strdup(NULL, options != NULL && options->name != NULL &&
+                                     options->name[0] != '\0'
+                                 ? options->name
+                                 : fallback);
+        runtime->mcp_options[i].description =
+            cai_strdup(NULL, options != NULL && options->description != NULL
+                                 ? options->description
+                                 : "");
+        if (runtime->mcp_options[i].name == NULL ||
+            runtime->mcp_options[i].description == NULL)
+          return cai_set_error(error, CAI_ERR_NOMEM,
+                               "copy MCP discovery settings");
+      }
+    }
     runtime->mcp_tool_ends = cai_alloc(
         NULL, config->mcp_client_count * sizeof(*runtime->mcp_tool_ends));
     if (runtime->mcp_tool_ends == NULL)
@@ -2266,14 +2322,13 @@ cai_runtime_capture_mcp_config(cai_agent_runtime *runtime,
   if (config->mcp_tool_config == NULL) {
     return CAI_OK;
   }
-  runtime->mcp_tool_config = *config->mcp_tool_config;
-  rc = cai_runtime_copy_optional_string(config->mcp_tool_config->name_prefix,
-                                        &runtime->mcp_tool_name_prefix, error);
+  rc = cai_mcp_registration_snapshot_copy(NULL, config->mcp_tool_config,
+                                          &runtime->mcp_policy_snapshot, error);
   if (rc != CAI_OK) {
     cai_runtime_clear_mcp_config(runtime);
     return rc;
   }
-  runtime->mcp_tool_config.name_prefix = runtime->mcp_tool_name_prefix;
+  runtime->mcp_tool_config = runtime->mcp_policy_snapshot.config;
   runtime->has_mcp_tool_config = 1;
   return CAI_OK;
 }
@@ -4994,6 +5049,8 @@ static int cai_runtime_commit_durable_tool_round(void *context,
      * compaction, without interrupting or repeating an executed tool. */
     rc = cai_runtime_apply_pending_settings(runtime, error);
   }
+  if (rc == CAI_OK)
+    rc = cai_runtime_apply_pending_mcp(runtime, error);
   if (rc == CAI_OK) {
     rc = cai_runtime_compact_before_request(runtime, error);
   }
@@ -5027,6 +5084,8 @@ cai_runtime_deliver_steering_after_response(cai_agent_runtime *runtime,
     if (rc == CAI_OK)
       rc = cai_runtime_apply_pending_settings(runtime, error);
   }
+  if (rc == CAI_OK)
+    rc = cai_runtime_apply_pending_mcp(runtime, error);
   return rc;
 }
 
@@ -5712,23 +5771,30 @@ static void *cai_runtime_worker(void *context) {
     manual_compaction = 0;
     cai_error_init(&error);
     pthread_mutex_lock(&runtime->lock);
-    while (!runtime->stopping &&
-           (runtime->shell_context_failed || runtime->pending_settings_failed ||
-            runtime->settings_applying ||
-            (runtime->shell_context_head == NULL &&
-             runtime->user_shell_command != NULL) ||
-            (runtime->shell_context_head == NULL &&
-             runtime->goal_control_head == NULL &&
-             (runtime->goal_control_failed ||
-              (runtime->turn_head == NULL &&
-               !runtime->manual_compaction_pending) ||
-              runtime->subagent_active || runtime->active_review != NULL ||
-              runtime->review_launching || runtime->review_pause_pending)))) {
+    while (
+        !runtime->stopping &&
+        (runtime->shell_context_failed || runtime->pending_settings_failed ||
+         runtime->settings_applying ||
+         (runtime->shell_context_head == NULL &&
+          runtime->user_shell_command != NULL) ||
+         (runtime->shell_context_head == NULL &&
+          runtime->goal_control_head == NULL &&
+          (runtime->goal_control_failed ||
+           (runtime->turn_head == NULL && !runtime->manual_compaction_pending &&
+            !runtime->mcp_refresh_pending) ||
+           runtime->subagent_active || runtime->active_review != NULL ||
+           runtime->review_launching || runtime->review_pause_pending)))) {
       pthread_cond_wait(&runtime->condition, &runtime->lock);
     }
     if (runtime->stopping) {
       pthread_mutex_unlock(&runtime->lock);
       break;
+    }
+    if (runtime->mcp_refresh_pending) {
+      pthread_mutex_unlock(&runtime->lock);
+      rc = cai_runtime_apply_pending_mcp(runtime, &error);
+      cai_error_cleanup(&error);
+      continue;
     }
     if (runtime->manual_compaction_pending) {
       runtime->manual_compaction_pending = 0;
@@ -8102,6 +8168,8 @@ int cai_agent_runtime_open(cai_client *client,
     rc = cai_set_error(error, CAI_ERR_INVALID,
                        "agent preset does not enable image generation");
   }
+  if (rc == CAI_OK && runtime->mcp_client_count > 0U)
+    rc = cai_runtime_register_mcp_search(runtime, error);
   if (rc == CAI_OK)
     runtime->mcp_tool_begin =
         cai_tool_registry_count(CAI_AGENT_IMPL(runtime->agent)->tools);
@@ -8118,6 +8186,8 @@ int cai_agent_runtime_open(cai_client *client,
           cai_tool_registry_count(CAI_AGENT_IMPL(runtime->agent)->tools);
     }
   }
+  if (rc == CAI_OK && runtime->mcp_client_count > 0U)
+    rc = cai_runtime_prepare_initial_mcp(runtime, error);
   if (rc == CAI_OK && config->enable_image_generation &&
       (preset->tool_capabilities & CAI_AGENT_PRESET_TOOL_IMAGE_GENERATION) !=
           0UL) {
@@ -10926,6 +10996,7 @@ static int cai_runtime_open_tool_subagent(
         0UL) {
       config.mcp_clients = parent->mcp_clients;
       config.mcp_client_count = parent->mcp_client_count;
+      config.mcp_options = parent->mcp_options;
       config.mcp_tool_config =
           parent->has_mcp_tool_config ? &parent->mcp_tool_config : NULL;
     }
@@ -13168,6 +13239,10 @@ int cai_agent_runtime_visit_tools(cai_agent_runtime *runtime,
             ? "text"
             : "json";
     info.mcp_client_index = (size_t)-1;
+    info.deferred = cai_tool_registry_deferred_internal(agent->tools, i);
+    if (i == runtime->mcp_search_tool && runtime->mcp_client_count != 0U &&
+        info.deferred)
+      continue;
     if (i >= runtime->mcp_tool_begin) {
       for (j = 0U; j < runtime->mcp_client_count; j++) {
         if (i < runtime->mcp_tool_ends[j]) {

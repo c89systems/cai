@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/cli_test_common.sh"
 peer_start
+base+=(--mcp)
 base+=(--terminal)
 mkdir -p "$root/config/cai"
-printf '[mcp.alpha]\nendpoint = %s/mcp/alpha\n' "${endpoint%/v1}" >"$root/config/cai/config.ini"
+printf '[mcp.alpha]\nlazy = false\nendpoint = %s/mcp/alpha\n' "${endpoint%/v1}" >"$root/config/cai/config.ini"
 terminal_start -N
 plan '{"mcp":{"alpha":{"call_result":{"content":[{"type":"text","text":"## Remote report\n\n**Rich MCP text**"}]}}},"plan":[{"tool":"read_file","arguments":{"path":"missing.file"}},{"tool":"mcp_5_alpha_echo","arguments":{"text":"report"}},"MARKDOWN TURN DONE"]}'
 prompt 'exercise tool rendering' 'MARKDOWN TURN DONE'

@@ -252,12 +252,14 @@ static int cai_runtime_execution_lifecycle_locked(cai_agent_runtime *runtime,
       : type == CAI_AGENT_EVENT_RESPONSE_COMPLETED   ? "response.completed"
       : type == CAI_AGENT_EVENT_GOAL_CHANGED         ? "goal.changed"
       : type == CAI_AGENT_EVENT_REQUEST_RETRY        ? "request.retry"
+      : type == CAI_AGENT_EVENT_MCP_UPDATED          ? "mcp.updated"
                                                      : NULL;
   if (!runtime->record_transcript || kind == NULL)
     return CAI_OK;
   cai_runtime_execution_init(&s, runtime, kind, NULL, NULL, NULL);
   if ((type == CAI_AGENT_EVENT_GOAL_CHANGED ||
-       type == CAI_AGENT_EVENT_REQUEST_RETRY) &&
+       type == CAI_AGENT_EVENT_REQUEST_RETRY ||
+       type == CAI_AGENT_EVENT_MCP_UPDATED) &&
       text != NULL) {
     size_t n = strlen(text);
     s.record.field =

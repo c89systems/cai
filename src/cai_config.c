@@ -66,7 +66,20 @@ static const cai_config_field globals[] = {
      "Enable this named HTTP MCP server. Copy the example section per server.",
      NULL, 0U},
     {"mcp.*", "endpoint", CAI_CONFIG_STRING, "",
-     "Streamable HTTP MCP URL; required for enabled servers.", NULL, 0U},
+     "Streamable HTTP MCP URL; provider connections may supply a default.",
+     NULL, 0U},
+    {"mcp.*", "lazy", CAI_CONFIG_BOOL, "true",
+     "Expose tool schemas through local tool_search discovery. false loads all "
+     "tools eagerly.",
+     NULL, 0U},
+    {"mcp.*", "description", CAI_CONFIG_STRING, "",
+     "Optional source hint describing the app/actions available for tool "
+     "discovery.",
+     NULL, 0U},
+    {"mcp.*", "provider", CAI_CONFIG_STRING, "",
+     "Connection authentication provider, independent of inference. chatgpt "
+     "uses saved ChatGPT login; empty selects ordinary MCP auth.",
+     NULL, 0U},
     {"mcp.*", "api_key_env", CAI_CONFIG_STRING, "",
      "Optional environment variable containing a Bearer API key.", NULL, 0U},
     {"mcp.*", "client_name", CAI_CONFIG_STRING, "",

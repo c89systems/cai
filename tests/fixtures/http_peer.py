@@ -184,9 +184,16 @@ class Peer(http.server.BaseHTTPRequestHandler):
         with (root / 'mcp_requests.jsonl').open('a') as output:
             output.write(json.dumps(dict(server=name, request=request,
                                           authorization=self.headers.get('Authorization'),
+                                          account_id=self.headers.get('ChatGPT-Account-Id'),
+                                          product_sku=self.headers.get('X-OpenAI-Product-Sku'),
+                                          originator=self.headers.get('originator'),
                                           time_ns=time.monotonic_ns())) + '\n')
+        if spec.get('gate'):
+            deadline = time.monotonic() + 15
+            while not (root / spec['gate']).exists() and time.monotonic() < deadline:
+                time.sleep(.005)
         time.sleep(spec.get('delay_ms', 0) / 1000 if method != 'notifications/initialized' else 0)
-        self.send_response(spec.get('status', 202 if method == 'notifications/initialized' else 200))
+        self.send_response(spec.get('status', spec.get('notification_status', 202) if method == 'notifications/initialized' else 200))
         notify = method == 'tools/call' and spec.get('notify_tools_changed')
         self.send_header('Content-Type', 'text/event-stream' if notify else 'application/json')
         self.end_headers()

@@ -1112,6 +1112,7 @@ int cai_chatgpt_auth_open(const cai_chatgpt_auth_config *config,
   memset(auth, 0, sizeof(*auth));
   auth->allocator = effective->allocator;
   auth->access_token = cai_chatgpt_auth_access_token;
+  auth->account_id = cai_chatgpt_auth_account_id;
   auth->refresh = cai_chatgpt_auth_refresh;
   auth->close = cai_chatgpt_auth_close;
   impl =
@@ -1693,6 +1694,20 @@ int cai_chatgpt_auth_access_token(cai_chatgpt_auth *auth, char **out,
                          "failed to allocate access token");
   }
   return CAI_OK;
+}
+
+int cai_chatgpt_auth_account_id(cai_chatgpt_auth *auth, char **out,
+                                cai_error *error) {
+  cai_chatgpt_auth_impl *impl = cai_chatgpt_auth_impl_from_public(auth);
+  if (out != NULL)
+    *out = NULL;
+  if (out == NULL || impl == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "auth and account ID output are required");
+  *out = cai_strdup(NULL, impl->account_id);
+  return impl->account_id != NULL && *out == NULL
+             ? cai_set_error(error, CAI_ERR_NOMEM, "copy ChatGPT account ID")
+             : CAI_OK;
 }
 
 void cai_chatgpt_login_config_init(cai_chatgpt_login_config *config) {

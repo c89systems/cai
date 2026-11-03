@@ -883,6 +883,12 @@ int cai_client_new_agent(cai_client *client, const cai_agent_config *config,
     cai_agent_destroy(agent);
     return error != NULL ? error->code : CAI_ERR_NOMEM;
   }
+  if (pthread_mutex_init(&impl->plugins_lock, NULL) != 0) {
+    cai_agent_destroy(agent);
+    return cai_set_error(error, CAI_ERR_TRANSPORT,
+                         "initialize tool publication lock");
+  }
+  impl->plugins_lock_initialized = 1;
   *out = agent;
   return CAI_OK;
 }
@@ -6024,14 +6030,17 @@ static int cai_session_sync_plugin_request(cai_session *session,
   struct cai_function_tool *hosted = agent->hosted_tools.items;
   size_t i;
   int rc = cai_plugins_sync_agent(CAI_SESSION_IMPL(session)->agent, error);
-  if (rc != CAI_OK || agent->plugins == NULL ||
-      generation == agent->plugins_generation)
+  if (rc != CAI_OK ||
+      (!agent->mcp_tools_dirty &&
+       (agent->plugins == NULL || generation == agent->plugins_generation)))
     return rc;
   cai_plugin_request_clear_tools(params);
   for (i = 0U; rc == CAI_OK && i < agent->hosted_tools.count; i++)
     rc = params->add_hosted_tool_json(params, hosted[i].raw_json, error);
   if (rc == CAI_OK)
     rc = agent->tools->add_to_response_params(agent->tools, params, error);
+  if (rc == CAI_OK)
+    agent->mcp_tools_dirty = 0;
   return rc;
 }
 

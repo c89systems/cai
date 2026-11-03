@@ -64,6 +64,7 @@ cai_agent_runtime_open
 cai_agent_runtime_pause_goal
 cai_agent_runtime_pump
 cai_agent_runtime_pump_bounded
+cai_agent_runtime_refresh_mcp
 cai_agent_runtime_replace_goal
 cai_agent_runtime_resume_goal
 cai_agent_runtime_select_board
@@ -99,6 +100,7 @@ cai_agent_usage
 cai_agent_use_plugins
 cai_apply_patch
 cai_chatgpt_auth_access_token
+cai_chatgpt_auth_account_id
 cai_chatgpt_auth_close
 cai_chatgpt_auth_config_init
 cai_chatgpt_auth_default_path
@@ -229,6 +231,7 @@ cai_input_item_role
 cai_input_item_type
 cai_list_params_init
 cai_load_dotenv_api_key
+cai_mcp_chatgpt_auth_provider_init
 cai_mcp_client_call_tool
 cai_mcp_client_call_tool_raw
 cai_mcp_client_complete
@@ -258,6 +261,7 @@ cai_mcp_handler_handle_http
 cai_mcp_handler_new
 cai_mcp_streamable_http_client_config_init
 cai_mcp_streamable_http_client_open
+cai_mcp_tool_alias
 cai_model_auto_compact_token_limit
 cai_model_can_estimate_usage_usd
 cai_model_catalog_close

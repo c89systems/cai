@@ -3,6 +3,7 @@
 
 #include <cai/cai.h>
 #include <cai/history.h>
+#include <cai/mcp.h>
 #include <cai/plugins.h>
 #include <cai/quota.h>
 #include <cai/session_store.h>
@@ -128,6 +129,7 @@ typedef struct cai_agent_impl {
   char *plugin_workspace;
   size_t plugins_base;
   unsigned long plugins_generation;
+  int mcp_tools_dirty;
   int plugins_bound, plugins_lock_initialized;
   pthread_mutex_t plugins_lock;
   cai_session *default_session;
@@ -578,12 +580,30 @@ int cai_mcp_test_authenticated_url_status(const char *url, const char *field,
 #endif
 int cai_stream_fuzz_sse(const unsigned char *data, size_t size);
 /* Mutate only while the registry is quiescent. */
+typedef struct cai_mcp_registration_snapshot {
+  cai_mcp_tool_registration_config config;
+  cai_mcp_raw_input_override *overrides;
+  cai_tool_raw_input *mappings;
+  char *name_prefix;
+  size_t count;
+} cai_mcp_registration_snapshot;
+void cai_mcp_registration_snapshot_cleanup(
+    cai_mcp_registration_snapshot *snapshot);
+int cai_mcp_registration_snapshot_copy(
+    cai_mcp_client *client, const cai_mcp_tool_registration_config *config,
+    cai_mcp_registration_snapshot *snapshot, cai_error *error);
+int cai_tool_registry_deferred_internal(const cai_tool_registry *registry,
+                                        size_t index);
+void cai_tool_registry_defer_internal(cai_tool_registry *registry, size_t index,
+                                      int deferred);
+int cai_tool_registry_description_internal(cai_tool_registry *registry,
+                                           size_t index, char *description);
 int cai_tool_registry_remove_internal(cai_tool_registry *registry,
                                       const char *name, cai_error *error);
-int cai_tool_registry_replace_tail_internal(cai_tool_registry *registry,
-                                            size_t prefix,
-                                            cai_tool_registry *replacement,
-                                            cai_error *error);
+int cai_tool_registry_replace_range_internal(cai_tool_registry *registry,
+                                             size_t prefix, size_t removed,
+                                             cai_tool_registry *replacement,
+                                             cai_error *error);
 void cai_tool_registry_promote_last_internal(cai_tool_registry *registry,
                                              size_t index);
 /* Quiescent registry operations. Exchange preserves tool order and ownership.

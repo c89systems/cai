@@ -79,6 +79,9 @@ struct cai_chatgpt_auth {
   cai_allocator allocator;
   /** Private implementation owned by cai. */
   void *impl;
+  /** Optional copied account routing ID; NULL output means unavailable.
+   * Release the returned string with cai_string_destroy(). */
+  int (*account_id)(cai_chatgpt_auth *auth, char **out, cai_error *error);
 };
 
 /** Server-agnostic request passed to the ChatGPT OAuth callback handler. */
@@ -188,6 +191,11 @@ int cai_chatgpt_auth_open(const cai_chatgpt_auth_config *config,
 /** Return the current access token, refreshing first when it is near expiry. */
 int cai_chatgpt_auth_access_token(cai_chatgpt_auth *auth, char **out,
                                   cai_error *error);
+/** Copy the selected account routing ID from a CAI-owned auth handle.
+ * NULL output means no explicit account ID. Release with cai_string_destroy().
+ */
+int cai_chatgpt_auth_account_id(cai_chatgpt_auth *auth, char **out,
+                                cai_error *error);
 /** Force a refresh-token grant and persist returned token fields. */
 int cai_chatgpt_auth_refresh(cai_chatgpt_auth *auth, cai_error *error);
 /** Close a ChatGPT auth session and clear sensitive token memory. */

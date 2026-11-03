@@ -731,6 +731,8 @@ set(CAI_SOURCES
   src/cai_log.c
   src/cai_mcp.c
   src/cai_mcp_client.c
+  src/cai_mcp_search.c
+  src/cai_mcp_chatgpt.c
   src/cai_model_catalog.c
   src/cai_quota.c
   src/cai_models.c
@@ -810,11 +812,12 @@ foreach(_cai_target IN ITEMS cai_static cai_shared)
 endforeach()
 if(TARGET cai_shared)
   target_link_libraries(cai_shared PRIVATE ${CAI_CURL_SHARED_LINK}
-    Threads::Threads ${CAI_OPENSSL_CRYPTO_SHARED_LINK} ${CAI_LONEJSON_LINK} CpktYaml::Yaml)
+    Threads::Threads ${CAI_OPENSSL_CRYPTO_SHARED_LINK} ${CAI_LONEJSON_LINK} CpktYaml::Yaml m)
 endif()
 if(TARGET cai_static)
   target_link_libraries(cai_static PRIVATE CpktYaml::Yaml)
   target_link_libraries(cai_static INTERFACE
+    m
     $<BUILD_INTERFACE:${CAI_CURL_STATIC_LINK}>
     $<BUILD_INTERFACE:Threads::Threads>
     $<BUILD_INTERFACE:${CAI_OPENSSL_CRYPTO_STATIC_LINK}>
@@ -1463,6 +1466,7 @@ if(CAI_INSTALL)
     set(CAI_CONFIG_PSLOG_INCLUDE_HINT "${CAI_PSLOG_INCLUDE_DIR}")
   endif()
   string(APPEND CAI_PACKAGE_REQUIRES_PRIVATE ", yaml-0.1 >= ${CAI_LIBYAML_VERSION}")
+  string(APPEND CAI_PC_DEPENDENCY_LIBS_PRIVATE " -lm")
   set(CAI_LONEJSON_PKG_SHA256_FOR_PACKAGE "${CAI_LONEJSON_PKG_SHA256}")
   if(NOT DEFINED CAI_LONEJSON_PKG_SHA256_FOR_PACKAGE OR
      CAI_LONEJSON_PKG_SHA256_FOR_PACKAGE STREQUAL "")

@@ -18,6 +18,7 @@ typedef struct cai_tool_entry {
   cai_tool_raw_input raw_input;
   int strict;
   int ignore_arguments;
+  int deferred;
   cai_tool_kind kind;
   const lonejson_map *params_map;
   const lonejson_map *result_map;
@@ -1474,10 +1475,10 @@ void cai_tool_registry_promote_last_internal(cai_tool_registry *registry,
   impl->entries[index] = entry;
 }
 
-int cai_tool_registry_replace_tail_internal(cai_tool_registry *registry,
-                                            size_t prefix,
-                                            cai_tool_registry *replacement,
-                                            cai_error *error) {
+int cai_tool_registry_replace_range_internal(cai_tool_registry *registry,
+                                             size_t prefix, size_t removed,
+                                             cai_tool_registry *replacement,
+                                             cai_error *error) {
   cai_tool_registry_impl *current =
       cai_tool_registry_impl_from_public(registry);
   cai_tool_registry_impl *next =
@@ -1485,18 +1486,22 @@ int cai_tool_registry_replace_tail_internal(cai_tool_registry *registry,
   cai_tool_entry *entries, *retired;
   size_t i, j, count;
   if (current == NULL || next == NULL || current == next ||
-      prefix > current->count)
+      prefix > current->count || removed > current->count - prefix)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "invalid registry replacement");
-  for (i = 0U; i < prefix; i++)
+  for (i = 0U; i < current->count; i++) {
+    if (i >= prefix && i < prefix + removed)
+      continue;
     for (j = 0U; j < next->count; j++)
       if (strcmp(current->entries[i].name, next->entries[j].name) == 0)
         return cai_set_error(error, CAI_ERR_INVALID,
-                             "plugin conflicts with native tool");
-  if (prefix > (size_t)-1 / sizeof(*entries) - 1U ||
-      next->count > (size_t)-1 / sizeof(*entries) - prefix - 1U)
+                             "replacement conflicts with an existing tool");
+  }
+  if (current->count - removed > (size_t)-1 / sizeof(*entries) - 1U ||
+      next->count >
+          (size_t)-1 / sizeof(*entries) - (current->count - removed) - 1U)
     return cai_set_error(error, CAI_ERR_LIMIT, "too many plugin tools");
-  count = prefix + next->count;
+  count = current->count - removed + next->count;
   entries = cai_alloc(NULL, (count + 1U) * sizeof(*entries));
   if (entries == NULL)
     return cai_set_error(error, CAI_ERR_NOMEM,
@@ -1505,16 +1510,18 @@ int cai_tool_registry_replace_tail_internal(cai_tool_registry *registry,
     memcpy(entries, current->entries, prefix * sizeof(*entries));
   if (next->count != 0U)
     memcpy(entries + prefix, next->entries, next->count * sizeof(*entries));
+  if (current->count > prefix + removed)
+    memcpy(entries + prefix + next->count, current->entries + prefix + removed,
+           (current->count - prefix - removed) * sizeof(*entries));
   /* Return retired entries in replacement: destruction may call host code
    * and must occur after the publication lock has been released. */
   retired = current->entries;
-  if (current->count > prefix)
-    memmove(retired, retired + prefix,
-            (current->count - prefix) * sizeof(*retired));
+  if (removed != 0U)
+    memmove(retired, retired + prefix, removed * sizeof(*retired));
   cai_free_mem(NULL, next->entries);
   next->entries = retired;
   next->capacity = current->capacity;
-  next->count = current->count - prefix;
+  next->count = removed;
   current->entries = entries;
   current->count = count;
   current->capacity = count + 1U;
@@ -2037,6 +2044,8 @@ int cai_tool_registry_add_to_response_params(const cai_tool_registry *registry,
     return cai_set_error(error, CAI_ERR_INVALID, "tool registry is closed");
   }
   for (i = 0U; i < impl->count; i++) {
+    if (impl->entries[i].deferred)
+      continue;
     rc = cai_tool_entry_add_params(&impl->entries[i], params, error);
     if (rc != CAI_OK) {
       return rc;
@@ -2050,6 +2059,30 @@ size_t cai_tool_registry_count(const cai_tool_registry *registry) {
 
   impl = cai_tool_registry_impl_from_const_public(registry);
   return impl != NULL ? impl->count : 0U;
+}
+
+int cai_tool_registry_deferred_internal(const cai_tool_registry *registry,
+                                        size_t index) {
+  const cai_tool_registry_impl *impl =
+      cai_tool_registry_impl_from_const_public(registry);
+  return impl != NULL && index < impl->count ? impl->entries[index].deferred
+                                             : 0;
+}
+void cai_tool_registry_defer_internal(cai_tool_registry *registry, size_t index,
+                                      int deferred) {
+  cai_tool_registry_impl *impl = cai_tool_registry_impl_from_public(registry);
+  if (impl != NULL && index < impl->count)
+    impl->entries[index].deferred = deferred;
+}
+/* Description ownership transfers only on success. No allocation at publish. */
+int cai_tool_registry_description_internal(cai_tool_registry *registry,
+                                           size_t index, char *description) {
+  cai_tool_registry_impl *impl = cai_tool_registry_impl_from_public(registry);
+  if (impl == NULL || index >= impl->count)
+    return CAI_ERR_INVALID;
+  cai_free_mem(NULL, impl->entries[index].description);
+  impl->entries[index].description = description;
+  return CAI_OK;
 }
 
 void cai_tool_registry_truncate(cai_tool_registry *registry, size_t count) {
