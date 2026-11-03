@@ -38,7 +38,7 @@ send '/help\r'; expect 'startup options'; [[ $(requests) == "$count" ]]
 send 'preserved-draft'; resize 48; expect_prompt preserved-draft
 release; expect_assistant 'FINAL paragraph.'; expect 'Worked for'
 contains "$root/peer/requests.jsonl" 'data:image/png;base64,'
-contains "$term/text" '! Worked for'
+contains "$term/message" '! Worked for'
 plan '{"plan":["DRAFT SENT DONE"]}'
 offset=$(wc -c <"$term/text")
 send '\r'; expect_turn "$offset" 'DRAFT SENT DONE'

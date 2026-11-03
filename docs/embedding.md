@@ -335,7 +335,7 @@ parent on completion, failure or cancellation.
 Tool activity verbs and durations use the effective palette's H3 foreground
 with normal weight; commands, paths, tool labels and slash-command text use
 H2 foreground in bold. Neutral/success/failure symbols stay gray/green/red.
-The application copies foregrounds from libmdf 0.18.0's public palette into
+The application copies foregrounds from libmdf 0.19.0's public palette into
 libcai's dependency-free `cai_tool_display_set_palette` API (Lua
 `display:set_palette(activity_foreground, label_foreground)`). Palette changes
 preserve active call identity, output limits and partial UTF-8/SGR decoding.

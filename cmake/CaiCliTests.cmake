@@ -506,6 +506,13 @@
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_terminal_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>")
     set_tests_properties(cai_cli_terminal PROPERTIES TIMEOUT 60)
+    foreach(_cai_url_protocol responses chat_completions)
+      add_test(NAME cai_cli_url_wrapping_${_cai_url_protocol}
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_url_wrapping_test.sh"
+          "$<TARGET_FILE:cai_cli_mock_fixture>" "${_cai_url_protocol}")
+      set_tests_properties(cai_cli_url_wrapping_${_cai_url_protocol}
+        PROPERTIES TIMEOUT 30)
+    endforeach()
     add_test(NAME cai_cli_commands
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_commands_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>")

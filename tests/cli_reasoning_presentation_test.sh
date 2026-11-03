@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/cli_test_common.sh"
 peer_start
+capture_feed() {
+  sed -E $'s/\033\[[0-?]*[ -/]*[@-~]//g' "$term/feed" | without_dtg >"$1"
+}
 plan '{"plan":[{"reasoning":["**Applying ","patch to script path**"],"pause":true,"text":"ONE LINE DONE"}]}'
 terminal_start -N
 send 'first\r'; expect 'STREAM in flight'
@@ -15,7 +18,7 @@ terminal_close
 plan '{"plan":[{"reasoning":["**Checking goal**\n\nREASONING ENDS HERE"],"tool":"create_goal","arguments":{"unexpected":true}},"AFTER TOOL FAILURE"]}'
 terminal_start -N
 prompt 'check reasoning-to-tool boundary' 'AFTER TOOL FAILURE'
-sed -E $'s/\033\[[0-?]*[ -/]*[@-~]//g' "$term/feed" >"$root/failed-tool"
+capture_feed "$root/failed-tool"
 grep -q '^\* Failed create_goal' "$root/failed-tool"
 absent "$root/failed-tool" '* WARN:'
 if grep -Eq '^.*[>│].*\* (Failed|WARN:)' "$root/failed-tool"; then fail 'tool output retained a reasoning quote'; fi
@@ -49,7 +52,7 @@ expect '! Choosing a boundary'
 absent "$term/text" 'Worked for'
 release; expect 'Still the same response.'; expect 'Worked for'
 [[ $(requests) == $((before+1)) ]]
-sed -E $'s/\033\[[0-?]*[ -/]*[@-~]//g' "$term/feed" >"$root/blocks"
+capture_feed "$root/blocks"
 contains "$root/blocks" $'  Commentary before reasoning.\n\n  > Summary body one continues.'
 contains "$root/blocks" $'  > Summary body two.\n\n  Answer after reasoning. Still the same response.'
 absent "$root/blocks" 'Choosing a boundary'
@@ -61,7 +64,7 @@ width=60
 plan '{"plan":[{"reasoning":["**Quoted plan**\n\nFIRST quoted paragraph is deliberately long enough to wrap across multiple rows while preserving **Markdown** and `code`.","\r","\n\r\nSECOND quoted paragraph is also long enough to wrap, ending at ENDREASON"],"pause":true,"pause_text":"ANSWER after quote. ","text":"QUOTE DONE"}]}'
 terminal_start -N
 send 'wrap the summary\r'; expect 'ANSWER after quote.'; expect '! Quoted plan'
-sed -E $'s/\033\[[0-?]*[ -/]*[@-~]//g' "$term/feed" >"$root/wrapped"
+capture_feed "$root/wrapped"
 awk '
   /^  > FIRST/ {inside=1}
   /^  ANSWER after quote/ {inside=0; answer++}
