@@ -6335,7 +6335,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   }
   auth_file = state->options.auth_json;
   if (strcmp(state->options.provider, "chatgpt") == 0 ||
-      !state->options.review) {
+      (!state->options.review && state->options.mcp)) {
     auth_store =
         cli_named_store(state, state->normal_options.auth_store, 1, &error);
     if (auth_store == NULL) {

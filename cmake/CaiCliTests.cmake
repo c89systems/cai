@@ -506,6 +506,10 @@
     add_test(NAME cai_cli_providers
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_providers_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>" "${CMAKE_CURRENT_BINARY_DIR}")
+    add_test(NAME cai_cli_auth_dependency COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_auth_dependency_test.sh"
+      "$<TARGET_FILE:cai_cli_mock_fixture>")
+    set_tests_properties(cai_cli_auth_dependency PROPERTIES TIMEOUT 15)
     add_test(NAME cai_cli_login
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_login_test.sh"
         "$<TARGET_FILE:cai_cli>")
