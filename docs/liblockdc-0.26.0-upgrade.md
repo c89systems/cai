@@ -1,5 +1,8 @@
 # liblockdc 0.26.0 integration
 
+Historical integration notes. The current dependency is documented in
+[the 0.27.0 integration notes](liblockdc-0.27.0-upgrade.md).
+
 CAI consumes the published, checksum-pinned liblockdc 0.26.0 core SDK for all
 six Linux targets. PostgreSQL remains excluded. The SDK advances its shared
 ABI from 8 to 9; consumers must rebuild against matching headers and libraries.

@@ -1,7 +1,7 @@
 # liblockdc 0.25.0 integration
 
 Historical upgrade notes. The current SDK pin and subsequent ABI changes are
-documented in [the 0.26.0 integration notes](liblockdc-0.26.0-upgrade.md).
+documented in [the 0.27.0 integration notes](liblockdc-0.27.0-upgrade.md).
 
 CAI consumes the published, checksum-pinned liblockdc 0.25.0 core SDK for all
 six Linux targets. The optional PostgreSQL provider remains excluded. This

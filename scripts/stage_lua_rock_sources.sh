@@ -63,6 +63,7 @@ files=(
   docs/journal.md
   docs/liblockdc-0.25.0-upgrade.md
   docs/liblockdc-0.26.0-upgrade.md
+  docs/liblockdc-0.27.0-upgrade.md
   docs/patch-tool.md
   docs/plugins.md
   examples/app.lua

@@ -172,7 +172,7 @@ The musl SDK presets build the terminal coding agent as a statically linked
 Linux x86_64, aarch64 or armhf executable. The `cai` convenience preset selects
 the same x86_64 musl producer. It adds pinned softline 0.15.0 for the prompt and
 [libmdf 0.19.0](https://github.com/c89systems/libmdf) for streamed Markdown
-rendering and its public theme palette, and liblockdc 0.26.0 with
+rendering and its public theme palette, and liblockdc 0.27.0 with
 liblql 0.4.0 for durable storage. It uses libpslog 0.12.0 for logging.
 The native dependency SDK is cpkt 0.6.1 from
 [c89systems/cpkt](https://github.com/c89systems/cpkt). CAI consumes liblockdc's
@@ -188,6 +188,8 @@ conditionally reclaim its own crashed owner without waiting for expiry. See
 [the 0.26.0 upgrade notes](docs/liblockdc-0.26.0-upgrade.md) for the SDK ABI
 change and restrictions on older clients once atomic edits are used. Roots
 older than 0.25.0 also need the documented control-head upgrade.
+The [0.27.0 integration notes](docs/liblockdc-0.27.0-upgrade.md) cover the
+current dependency's compaction cleanup and compression-recovery fixes.
 Softline and libmdf run on the UI thread. The runtime
 worker executes model requests and tools, then wakes the UI thread to render
 events.

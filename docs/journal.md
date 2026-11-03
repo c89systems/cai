@@ -147,9 +147,9 @@ spool is introduced. The configured compression must match the root manifest.
 Old CAI snapshot-backed journals remain unsupported. Existing append-only
 collection roots use liblockdc's native control-head upgrade, described in
 [the 0.25.0 upgrade notes](liblockdc-0.25.0-upgrade.md). The current
-[0.26.0 SDK](liblockdc-0.26.0-upgrade.md) adds atomic edits and recovery heads
-without rewriting existing 0.25.x roots; clients using those new operations
-must all be upgraded before edited collections are shared.
+[0.27.0 SDK](liblockdc-0.27.0-upgrade.md) retains the atomic edits and recovery
+heads introduced in 0.26.0 without rewriting existing 0.25.x roots; clients
+predating those operations must be upgraded before edited collections are shared.
 
 Writable restore acquires a native SDK collection lease before replaying model
 context or choosing event IDs. All commits/events use that owned receiver until
