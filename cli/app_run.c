@@ -195,6 +195,7 @@ typedef struct cli_state {
   int notice_first_row;
   int command_input;
   int command_output;
+  int tool_result_body;
   int sink_failed;
   mdf_status renderer_error;
   unsigned long long presentation_timestamp_ns;
@@ -456,7 +457,8 @@ static int cli_timestamp_write(cli_state *state, const char *stamp) {
 }
 static int cli_timestamp_header(cli_state *state) {
   char stamp[CAI_DTG_CAPACITY];
-  if (state->command_output && !state->presentation_event)
+  if (state->tool_result_body ||
+      (state->command_output && !state->presentation_event))
     return 0;
   if (!cli_timestamp(state, stamp, sizeof(stamp)))
     return 0;
@@ -786,7 +788,12 @@ static int cli_literal_prepare(cli_state *state) {
              : -1;
 }
 static int cli_tool_markdown(void *context, const char *text, size_t length) {
-  return cli_text(context, text, length);
+  cli_state *state = context;
+  int saved = state->tool_result_body, rc;
+  state->tool_result_body = 1;
+  rc = cli_text(state, text, length);
+  state->tool_result_body = saved;
+  return rc;
 }
 
 static int cli_markdown(cli_state *state, const char *text) {
@@ -1879,10 +1886,11 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
                                      "markdown", &formatted) == 0
                    ? CAI_OK
                    : CAI_ERR_PROTOCOL;
-      if (rc == CAI_OK && (cli_finish_response(state) != 0 ||
-                           cli_finish_reasoning(state) != 0 ||
-                           cli_text(state, formatted, strlen(formatted)) != 0 ||
-                           cli_finish_response(state) != 0))
+      if (rc == CAI_OK &&
+          (cli_finish_response(state) != 0 ||
+           cli_finish_reasoning(state) != 0 ||
+           cli_tool_markdown(state, formatted, strlen(formatted)) != 0 ||
+           cli_finish_response(state) != 0))
         rc = CAI_ERR_TRANSPORT;
       free(formatted);
       return rc;
@@ -1995,7 +2003,8 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
     if (event->data != NULL && event->data_length != 0U)
       rc = cli_finish_response(state) == 0 &&
                    cli_finish_reasoning(state) == 0 &&
-                   cli_text(state, event->data, event->data_length) == 0 &&
+                   cli_tool_markdown(state, event->data, event->data_length) ==
+                       0 &&
                    cli_finish_response(state) == 0
                ? CAI_OK
                : CAI_ERR_TRANSPORT;
@@ -2587,7 +2596,7 @@ static int cli_replay_output_body(cli_state *state,
           rc = CAI_ERR_TRANSPORT;
       } else if (strcmp(record.kind, "review_markdown_delta") == 0) {
         if (record.data[0] != '\0' &&
-            cli_text(state, record.data, strlen(record.data)) != 0)
+            cli_tool_markdown(state, record.data, strlen(record.data)) != 0)
           rc = CAI_ERR_TRANSPORT;
       } else if (strcmp(record.kind, "assistant_text_end") == 0 ||
                  strcmp(record.kind, "review_markdown_end") == 0) {

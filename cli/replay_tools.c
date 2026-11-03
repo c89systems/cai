@@ -22,6 +22,8 @@ typedef struct replay_call {
   char terminal[257], number[64];
   size_t label_length, terminal_length, number_length;
   unsigned long long last, offset, command_id, duration_ms;
+  unsigned long long started_timestamp_ns;
+  int started_utc_offset;
   int failed, completed, action, has_exit, has_signal, truncated, is_error;
   long long exit_code, signal;
   int parsing, invalid, output, rendering, opened, patch, has_preview,
@@ -319,6 +321,12 @@ int cai_cli_replay_tools_index(cai_cli_replay_tools **out,
     r->calls = c;
   }
   c->last = sequence;
+  if (record->timestamp_ns != 0U && (same(record->kind, "tool.started") ||
+                                     (c->started_timestamp_ns == 0U &&
+                                      same(record->kind, "tool.arguments")))) {
+    c->started_timestamp_ns = record->timestamp_ns;
+    c->started_utc_offset = record->utc_offset_seconds;
+  }
   if (same(record->kind, "tool.completed"))
     c->completed = 1;
   if (same(record->kind, "tool.failed"))
@@ -380,6 +388,8 @@ static void event_init(replay_call *c) {
   c->event.tool_call_id = c->id;
   c->event.tool_name = c->name;
   c->event.tool_action = c->action;
+  c->event.timestamp_ns = c->started_timestamp_ns;
+  c->event.utc_offset_seconds = c->started_utc_offset;
   c->event.tool_path = c->label_length != 0U ? c->label : NULL;
   c->event.terminal_has_exit_code = c->has_exit;
   c->event.terminal_exit_code = c->exit_code;
@@ -418,8 +428,10 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
   c->error = error;
   c->rc = CAI_OK;
   event_init(c);
-  c->event.timestamp_ns = record->timestamp_ns;
-  c->event.utc_offset_seconds = record->utc_offset_seconds;
+  if (c->event.timestamp_ns == 0U) {
+    c->event.timestamp_ns = record->timestamp_ns;
+    c->event.utc_offset_seconds = record->utc_offset_seconds;
+  }
   if (same(c->name, "set_reasoning") && !c->failed)
     return CAI_OK;
   /* The runner's failure message is a diagnostic. Only its captured output
@@ -442,8 +454,10 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
   if (command) {
     event_init(origin);
     c->event = origin->event;
-    c->event.timestamp_ns = record->timestamp_ns;
-    c->event.utc_offset_seconds = record->utc_offset_seconds;
+    if (c->event.timestamp_ns == 0U) {
+      c->event.timestamp_ns = record->timestamp_ns;
+      c->event.utc_offset_seconds = record->utc_offset_seconds;
+    }
     origin->display = display;
     if ((same(record->kind, "tool.output") ||
          same(record->kind, "tool.partial_output")) &&

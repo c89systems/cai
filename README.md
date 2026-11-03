@@ -617,8 +617,10 @@ The live timer advances while the turn is active and stops when it settles.
 
 Interactive activity headings, command receipts, diagnostics and Markdown
 blocks use gray DTGs without additional dimming. Slash-command replies share
-the input's timestamp. Same month and year: `DDHHMM` in local time, or
-`DDHHMMZ` with `--utc`. Older entries use `DDHHMMZONEMMMYY`, for example
+the input's timestamp. Tool-result bodies share their receipt's timestamp,
+which uses the recorded call-start time when available. Assistant and reasoning
+blocks keep their own timestamps. Same month and year: `DDHHMM` in local time, or `DDHHMMZ` with
+`--utc`. Older entries use `DDHHMMZONEMMMYY`, for example
 `021230ANOV26`. Months are JAN through DEC; years are always two digits.
 Local zones follow the [USNO/HMNAO chart](https://aa.usno.navy.mil/downloads/TimeZoneMap_2021.pdf),
 using ASCII letters and star codes (`E*` for +05:30, `M*` for +13:00).

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/cli_test_common.sh"
 peer_start
+base+=(--utc)
+no_result_stamp() {
+  awk '/^\* [0-9]{6}Z (MCP|Failed)/ {body=1; seen++; next}
+       body && NF {if ($0 ~ /^  [0-9]{6}Z$/) exit 1; body=0}
+       END {if (!seen) exit 1}' "$1"
+}
 base+=(--mcp)
 base+=(--terminal)
 mkdir -p "$root/config/cai"
@@ -25,6 +31,8 @@ plan '{"mcp":{"alpha":{"call_result":{"isError":true,"content":[{"type":"text","
 prompt 'exercise MCP failure' 'FAILURE TURN DONE'
 contains "$term/text" '* MCP failed mcp_5_alpha_echo'
 contains "$term/text" '> Server **literal** failure'
+no_result_stamp "$term/feed"
+grep -Eq '^  [0-9]{6}Z$' "$term/feed" # Assistant messages still have DTGs.
 id=$(current_session_id)
 terminal_close
 before=$(requests)
@@ -40,5 +48,7 @@ contains "$term/text" '> write_stdin session_id'
 contains "$term/text" 'raw-command-output'
 absent "$term/text" '> raw-command-output'
 absent "$term/text" '"content"'
+no_result_stamp "$term/text"
+grep -Eq '^  [0-9]{6}Z$' "$term/text"
 terminal_close
 [[ $(requests) == "$before" ]]

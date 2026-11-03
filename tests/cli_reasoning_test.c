@@ -1002,6 +1002,9 @@ static int test_timestamps(void) {
                           &state->renderer, &error) != CAI_OK ||
       cli_timestamp(state, stamp, sizeof(stamp)) == 0 ||
       cli_command_input(state, "/status") != 0 ||
+      cli_tool_markdown(state, "Tool result body.",
+                        strlen("Tool result body.")) != 0 ||
+      cli_finish_response(state) != 0 ||
       cli_text(state, "Visible answer.", 15U) != 0 ||
       cli_finish_response(state) != 0)
     rc = 1;
@@ -1030,6 +1033,14 @@ static int test_timestamps(void) {
     if (memchr(output, '\0', (size_t)count) != NULL ||
         strstr(output, expected) == NULL || strstr(output, "/status") == NULL ||
         strstr(output, "Visible answer.") == NULL)
+      rc = 1;
+    snprintf(expected, sizeof(expected), "  %s%s%s\n",
+             getenv("NO_COLOR") == NULL ? "\033[0;90m" : "", stamp,
+             getenv("NO_COLOR") == NULL ? "\033[0m" : "");
+    if (strstr(output, expected) == NULL ||
+        strstr(strstr(output, expected) + strlen(expected), expected) != NULL ||
+        strstr(output, "Tool result body.") == NULL ||
+        strstr(output, "Tool result body.") > strstr(output, expected))
       rc = 1;
     if (rc != 0)
       fprintf(stderr, "timestamp rendering failed: %s\n", output);

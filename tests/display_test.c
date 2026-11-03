@@ -1227,9 +1227,9 @@ static void timestamps(capture *c) {
   cai_sink *sink = NULL;
   cai_agent_runtime_event e;
   cai_error error;
-  char stamp[CAI_DTG_CAPACITY], expected[128];
+  char stamp[CAI_DTG_CAPACITY], finished[CAI_DTG_CAPACITY], expected[128];
   time_t when = (time_t)1793622600;
-  int color;
+  int color, scenario;
   memset(&callbacks, 0, sizeof(callbacks));
   callbacks.context = c;
   callbacks.write = write_capture;
@@ -1260,6 +1260,46 @@ static void timestamps(capture *c) {
     e.timestamp_ns = 0U; /* Legacy entries must never use the replay clock. */
     assert(cai_tool_display_event(display, &e, &error) == CAI_OK);
     assert(strstr(c->bytes, stamp) == NULL);
+    assert(cai_dtg_format_time(when + 120, time(NULL), 1, finished,
+                               sizeof(finished)) == CAI_DTG_OK);
+    for (scenario = 0; scenario < 5; scenario++) {
+      memset(&e, 0, sizeof(e));
+      c->length = 0U;
+      e.tool_call_id = "clock";
+      e.tool_name = "fixture";
+      e.tool_action = scenario >= 3   ? CAI_AGENT_TOOL_ACTION_EXECUTE
+                      : scenario == 1 ? CAI_AGENT_TOOL_ACTION_MCP
+                                      : CAI_AGENT_TOOL_ACTION_READ;
+      e.timestamp_ns = 1793622600123456789ULL;
+      e.type = CAI_AGENT_EVENT_TOOL_CALL_STARTED;
+      assert(cai_tool_display_event(display, &e, &error) == CAI_OK);
+      if (scenario == 3) {
+        e.type = CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED;
+        e.timestamp_ns += 60000000000ULL;
+        e.data = "echo";
+        e.data_length = 4U;
+        assert(cai_tool_display_event(display, &e, &error) == CAI_OK);
+        e.data = NULL;
+        e.data_length = 0U;
+      }
+      e.timestamp_ns = 1793622720123456789ULL;
+      e.type = scenario == 3   ? CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED
+               : scenario == 2 ? CAI_AGENT_EVENT_TOOL_CALL_FAILED
+                               : CAI_AGENT_EVENT_TOOL_CALL_COMPLETED;
+      e.terminal_has_exit_code = 1;
+      if (scenario == 4) {
+        assert(cai_tool_display_replay_begin(display, &e, "Ran", "fixture", 1,
+                                             &error) == CAI_OK);
+        e.type = CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED;
+        assert(cai_tool_display_event(display, &e, &error) == CAI_OK);
+      } else if (scenario == 1)
+        assert(cai_tool_display_summary(display, &e, "MCP", "fixture", 1,
+                                        &error) == CAI_OK);
+      else
+        assert(cai_tool_display_event(display, &e, &error) == CAI_OK);
+      assert(strstr(c->bytes, stamp) != NULL);
+      assert(strstr(c->bytes, finished) == NULL);
+    }
     cai_tool_display_close(display);
   }
   cai_sink_close(sink);

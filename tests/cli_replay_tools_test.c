@@ -1,7 +1,9 @@
 #include "../cli/replay_tools.h"
 #include <assert.h>
+#include <cai/dtg.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct fixture {
   cai_cli_replay_tools *tools;
@@ -10,7 +12,7 @@ typedef struct fixture {
   cai_error error;
   char text[32768];
   size_t length;
-  unsigned long long sequence;
+  unsigned long long sequence, timestamp_ns;
   int fail, phase, mode;
 } fixture;
 static int capture(void *context, const void *bytes, size_t count,
@@ -40,6 +42,7 @@ static void open_fixture(fixture *f, int full) {
   memset(&config, 0, sizeof(config));
   config.sink = f->sink;
   config.mode = full ? CAI_TOOL_OUTPUT_FULL : CAI_TOOL_OUTPUT_COMPACT;
+  config.timestamps = config.utc = 1;
   f->mode = config.mode;
   assert(cai_tool_display_new(&config, &f->display, &f->error) == CAI_OK);
   assert(cai_tool_display_set_width(f->display, 80U, &f->error) == CAI_OK);
@@ -64,6 +67,7 @@ static int record(fixture *f, const char *session, const char *id,
     r.kind = kind;
     r.field = field;
     r.offset = offset;
+    r.timestamp_ns = f->timestamp_ns;
     n = count - offset;
     if (n > step)
       n = step;
@@ -346,7 +350,31 @@ static void invalid_output(void) {
   assert(cai_cli_replay_tools_finish(f.tools, &f.error) == CAI_OK);
   close_fixture(&f);
 }
+static void call_timestamps(void) {
+  fixture f;
+  char stamp[CAI_DTG_CAPACITY], finished[CAI_DTG_CAPACITY], expected[128];
+  int phase;
+  open_fixture(&f, 0);
+  for (phase = 0; phase < 2; phase++) {
+    f.phase = phase;
+    f.timestamp_ns = 1793622600000000000ULL;
+    FEED("s", "clock", "mcp_fixture", "tool.started", NULL, "", 4096U);
+    f.timestamp_ns += 120000000000ULL;
+    FEED("s", "clock", "mcp_fixture", "tool.completed", NULL, "", 4096U);
+    FEED("s", "clock", "mcp_fixture", "tool.output", "data",
+         "{\"content\":[{\"type\":\"text\",\"text\":\"short result\"}]}", 1U);
+  }
+  assert(cai_dtg_format_time((time_t)1793622600, time(NULL), 1, stamp,
+                             sizeof(stamp)) == CAI_DTG_OK);
+  assert(cai_dtg_format_time((time_t)1793622720, time(NULL), 1, finished,
+                             sizeof(finished)) == CAI_DTG_OK);
+  snprintf(expected, sizeof(expected), "* %s MCP mcp_fixture", stamp);
+  assert(strstr(f.text, expected) != NULL);
+  assert(strstr(f.text, finished) == NULL);
+  close_fixture(&f);
+}
 int main(void) {
+  call_timestamps();
   commands(0, 1U);
   commands(1, 3U);
   commands(0, 4096U);

@@ -1353,6 +1353,8 @@ int cai_tool_display_event(cai_tool_display *d,
         e->type == CAI_AGENT_EVENT_REVIEW_STARTED ? "Starting" : "Finished",
         "review", 6U, error);
   c = display_find(d, e);
+  if (c != NULL && c->timestamp_ns != 0U)
+    d->timestamp_ns = c->timestamp_ns;
   if (e->type == CAI_AGENT_EVENT_RUN_FAILED ||
       e->type == CAI_AGENT_EVENT_RUN_CANCELLED) {
     cai_display_call *next;
@@ -1534,7 +1536,9 @@ int cai_tool_display_summary(cai_tool_display *d,
     return cai_set_error(error, CAI_ERR_INVALID,
                          "tool summary requires a completion and plain labels");
   call = display_find(d, e);
-  d->timestamp_ns = e->timestamp_ns;
+  d->timestamp_ns = call != NULL && call->timestamp_ns != 0U
+                        ? call->timestamp_ns
+                        : e->timestamp_ns;
   rc = display_marker(d, success != 0, verb, label, strlen(label), error);
   if (call != NULL)
     display_remove(d, call);
@@ -1554,12 +1558,15 @@ int cai_tool_display_replay_begin(cai_tool_display *d,
     return cai_set_error(error, CAI_ERR_INVALID,
                          "replay requires a completion and plain labels");
   call = display_find(d, e);
-  d->timestamp_ns = e->timestamp_ns;
+  d->timestamp_ns = call != NULL && call->timestamp_ns != 0U
+                        ? call->timestamp_ns
+                        : e->timestamp_ns;
   if (call != NULL)
     display_remove(d, call);
   rc = display_call_new(d, e, &call, error);
   if (rc != CAI_OK)
     return rc;
+  call->timestamp_ns = d->timestamp_ns;
   call->command_active = 1;
   call->replay = 1;
   if (strcmp(verb, "Ran") == 0 || strcmp(verb, "Cancelled") == 0) {

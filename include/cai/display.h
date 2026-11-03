@@ -32,6 +32,7 @@ typedef struct cai_tool_display_config {
   int (*begin_block)(void *context, cai_error *error);
   void *begin_block_context;
   /** Prefix headings with original event DTGs. Zero timestamps stay absent.
+   * Tool receipts prefer the originating call's start time when available.
    * utc selects Zulu; otherwise use host local time, including historical DST.
    * Color-enabled timestamps use normal gray independently of the palette. */
   int timestamps;
