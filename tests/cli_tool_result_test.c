@@ -7,12 +7,14 @@
 typedef struct capture {
   char text[16384];
   size_t length;
-  int fail;
+  int fail, fail_notice;
 } capture;
 static int write_text(void *context, const char *bytes, size_t count) {
   capture *c = context;
   assert(count != 0U);
-  if (c->fail)
+  if (c->fail ||
+      (c->fail_notice && count > strlen("*Output omitted") &&
+       memcmp(bytes, "*Output omitted", strlen("*Output omitted")) == 0))
     return -1;
   assert(count < sizeof(c->text) - c->length);
   memcpy(c->text + c->length, bytes, count);
@@ -60,7 +62,8 @@ static int format(capture *c, const char *tool, int action, int type,
     event.type = type;
     rc = cai_cli_tool_result_heading(result, display, &event, &error);
     if (rc == CAI_OK)
-      rc = cai_cli_tool_result_write(result, write_text, c, &error);
+      rc = cai_cli_tool_result_write(result, CAI_TOOL_OUTPUT_COMPACT, 80U,
+                                     write_text, c, &error);
     assert(rc == (c->fail ? CAI_ERR_TRANSPORT : CAI_OK));
     /* Summary completion releases call state, including sink failures. */
     event.type = CAI_AGENT_EVENT_TOOL_CALL_STARTED;
@@ -111,6 +114,91 @@ static void streamed_text(void) {
                                  &error) == CAI_ERR_TRANSPORT);
   cai_error_cleanup(&error);
 }
+static void compact_text(void) {
+  capture c, expected;
+  cai_cli_tool_text state;
+  cai_error error;
+  char body[4096];
+  size_t step, offset, n, width;
+  cai_error_init(&error);
+  memset(body, 'x', sizeof(body));
+  body[0] = '{';
+  memcpy(body + sizeof(body) - 12U, "HIDDEN_TAIL}", 12U);
+  for (width = 8U; width <= 120U; width += 56U) {
+    memset(&expected, 0, sizeof(expected));
+    cai_cli_tool_text_init(&state, CAI_TOOL_OUTPUT_COMPACT, width);
+    assert(cai_cli_tool_text_write(&state, body, sizeof(body), 1, 0, write_text,
+                                   &expected, &error) == CAI_OK);
+    assert(expected.length < 5U * width + 256U);
+    assert(!strstr(expected.text, "HIDDEN_TAIL"));
+    assert(strstr(expected.text, "Output omitted"));
+    for (step = 1U; step <= 97U; step += 16U) {
+      memset(&c, 0, sizeof(c));
+      cai_cli_tool_text_init(&state, CAI_TOOL_OUTPUT_COMPACT, width);
+      for (offset = 0U; offset < sizeof(body); offset += n) {
+        n = sizeof(body) - offset;
+        if (n > step)
+          n = step;
+        assert(cai_cli_tool_text_write(&state, body + offset, n,
+                                       offset + n == sizeof(body), 0,
+                                       write_text, &c, &error) == CAI_OK);
+      }
+      assert(strcmp(c.text, expected.text) == 0);
+    }
+  }
+  memset(&c, 0, sizeof(c));
+  cai_cli_tool_text_init(&state, CAI_TOOL_OUTPUT_FULL, 8U);
+  assert(cai_cli_tool_text_write(&state, body, sizeof(body), 1, 0, write_text,
+                                 &c, &error) == CAI_OK);
+  assert(strstr(c.text, "HIDDEN_TAIL}") && !strstr(c.text, "Output omitted"));
+  memset(&c, 0, sizeof(c));
+  body[sizeof(body) - 1U] = '\0';
+  assert(cai_cli_tool_busy_write("active", body, CAI_TOOL_OUTPUT_FULL, 8U,
+                                 write_text, &c, &error) == CAI_OK);
+  assert(strstr(c.text, "HIDDEN_TAIL") && !strstr(c.text, "Output omitted"));
+  memset(&c, 0, sizeof(c));
+  cai_cli_tool_text_init(&state, CAI_TOOL_OUTPUT_COMPACT, 80U);
+  assert(cai_cli_tool_text_write(&state, "one\ntwo\nthree\nfour\nfive\nsix\n",
+                                 strlen("one\ntwo\nthree\nfour\nfive\nsix\n"),
+                                 1, 1, write_text, &c, &error) == CAI_OK);
+  assert(strstr(c.text, ">     five") && !strstr(c.text, ">     six"));
+  assert(strstr(c.text, "Output omitted"));
+  /* A UTF-8 scalar at the cutoff must never be split into invalid bytes. */
+  memset(&c, 0, sizeof(c));
+  memset(body, 'x', 39U);
+  memcpy(body + 39U, "é", 2U);
+  cai_cli_tool_text_init(&state, CAI_TOOL_OUTPUT_COMPACT, 8U);
+  assert(cai_cli_tool_text_write(&state, body, 41U, 1, 0, write_text, &c,
+                                 &error) == CAI_OK);
+  assert(!strstr(c.text, "é") && !strchr(c.text, '?'));
+  assert(strstr(c.text, "Output omitted"));
+  /* Content blocks share one budget, rather than five lines each. */
+  memset(&c, 0, sizeof(c));
+  assert(
+      format(&c, "mcp_fixture", CAI_AGENT_TOOL_ACTION_MCP,
+             CAI_AGENT_EVENT_TOOL_CALL_COMPLETED,
+             "{\"content\":[{\"type\":\"text\",\"text\":\"one\\ntwo\\nthree\"},"
+             "{\"type\":\"text\",\"text\":\"four\\nfive\\nsix\"},"
+             "{\"type\":\"text\",\"text\":\"HIDDEN_TAIL\"}]}"));
+  assert(!strstr(c.text, "HIDDEN_TAIL") && strstr(c.text, "Output omitted"));
+  /* Empty content cannot flood the feed with blank lines. */
+  memset(&c, 0, sizeof(c));
+  cai_cli_tool_text_init(&state, CAI_TOOL_OUTPUT_COMPACT, 80U);
+  for (offset = 0U; offset < 1000U; offset++)
+    assert(cai_cli_tool_text_write(&state, "", 0U, 1, 0, write_text, &c,
+                                   &error) == CAI_OK);
+  assert(c.length == 0U);
+  memset(body, 'x', sizeof(body));
+  assert(cai_cli_tool_text_write(&state, body, 400U, 1, 0, write_text, &c,
+                                 &error) == CAI_OK);
+  assert(!strstr(c.text, "Output omitted"));
+  memset(&c, 0, sizeof(c));
+  cai_cli_tool_text_init(&state, CAI_TOOL_OUTPUT_COMPACT, 80U);
+  c.fail_notice = 1;
+  assert(cai_cli_tool_text_write(&state, body, sizeof(body), 1, 0, write_text,
+                                 &c, &error) == CAI_ERR_TRANSPORT);
+  cai_error_cleanup(&error);
+}
 int main(void) {
   capture c;
   size_t i;
@@ -142,6 +230,7 @@ int main(void) {
       CAI_AGENT_EVENT_TOOL_CALL_COMPLETED,
       "{\"status\":\"completed\",\"accepted\":true,\"output\":\"raw bytes\"}"));
   streamed_text();
+  compact_text();
   for (action = CAI_AGENT_TOOL_ACTION_NONE;
        action <= CAI_AGENT_TOOL_ACTION_CHROME; action++) {
     memset(&c, 0, sizeof(c));
@@ -288,8 +377,9 @@ int main(void) {
     cai_error_init(&error);
     assert(cai_cli_tool_result_open(&event, &prepared, &error) == CAI_OK &&
            prepared != NULL);
-    assert(cai_cli_tool_result_write(prepared, write_text, &c, &error) ==
-           CAI_ERR_TRANSPORT);
+    assert(cai_cli_tool_result_write(prepared, CAI_TOOL_OUTPUT_COMPACT, 80U,
+                                     write_text, &c,
+                                     &error) == CAI_ERR_TRANSPORT);
     cai_cli_tool_result_close(prepared);
     cai_error_cleanup(&error);
     prepared = NULL;
@@ -301,8 +391,9 @@ int main(void) {
     cai_error_init(&error);
     assert(cai_cli_tool_result_open(&event, &prepared, &error) == CAI_OK &&
            prepared != NULL);
-    assert(cai_cli_tool_result_write(prepared, write_text, &c, &error) ==
-           CAI_ERR_TRANSPORT);
+    assert(cai_cli_tool_result_write(prepared, CAI_TOOL_OUTPUT_COMPACT, 80U,
+                                     write_text, &c,
+                                     &error) == CAI_ERR_TRANSPORT);
     cai_cli_tool_result_close(prepared);
     cai_error_cleanup(&error);
   }

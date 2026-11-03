@@ -14,18 +14,27 @@ int cai_cli_tool_result_heading(cai_cli_tool_result *result,
                                 const cai_agent_runtime_event *event,
                                 cai_error *error);
 /* Feed Markdown incrementally into the application's existing renderer. */
-int cai_cli_tool_result_write(cai_cli_tool_result *result,
+int cai_cli_tool_result_write(cai_cli_tool_result *result, int mode,
+                              size_t width,
                               int (*write)(void *, const char *, size_t),
                               void *context, cai_error *error);
 void cai_cli_tool_result_close(cai_cli_tool_result *result);
 int cai_cli_tool_busy_write(const char *session_id, const char *command,
+                            int mode, size_t width,
                             int (*write)(void *, const char *, size_t),
                             void *context, cai_error *error);
 typedef struct cai_cli_tool_text {
   int started, line_start, format;
+  int full, omitted, notified;
+  size_t width, row, column;
 } cai_cli_tool_text;
+void cai_cli_tool_text_init(cai_cli_tool_text *state, int mode, size_t width);
 /* UTF-8-aligned payload chunks; bounded state only. Failures are literal
- * blockquotes; generic JSON uses indented code; other results are Markdown. */
+ * blockquotes; generic JSON uses indented code; other results are Markdown.
+ * Compact previews retain at most five source lines and five rows' byte
+ * budget at the supplied width. Full mode bypasses presentation clipping.
+ * The budget persists across chunks and content blocks; omitted data is never
+ * copied or spooled here. Zero-initialization selects compact at 80 columns. */
 int cai_cli_tool_text_write(cai_cli_tool_text *state, const char *text,
                             size_t length, int final, int failed,
                             int (*write)(void *, const char *, size_t),

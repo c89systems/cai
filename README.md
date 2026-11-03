@@ -1494,10 +1494,15 @@ payloads are unchanged. Command runners alone use raw terminal previews.
 Commands show their
 first five logical output lines by default. `/output` shows the current setting;
 `/output compact|full` changes it, and `--tool-output compact|full` selects the
-startup setting. Each tool call captures its mode when it starts: active calls
-and already displayed output stay unchanged. Full mode retains supplied
-command output and all patch context. Non-command Markdown follows its tool's
-response limits. Any tool-level output limit is
+startup setting. Commands capture their mode when they start: active commands
+and already displayed output stay unchanged. Generic result bodies, tool
+failures, and MCP content share a compact budget of five source lines and five
+rows' worth of bytes at the terminal width. Multiple MCP content blocks share
+one budget; a long single-line JSON value cannot bypass it. Clipped previews
+include an omission notice. Full mode retains supplied command output, result
+bodies, and all patch context. Changing this setting affects non-command
+results when they are displayed. Complete model-visible and journal payloads
+are preserved and remain available in JSONL exports. Any tool-level output limit is
 still reported explicitly.
 Command previews preserve recognized ANSI SGR colors/styles and discard other
 terminal controls, including cursor movement and title/clipboard strings.

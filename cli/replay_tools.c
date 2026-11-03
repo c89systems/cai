@@ -389,7 +389,8 @@ static void event_init(replay_call *c) {
 }
 int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
                                 const cai_execution_record *record,
-                                cai_tool_display *display,
+                                cai_tool_display *display, int mode,
+                                size_t width,
                                 int (*markdown)(void *, const char *, size_t),
                                 void *context, int *handled, cai_error *error) {
   replay_call *c, *origin;
@@ -434,8 +435,8 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
     rc = cai_tool_display_summary(display, &c->event, "Busy",
                                   "command not started", 1, error);
     if (rc == CAI_OK)
-      rc = cai_cli_tool_busy_write(c->terminal, c->active_command, markdown,
-                                   context, error);
+      rc = cai_cli_tool_busy_write(c->terminal, c->active_command, mode, width,
+                                   markdown, context, error);
     return rc;
   }
   if (command) {
@@ -468,7 +469,8 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
       rc = cai_tool_display_summary(display, &c->event, "Failed to replay",
                                     label, 0, error);
     if (rc == CAI_OK)
-      rc = cai_cli_tool_result_write(result, markdown, context, error);
+      rc = cai_cli_tool_result_write(result, mode, width, markdown, context,
+                                     error);
     cai_cli_tool_result_close(result);
     return rc;
   }
@@ -543,7 +545,8 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
     if (rc == CAI_OK && result != NULL) {
       rc = cai_cli_tool_result_heading(result, display, &c->event, error);
       if (rc == CAI_OK)
-        rc = cai_cli_tool_result_write(result, markdown, context, error);
+        rc = cai_cli_tool_result_write(result, mode, width, markdown, context,
+                                       error);
       cai_cli_tool_result_close(result);
       return rc;
     }
@@ -562,7 +565,7 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
       rc = cai_tool_display_summary(display, &c->event, verb, label,
                                     !c->failed && !c->is_error, error);
       origin->opened = rc == CAI_OK;
-      memset(&origin->markdown, 0, sizeof(origin->markdown));
+      cai_cli_tool_text_init(&origin->markdown, mode, width);
     }
     if (rc == CAI_OK)
       rc = cai_cli_tool_text_write(

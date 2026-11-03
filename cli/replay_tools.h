@@ -15,7 +15,8 @@ int cai_cli_replay_tools_index(cai_cli_replay_tools **tools,
  */
 int cai_cli_replay_tools_render(cai_cli_replay_tools *tools,
                                 const cai_execution_record *record,
-                                cai_tool_display *display,
+                                cai_tool_display *display, int mode,
+                                size_t width,
                                 int (*markdown)(void *, const char *, size_t),
                                 void *context, int *handled, cai_error *error);
 /* Flush any command whose recorded tail was interrupted. */

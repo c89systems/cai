@@ -275,11 +275,70 @@ static int cell(int (*write)(void *, const char *, size_t), void *context,
                 const char *text) {
   return literal(write, context, text, text != NULL ? strlen(text) : 0U, 1);
 }
+void cai_cli_tool_text_init(cai_cli_tool_text *state, int mode, size_t width) {
+  memset(state, 0, sizeof(*state));
+  state->full = mode == CAI_TOOL_OUTPUT_FULL;
+  state->width = width < 8U ? 80U : width > 4096U ? 4096U : width;
+}
+
+/* Bound source bytes conservatively at the terminal width, keeping complete
+ * UTF-8 scalars at the cutoff. Each source newline reserves the rest of its
+ * budgeted row; Markdown layout remains the renderer's responsibility. */
+static size_t preview_keep(cai_cli_tool_text *state, const char *text,
+                           size_t length) {
+  size_t i = 0U, n, cost, j;
+  if (state->full)
+    return length;
+  if (state->omitted)
+    return 0U;
+  if (state->width == 0U)
+    state->width = 80U;
+  while (i < length) {
+    unsigned char ch = (unsigned char)text[i];
+    if (state->row >= 5U)
+      break;
+    if (ch == '\n') {
+      state->row++;
+      state->column = 0U;
+      i++;
+      continue;
+    }
+    n = ch >= 0xc2U && ch < 0xe0U    ? 2U
+        : ch >= 0xe0U && ch < 0xf0U  ? 3U
+        : ch >= 0xf0U && ch <= 0xf4U ? 4U
+                                     : 1U;
+    if (n > length - i)
+      n = 1U;
+    for (j = 1U; j < n; j++)
+      if (((unsigned char)text[i + j] & 0xc0U) != 0x80U) {
+        n = 1U;
+        break;
+      }
+    cost = ch == '\t' ? 8U - state->column % 8U : n;
+    if (cost > state->width - state->column) {
+      state->row++;
+      state->column = 0U;
+      if (state->row >= 5U)
+        break;
+      cost = ch == '\t' ? 8U : n;
+    }
+    state->column += cost;
+    i += n;
+  }
+  if (i < length)
+    state->omitted = 1;
+  return i;
+}
 int cai_cli_tool_text_write(cai_cli_tool_text *state, const char *text,
                             size_t length, int final, int failed,
                             int (*write)(void *, const char *, size_t),
                             void *context, cai_error *error) {
   size_t start = 0U, end;
+  if (state->omitted && state->notified)
+    return CAI_OK;
+  length = preview_keep(state, text, length);
+  if (length == 0U && !state->started && !state->omitted)
+    return CAI_OK;
   if (!state->started) {
     size_t first = 0U;
     while (first < length && strchr(" \r\n\t", text[first]) != NULL)
@@ -317,6 +376,22 @@ int cai_cli_tool_text_write(cai_cli_tool_text *state, const char *text,
       goto failed;
     if (write(context, "\n", 1U) != 0)
       goto failed;
+    if (!state->full) {
+      if (!state->line_start)
+        state->row++;
+      state->row++;
+      state->column = 0U;
+    }
+    state->line_start = 1;
+    state->started = 0;
+    if (state->omitted && !state->notified) {
+      const char *notice =
+          "*Output omitted; use `/output full` for future calls. "
+          "The complete result is available in the JSONL export.*\n\n";
+      if (write(context, notice, strlen(notice)) != 0)
+        goto failed;
+      state->notified = 1;
+    }
   }
   return CAI_OK;
 failed:
@@ -334,6 +409,7 @@ failed:
       goto failed;                                                             \
   } while (0)
 int cai_cli_tool_busy_write(const char *session_id, const char *command,
+                            int mode, size_t width,
                             int (*write)(void *, const char *, size_t),
                             void *context, cai_error *error) {
   cai_cli_tool_text text;
@@ -344,7 +420,7 @@ int cai_cli_tool_busy_write(const char *session_id, const char *command,
   WRITE("`. Use `write_stdin` to poll or terminate it.\n\n");
   if (command != NULL && command[0] != '\0') {
     WRITE("Active command:\n\n");
-    memset(&text, 0, sizeof(text));
+    cai_cli_tool_text_init(&text, mode, width);
     return cai_cli_tool_text_write(&text, command, strlen(command), 1, 1, write,
                                    context, error);
   }
@@ -353,7 +429,7 @@ failed:
   return cai_cli_error(error, CAI_ERR_TRANSPORT, "render busy command receipt");
 }
 
-int cai_cli_tool_result_write(cai_cli_tool_result *r,
+int cai_cli_tool_result_write(cai_cli_tool_result *r, int mode, size_t width,
                               int (*write)(void *, const char *, size_t),
                               void *context, cai_error *error) {
   result_row *rows;
@@ -361,28 +437,35 @@ int cai_cli_tool_result_write(cai_cli_tool_result *r,
   int boards;
   if (r->busy)
     return cai_cli_tool_busy_write(r->doc.session_id, r->doc.active_command,
-                                   write, context, error);
+                                   mode, width, write, context, error);
   if (r->mcp) {
+    cai_cli_tool_text text;
+    cai_cli_tool_text_init(&text, mode, width);
     rows = r->doc.content.items;
     for (i = 0U; i < r->doc.content.count; i++) {
       if (rows[i].text != NULL) {
-        cai_cli_tool_text text;
-        memset(&text, 0, sizeof(text));
         if (cai_cli_tool_text_write(&text, rows[i].text, strlen(rows[i].text),
                                     1, !r->success, write, context,
                                     error) != CAI_OK)
           return CAI_ERR_TRANSPORT;
       } else {
-        WRITE("Non-text MCP content: ");
-        CELL(rows[i].type != NULL ? rows[i].type : "unknown");
-        WRITE("\n\n");
+        const char *type = rows[i].type != NULL ? rows[i].type : "unknown";
+        if (cai_cli_tool_text_write(
+                &text,
+                "Non-text MCP content: ", strlen("Non-text MCP content: "), 0,
+                !r->success, write, context, error) != CAI_OK ||
+            cai_cli_tool_text_write(&text, type, strlen(type), 1, !r->success,
+                                    write, context, error) != CAI_OK)
+          return CAI_ERR_TRANSPORT;
       }
+      if (text.omitted)
+        break;
     }
     return CAI_OK;
   }
   if (r->generic || r->failure) {
     cai_cli_tool_text text;
-    memset(&text, 0, sizeof(text));
+    cai_cli_tool_text_init(&text, mode, width);
     return cai_cli_tool_text_write(&text, r->markdown, r->markdown_length, 1,
                                    r->failure, write, context, error);
   }

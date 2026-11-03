@@ -11,7 +11,7 @@ typedef struct fixture {
   char text[32768];
   size_t length;
   unsigned long long sequence;
-  int fail, phase;
+  int fail, phase, mode;
 } fixture;
 static int capture(void *context, const void *bytes, size_t count,
                    cai_error *error) {
@@ -40,6 +40,7 @@ static void open_fixture(fixture *f, int full) {
   memset(&config, 0, sizeof(config));
   config.sink = f->sink;
   config.mode = full ? CAI_TOOL_OUTPUT_FULL : CAI_TOOL_OUTPUT_COMPACT;
+  f->mode = config.mode;
   assert(cai_tool_display_new(&config, &f->display, &f->error) == CAI_OK);
   assert(cai_tool_display_set_width(f->display, 80U, &f->error) == CAI_OK);
 }
@@ -75,8 +76,8 @@ static int record(fixture *f, const char *session, const char *id,
       rc = cai_cli_replay_tools_index(&f->tools, &r, ++f->sequence, 1U,
                                       &f->error);
     else {
-      rc = cai_cli_replay_tools_render(f->tools, &r, f->display, markdown, f,
-                                       &handled, &f->error);
+      rc = cai_cli_replay_tools_render(f->tools, &r, f->display, f->mode, 72U,
+                                       markdown, f, &handled, &f->error);
       assert(handled);
     }
     if (rc != CAI_OK)
@@ -242,18 +243,21 @@ static void streaming_and_errors(void) {
   r.kind = "tool.output";
   r.field = "data";
   strcpy(r.data, "{\"output\":\"ready\\n");
-  assert(cai_cli_replay_tools_render(f.tools, &r, f.display, markdown, &f,
-                                     &handled, &f.error) == CAI_OK);
+  assert(cai_cli_replay_tools_render(f.tools, &r, f.display, f.mode, 72U,
+                                     markdown, &f, &handled,
+                                     &f.error) == CAI_OK);
   assert(strstr(f.text, "ready\n")); /* Before EOF or the closing string. */
   r.offset = strlen(r.data);
   strcpy(r.data, "\",\"exit_code\":0}");
   r.final = 1;
-  assert(cai_cli_replay_tools_render(f.tools, &r, f.display, markdown, &f,
-                                     &handled, &f.error) == CAI_OK);
+  assert(cai_cli_replay_tools_render(f.tools, &r, f.display, f.mode, 72U,
+                                     markdown, &f, &handled,
+                                     &f.error) == CAI_OK);
   f.fail = 1;
   r.offset = 0U;
-  assert(cai_cli_replay_tools_render(f.tools, &r, f.display, markdown, &f,
-                                     &handled, &f.error) == CAI_ERR_TRANSPORT);
+  assert(cai_cli_replay_tools_render(f.tools, &r, f.display, f.mode, 72U,
+                                     markdown, &f, &handled,
+                                     &f.error) == CAI_ERR_TRANSPORT);
   close_fixture(&f);
 }
 static void streamed_markdown(void) {
@@ -302,8 +306,9 @@ static void large_output(void) {
         assert(cai_cli_replay_tools_index(&f.tools, &r, ++f.sequence, 1U,
                                           &f.error) == CAI_OK);
       else
-        assert(cai_cli_replay_tools_render(f.tools, &r, f.display, markdown, &f,
-                                           &handled, &f.error) == CAI_OK);
+        assert(cai_cli_replay_tools_render(f.tools, &r, f.display, f.mode, 72U,
+                                           markdown, &f, &handled,
+                                           &f.error) == CAI_OK);
       offset += strlen(r.data);
       if (i == 128) {
         strcpy(r.data, "\",\"exit_code\":0}");

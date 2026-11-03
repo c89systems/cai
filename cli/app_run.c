@@ -2048,7 +2048,14 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
       else if (rc == CAI_OK)
         rc = cai_tool_display_event(state->tool_display, event, error);
       if (rc == CAI_OK && result != NULL)
-        rc = cai_cli_tool_result_write(result, cli_tool_markdown, state, error);
+        rc = cai_cli_tool_result_write(
+            result,
+            state->options.tool_output != NULL &&
+                    strcmp(state->options.tool_output, "full") == 0
+                ? CAI_TOOL_OUTPUT_FULL
+                : CAI_TOOL_OUTPUT_COMPACT,
+            width > 8 ? (size_t)(width - 8) : 8U, cli_tool_markdown, state,
+            error);
       if (rc == CAI_OK && result != NULL && cli_finish_response(state) != 0)
         rc = CAI_ERR_TRANSPORT;
       cai_cli_tool_result_close(result);
@@ -2618,9 +2625,14 @@ static int cli_replay_output_body(cli_state *state,
                                                               : width),
                                       error);
       if (rc == CAI_OK)
-        rc = cai_cli_replay_tools_render(state->replay_tools, &record,
-                                         state->tool_display, cli_tool_markdown,
-                                         state, &handled, error);
+        rc = cai_cli_replay_tools_render(
+            state->replay_tools, &record, state->tool_display,
+            state->options.tool_output != NULL &&
+                    strcmp(state->options.tool_output, "full") == 0
+                ? CAI_TOOL_OUTPUT_FULL
+                : CAI_TOOL_OUTPUT_COMPACT,
+            width > 8 ? (size_t)(width - 8) : 8U, cli_tool_markdown, state,
+            &handled, error);
       if (handled || rc != CAI_OK) {
         if (rc == CAI_OK && record.final && cli_finish_response(state) != 0)
           rc = CAI_ERR_TRANSPORT;
@@ -5293,7 +5305,8 @@ static int cli_handle_command(cli_state *state, const char *line,
         "Zero selects foreground mode. Changes affect subsequent tool waits. "
         "|\n",
         "| `/output [compact\\|full]` | Show or change tool previews, starting "
-        "with the next tool call. Compact commands show five lines; patches "
+        "with the next tool call. Compact commands show five lines; generic "
+        "and MCP result previews also have a five-line/width budget. Patches "
         "collapse unchanged context. |\n",
         "| `/status` | Show model, reasoning, context, and available cost or "
         "quota metrics and the tool summary. Refresh ChatGPT quota "
