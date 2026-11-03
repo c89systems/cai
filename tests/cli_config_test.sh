@@ -7,6 +7,8 @@ run --version; ok; [[ ! -e "$config" ]]
 run --dump-config; ok; [[ ! -e "$config" && ! -e "$root/state" && ! -e "$root/cache" ]]
 contains "$root/stdout" '## Configuration.'
 contains "$root/stdout" '# prompt_history_limit = 200'
+contains "$root/stdout" '# eager = false'
+absent "$root/stdout" '# lazy ='
 contains "$root/stdout" '# conversation_retention_days = 30'
 absent "$root/stdout" history_dir
 contains "$root/stdout" '# status_fields = "model:ctx:dir:branch:weekly:crd:yolo:goal"'

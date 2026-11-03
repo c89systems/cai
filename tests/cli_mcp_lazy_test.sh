@@ -13,7 +13,7 @@ endpoint = "$origin/mcp/lazy"
 description = "Workspace utilities"
 [mcp.eager]
 endpoint = "$origin/mcp/eager"
-lazy = false
+eager = true
 INI
 base+=(--config "$root/lazy.ini")
 cp "$root/lazy.ini" "$root/original.ini"

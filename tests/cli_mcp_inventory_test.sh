@@ -14,12 +14,12 @@ cat >"$config" <<INI
 [client]
 api_protocol = $protocol
 [mcp.alpha]
-lazy = false
+eager = true
 endpoint = "$origin/mcp/alpha"
 api_key_env = MCP_FIXTURE_KEY
 discovery_timeout_ms = 1000
 [mcp.beta]
-lazy = false
+eager = true
 endpoint = "$origin/mcp/beta"
 [mcp.disabled]
 enabled = false
@@ -103,10 +103,10 @@ cat >"$config" <<INI
 [client]
 api_protocol = $protocol
 [mcp.a_b]
-lazy = false
+eager = true
 endpoint = "$origin/mcp/a_b"
 [mcp.a]
-lazy = false
+eager = true
 endpoint = "$origin/mcp/a"
 [mcp.alpha]
 endpoint = "$origin/mcp/alpha"
@@ -136,10 +136,10 @@ cat >"$config" <<INI
 [client]
 api_protocol = $protocol
 [mcp.edge]
-lazy = false
+eager = true
 endpoint = "$origin/mcp/edge"
 [mcp.over]
-lazy = false
+eager = true
 endpoint = "$origin/mcp/over"
 INI
 plan "$(jq -n --arg name "$max_name" --argjson chat "$([[ "$protocol" == chat_completions ]] && printf true || printf false)" '

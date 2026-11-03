@@ -68,9 +68,9 @@ static const cai_config_field globals[] = {
     {"mcp.*", "endpoint", CAI_CONFIG_STRING, "",
      "Streamable HTTP MCP URL; provider connections may supply a default.",
      NULL, 0U},
-    {"mcp.*", "lazy", CAI_CONFIG_BOOL, "true",
-     "Expose tool schemas through local tool_search discovery. false loads all "
-     "tools eagerly.",
+    {"mcp.*", "eager", CAI_CONFIG_BOOL, "false",
+     "Expose all tool schemas immediately when true. The default false uses "
+     "local tool_search discovery.",
      NULL, 0U},
     {"mcp.*", "description", CAI_CONFIG_STRING, "",
      "Optional source hint describing the app/actions available for tool "

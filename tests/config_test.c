@@ -149,11 +149,13 @@ int main(int argc, char **argv) {
       "[response]\nmax_output_tokens=123\n[terminal]\noutput_max_bytes=4096\n"
       "[env]\nCAI_TEST_CONFIG_VALUE=\"secret-DO-NOT-LOG\\nline\"\n"
       "[mcp.team]\nendpoint=http://127.0.0.1:1/mcp\n"
-      "enabled=true\n[mcp.other]\nenabled=false\n";
+      "enabled=true\neager=false\n[mcp.other]\nenabled=false\neager=true\n";
   static const char *const invalid[] = {
       "[mcp.]\nendpoint=x",
       "[mcp.team.other]\nendpoint=x",
       "[mcp.team]\nenabled=maybe",
+      "[mcp.team]\neager=maybe",
+      "[mcp.team]\nlazy=false",
       "[mcp.team]\ndiscovery_timeout_ms=-1",
       "[mcp.team]\nunknown=x",
       "[unknown]\nx=y",
@@ -194,6 +196,8 @@ int main(int argc, char **argv) {
     assert(strcmp(config->section_at(config, 7U), "mcp.team") == 0);
     assert(strcmp(config->section_at(config, 8U), "mcp.other") == 0);
     assert(config->section_at(config, 9U) == NULL);
+    assert(!config->get_bool(config, "mcp.team", "eager", 1));
+    assert(config->get_bool(config, "mcp.other", "eager", 0));
   }
   cai_client_config_init(&client);
   assert(config->apply_client(config, &client, &error) == CAI_OK);
@@ -269,6 +273,8 @@ int main(int argc, char **argv) {
   assert(strstr(bytes, "secret-DO-NOT-LOG") == NULL &&
          strstr(bytes, "# config_env_has_precedence = false") != NULL);
   assert(strncmp(bytes, "## Configuration.", 17U) == 0);
+  assert(strstr(bytes, "# eager = false") != NULL);
+  assert(strstr(bytes, "# lazy =") == NULL);
   assert(strstr(bytes, "\n## Config [env]") != NULL);
   assert(strstr(bytes, "\n## Optional literal environment assignments;") !=
          NULL);

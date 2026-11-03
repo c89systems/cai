@@ -341,7 +341,7 @@ int cai_cli_mcp_open(cai_cli_mcp *mcp, const cai_config *config,
     mcp->options[mcp->client_count].description =
         cai_config_get(config, section, "description");
     mcp->options[mcp->client_count].eager =
-        !cai_config_get_bool(config, section, "lazy", 1);
+        cai_config_get_bool(config, section, "eager", 0);
     server->owner = mcp;
     server->logger = logger;
     cai_error_init(&server->error);

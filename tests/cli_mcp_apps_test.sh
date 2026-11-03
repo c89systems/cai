@@ -15,7 +15,7 @@ api_protocol = $protocol
 [mcp.chatgpt]
 endpoint = "$origin/mcp/chatgpt"
 [mcp.extra]
-lazy = false
+eager = true
 endpoint = "$origin/mcp/extra"
 INI
 base+=(--config "$root/apps.ini")

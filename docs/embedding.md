@@ -123,7 +123,7 @@ Core embedders can implement other credential sources through
 All connections default to lazy tool schemas. The local `tool_search` function
 advertises source hints, searches the cached catalog with BM25, and exposes
 selected schemas on the next model request; it works with either inference
-protocol. `[mcp.NAME] lazy = false` opts a connection into eager exposure;
+protocol. `[mcp.NAME] eager = true` opts a connection into eager exposure;
 `description` supplies its discovery hint. Catalog discovery still runs once
 on the worker, with explicit refresh afterward. Core hosts can set the parallel
 `cai_agent_runtime_config.mcp_options` array for source names/descriptions and

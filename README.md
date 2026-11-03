@@ -1181,7 +1181,7 @@ Add a named Streamable HTTP server to `config.ini`:
 ```ini
 [mcp.example]
 enabled = true
-lazy = true
+eager = false
 description = Workspace document search and editing
 endpoint = https://example.com/mcp
 api_key_env = EXAMPLE_MCP_API_KEY
@@ -1201,7 +1201,7 @@ short descriptions are included in the discovery tool so the model can find
 apps without already knowing their tool names. Provider connector metadata
 supplies app hints; ordinary servers can use `description` above.
 
-Set `lazy = false` on an individual connection to expose all its tools from
+Set `eager = true` on an individual connection to expose all its tools from
 startup. Selected lazy tools remain exposed for that runtime; a new runtime
 starts with deferred schemas again. Refresh preserves selected aliases that
 still exist, while disabling a connection removes its tools from discovery
