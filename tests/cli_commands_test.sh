@@ -102,4 +102,7 @@ for colors in yes no; do
   absent "$root/farewell" 'Worked for'
   tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/farewell-feed"
   absent "$root/farewell-feed" 'Goodbye.'
+  # A no-output command terminates its input line without reserving an empty
+  # response row. Closing Softline must not add a transcript separator.
+  [[ $(tail -c 2 "$root/farewell-feed" | od -An -tx1 | tr -d '[:space:]') == 740a ]]
 done

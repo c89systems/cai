@@ -961,8 +961,12 @@ static int cli_input(cli_state *state, const char *text, int command) {
   if (state->interactive && !state->theme.ascii && getenv("NO_COLOR") == NULL &&
       cli_sink(state, "\033[0m", 4U) != 0)
     rc = -1;
-  while (rc == 0 && state->feed_breaks < 2)
+  /* End the input line now. Separate a response only when it actually writes
+   * to the feed; no-output commands must not leave an empty response row. */
+  while (rc == 0 && state->feed_breaks < 1)
     rc = cli_sink(state, "\n", 1U);
+  if (rc == 0)
+    state->block_spacing_pending = 1;
   return rc;
 }
 
@@ -980,7 +984,7 @@ static int cli_command_input(cli_state *state, const char *text) {
 
 static int cli_shell_literal(void *context, const char *bytes, size_t length,
                              cai_error *error) {
-  return cli_sink(context, bytes, length) == 0
+  return cli_renderer_sink(context, bytes, length) == 0
              ? CAI_OK
              : cai_cli_error(error, CAI_ERR_TRANSPORT,
                              "cannot display shell output");
@@ -1037,6 +1041,7 @@ static int cli_shell_pump(cli_state *state, cai_error *error) {
     cli_shell_unwatch(state);
     cai_cli_shell_close(&state->shell);
     cai_cli_status_maybe_refresh_branch(&state->status, state->workspace);
+    state->block_spacing_pending = 1;
     if (cli_markdown(state, message) != 0)
       return cai_cli_error(error, CAI_ERR_TRANSPORT,
                            "cannot display shell completion");
@@ -2728,6 +2733,7 @@ static int cli_replay_output_body(cli_state *state,
                  strcmp(event->type, "user_shell_unshared") == 0)) {
     int rc = cai_cli_shell_plain(&state->shell, NULL, 0U, 1, cli_shell_literal,
                                  state, error);
+    state->block_spacing_pending = 1;
     return rc != CAI_OK ? rc
            : cli_markdown(state, "**Shell command finished.**") == 0
                ? CAI_OK

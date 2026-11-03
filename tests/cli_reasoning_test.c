@@ -1,5 +1,6 @@
 /* Drive the CLI's owner-thread event renderer with provider-shaped chunks. */
 #include "../cli/app_run.c"
+#include <fcntl.h>
 
 typedef struct event_log_capture {
   char bytes[16384];
@@ -977,6 +978,85 @@ static int test_reasoning_replay(void) {
   return 0;
 }
 
+static int test_deferred_command_spacing(void) {
+  cli_state *state = calloc(1U, sizeof(*state));
+  char output[256];
+  int pipes[2], saved = -1, rc = 1;
+  ssize_t count;
+  if (state == NULL)
+    return 1;
+  if (pipe(pipes) != 0) {
+    free(state);
+    return 1;
+  }
+  saved = dup(STDOUT_FILENO);
+  if (saved < 0 || dup2(pipes[1], STDOUT_FILENO) < 0)
+    goto done;
+  close(pipes[1]);
+  pipes[1] = -1;
+  if (fcntl(pipes[0], F_SETFL, O_NONBLOCK) != 0)
+    goto done;
+  state->sl = sl_create();
+  state->width = 80;
+  state->feed_breaks = 2;
+  if (state->sl == NULL || sl_output_stream_begin(state->sl) != SL_OK ||
+      cli_renderer_create(state, &state->render_theme, MDF_TABLE_BUFFER_FULL,
+                          &state->renderer, NULL) != CAI_OK ||
+      cli_command_input(state, "/delayed") != 0)
+    goto done;
+  count = read(pipes[0], output, sizeof(output));
+  if (count != (ssize_t)strlen("$ /delayed\n") ||
+      memcmp(output, "$ /delayed\n", (size_t)count) != 0)
+    goto done;
+  /* The same renderer adds the separator when a response finally arrives. */
+  if (cli_text(state, "Response arrived.", strlen("Response arrived.")) != 0 ||
+      cli_finish_response(state) != 0)
+    goto done;
+  count = read(pipes[0], output, sizeof(output));
+  if (count != (ssize_t)strlen("\nResponse arrived.\n") ||
+      memcmp(output, "\nResponse arrived.\n", (size_t)count) != 0)
+    goto done;
+  /* Raw shell output shares that deferred boundary without inserting gaps
+   * between subsequent chunks. */
+  if (cli_command_input(state, "!delayed") != 0)
+    goto done;
+  count = read(pipes[0], output, sizeof(output));
+  if (count != (ssize_t)strlen("\n$ !delayed\n") ||
+      memcmp(output, "\n$ !delayed\n", (size_t)count) != 0)
+    goto done;
+  if (cli_shell_literal(state, "first", 5U, NULL) != CAI_OK)
+    goto done;
+  count = read(pipes[0], output, sizeof(output));
+  if (count != 6 || memcmp(output, "\nfirst", 6U) != 0)
+    goto done;
+  if (cli_shell_literal(state, "second", 6U, NULL) != CAI_OK)
+    goto done;
+  count = read(pipes[0], output, sizeof(output));
+  if (count != 6 || memcmp(output, "second", 6U) != 0)
+    goto done;
+  rc = 0;
+done:
+  if (state->renderer != NULL)
+    state->renderer->destroy(state->renderer);
+  if (state->notice_renderer != NULL)
+    state->notice_renderer->destroy(state->notice_renderer);
+  if (state->sl != NULL) {
+    (void)sl_output_stream_end(state->sl);
+    sl_destroy(state->sl);
+  }
+  if (saved >= 0) {
+    (void)dup2(saved, STDOUT_FILENO);
+    close(saved);
+  }
+  if (pipes[1] >= 0)
+    close(pipes[1]);
+  close(pipes[0]);
+  free(state);
+  if (rc)
+    fprintf(stderr, "command separator was not deferred until output\n");
+  return rc;
+}
+
 static int test_timestamps(void) {
   cli_state *state = calloc(1U, sizeof(*state));
   cai_error error;
@@ -1082,7 +1162,7 @@ int main(void) {
       test_event_logging() != 0 || test_reasoning_sections() != 0 ||
       test_literal_tokens() != 0 || test_reasoning_quotes() != 0 ||
       test_reasoning_replay() != 0 || test_timestamps() != 0 ||
-      test_streaming_tables() != 0)
+      test_streaming_tables() != 0 || test_deferred_command_spacing() != 0)
     return 1;
   memset(&state, 0, sizeof(state));
   if (!cai_cli_quota_due(0, start, start, 0) ||

@@ -3,8 +3,8 @@ source "$(dirname "$0")/cli_test_common.sh"
 peer_start
 # Force the truncation case below independently of the normal 4 MiB default.
 terminal_start -N --shell-context-max-bytes 32768
-send '/goal status\r'; expect 'No goal.'; contains "$term/text" '$ /goal status'
-send '/help\r'; expect 'startup options'; contains "$term/text" '$ /help'
+send '/goal status\r'; expect 'No goal.'; contains "$term/feed" '$ /goal status'
+send '/help\r'; expect 'startup options'; contains "$term/feed" '$ /help'
 send '/nonesuch\r'; expect 'Unknown command'; [[ $(requests) == 0 ]]
 send '!test ! -t 0 && test ! -t 1 && test ! -t 2 && cat && printf "# literal **stars** & <tags>\\n" && printf "stderr-marker\\n" >&2; touch ../normal-user-permissions\r'
 expect 'Shell command exited 0'; contains "$term/text" '# literal **stars** & <tags>'
