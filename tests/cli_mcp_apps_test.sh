@@ -53,8 +53,8 @@ tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/connection"
 contains "$root/connection" disabled
 send '/tools\r'; expect 'MCP servers'
 tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/tools"
-absent "$root/tools" mcp_7_chatgpt_echo
-contains "$root/tools" mcp_5_extra_echo
+! table_contains "$root/tools" 1 mcp_7_chatgpt_echo
+table_contains "$root/tools" 1 mcp_5_extra_echo
 apps_plan '[{tool:"mcp_5_extra_echo",arguments:{text:"independent connection"}},"EXTRA WORKS"]'
 prompt 'use the other connection' 'EXTRA WORKS'
 tail -2 "$root/peer/requests.jsonl" | head -1 >"$root/request"
@@ -64,9 +64,9 @@ contains "$root/names" mcp_5_extra_echo
 update '/mcp enable chatgpt'
 apps_plan '[]' '{chatgpt:{tools:[{name:"fresh",description:"Refreshed app tool",inputSchema:{type:"object",properties:{text:{type:"string"}},required:["text"],additionalProperties:false}}]}}'
 update '/mcp refresh chatgpt'
-send '/tools\r'; expect mcp_7_chatgpt_fresh
+send '/tools\r'; expect_table 1 mcp_7_chatgpt_fresh; expect 'MCP servers'
 tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/tools"
-absent "$root/tools" mcp_7_chatgpt_echo
+! table_contains "$root/tools" 1 mcp_7_chatgpt_echo
 apps_plan '[{tool:"tool_search",arguments:{query:"chatgpt fresh",limit:1}},{tool:"mcp_7_chatgpt_fresh",arguments:{text:"ChatGPT app through another inference provider"}},"APP WORKS"]' '{chatgpt:{tools:[{name:"fresh",inputSchema:{type:"object",properties:{text:{type:"string"}},required:["text"],additionalProperties:false}}]}}'
 prompt 'use the app' 'APP WORKS'
 jq -se --arg token "Bearer $token" 'any(.[]; .server == "chatgpt" and .request.method == "tools/call") and all(.[]; .server != "chatgpt" or (.authorization == $token and .account_id == "apps-account" and .product_sku == "codex" and .originator == "cai"))' "$root/peer/mcp_requests.jsonl" >/dev/null

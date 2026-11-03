@@ -285,7 +285,7 @@ static int display_marker_suffix(cai_tool_display *d, int result,
         cai_dtg_format_time(when, time(NULL), d->config.utc, stamp,
                             sizeof(stamp)) == CAI_DTG_OK) {
       if (d->config.color)
-        rc = display_text(d, "\033[0;2;90m", error);
+        rc = display_text(d, "\033[0;90m", error);
       if (rc == CAI_OK)
         rc = display_text(d, stamp, error);
       if (rc == CAI_OK && d->config.color)

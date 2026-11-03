@@ -9,9 +9,12 @@ prompt 'timestamp task' 'TIMESTAMP ANSWER'
 grep -Eq '^\* [0-9]{6}Z Read source.txt$' "$term/feed"
 grep -Eq '^  [0-9]{6}Z$' "$term/feed"
 grep -Eq '^! [0-9]{6}Z Worked for ' "$term/message"
-grep -F $'\033[0;2;90m' "$term/raw" >/dev/null
+grep -F $'\033[0;90m' "$term/raw" >/dev/null
+! grep -F $'\033[0;2;90m' "$term/raw" >/dev/null
 send '/status\r'; expect 'Status'
 grep -Eq '^\$ [0-9]{6}Z /status$' "$term/feed"
+send '/log\r'; expect '.log'
+! sed -n '/^\$ [0-9]*Z \/status$/,$p' "$term/feed" | grep -Eq '^  [0-9]{6}Z$'
 terminal_close
 id=$(current_session_id)
 run --export "$id" --export-out "$root/conversation.jsonl"; ok

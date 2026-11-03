@@ -7,6 +7,56 @@ typedef struct event_log_capture {
 } event_log_capture;
 
 static int tick_stub, tick_calls;
+
+static int table_count_write(void *context, const char *bytes, size_t count) {
+  size_t *total = context;
+  (void)bytes;
+  *total += count;
+  return 0;
+}
+
+/* Exercise the configured production renderer: output must arrive before EOF,
+ * with neither the full-table byte limit nor its row limit accumulating. */
+static int test_streaming_tables(void) {
+  cli_state *state = calloc(1U, sizeof(*state));
+  mdf_sink sink;
+  size_t total = 0U, first;
+  int i, rc = 1;
+  const char *header = "| Tool | Description |\n| --- | --- |\n";
+  const char *row =
+      "| tool | A complete description with enough words to exceed the full "
+      "table retention budget after many rows. |\n";
+  if (state == NULL)
+    return 1;
+  state->width = 120;
+  if (cli_renderer_create(state, &state->render_theme, MDF_TABLE_BUFFER_ROW,
+                          &state->renderer, NULL) != CAI_OK)
+    goto done;
+  sink.userdata = &total;
+  sink.write = table_count_write;
+  if (state->renderer->set_sink(state->renderer, &sink) != MDF_OK ||
+      state->renderer->feed(state->renderer, header, strlen(header)) !=
+          MDF_OK ||
+      state->renderer->feed(state->renderer, row, strlen(row)) != MDF_OK ||
+      total == 0U)
+    goto done;
+  first = total;
+  for (i = 0; i < 1030; i++)
+    if (state->renderer->feed(state->renderer, row, strlen(row)) != MDF_OK)
+      goto done;
+  if (total <= first ||
+      state->renderer->finish_document(state->renderer) != MDF_OK)
+    goto done;
+  rc = 0;
+done:
+  if (state->renderer != NULL)
+    state->renderer->destroy(state->renderer);
+  free(state);
+  if (rc)
+    fprintf(stderr,
+            "configured tables did not stream beyond full-table limits\n");
+  return rc;
+}
 int __real_cai_tool_display_tick(cai_tool_display *display, cai_error *error);
 int __wrap_cai_tool_display_tick(cai_tool_display *display, cai_error *error);
 int __wrap_cai_tool_display_tick(cai_tool_display *display, cai_error *error) {
@@ -948,8 +998,8 @@ static int test_timestamps(void) {
   cai_error_init(&error);
   if (cai_cli_theme_parse("default", &state->theme) != NULL ||
       sl_output_stream_begin(state->sl) != SL_OK ||
-      cli_renderer_create(state, &state->theme, &state->renderer, &error) !=
-          CAI_OK ||
+      cli_renderer_create(state, &state->theme, MDF_TABLE_BUFFER_FULL,
+                          &state->renderer, &error) != CAI_OK ||
       cli_timestamp(state, stamp, sizeof(stamp)) == 0 ||
       cli_command_input(state, "/status") != 0 ||
       cli_text(state, "Visible answer.", 15U) != 0 ||
@@ -1020,7 +1070,8 @@ int main(void) {
       test_command_timer_boundary() != 0 || test_shared_auth() != 0 ||
       test_event_logging() != 0 || test_reasoning_sections() != 0 ||
       test_literal_tokens() != 0 || test_reasoning_quotes() != 0 ||
-      test_reasoning_replay() != 0 || test_timestamps() != 0)
+      test_reasoning_replay() != 0 || test_timestamps() != 0 ||
+      test_streaming_tables() != 0)
     return 1;
   memset(&state, 0, sizeof(state));
   if (!cai_cli_quota_due(0, start, start, 0) ||

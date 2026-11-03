@@ -301,10 +301,18 @@ metadata, never model input. Replay preserves the original instant, including
 when child events are forwarded into the parent. Rendering uses the viewing
 host's local timezone at that instant unless UTC is selected. Missing original
 times are omitted, not replaced with the replay clock. Noninteractive output
-is unaffected. Softline's quoted-prompt metadata extension is still required
+is unaffected. Feed timestamps use gray without additional dimming;
+slash-command replies share the command input's timestamp. Softline's
+quoted-prompt metadata extension is still required
 for an independently dimmed timestamp beside `>`.
 The completed status message includes its DTG but shares Softline's status
 style until an independently styled status metadata slot is available.
+
+`/tools` configures libmdf's row-streaming table generator so large catalogs
+do not accumulate a full table in the renderer. Descriptions are retained in
+full. Column widths follow libmdf's header/first-row layout; bounded tables
+such as `/status` retain full-table layout. Command rendering errors are
+reported inline so subsequent commands and conversation turns remain usable.
 
 `<cai/dtg.h>` provides an allocation-free parser/formatter independent of
 runtime objects. `cai_dtg_parse` returns calendar fields with a two-digit year

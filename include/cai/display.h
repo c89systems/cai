@@ -33,7 +33,7 @@ typedef struct cai_tool_display_config {
   void *begin_block_context;
   /** Prefix headings with original event DTGs. Zero timestamps stay absent.
    * utc selects Zulu; otherwise use host local time, including historical DST.
-   * Color-enabled timestamps are dim gray independently of the palette. */
+   * Color-enabled timestamps use normal gray independently of the palette. */
   int timestamps;
   int utc;
 } cai_tool_display_config;

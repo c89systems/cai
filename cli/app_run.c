@@ -194,6 +194,9 @@ typedef struct cli_state {
   int notice_open;
   int notice_first_row;
   int command_input;
+  int command_output;
+  int sink_failed;
+  mdf_status renderer_error;
   unsigned long long presentation_timestamp_ns;
   int presentation_event;
   char command_foreground[MDF_THEME_FOREGROUND_SIZE];
@@ -368,11 +371,17 @@ static int cli_sink(void *context, const char *bytes, size_t count) {
   state = (cli_state *)context;
   if (count == 0U)
     return 0;
-  if (state->batch)
-    return fwrite(bytes, 1U, count, stdout) == count ? 0 : -1;
-  if (cli_reconcile_output(state) != 0 ||
-      sl_output_stream_write(state->sl, bytes, count) != SL_OK)
+  if (state->batch) {
+    if (fwrite(bytes, 1U, count, stdout) == count)
+      return 0;
+    state->sink_failed = 1;
     return -1;
+  }
+  if (cli_reconcile_output(state) != 0 ||
+      sl_output_stream_write(state->sl, bytes, count) != SL_OK) {
+    state->sink_failed = 1;
+    return -1;
+  }
   for (i = 0U; i < count; i++) {
     unsigned char ch = (unsigned char)bytes[i];
     if (state->feed_ansi == 1) {
@@ -439,7 +448,7 @@ static int cli_timestamp(cli_state *state, char *out, size_t capacity) {
 }
 static int cli_timestamp_write(cli_state *state, const char *stamp) {
   int color = !state->theme.ascii && getenv("NO_COLOR") == NULL;
-  if (color && cli_sink(state, "\033[0;2;90m", 9U) != 0)
+  if (color && cli_sink(state, "\033[0;90m", 7U) != 0)
     return -1;
   if (cli_sink(state, stamp, strlen(stamp)) != 0)
     return -1;
@@ -447,6 +456,8 @@ static int cli_timestamp_write(cli_state *state, const char *stamp) {
 }
 static int cli_timestamp_header(cli_state *state) {
   char stamp[CAI_DTG_CAPACITY];
+  if (state->command_output && !state->presentation_event)
+    return 0;
   if (!cli_timestamp(state, stamp, sizeof(stamp)))
     return 0;
   while (state->feed_breaks < 2)
@@ -536,7 +547,8 @@ static int cli_renderer_sink(void *context, const char *bytes, size_t count) {
                             : cli_sink(context, bytes, count);
 }
 static int cli_renderer_create(cli_state *state, const cai_cli_theme *theme,
-                               mdf **out, cai_error *error) {
+                               mdf_table_buffer_mode tables, mdf **out,
+                               cai_error *error) {
   mdf_options options;
   mdf_sink sink;
   mdf_status status;
@@ -549,6 +561,7 @@ static int cli_renderer_create(cli_state *state, const cai_cli_theme *theme,
   options.width = width;
   options.margin_left = state->interactive && width >= 5 ? 2 : 0;
   options.boring = !state->interactive;
+  options.table_buffer_mode = tables;
   status = mdf_create(MDF_FORMAT_ANSI, &options, out);
   if (status != MDF_OK)
     return cai_cli_error(
@@ -625,11 +638,18 @@ static int cli_geometry(cli_state *state) {
   return 0;
 }
 
+static int cli_mdf_status(cli_state *state, mdf_status status) {
+  if (status == MDF_OK)
+    return 0;
+  state->renderer_error = status;
+  return -1;
+}
 static int cli_finish_response(cli_state *state) {
   if (!state->response_open) {
     return 0;
   }
-  if (state->renderer->finish_document(state->renderer) != MDF_OK) {
+  if (cli_mdf_status(state,
+                     state->renderer->finish_document(state->renderer)) != 0) {
     return -1;
   }
   state->documents_rendered++;
@@ -657,8 +677,8 @@ static int cli_finish_reasoning(cli_state *state) {
 static int cli_reasoning_markdown(void *context, const char *data,
                                   size_t length) {
   cli_state *state = context;
-  return state->renderer->feed(state->renderer, data, length) == MDF_OK ? 0
-                                                                        : -1;
+  return cli_mdf_status(state,
+                        state->renderer->feed(state->renderer, data, length));
 }
 
 static int cli_reasoning_body(void *context, const char *data, size_t length) {
@@ -698,8 +718,8 @@ static int cli_text(cli_state *state, const char *data, size_t length) {
       return -1;
     state->response_open = 1;
   }
-  return state->renderer->feed(state->renderer, data, length) == MDF_OK ? 0
-                                                                        : -1;
+  return cli_mdf_status(state,
+                        state->renderer->feed(state->renderer, data, length));
 }
 
 static int cli_introduction(cli_state *state, const cai_app_config *config) {
@@ -807,7 +827,8 @@ static int cli_set_theme_scope(cli_state *state, int scope, cai_error *error) {
   if (!changed && state->theme_scope == scope)
     return CAI_OK;
   if (changed && state->renderer != NULL) {
-    rc = cli_renderer_create(state, &selected, &renderer, error);
+    rc = cli_renderer_create(state, &selected, MDF_TABLE_BUFFER_FULL, &renderer,
+                             error);
     if (rc != CAI_OK)
       return rc;
   }
@@ -2350,7 +2371,7 @@ static int cli_messages_process(cli_state *state, int at_boundary,
       sl_free_string(state->sl, taken);
       if (rc != CAI_OK) {
         cli_print_error(state, "input", error);
-        if (rc == CAI_ERR_TRANSPORT || rc == CAI_ERR_NOMEM ||
+        if (state->sink_failed || rc == CAI_ERR_NOMEM ||
             state->runtime == NULL || state->exit_requested)
           return rc;
         cai_error_cleanup(error);
@@ -4521,7 +4542,8 @@ static int cli_theme_command(cli_state *state, const char *arguments,
   /* Both submission keys retain this command until INPUT_BOUNDARY, with the
    * worker paused, or idle. Never replace a renderer mid-response. */
   cli_theme_for_scope(state, &selected, state->theme_scope, &effective);
-  rc = cli_renderer_create(state, &effective, &renderer, error);
+  rc = cli_renderer_create(state, &effective, MDF_TABLE_BUFFER_FULL, &renderer,
+                           error);
   if (rc == CAI_OK &&
       (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0 ||
        renderer->set_geometry(renderer, state->width, state->width >= 5 ? 2 : 0,
@@ -5429,12 +5451,31 @@ static int cli_handle_command(cli_state *state, const char *line,
     return rc;
   }
   if (strcmp(line, "/tools") == 0) {
+    mdf *saved, *inventory = NULL;
+    int documents;
     if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0)
       return CAI_ERR_TRANSPORT;
+    /* The catalog is unbounded. Configure libmdf's row generator while using
+     * the ordinary Markdown feed and sink; bounded status tables retain their
+     * full-layout renderer. Neither descriptions nor the table are rewritten.
+     */
+    rc = cli_renderer_create(state, &state->render_theme, MDF_TABLE_BUFFER_ROW,
+                             &inventory, error);
+    if (rc != CAI_OK)
+      return rc;
+    saved = state->renderer;
+    documents = state->documents_rendered;
+    state->renderer = inventory;
+    state->documents_rendered = 0;
     rc = cai_cli_tools_markdown(&state->mcp, state->runtime, 1, cli_tools_write,
                                 state, error);
     if (rc == CAI_OK && cli_finish_response(state) != 0)
       rc = CAI_ERR_TRANSPORT;
+    inventory->destroy(inventory);
+    state->renderer = saved;
+    state->documents_rendered = documents;
+    state->response_open = 0;
+    state->block_spacing_pending = 1;
     return rc;
   }
   if (strcmp(line, "/skills") == 0) {
@@ -5585,7 +5626,8 @@ static int cli_handle_command(cli_state *state, const char *line,
 
 static int cli_dispatch_command(cli_state *state, const char *line,
                                 cai_error *error, int *handled) {
-  int rc;
+  int rc, saved_command_output = state->command_output;
+  int saved_presentation_event = state->presentation_event;
   char *normalized = NULL;
   const char *command = line;
   /* Classification and execution share horizontal-whitespace semantics.
@@ -5611,12 +5653,43 @@ static int cli_dispatch_command(cli_state *state, const char *line,
     normalized[name] = '\0';
     command = normalized;
   }
+  if (line[0] == '/') {
+    state->command_output = 1;
+    state->presentation_event = 0;
+  }
+  state->renderer_error = MDF_OK;
   if ((line[0] == '/' || line[0] == '!') &&
       cli_command_input(state, line) != 0) {
     free(normalized);
+    state->command_output = saved_command_output;
+    state->presentation_event = saved_presentation_event;
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "display command input");
   }
   rc = cli_handle_command(state, command, error, handled);
+  if (state->renderer_error == MDF_ERROR_NOMEM)
+    rc = cai_cli_error(error, CAI_ERR_NOMEM, "render command output");
+  if (rc != CAI_OK && !state->sink_failed &&
+      (state->renderer_error == MDF_ERROR_PARSE ||
+       state->renderer_error == MDF_ERROR_INVALID)) {
+    mdf *replacement = NULL;
+    int recovered =
+        cli_renderer_create(state, &state->render_theme, MDF_TABLE_BUFFER_FULL,
+                            &replacement, error);
+    if (recovered == CAI_OK) {
+      state->renderer->destroy(state->renderer);
+      state->renderer = replacement;
+      state->response_open = state->reasoning_open = 0;
+      state->documents_rendered = 0;
+      state->block_spacing_pending = 1;
+      state->renderer_error = MDF_OK;
+      rc = cai_cli_error(error, CAI_ERR_INVALID,
+                         "Cannot render command output: Markdown input "
+                         "exceeded a limit or was invalid.");
+    } else
+      rc = recovered;
+  }
+  state->command_output = saved_command_output;
+  state->presentation_event = saved_presentation_event;
   free(normalized);
   /* FIFO delivery can return without an active editor. Refresh the retained
    * native status rows before closing, rather than adding a feed farewell. */
@@ -6316,8 +6389,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
                    "failed to initialize terminal renderers\n");
     goto cleanup;
   }
-  if (cli_renderer_create(state, &state->render_theme, &state->renderer,
-                          &error) != CAI_OK) {
+  if (cli_renderer_create(state, &state->render_theme, MDF_TABLE_BUFFER_FULL,
+                          &state->renderer, &error) != CAI_OK) {
     cli_print_error(state, "initialize Markdown renderer", &error);
     goto cleanup;
   }
@@ -6613,7 +6686,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       }
       if (rc != CAI_OK) {
         cli_print_error(state, "input", &error);
-        if (state->runtime == NULL || state->exit_requested) {
+        if (state->sink_failed || rc == CAI_ERR_NOMEM ||
+            state->runtime == NULL || state->exit_requested) {
           sl_free_string(state->sl, line);
           goto cleanup;
         }

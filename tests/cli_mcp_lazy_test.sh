@@ -51,7 +51,7 @@ absent "$term/feed" '"input_schema"'
 jq -se 'any(.[]; .server == "lazy" and .request.method == "tools/call" and .request.params.name == "searchInvoices")' "$root/peer/mcp_requests.jsonl" >/dev/null
 send '/tools\r'; expect 'MCP servers'
 tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/inventory"
-contains "$root/inventory" 'json (deferred)'
+table_contains "$root/inventory" 3 'json (deferred)'
 send '/mcp lazy\r'; expect 'Use /mcp help'
 tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/connection"
 contains "$root/connection" '(lazy)'

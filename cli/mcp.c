@@ -487,6 +487,11 @@ static int cell(inventory_output *out, const char *text, cai_error *error) {
               : cai_cli_error(error, CAI_ERR_TRANSPORT, "write tool inventory");
       used = 0U;
     }
+    if (*p == 0xc2U && p[1] >= 0x80U && p[1] <= 0x9fU) {
+      buffer[used++] = ' ';
+      ++p;
+      continue;
+    }
     if (strchr("\\|`*~[]<>#", *p) != NULL)
       buffer[used++] = '\\';
     buffer[used++] = *p < 32U || *p == 127U ? ' ' : (char)*p;

@@ -1250,7 +1250,7 @@ static void timestamps(capture *c) {
     assert(cai_tool_display_event(display, &e, &error) == CAI_OK);
     assert(cai_dtg_format_time(when, time(NULL), 1, stamp, sizeof(stamp)) ==
            CAI_DTG_OK);
-    snprintf(expected, sizeof(expected), "%s%s%s", color ? "\033[0;2;90m" : "",
+    snprintf(expected, sizeof(expected), "%s%s%s", color ? "\033[0;90m" : "",
              stamp, color ? "\033[0m" : "");
     assert(strstr(c->bytes, expected) != NULL);
     assert(strstr(c->bytes, "requested high") != NULL);

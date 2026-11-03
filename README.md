@@ -616,7 +616,8 @@ with the settled turn's date-time group (DTG) first.
 The live timer advances while the turn is active and stops when it settles.
 
 Interactive activity headings, command receipts, diagnostics and Markdown
-blocks use dim gray DTGs. Same month and year: `DDHHMM` in local time, or
+blocks use gray DTGs without additional dimming. Slash-command replies share
+the input's timestamp. Same month and year: `DDHHMM` in local time, or
 `DDHHMMZ` with `--utc`. Older entries use `DDHHMMZONEMMMYY`, for example
 `021230ANOV26`. Months are JAN through DEC; years are always two digits.
 Local zones follow the [USNO/HMNAO chart](https://aa.usno.navy.mil/downloads/TimeZoneMap_2021.pdf),

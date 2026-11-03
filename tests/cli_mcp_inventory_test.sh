@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/cli_test_common.sh"
-# Keep complete aliases visible; wrapping belongs to the rendering fixtures.
+# Exercise wide tables while allowing the row generator to wrap later aliases.
 width=240
 peer_start
 base+=(--mcp)
@@ -43,20 +43,20 @@ absent "$term/feed" 'Instruction files in context'
 absent "$term/feed" '## Tools'
 expect alpha; expect beta; expect missing_key
 before=$(wc -l <"$root/peer/mcp_requests.jsonl")
-send '/tools\r'; expect mcp_5_alpha_echo; expect mcp_4_beta_echo; expect mcp_5_alpha_raw
-expect 'Accept raw text'; expect 'Echo | user text'; expect 'environment variable is unset'
+send '/tools\r'; expect_table 1 mcp_5_alpha_echo; expect_table 1 mcp_4_beta_echo; expect_table 1 mcp_5_alpha_raw
+expect 'Accept raw text'; expect 'Echo | user text'; expect_table 2 'environment variable is unset'
 absent "$term/text" fixture-mcp-secret
 [[ $(wc -l <"$root/peer/mcp_requests.jsonl") == "$before" ]]
 send 'pause a model turn\r'; expect 'STREAM in flight'
-send '/tools\r'; expect mcp_4_beta_raw
+send '/tools\r'; expect_table 1 mcp_4_beta_raw
 release; expect 'INVENTORY TURN DONE'; expect 'Worked for'
 # The transport invalidates its own catalog on this notification. Installed
 # metadata must survive the next inventory and a new runtime in this process.
 plan "$(jq -n --argjson chat "$([[ "$protocol" == chat_completions ]] && printf true || printf false)" '{chat:$chat,mcp:{alpha:{notify_tools_changed:true}},plan:[{tool:"mcp_5_alpha_echo",arguments:{text:"catalog invalidation"}},"NOTIFICATION TURN DONE"]}')"
 prompt 'exercise metadata invalidation' 'NOTIFICATION TURN DONE'
-send '/tools\r'; expect mcp_5_alpha_raw; expect 'Echo | user text'
+send '/tools\r'; expect_table 1 mcp_5_alpha_raw; expect 'Echo | user text'
 send '/new\r'; expect 'Welcome to cai'
-send '/tools\r'; expect mcp_5_alpha_echo; expect mcp_5_alpha_raw
+send '/tools\r'; expect_table 1 mcp_5_alpha_echo; expect_table 1 mcp_5_alpha_raw
 terminal_close
 [[ $(wc -l <"$root/peer/mcp_requests.jsonl") == $((before+1)) ]]
 jq -se 'all(.[]; (.request.method != "initialize" or .server != "alpha") or .authorization == "Bearer fixture-mcp-secret")' "$root/peer/mcp_requests.jsonl" >/dev/null
@@ -89,7 +89,7 @@ endpoint = "$origin/mcp/empty"
 INI
 plan '{"mcp":{"slow":{"delay_ms":40},"broken":{"malformed":true},"denied":{"status":401},"empty":{"empty":true}},"plan":[]}'
 terminal_start -N
-send '/tools\r'; expect 'discovery timed out'; expect broken; expect denied; expect empty
+send '/tools\r'; expect_table 2 'discovery timed out'; expect broken; expect denied; expect empty
 expect 'read_file'
 terminal_close
 # Malformed server definitions fail clearly before any discovery.
