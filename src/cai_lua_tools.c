@@ -796,6 +796,7 @@ static int handler_run(void *context, cai_source *arguments, cai_sink *output,
   lua_job *job;
   lua_decode *decode;
   lonejson_error local;
+  cai_error local_error;
   int rc;
   job = calloc(1U, sizeof(*job));
   if (job == NULL)
@@ -804,7 +805,6 @@ static int handler_run(void *context, cai_source *arguments, cai_sink *output,
   job->input = arguments;
   job->output = output;
   job->call = call;
-  job->error = error;
   job->deadline =
       tools_time() +
       (double)(call->timeout_ms > 0L ? call->timeout_ms : 120000L) / 1000.0;
@@ -814,6 +814,10 @@ static int handler_run(void *context, cai_source *arguments, cai_sink *output,
     free(job);
     return tools_error(error, CAI_ERR_NOMEM, "allocate Lua JSON codec");
   }
+  cai_error_init(&local_error);
+  if (error == NULL)
+    error = &local_error;
+  job->error = error;
   if (job_cancelled(job))
     rc = job->code;
   else if (handler->reference != LUA_NOREF) {
@@ -842,6 +846,7 @@ static int handler_run(void *context, cai_source *arguments, cai_sink *output,
   }
   lonejson_free(job->json);
   free(job);
+  cai_error_cleanup(&local_error);
   return rc;
 }
 static int release_reference(void *context, cai_error *error) {

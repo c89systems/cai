@@ -41,8 +41,10 @@ static int fixture_write(void *context, const void *bytes, size_t size,
   output->bytes[output->length] = '\0';
   return CAI_OK;
 }
-static int execute(cai_plugins *plugins, const char *name, const char *input,
-                   const cai_plugin_call *call, const char *expected) {
+static int execute_optional_error(cai_plugins *plugins, const char *name,
+                                  const char *input,
+                                  const cai_plugin_call *call,
+                                  const char *expected, int omit_error) {
   fixture_input reader;
   fixture_output writer;
   cai_source_callbacks read;
@@ -63,7 +65,8 @@ static int execute(cai_plugins *plugins, const char *name, const char *input,
   cai_error_init(&error);
   assert(cai_source_from_callbacks(&read, &source, &error) == CAI_OK &&
          cai_sink_from_callbacks(&write, &sink, &error) == CAI_OK);
-  rc = cai_plugins_run(plugins, name, source, sink, call, &error);
+  rc = cai_plugins_run(plugins, name, source, sink, call,
+                       omit_error ? NULL : &error);
   if (expected != NULL) {
     if (rc != CAI_OK)
       fprintf(stderr, "Lua invocation: %s\n",
@@ -74,6 +77,10 @@ static int execute(cai_plugins *plugins, const char *name, const char *input,
   cai_sink_close(sink);
   cai_error_cleanup(&error);
   return rc;
+}
+static int execute(cai_plugins *plugins, const char *name, const char *input,
+                   const cai_plugin_call *call, const char *expected) {
+  return execute_optional_error(plugins, name, input, call, expected, 0);
 }
 static void file_write(const char *path, const char *text) {
   FILE *file = fopen(path, "wb");
@@ -108,8 +115,8 @@ static int host_dispatch(void *context, cai_lua_tools_operation operation,
 }
 static void *host_worker(void *context) {
   dispatcher *host = context;
-  assert(execute(host->plugins, "host_function", "{}", host->call, "HOST") ==
-         CAI_OK);
+  assert(execute_optional_error(host->plugins, "host_function", "{}",
+                                host->call, "HOST", 1) == CAI_OK);
   return NULL;
 }
 static void trusted_host(cai_plugin_call *call) {
@@ -139,9 +146,10 @@ static void trusted_host(cai_plugin_call *call) {
   definition.name = "host_function";
   definition.description = "trusted host handler";
   definition.parameters_json = "{\"type\":\"object\"}";
-  assert(luaL_dostring(state,
-                       "return function(input, context) saved_input=input; "
-                       "saved_context=context; return 'HOST' end") == LUA_OK);
+  assert(luaL_dostring(
+             state, "return function(input, context) saved_input=input; "
+                    "saved_context=context; assert(input:decode()); "
+                    "assert(input:read()==nil); return 'HOST' end") == LUA_OK);
   assert(cai_lua_tools_define(adapter, plugins, &definition, -1, &error) ==
          CAI_OK);
   lua_pop(state, 1);
@@ -224,6 +232,13 @@ static void test_files(const char *base) {
   assert(cai_plugins_load(plugins, package, &error) == CAI_OK);
   execute(plugins, "lua_example", "{\"n\":1,\"empty\":[],\"nul\":null}", &call,
           "{\"answer\":43}");
+  /* Error details are optional, including inside decode/read and host dispatch.
+   */
+  execute_optional_error(plugins, "lua_example",
+                         "{\"n\":2,\"empty\":[],\"nul\":null}", &call,
+                         "{\"answer\":44}", 1);
+  assert(execute_optional_error(plugins, "lua_example", "{", &call, NULL, 1) ==
+         CAI_ERR_INVALID);
   /* Syntax failure preserves the loaded source; file edits alone do not reload.
    */
   file_write(source, "this is not Lua !");
@@ -241,6 +256,13 @@ static void test_files(const char *base) {
   execute(plugins, "lua_example", "{}", &call, "YOLO");
   call.yolo = 0;
   execute(plugins, "lua_example", "{}", &call, "RESTRICTED");
+  file_write(source,
+             "return function(input,ctx) local text=assert(input:read(2)); "
+             "ctx.write(text); ctx.write(assert(input:read())); "
+             "assert(input:read()==nil) end");
+  assert(cai_plugins_load(plugins, package, &error) == CAI_OK);
+  execute_optional_error(plugins, "lua_example", "read input", &call,
+                         "read input", 1);
   call.call_tool = capability;
   file_write(
       source,
@@ -251,6 +273,8 @@ static void test_files(const char *base) {
   execute(plugins, "lua_example", "{}", &call, "CAPABILITY");
   call.max_output_bytes = 2U;
   assert(execute(plugins, "lua_example", "{}", &call, NULL) == CAI_ERR_LIMIT);
+  assert(execute_optional_error(plugins, "lua_example", "{}", &call, NULL, 1) ==
+         CAI_ERR_LIMIT);
   call.max_output_bytes = 0U;
   file_write(helper, "return require('helper')");
   file_write(source, "return function() return require('helper') end");
