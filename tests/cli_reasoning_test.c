@@ -9,53 +9,73 @@ typedef struct event_log_capture {
 
 static int tick_stub, tick_calls;
 
+typedef struct table_counter {
+  size_t bytes, rows, matched;
+} table_counter;
 static int table_count_write(void *context, const char *bytes, size_t count) {
-  size_t *total = context;
-  (void)bytes;
-  *total += count;
+  table_counter *total = context;
+  size_t i;
+  total->bytes += count;
+  for (i = 0U; i < count; ++i) {
+    if (bytes[i] == "tool"[total->matched]) {
+      if (++total->matched == 4U) {
+        total->rows++;
+        total->matched = 0U;
+      }
+    } else
+      total->matched = bytes[i] == 't' ? 1U : 0U;
+  }
   return 0;
 }
 
-/* Exercise the configured production renderer: output must arrive before EOF,
- * with neither the full-table byte limit nor its row limit accumulating. */
+/* Small tables retain full layout. Oversized tables flush once and continue
+ * before EOF at either the byte or row limit, preserving every body row. */
 static int test_streaming_tables(void) {
   cli_state *state = calloc(1U, sizeof(*state));
   mdf_sink sink;
-  size_t total = 0U, first;
-  int i, rc = 1;
+  table_counter total;
+  int scenario, i, rows, rc = 1;
   const char *header = "| Tool | Description |\n| --- | --- |\n";
-  const char *row =
+  const char *long_row =
       "| tool | A complete description with enough words to exceed the full "
       "table retention budget after many rows. |\n";
+  const char *short_row = "| tool | short |\n";
   if (state == NULL)
     return 1;
   state->width = 120;
-  if (cli_renderer_create(state, &state->render_theme, MDF_TABLE_BUFFER_ROW,
-                          &state->renderer, NULL) != CAI_OK)
-    goto done;
-  sink.userdata = &total;
-  sink.write = table_count_write;
-  if (state->renderer->set_sink(state->renderer, &sink) != MDF_OK ||
-      state->renderer->feed(state->renderer, header, strlen(header)) !=
-          MDF_OK ||
-      state->renderer->feed(state->renderer, row, strlen(row)) != MDF_OK ||
-      total == 0U)
-    goto done;
-  first = total;
-  for (i = 0; i < 1030; i++)
-    if (state->renderer->feed(state->renderer, row, strlen(row)) != MDF_OK)
+  for (scenario = 0; scenario < 3; ++scenario) {
+    const char *row = scenario == 1 ? long_row : short_row;
+    memset(&total, 0, sizeof(total));
+    if (cli_renderer_create(state, &state->render_theme, &state->renderer,
+                            NULL) != CAI_OK)
       goto done;
-  if (total <= first ||
-      state->renderer->finish_document(state->renderer) != MDF_OK)
-    goto done;
+    sink.userdata = &total;
+    sink.write = table_count_write;
+    if (state->renderer->set_sink(state->renderer, &sink) != MDF_OK ||
+        state->renderer->feed(state->renderer, header, strlen(header)) !=
+            MDF_OK ||
+        state->renderer->feed(state->renderer, row, strlen(row)) != MDF_OK ||
+        total.rows != 0U)
+      goto done;
+    rows = scenario == 0 ? 5 : 1030;
+    for (i = 0; i < rows; i++)
+      if (state->renderer->feed(state->renderer, row, strlen(row)) != MDF_OK)
+        goto done;
+    if ((scenario == 0 && total.rows != 0U) ||
+        (scenario != 0 && total.rows == 0U) ||
+        state->renderer->finish_document(state->renderer) != MDF_OK ||
+        total.rows != (size_t)rows + 1U)
+      goto done;
+    state->renderer->destroy(state->renderer);
+    state->renderer = NULL;
+  }
   rc = 0;
 done:
   if (state->renderer != NULL)
     state->renderer->destroy(state->renderer);
   free(state);
   if (rc)
-    fprintf(stderr,
-            "configured tables did not stream beyond full-table limits\n");
+    fprintf(stderr, "full-layout table fallback lost layout or body rows\n");
   return rc;
 }
 int __real_cai_tool_display_tick(cai_tool_display *display, cai_error *error);
@@ -204,31 +224,32 @@ static int test_command_queue_modes(void) {
                                      "/rr",
                                      "/tt"};
   cli_state state;
-  sl_prompt_queue_policy_t policy;
+  cai_input_policy policy;
   size_t i;
   memset(&state, 0, sizeof(state));
   state.was_busy = 1;
   state.options.subagent_steering = 1;
   for (i = 0U; i < sizeof(turns) / sizeof(turns[0]); i++) {
     memset(&policy, 0, sizeof(policy));
-    if (cli_prompt_policy(NULL, turns[i], SL_PROMPT_QUEUE_MODE_STEER, &policy,
-                          &state) != SL_OK ||
-        policy.enqueue || policy.independent || policy.executable ||
+    policy.intent = CAI_INPUT_STEERING;
+    if (cli_prompt_classify(&state, turns[i], &policy, NULL) != CAI_OK ||
+        !policy.action || policy.independent ||
+        policy.intent != CAI_INPUT_QUEUED ||
         cli_prompt_mode(&state, turns[i], SL_PROMPT_QUEUE_MODE_STEER) !=
             SL_PROMPT_QUEUE_MODE_QUEUED)
       return 1;
   }
   for (i = 0U; i < sizeof(feed) / sizeof(feed[0]); i++) {
     memset(&policy, 0, sizeof(policy));
-    if (cli_prompt_policy(NULL, feed[i], SL_PROMPT_QUEUE_MODE_QUEUED, &policy,
-                          &state) != SL_OK ||
-        !policy.enqueue || !policy.independent || !policy.executable ||
+    if (cli_prompt_classify(&state, feed[i], &policy, NULL) != CAI_OK ||
+        !policy.action || !policy.independent ||
         !cli_command_at_feed_boundary(feed[i]))
       return 1;
     memset(&policy, 0, sizeof(policy));
-    if (cli_prompt_policy(NULL, feed[i], SL_PROMPT_QUEUE_MODE_STEER, &policy,
-                          &state) != SL_OK ||
-        !policy.enqueue || !policy.independent || !policy.executable)
+    policy.intent = CAI_INPUT_STEERING;
+    if (cli_prompt_classify(&state, feed[i], &policy, NULL) != CAI_OK ||
+        !policy.action || !policy.independent ||
+        policy.intent != CAI_INPUT_STEERING)
       return 1;
   }
   for (i = 0U; i < sizeof(requests) / sizeof(requests[0]); i++) {
@@ -238,9 +259,11 @@ static int test_command_queue_modes(void) {
     modes[1] = SL_PROMPT_QUEUE_MODE_STEER;
     for (m = 0U; m < 2U; m++) {
       memset(&policy, 0, sizeof(policy));
-      if (cli_prompt_policy(NULL, requests[i], modes[m], &policy, &state) !=
-              SL_OK ||
-          !policy.enqueue || !policy.independent || policy.executable ||
+      policy.intent = modes[m] == SL_PROMPT_QUEUE_MODE_STEER
+                          ? CAI_INPUT_STEERING
+                          : CAI_INPUT_QUEUED;
+      if (cli_prompt_classify(&state, requests[i], &policy, NULL) != CAI_OK ||
+          !policy.action || !policy.independent ||
           cli_command_at_feed_boundary(requests[i]) ||
           cli_command_at_turn_boundary(requests[i]) ||
           cli_prompt_mode(&state, requests[i], modes[m]) != modes[m])
@@ -258,17 +281,16 @@ static int test_command_queue_modes(void) {
   state.was_busy = 0;
   for (i = 0U; i < sizeof(turns) / sizeof(turns[0]); i++) {
     memset(&policy, 0, sizeof(policy));
-    if (cli_prompt_policy(NULL, turns[i], SL_PROMPT_QUEUE_MODE_STEER, &policy,
-                          &state) != SL_OK ||
-        !policy.enqueue)
+    policy.intent = CAI_INPUT_STEERING;
+    if (cli_prompt_classify(&state, turns[i], &policy, NULL) != CAI_OK ||
+        !policy.action || policy.intent != CAI_INPUT_QUEUED)
       return 1;
   }
   state.foreground_subagent = 1;
   state.options.subagent_steering = 0;
   memset(&policy, 0, sizeof(policy));
-  if (cli_prompt_policy(NULL, "ordinary prompt", SL_PROMPT_QUEUE_MODE_QUEUED,
-                        &policy, &state) != SL_OK ||
-      policy.enqueue || policy.independent || policy.executable ||
+  if (cli_prompt_classify(&state, "ordinary prompt", &policy, NULL) != CAI_OK ||
+      policy.action || policy.independent ||
       cli_prompt_mode(&state, "ordinary prompt", SL_PROMPT_QUEUE_MODE_QUEUED) !=
           SL_PROMPT_QUEUE_MODE_QUEUED)
     return 1;
@@ -1000,8 +1022,8 @@ static int test_deferred_command_spacing(void) {
   state->width = 80;
   state->feed_breaks = 2;
   if (state->sl == NULL || sl_output_stream_begin(state->sl) != SL_OK ||
-      cli_renderer_create(state, &state->render_theme, MDF_TABLE_BUFFER_FULL,
-                          &state->renderer, NULL) != CAI_OK ||
+      cli_renderer_create(state, &state->render_theme, &state->renderer,
+                          NULL) != CAI_OK ||
       cli_command_input(state, "/delayed") != 0)
     goto done;
   count = read(pipes[0], output, sizeof(output));
@@ -1078,8 +1100,8 @@ static int test_timestamps(void) {
   cai_error_init(&error);
   if (cai_cli_theme_parse("default", &state->theme) != NULL ||
       sl_output_stream_begin(state->sl) != SL_OK ||
-      cli_renderer_create(state, &state->theme, MDF_TABLE_BUFFER_FULL,
-                          &state->renderer, &error) != CAI_OK ||
+      cli_renderer_create(state, &state->theme, &state->renderer, &error) !=
+          CAI_OK ||
       cli_timestamp(state, stamp, sizeof(stamp)) == 0 ||
       cli_command_input(state, "/status") != 0 ||
       cli_tool_markdown(state, "Tool result body.",

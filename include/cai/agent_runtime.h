@@ -7,6 +7,7 @@
 #include <cai/cai.h>
 #include <cai/chrome.h>
 #include <cai/history.h>
+#include <cai/input_queue.h>
 #include <cai/plugins.h>
 #include <cai/session_store.h>
 #include <cai/skills.h>
@@ -21,6 +22,16 @@ extern "C" {
 #endif
 
 typedef struct cai_agent_runtime cai_agent_runtime;
+
+/** Borrow this conversation's editable input authority on its owner thread.
+ * Its incremental transitions use the session journal and are recovered with
+ * the conversation. Claiming model input transfers it to idempotent runtime
+ * delivery; pump completes delivery, including active-child steering. Opaque
+ * host actions are returned to the controller by cai_input_queue_claim().
+ * Frontends must use a copied asynchronous mailbox, not call from UI threads.
+ */
+int cai_agent_runtime_pending_input(cai_agent_runtime *runtime,
+                                    cai_input_queue **out, cai_error *error);
 
 /** Borrow the runtime's thread-safe kanban receiver until runtime close.
  * NULL means the tool is disabled. Use select_board below for an immediately

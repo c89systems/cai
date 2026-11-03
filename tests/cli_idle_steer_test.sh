@@ -16,17 +16,13 @@ for mode in ready held draft; do
   send 'Start idle seam test\r'; expect IdleSeamBegin
   if [[ "$mode" == draft ]]; then send 'KEEP_THIS_DRAFT'; expect_prompt KEEP_THIS_DRAFT; fi
   release; expect_assistant FirstTurnFinished
-  if [[ "$mode" != ready ]]; then
+  if [[ "$mode" == held ]]; then
     expect 'LATE_STEER'
     [[ $(requests) == $((before+1)) ]]
-    if [[ "$mode" == held ]]; then
-      send '\033a\033y'
-    else
-      expect_prompt KEEP_THIS_DRAFT
-      send '\025'
-    fi
+    send '\033a\033y'
   fi
   expect_assistant LateSteerHandled
+  if [[ "$mode" == draft ]]; then expect_prompt KEEP_THIS_DRAFT; fi
   wait_for has "$term/feed" 'Theme changed to gruvbox:gruvbox.'
   [[ $(requests) == $((before+2)) ]]
   tail -1 "$root/peer/requests.jsonl" >"$root/continuation"

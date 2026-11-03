@@ -26938,6 +26938,7 @@ static int test_runtime_input_boundary(void *context,
 #include "runtime_goal_continuation_test.inc"
 #include "runtime_goal_restart_test.inc"
 #include "runtime_input_ack_test.inc"
+#include "runtime_queue_test.inc"
 #include "runtime_responsiveness_test.inc"
 
 static void test_agent_runtime_input_boundary(test_state *state) {
@@ -54817,6 +54818,7 @@ static const test_entry test_entries[] = {
      test_agent_local_session_store_rejects_unsafe_scope},
     {"agent_runtime_resume", test_agent_runtime_resume},
     {"agent_runtime_input_ack", test_agent_runtime_input_ack},
+    {"agent_runtime_pending_input", test_agent_runtime_pending_input},
     {"agent_runtime_responsiveness", test_agent_runtime_responsiveness},
     {"agent_runtime_markdown_export", test_agent_runtime_markdown_export},
     {"goal_tools", test_goal_tools},

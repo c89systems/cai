@@ -2,8 +2,10 @@
 #define _XOPEN_SOURCE 700
 
 #include "app_internal.h"
+#include "completion.h"
 #include "config.h"
 #include "identity.h"
+#include "input_adapter.h"
 #include "literal.h"
 #include "log.h"
 #include "login.h"
@@ -126,6 +128,15 @@ typedef struct cli_state {
   sl_watch_id_t message_watch_id;
   int has_message_watch;
   sl_t *sl;
+  cai_input_controller *input_controller;
+  int input_idle;
+  cai_cli_input_adapter *input_adapter;
+  cai_input_queue *input;
+  cai_input_queue_client *input_admin;
+  unsigned long long input_request;
+  sl_watch_id_t input_watch;
+  int has_input_watch;
+  cai_cli_completions completions;
   mdf *renderer;
   mdf *notice_renderer;
   cai_tool_display *tool_display;
@@ -178,8 +189,9 @@ typedef struct cli_state {
   int starting_goal;
   size_t startup_goal_pending;
   size_t next_instruction;
-  /* Notification fields only. Softline owns commands until delivery; runtime
-   * owns accepted updates. No command or requested value is copied here. */
+  /* Notification fields only. The core queue owns commands until delivery;
+   * runtime owns accepted updates. No command or requested value is copied
+   * here. */
   unsigned int settings_notice_fields;
   cai_chatgpt_quota quota;
   cai_cli_quota_refresh quota_refresh;
@@ -230,6 +242,7 @@ static int cli_sync_status(cli_state *state, cai_error *error);
 static int cli_settings_notice(cli_state *state, cai_error *error);
 static int cli_review_event(void *context, const cai_agent_runtime_event *event,
                             cai_error *error);
+static int cli_input_wakeup(sl_t *, const sl_watch_event_t *, void *);
 
 static int cli_load_model_metadata(const cai_cli_options *options, char **out,
                                    cai_error *error) {
@@ -549,8 +562,7 @@ static int cli_renderer_sink(void *context, const char *bytes, size_t count) {
                             : cli_sink(context, bytes, count);
 }
 static int cli_renderer_create(cli_state *state, const cai_cli_theme *theme,
-                               mdf_table_buffer_mode tables, mdf **out,
-                               cai_error *error) {
+                               mdf **out, cai_error *error) {
   mdf_options options;
   mdf_sink sink;
   mdf_status status;
@@ -563,7 +575,7 @@ static int cli_renderer_create(cli_state *state, const cai_cli_theme *theme,
   options.width = width;
   options.margin_left = state->interactive && width >= 5 ? 2 : 0;
   options.boring = !state->interactive;
-  options.table_buffer_mode = tables;
+  options.table_buffer_mode = MDF_TABLE_BUFFER_FULL;
   status = mdf_create(MDF_FORMAT_ANSI, &options, out);
   if (status != MDF_OK)
     return cai_cli_error(
@@ -834,8 +846,7 @@ static int cli_set_theme_scope(cli_state *state, int scope, cai_error *error) {
   if (!changed && state->theme_scope == scope)
     return CAI_OK;
   if (changed && state->renderer != NULL) {
-    rc = cli_renderer_create(state, &selected, MDF_TABLE_BUFFER_FULL, &renderer,
-                             error);
+    rc = cli_renderer_create(state, &selected, &renderer, error);
     if (rc != CAI_OK)
       return rc;
   }
@@ -1267,17 +1278,71 @@ static int cli_word_is(const char *text, size_t length, const char *word) {
 
 /* Expand only the command token. Queue policy and dispatch share this map;
  * the original alias stays in the editor, prompt history and input echo. */
+static const struct {
+  const char *alias, *name;
+} cli_command_aliases[] = {
+    {"/m", "/model"}, {"/r", "/reasoning"}, {"/t", "/theme"}};
 static const char *cli_command_name(const char *line, size_t *length) {
-  static const struct {
-    const char *alias, *name;
-  } aliases[] = {{"/m", "/model"}, {"/r", "/reasoning"}, {"/t", "/theme"}};
   size_t i;
-  for (i = 0U; i < sizeof(aliases) / sizeof(aliases[0]); i++)
-    if (cli_word_is(line, *length, aliases[i].alias)) {
-      *length = strlen(aliases[i].name);
-      return aliases[i].name;
+  for (i = 0U; i < sizeof(cli_command_aliases) / sizeof(cli_command_aliases[0]);
+       i++)
+    if (cli_word_is(line, *length, cli_command_aliases[i].alias)) {
+      *length = strlen(cli_command_aliases[i].name);
+      return cli_command_aliases[i].name;
     }
   return line;
+}
+
+typedef struct cli_skill_completion {
+  sl_completion_emit_t emit;
+  void *context;
+  int result;
+} cli_skill_completion;
+static int cli_complete_skill(void *context, const cai_skill_info *skill,
+                              cai_error *error) {
+  cli_skill_completion *out = context;
+  size_t length = strlen(skill->name);
+  char *name = malloc(length + 2U);
+  (void)error;
+  if (name == NULL) {
+    out->result = SL_ERROR_NOMEM;
+    return CAI_ERR_NOMEM;
+  }
+  name[0] = '$';
+  memcpy(name + 1U, skill->name, length + 1U);
+  out->result = out->emit(name, out->context);
+  free(name);
+  return out->result == SL_OK ? CAI_OK : CAI_ERR_TRANSPORT;
+}
+static int cli_completion_catalog(void *context, char trigger,
+                                  sl_completion_emit_t emit,
+                                  void *emit_context) {
+  cli_state *state = context;
+  size_t i;
+  int rc = SL_OK;
+  if (trigger == '/') {
+    for (i = 0U; rc == SL_OK && i < sizeof(cli_command_definitions) /
+                                        sizeof(cli_command_definitions[0]);
+         ++i)
+      rc = emit(cli_command_definitions[i].name, emit_context);
+    for (i = 0U; rc == SL_OK && i < sizeof(cli_command_aliases) /
+                                        sizeof(cli_command_aliases[0]);
+         ++i)
+      rc = emit(cli_command_aliases[i].alias, emit_context);
+  } else if (trigger == '$' && state->options.skills &&
+             state->runtime != NULL) {
+    cli_skill_completion out;
+    cai_error error;
+    out.emit = emit;
+    out.context = emit_context;
+    out.result = SL_OK;
+    cai_error_init(&error);
+    rc = cai_agent_runtime_visit_skills(state->runtime, cli_complete_skill,
+                                        &out, &error);
+    cai_error_cleanup(&error);
+    rc = out.result != SL_OK ? out.result : rc == CAI_OK ? SL_OK : SL_ERROR_IO;
+  }
+  return rc;
 }
 
 static int cli_is_theme(const char *line) {
@@ -1407,25 +1472,21 @@ static int cli_yolo_value(const char *line, int *enabled) {
 }
 
 static int cli_yolo_pending(cli_state *state, int *enabled) {
+  cai_input_state pending;
+  cai_input_entry entry;
   size_t i;
-  for (i = 0U; i < sl_prompt_queue_count(state->sl); i++) {
-    sl_prompt_queue_entry_info_t info;
-    char *text = NULL;
-    int found;
-    if (sl_prompt_queue_info(state->sl, i, &info) != SL_OK || info.held)
-      continue;
-    if (sl_prompt_queue_peek(state->sl, i, &text) != SL_OK)
-      continue;
-    found = cli_yolo_value(text, enabled);
-    sl_free_string(state->sl, text);
-    if (found)
+  if (state->input_admin == NULL ||
+      cai_input_queue_get_state(state->input, &pending, NULL) != CAI_OK)
+    return 0;
+  for (i = 0U; i < pending.count; ++i)
+    if (cai_input_queue_entry_at(state->input_admin, i, &entry, NULL) ==
+            CAI_OK &&
+        !entry.held && cli_yolo_value(entry.text, enabled))
       return 1;
-  }
   return 0;
 }
 
-/* Softline owns admission, identity, approval, ordering and cancellation.
- * CAI only declares which execution boundary is currently available. */
+/* The backend owns accepted work. Readiness follows runtime boundaries. */
 static int cli_prompt_ready(cli_state *state, const char *text,
                             sl_prompt_queue_mode_t mode, int at_boundary,
                             int *ready, cai_error *error) {
@@ -1476,68 +1537,91 @@ static int cli_prompt_ready(cli_state *state, const char *text,
   return rc;
 }
 
-static int cli_prompt_policy(sl_t *sl, const char *text,
-                             sl_prompt_queue_mode_t mode,
-                             sl_prompt_queue_policy_t *policy, void *context) {
-  cli_state *state = context;
-  cai_error error;
+static int cli_input_request(cli_state *state, cai_input_operation operation,
+                             const char *text, cai_input_intent intent,
+                             int enabled, const cai_input_entry *entry,
+                             unsigned long long *id, cai_error *error) {
+  cai_input_request request;
+  cai_input_result result;
+  cai_input_state pending;
   int rc;
-  (void)sl;
+  if (state->input_request == ~(unsigned long long)0)
+    return cai_cli_error(error, CAI_ERR_LIMIT,
+                         "input request identities exhausted");
+  memset(&request, 0, sizeof(request));
+  request.request_id = ++state->input_request;
+  request.operation = operation;
+  request.text = text;
+  request.intent = intent;
+  request.enabled = enabled;
+  rc = cai_input_queue_get_state(state->input, &pending, error);
+  if (rc != CAI_OK)
+    return rc;
+  request.queue_revision = pending.revision;
+  if (entry != NULL) {
+    request.item_id = entry->id;
+    request.item_revision = entry->revision;
+    request.edit_token = entry->edit_token;
+  }
+  rc = cai_input_queue_request(state->input_admin, &request, &result, error);
+  if (rc == CAI_OK && result.outcome != CAI_INPUT_ACCEPTED)
+    rc = cai_cli_error(error,
+                       result.code != CAI_OK ? result.code : CAI_ERR_TRANSPORT,
+                       result.reason);
+  if (rc == CAI_OK && id != NULL)
+    *id = result.item_id;
+  return rc;
+}
+static int cli_prompt_classify(void *context, const char *text,
+                               cai_input_policy *policy, cai_error *error) {
+  cli_state *state = context;
+  sl_prompt_queue_mode_t mode = policy->intent == CAI_INPUT_STEERING
+                                    ? SL_PROMPT_QUEUE_MODE_STEER
+                                    : SL_PROMPT_QUEUE_MODE_QUEUED;
+  (void)error;
+  mode = cli_prompt_mode(state, text, mode);
+  policy->intent = mode == SL_PROMPT_QUEUE_MODE_STEER ? CAI_INPUT_STEERING
+                                                      : CAI_INPUT_QUEUED;
+  policy->action = text[0] == '/' || text[0] == '!';
   policy->independent = cli_command_at_feed_boundary(text) ||
                         cli_command_at_request_boundary(text);
-  policy->enqueue = text[0] == '/' || text[0] == '!';
-  /* Busy Softline already admits ordinary turns through its native queue.
-   * Other mutating commands use that lane, so seam steers retain their native
-   * priority over Q entries. Managed admission is still required while idle
-   * to keep every command editable before dispatch. */
-  if (state->was_busy && !policy->independent)
-    policy->enqueue = 0;
-  cai_error_init(&error);
-  rc = cli_prompt_ready(state, text, mode, 0, &policy->executable, &error);
-  cai_error_cleanup(&error);
-  return rc == CAI_OK ? SL_OK : SL_ERROR_IO;
+  policy->resume_backlog = !policy->action;
+  return CAI_OK;
 }
-
 static int cli_sync_queue(cli_state *state, int at_boundary, cai_error *error) {
-  sl_prompt_queue_entry_info_t info;
+  cai_input_entry entry;
+  cai_input_state pending;
   size_t i;
   int ready, rc;
-  if (!state->interactive || state->runtime == NULL)
+  if (state->batch || state->input_admin == NULL)
     return CAI_OK;
-  if (sl_prompt_queue_draft_info(state->sl, &info) != SL_OK)
-    return CAI_ERR_TRANSPORT;
-  if (info.id != 0) {
-    rc = cli_prompt_ready(state, sl_buffer(state->sl), info.mode, at_boundary,
-                          &ready, error);
+  rc = cai_input_queue_get_state(state->input, &pending, error);
+  for (i = 0U; rc == CAI_OK && i < pending.count; ++i) {
+    sl_prompt_queue_mode_t mode;
+    rc = cai_input_queue_entry_at(state->input_admin, i, &entry, error);
     if (rc != CAI_OK)
-      return rc;
-    if (sl_prompt_queue_set_executable(state->sl, info.id, ready) != SL_OK)
-      return CAI_ERR_TRANSPORT;
-  }
-  for (i = 0U; i < sl_prompt_queue_count(state->sl); i++) {
-    char *text = NULL;
-    if (sl_prompt_queue_info(state->sl, i, &info) != SL_OK ||
-        sl_prompt_queue_peek(state->sl, i, &text) != SL_OK)
-      return CAI_ERR_TRANSPORT;
-    /* Commands that cannot execute at a steering seam must say Q, not remain
-     * indefinitely in the S lane. Preserve native identity/editing/approval. */
-    {
-      sl_prompt_queue_mode_t mode = cli_prompt_mode(state, text, info.mode);
-      if (mode != info.mode &&
-          sl_prompt_queue_set_mode(state->sl, i, mode) != SL_OK) {
-        sl_free_string(state->sl, text);
-        return CAI_ERR_TRANSPORT;
-      }
-      info.mode = mode;
+      break;
+    mode = cli_prompt_mode(state, entry.text,
+                           entry.intent == CAI_INPUT_STEERING
+                               ? SL_PROMPT_QUEUE_MODE_STEER
+                               : SL_PROMPT_QUEUE_MODE_QUEUED);
+    if ((mode == SL_PROMPT_QUEUE_MODE_STEER) !=
+        (entry.intent == CAI_INPUT_STEERING)) {
+      rc = cli_input_request(state, CAI_INPUT_SET_INTENT, NULL,
+                             mode == SL_PROMPT_QUEUE_MODE_STEER
+                                 ? CAI_INPUT_STEERING
+                                 : CAI_INPUT_QUEUED,
+                             0, &entry, NULL, error);
+      if (rc == CAI_OK)
+        rc = cai_input_queue_entry_at(state->input_admin, i, &entry, error);
     }
-    rc = cli_prompt_ready(state, text, info.mode, at_boundary, &ready, error);
-    sl_free_string(state->sl, text);
-    if (rc != CAI_OK)
-      return rc;
-    if (sl_prompt_queue_set_executable(state->sl, info.id, ready) != SL_OK)
-      return CAI_ERR_TRANSPORT;
+    if (rc == CAI_OK)
+      rc =
+          cli_prompt_ready(state, entry.text, mode, at_boundary, &ready, error);
+    if (rc == CAI_OK)
+      rc = cai_input_queue_set_ready(state->input, entry.id, ready, error);
   }
-  return CAI_OK;
+  return rc;
 }
 
 static int cli_terminal_shell_output(void *context, const char *bytes,
@@ -2314,123 +2398,92 @@ static int cli_timer_wakeup(sl_t *sl, const sl_watch_event_t *event,
 /* Match Softline's chat host: a steer that missed the final active seam can
  * start work at an idle input boundary. Do not disturb a draft, search, edit,
  * manual delivery, approval or cancellation's stopped backlog. */
-static int cli_idle_input_ready(cli_state *state, int *ready,
-                                cai_error *error) {
-  sl_prompt_queue_entry_info_t draft;
-  sl_prompt_queue_delivery_t delivery;
-  const char *buffer;
-  int rc = cli_command_turn_ready(state, ready, error);
-  if (rc != CAI_OK || !*ready)
-    return rc;
-  buffer = sl_buffer(state->sl);
-  *ready = 0;
-  if ((buffer != NULL && buffer[0] != '\0') ||
-      sl_history_search_active(state->sl))
-    return CAI_OK;
-  if (sl_prompt_queue_draft_info(state->sl, &draft) != SL_OK ||
-      sl_get_prompt_queue_delivery(state->sl, &delivery) != SL_OK)
-    return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                         "inspect idle input boundary");
-  *ready = draft.id == 0U && delivery == SL_PROMPT_QUEUE_DELIVERY_AUTO;
-  return CAI_OK;
-}
-
-/* Eligible inspections, request preferences and seam steers are owner-consumed.
- * Ordinary Q turns and whole-turn commands use native next_prompt delivery. */
 static int cli_messages_process(cli_state *state, int at_boundary,
                                 cai_error *error) {
-  sl_prompt_queue_entry_info_t info;
-  size_t index;
-  char *text;
-  int rc, local, request, idle;
-  if (state->exit_requested || state->batch || state->runtime == NULL)
+  cai_input_state pending;
+  cai_input_entry entry;
+  cai_input_claim claim;
+  size_t index = 0U, applied = 0U;
+  int rc;
+  if (state->exit_requested || state->batch || state->input_admin == NULL)
     return CAI_OK;
-  rc = cai_cli_messages_sync(state->messages, state->sl, error);
+  rc = cai_input_controller_pump(state->input_controller, 32U, error);
+  if (rc == CAI_OK && state->input_adapter != NULL)
+    rc = cai_cli_input_adapter_receive(state->input_adapter, 64U, error);
+  if (rc == CAI_OK && cai_cli_input_adapter_settling(state->input_adapter))
+    return CAI_OK;
+  if (rc == CAI_OK)
+    rc = cai_cli_messages_sync(state->messages, state->input, error);
   if (rc == CAI_OK)
     rc = cli_sync_queue(state, at_boundary, error);
-  if (rc != CAI_OK)
-    return rc;
-  for (index = 0U; index < sl_prompt_queue_count(state->sl);) {
-    if (sl_prompt_queue_info(state->sl, index, &info) != SL_OK)
-      return cai_cli_error(error, CAI_ERR_TRANSPORT, "inspect queued prompt");
-    if (!info.eligible) {
-      index++;
-      continue;
-    }
-    text = NULL;
-    if (sl_prompt_queue_peek(state->sl, index, &text) != SL_OK)
-      return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                           "read eligible queued prompt");
-    local = cli_command_at_feed_boundary(text);
-    request = cli_command_at_request_boundary(text);
-    idle = 0;
-    if (!local && info.mode == SL_PROMPT_QUEUE_MODE_STEER && !at_boundary) {
-      rc = cli_idle_input_ready(state, &idle, error);
-      if (rc != CAI_OK) {
-        sl_free_string(state->sl, text);
-        return rc;
-      }
-    }
-    if (!local && ((!at_boundary && !idle) ||
-                   (!request && info.mode != SL_PROMPT_QUEUE_MODE_STEER) ||
-                   cli_command_at_turn_boundary(text))) {
-      sl_free_string(state->sl, text);
-      index++;
-      continue;
-    }
-    if (text[0] == '/' || text[0] == '!') {
-      char *taken = NULL;
-      int handled;
-      sl_free_string(state->sl, text);
-      if (sl_prompt_queue_take(state->sl, index, &taken) != SL_OK)
-        return cai_cli_error(error, CAI_ERR_TRANSPORT, "take eligible command");
-      /* Acceptance removes this native identity. A command can reopen the
-       * session/messages context, so settle its originating inbox first. */
-      rc = cai_cli_messages_consumed(state->messages, info.id, error);
-      if (rc == CAI_OK)
-        rc = cli_dispatch_command(state, taken, error, &handled);
-      sl_free_string(state->sl, taken);
-      if (rc != CAI_OK) {
-        cli_print_error(state, "input", error);
-        if (state->sink_failed || rc == CAI_ERR_NOMEM ||
-            state->runtime == NULL || state->exit_requested)
-          return rc;
-        cai_error_cleanup(error);
-        cai_error_init(error);
-      }
-      if (state->exit_requested)
-        return sl_cancel(state->sl) == SL_OK ? CAI_OK : CAI_ERR_TRANSPORT;
-    } else {
-      rc = idle
-               ? cai_agent_runtime_submit_interactive(state->runtime, text,
-                                                      error)
-               : cai_agent_runtime_submit_steering(state->runtime, text, error);
-      sl_free_string(state->sl, text);
-      if (rc == CAI_ERR_INVALID || rc == CAI_ERR_LIMIT) {
-        /* A launching child or full runtime can briefly reject admission.
-         * Keep the original native entry, including its approval and ID. */
-        cai_error_cleanup(error);
-        cai_error_init(error);
-        break;
-      }
-      if (rc != CAI_OK)
-        return rc;
-      if (sl_prompt_queue_take(state->sl, index, &text) != SL_OK)
-        return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                             "take delivered steering");
-      sl_free_string(state->sl, text);
-      rc = cai_cli_messages_consumed(state->messages, info.id, error);
-      if (rc != CAI_OK)
-        return rc;
-    }
-    /* Dispatch can start work or reopen the runtime. Refresh all remaining
-     * execution holds before inspecting the next native identity. */
-    rc = cli_sync_queue(state, at_boundary, error);
+  /* FD watches may run while Softline is decoding the next key (including
+   * Alt-E). Admission is asynchronous; execute only at a native idle iteration
+   * or an actual model boundary, after the editor has handled buffered keys. */
+  if (rc == CAI_OK && state->input_adapter != NULL && !state->input_idle &&
+      !at_boundary)
+    return CAI_OK;
+  while (rc == CAI_OK && applied < 32U) {
+    rc = cai_input_queue_get_state(state->input, &pending, error);
+    if (rc != CAI_OK || index >= pending.count)
+      break;
+    rc = cai_input_queue_entry_at(state->input_admin, index, &entry, error);
     if (rc != CAI_OK)
-      return rc;
+      break;
+    if (!entry.ready) {
+      ++index;
+      continue;
+    }
+    rc = cai_input_queue_claim(state->input, entry.id, entry.revision, &claim,
+                               error);
+    if (rc == CAI_ERR_INVALID) {
+      cai_error_cleanup(error);
+      rc = CAI_OK;
+      ++index;
+      continue;
+    }
+    if (rc != CAI_OK)
+      break;
+    ++applied;
+    rc = cai_cli_messages_consumed(state->messages, claim.entry.id, error);
+    if (rc == CAI_OK && claim.entry.action) {
+      int handled;
+      rc = cli_dispatch_command(state, claim.text, error, &handled);
+    } else if (rc == CAI_OK &&
+               (!state->was_busy || entry.intent == CAI_INPUT_QUEUED))
+      state->awaiting_turn = 1;
+    cai_input_claim_cleanup(&claim);
+    if (rc != CAI_OK) {
+      cli_print_error(state, "input", error);
+      if (state->sink_failed || rc == CAI_ERR_NOMEM || state->runtime == NULL ||
+          state->exit_requested)
+        return rc;
+      cai_error_cleanup(error);
+      rc = CAI_OK;
+    }
+    if (state->exit_requested)
+      return !state->interactive || sl_cancel(state->sl) == SL_OK
+                 ? CAI_OK
+                 : CAI_ERR_TRANSPORT;
+    index = 0U;
+    rc = cli_sync_queue(state, at_boundary, error);
   }
-  return cli_sync_queue(state, 0, error);
+  return rc == CAI_OK ? cli_sync_queue(state, 0, error) : rc;
 }
+static int cli_input_wakeup(sl_t *sl, const sl_watch_event_t *event,
+                            void *context) {
+  cli_state *state = context;
+  cai_error error;
+  int rc;
+  (void)sl;
+  (void)event;
+  cai_error_init(&error);
+  rc = cli_messages_process(state, 0, &error);
+  if (rc != CAI_OK)
+    cli_print_error(state, "input queue", &error);
+  cai_error_cleanup(&error);
+  return rc == CAI_OK ? SL_OK : SL_ERROR_IO;
+}
+
 static int cli_message_wakeup(sl_t *sl, const sl_watch_event_t *event,
                               void *context) {
   cli_state *state = context;
@@ -2446,7 +2499,10 @@ static int cli_message_wakeup(sl_t *sl, const sl_watch_event_t *event,
   return rc == CAI_OK ? SL_OK : SL_ERROR_IO;
 }
 static void cli_message_idle(sl_t *sl, void *context) {
+  cli_state *state = context;
+  state->input_idle = 1;
   (void)cli_message_wakeup(sl, NULL, context);
+  state->input_idle = 0;
 }
 
 static int cli_wakeup(sl_t *sl, const sl_watch_event_t *event, void *context) {
@@ -2848,7 +2904,12 @@ static int cli_replay_ordered_output(void *context,
 static int cli_replay_output(cli_state *state,
                              const cai_agent_session_event *event, int render,
                              int logging, cai_error *error) {
+  cai_agent_session_event projected;
   int rc = CAI_OK;
+  rc = cai_agent_session_event_project_input(event, &projected, error);
+  if (rc != CAI_OK)
+    return rc;
+  event = &projected;
   if (strcmp(event->type, "input_journal_v2") == 0)
     state->replay_journal_v2 = 1;
   if (logging)
@@ -3287,6 +3348,36 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     state->replay_journal_v2 = 0;
     return rc;
   }
+  if (!state->batch) {
+    rc = cai_agent_runtime_pending_input(state->runtime, &state->input, error);
+    if (rc == CAI_OK)
+      rc = cai_input_queue_set_policy(state->input, cli_prompt_classify, state,
+                                      error);
+    if (rc == CAI_OK)
+      rc =
+          cai_input_queue_client_open(state->input, &state->input_admin, error);
+    state->input_request = 0U;
+    if (rc == CAI_OK)
+      rc = cai_input_controller_select(state->input_controller, state->input,
+                                       error);
+    if (rc != CAI_OK)
+      return rc;
+    {
+      cai_input_state pending;
+      rc = cai_input_queue_get_state(state->input, &pending, error);
+      if (rc == CAI_OK &&
+          pending.auto_approval != state->options.enable_auto_enqueue)
+        rc = cli_input_request(
+            state, CAI_INPUT_AUTO_APPROVAL, NULL, CAI_INPUT_QUEUED,
+            state->options.enable_auto_enqueue, NULL, NULL, error);
+    }
+    if (rc == CAI_OK)
+      rc = cai_input_controller_pump(state->input_controller, 32U, error);
+    if (rc == CAI_OK && state->input_adapter != NULL)
+      rc = cai_cli_input_adapter_receive(state->input_adapter, 128U, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
   /* The runtime has durably recorded approval before its directory lookup is
    * published. A bypass must never become a saved authorization. */
   if (state->workspace_approval_pending) {
@@ -3371,11 +3462,7 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     rc = cli_sync_status(state, error);
   }
   if (rc == CAI_OK && state->interactive) {
-    if (sl_set_auto_approval(state->sl, state->options.enable_auto_enqueue) !=
-            SL_OK ||
-        sl_set_prompt_queue_delivery(state->sl,
-                                     SL_PROMPT_QUEUE_DELIVERY_AUTO) != SL_OK ||
-        sl_set_idle_callback(state->sl, cli_message_idle, state) != SL_OK)
+    if (sl_set_idle_callback(state->sl, cli_message_idle, state) != SL_OK)
       rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "configure prompt queue delivery");
   }
@@ -3394,6 +3481,11 @@ static int cli_prepare_clipboard(cli_state *state, cai_error *error) {
 }
 
 static void cli_close_runtime(cli_state *state) {
+  if (state->input_controller != NULL)
+    (void)cai_input_controller_select(state->input_controller, NULL, NULL);
+  cai_input_queue_client_close(state->input_admin);
+  state->input_admin = NULL;
+  state->input = NULL;
   state->settings_notice_fields = 0U;
   state->compaction_active = 0;
   if (state->has_review_watch) {
@@ -3415,7 +3507,7 @@ static void cli_close_runtime(cli_state *state) {
   }
   if (state->messages != NULL && state->sl != NULL) {
     (void)sl_set_idle_callback(state->sl, NULL, NULL);
-    cai_cli_messages_detach(state->messages, state->sl);
+    /* Pending messages remain with this conversation. */
   }
   cai_cli_messages_stop(state->messages);
   if (state->timer_fd >= 0 && state->timer_armed) {
@@ -3602,7 +3694,8 @@ static int cli_session_field(cli_state *state, const char *label,
 static int cli_set_messaging(cli_state *state, int enabled, cai_error *error) {
   cai_agent_runtime_metrics metrics;
   cai_agent_run_state run_state;
-  sl_prompt_queue_entry_info_t info;
+  cai_input_entry info;
+  cai_input_state pending;
   size_t i;
   char *id;
   int rc;
@@ -3621,23 +3714,17 @@ static int cli_set_messaging(cli_state *state, int enabled, cai_error *error) {
   /* Reopening must not replace an edited, unconsumed incoming prompt with
    * its original durable delivery. Leave approval and editing under user
    * control before removing this runtime's messaging integration. */
-  if (!enabled && state->interactive) {
-    for (i = 0U; i < sl_prompt_queue_count(state->sl); i++) {
-      if (sl_prompt_queue_info(state->sl, i, &info) != SL_OK)
-        return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                             "inspect pending message approval");
-      if (cai_cli_messages_is_message(state->messages, info.id))
+  if (!enabled && state->input != NULL) {
+    rc = cai_input_queue_get_state(state->input, &pending, error);
+    for (i = 0U; rc == CAI_OK && i < pending.count; ++i) {
+      rc = cai_input_queue_entry_at(state->input_admin, i, &info, error);
+      if (rc == CAI_OK && cai_cli_messages_is_message(state->messages, info.id))
         return cai_cli_error(error, CAI_ERR_INVALID,
                              "Approve or reject queued incoming messages "
                              "before disabling messaging.");
     }
-    if (sl_prompt_queue_draft_info(state->sl, &info) != SL_OK)
-      return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                           "inspect incoming message draft");
-    if (cai_cli_messages_is_message(state->messages, info.id))
-      return cai_cli_error(error, CAI_ERR_INVALID,
-                           "Finish editing and approve or reject the "
-                           "incoming message before disabling messaging.");
+    if (rc != CAI_OK)
+      return rc;
   }
   id = strdup(cai_agent_runtime_session_id(state->runtime));
   if (id == NULL)
@@ -3649,7 +3736,7 @@ static int cli_set_messaging(cli_state *state, int enabled, cai_error *error) {
   /* Tool registration is immutable while a runtime exists. Reopen this same
    * durable session with the updated catalog, without replaying it to the UI
    * or host observers. No model request or new conversation is created. */
-  rc = cai_cli_messages_flush_decisions(state->messages, state->sl, error);
+  rc = cai_cli_messages_flush_decisions(state->messages, state->input, error);
   if (rc != CAI_OK) {
     free(id);
     return rc;
@@ -3690,7 +3777,7 @@ static int cli_switch_session(cli_state *state, const char *id, int new_session,
   }
   if (cli_finish_response(state) != 0)
     return CAI_ERR_TRANSPORT;
-  rc = cai_cli_messages_flush_decisions(state->messages, state->sl, error);
+  rc = cai_cli_messages_flush_decisions(state->messages, state->input, error);
   if (rc != CAI_OK)
     return rc;
   cli_close_runtime(state);
@@ -3970,10 +4057,8 @@ static int cli_host_process(cli_state *state, cai_error *error) {
           state->automation_done = 0;
         }
       } else {
-        sl_prompt_id_t id;
-        if (sl_inject_queued_prompt(state->sl, command->text, &id) != SL_OK)
-          rc = cai_cli_error(&applied, CAI_ERR_TRANSPORT,
-                             "inject host prompt into approval queue");
+        rc = cli_input_request(state, CAI_INPUT_OFFER, command->text,
+                               CAI_INPUT_QUEUED, 1, NULL, NULL, &applied);
       }
     } else if (command->type == CAI_APP_STEER) {
       rc = cai_agent_runtime_submit_steering(state->runtime, command->text,
@@ -4066,6 +4151,8 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
            : cai_agent_runtime_pump(state->runtime, timeout, error);
   if (rc == CAI_OK)
     rc = cli_host_process(state, error);
+  if (rc == CAI_OK && !state->interactive)
+    rc = cli_messages_process(state, 0, error);
   return rc;
 }
 static int cli_host_wakeup(sl_t *sl, const sl_watch_event_t *event,
@@ -4569,8 +4656,7 @@ static int cli_theme_command(cli_state *state, const char *arguments,
   /* Both submission keys retain this command until INPUT_BOUNDARY, with the
    * worker paused, or idle. Never replace a renderer mid-response. */
   cli_theme_for_scope(state, &selected, state->theme_scope, &effective);
-  rc = cli_renderer_create(state, &effective, MDF_TABLE_BUFFER_FULL, &renderer,
-                           error);
+  rc = cli_renderer_create(state, &effective, &renderer, error);
   if (rc == CAI_OK &&
       (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0 ||
        renderer->set_geometry(renderer, state->width, state->width >= 5 ? 2 : 0,
@@ -5106,8 +5192,13 @@ static int cli_handle_command(cli_state *state, const char *line,
     int enabled;
     if (state->messages == NULL)
       return cai_cli_error(error, CAI_ERR_INVALID, "Messaging is disabled.");
-    if (sl_get_auto_approval(state->sl, &enabled) != SL_OK)
-      return cai_cli_error(error, CAI_ERR_TRANSPORT, "read autoqueue setting");
+    {
+      cai_input_state pending;
+      rc = cai_input_queue_get_state(state->input, &pending, error);
+      if (rc != CAI_OK)
+        return rc;
+      enabled = pending.auto_approval;
+    }
     arg = line + 10U;
     while (*arg == ' ')
       arg++;
@@ -5120,9 +5211,12 @@ static int cli_handle_command(cli_state *state, const char *line,
     else
       return cai_cli_error(error, CAI_ERR_INVALID,
                            "Usage: /autoqueue [on|off]");
-    if (sl_set_auto_approval(state->sl, enabled) != SL_OK)
-      return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                           "set incoming message approval");
+    {
+      rc = cli_input_request(state, CAI_INPUT_AUTO_APPROVAL, NULL,
+                             CAI_INPUT_QUEUED, enabled, NULL, NULL, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
     state->options.enable_auto_enqueue = enabled;
     return cli_markdown(
                state,
@@ -5345,6 +5439,16 @@ static int cli_handle_command(cli_state *state, const char *line,
         "selects one format; other names get both suffixes. No name uses the "
         "default export directory. |\n"
         "| `/quit`, `/exit` | Exit the application. |\n\n",
+        "## Completions\n\n"
+        "| Prefix/key | Action |\n| --- | --- |\n"
+        "| `/` | Complete slash commands and aliases at draft start. |\n"
+        "| `@` | Complete workspace file paths; Tab into a directory for its "
+        "children. Hidden files except .git are included. |\n"
+        "| `$` | Complete names from the loaded skills catalog. |\n",
+        "| Tab | Accept a suggestion or cycle matches before ordinary queue "
+        "key handling. Enter submits actual text, never the ghost. |\n"
+        "| Prefix removal | Softline removes @ and $ when completion ends or "
+        "the draft is submitted; command slashes remain. |\n\n",
         "## Queue and approval keys\n\n"
         "| Key | Action |\n"
         "| --- | --- |\n"
@@ -5479,31 +5583,15 @@ static int cli_handle_command(cli_state *state, const char *line,
     return rc;
   }
   if (strcmp(line, "/tools") == 0) {
-    mdf *saved, *inventory = NULL;
-    int documents;
     if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0)
       return CAI_ERR_TRANSPORT;
-    /* The catalog is unbounded. Configure libmdf's row generator while using
-     * the ordinary Markdown feed and sink; bounded status tables retain their
-     * full-layout renderer. Neither descriptions nor the table are rewritten.
+    /* Full tables retain their layout; libmdf switches oversized tables to
+     * its bounded row renderer automatically. Use the normal feed throughout.
      */
-    rc = cli_renderer_create(state, &state->render_theme, MDF_TABLE_BUFFER_ROW,
-                             &inventory, error);
-    if (rc != CAI_OK)
-      return rc;
-    saved = state->renderer;
-    documents = state->documents_rendered;
-    state->renderer = inventory;
-    state->documents_rendered = 0;
     rc = cai_cli_tools_markdown(&state->mcp, state->runtime, 1, cli_tools_write,
                                 state, error);
     if (rc == CAI_OK && cli_finish_response(state) != 0)
       rc = CAI_ERR_TRANSPORT;
-    inventory->destroy(inventory);
-    state->renderer = saved;
-    state->documents_rendered = documents;
-    state->response_open = 0;
-    state->block_spacing_pending = 1;
     return rc;
   }
   if (strcmp(line, "/skills") == 0) {
@@ -5701,8 +5789,7 @@ static int cli_dispatch_command(cli_state *state, const char *line,
        state->renderer_error == MDF_ERROR_INVALID)) {
     mdf *replacement = NULL;
     int recovered =
-        cli_renderer_create(state, &state->render_theme, MDF_TABLE_BUFFER_FULL,
-                            &replacement, error);
+        cli_renderer_create(state, &state->render_theme, &replacement, error);
     if (recovered == CAI_OK) {
       state->renderer->destroy(state->renderer);
       state->renderer = replacement;
@@ -5844,17 +5931,18 @@ static int cli_advance_automation(cli_state *state, cai_error *error) {
   if (run_state == CAI_AGENT_SAMPLING ||
       run_state == CAI_AGENT_DISPATCHING_TOOL)
     return CAI_OK;
-  if (!state->batch) {
+  if (!state->batch && state->input_admin != NULL) {
     size_t index;
-    sl_prompt_queue_entry_info_t info;
-    if (sl_prompt_queue_draft_info(state->sl, &info) != SL_OK)
-      return CAI_ERR_TRANSPORT;
-    if (info.id != 0 && !info.held && !info.stopped)
-      return CAI_OK;
-    for (index = 0U; index < sl_prompt_queue_count(state->sl); index++) {
-      if (sl_prompt_queue_info(state->sl, index, &info) != SL_OK)
-        return CAI_ERR_TRANSPORT;
-      if (!info.held && !info.stopped)
+    cai_input_entry entry;
+    cai_input_state pending;
+    rc = cai_input_queue_get_state(state->input, &pending, error);
+    if (rc != CAI_OK)
+      return rc;
+    for (index = 0U; index < pending.count; ++index) {
+      rc = cai_input_queue_entry_at(state->input_admin, index, &entry, error);
+      if (rc != CAI_OK)
+        return rc;
+      if (!entry.held && !entry.stopped)
         return CAI_OK;
     }
   }
@@ -5929,7 +6017,7 @@ static int cli_drain(cli_state *state, cai_error *error) {
     rc = cai_agent_runtime_state(state->runtime, &run_state, error);
     if (rc != CAI_OK)
       return rc;
-    if (run_state != CAI_AGENT_SAMPLING &&
+    if (!state->awaiting_turn && run_state != CAI_AGENT_SAMPLING &&
         run_state != CAI_AGENT_DISPATCHING_TOOL) {
       return cli_pump(state, 0L, error);
     }
@@ -6055,7 +6143,6 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   cai_error error;
   sl_readline_status_t prompt_status;
   sl_prompt_source_t prompt_source;
-  sl_prompt_id_t prompt_id;
   char auth_path[PATH_MAX];
   const char *auth_file;
   char *metadata_json;
@@ -6063,7 +6150,6 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   pslog_level default_log_level;
   int utility_mode;
   int parsed;
-  int handled;
   int rc;
   int result;
 
@@ -6390,10 +6476,19 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       goto cleanup;
     }
     sl_config_init(&prompt_config);
+    rc = cai_input_controller_open(&state->input_controller, &error);
+    if (rc == CAI_OK && state->interactive)
+      rc = cai_cli_input_adapter_open(state->input_controller,
+                                      &state->input_adapter, &error);
+    if (rc != CAI_OK) {
+      cli_print_error(state, "initialize input controller", &error);
+      goto cleanup;
+    }
     prompt_config.prompt_theme = getenv("NO_COLOR") != NULL
                                      ? SL_PROMPT_THEME_PLAIN
                                      : state->theme.prompt;
-    prompt_config.prompt_queue = 1;
+    if (state->interactive)
+      cai_cli_input_adapter_configure(state->input_adapter, &prompt_config);
     prompt_config.line_max_len = 65536U + 512U;
     prompt_config.history_max_len = state->options.prompt_history_limit;
     snprintf(state->clipboard_template, sizeof(state->clipboard_template),
@@ -6403,6 +6498,25 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     if (state->sl == NULL) {
       cli_diagnostic(state, PSLOG_LEVEL_ERROR,
                      "failed to create softline prompt\n");
+      goto cleanup;
+    }
+    if (state->interactive &&
+        (cai_cli_input_adapter_bind(state->input_adapter, state->sl, &error) !=
+             CAI_OK ||
+         sl_watch_add(state->sl,
+                      cai_input_controller_fd(state->input_controller),
+                      SL_WATCH_READ | SL_WATCH_ERROR | SL_WATCH_HANGUP,
+                      cli_input_wakeup, state, &state->input_watch) != SL_OK)) {
+      cli_print_error(state, "attach Softline input adapter", &error);
+      goto cleanup;
+    }
+    state->has_input_watch = state->interactive;
+    if (state->interactive &&
+        cai_cli_completions_open(&state->completions, state->sl,
+                                 state->workspace, cli_completion_catalog,
+                                 state) != SL_OK) {
+      cli_diagnostic(state, PSLOG_LEVEL_ERROR,
+                     "failed to configure prompt completions");
       goto cleanup;
     }
   }
@@ -6417,8 +6531,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
                    "failed to initialize terminal renderers\n");
     goto cleanup;
   }
-  if (cli_renderer_create(state, &state->render_theme, MDF_TABLE_BUFFER_FULL,
-                          &state->renderer, &error) != CAI_OK) {
+  if (cli_renderer_create(state, &state->render_theme, &state->renderer,
+                          &error) != CAI_OK) {
     cli_print_error(state, "initialize Markdown renderer", &error);
     goto cleanup;
   }
@@ -6434,8 +6548,6 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   if (state->interactive) {
     if (sl_set_prompt_queue_profile(
             state->sl, SL_PROMPT_QUEUE_PROFILE_QUEUED_TURNS) != SL_OK ||
-        sl_set_prompt_queue_policy(state->sl, cli_prompt_policy, state) !=
-            SL_OK ||
         sl_bind_key(state->sl, SL_KEY_ALT_BASE + 's', cli_shell_editor_key,
                     state) != SL_OK ||
         sl_bind_key(state->sl, SL_KEY_ALT_BASE + 'q', cli_draft_quit_key,
@@ -6696,22 +6808,10 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       break;
     }
     if (line[0] != '\0') {
-      prompt_id = sl_last_prompt_id(state->sl);
-      rc = line[0] == '/' || line[0] == '!'
-               ? cai_cli_messages_consumed(state->messages, prompt_id, &error)
-               : CAI_OK;
+      rc = cli_input_request(state, CAI_INPUT_OFFER, line, CAI_INPUT_QUEUED, 0,
+                             NULL, NULL, &error);
       if (rc == CAI_OK)
-        rc = cli_dispatch_command(state, line, &error, &handled);
-      if (rc == CAI_OK && !handled) {
-        if (prompt_source == SL_PROMPT_SOURCE_QUEUED ||
-            cai_cli_messages_is_message(state->messages, prompt_id))
-          rc = cai_agent_runtime_submit_queued(state->runtime, line, &error);
-        else
-          rc = cai_agent_runtime_submit_interactive(state->runtime, line,
-                                                    &error);
-        if (rc == CAI_OK)
-          rc = cai_cli_messages_consumed(state->messages, prompt_id, &error);
-      }
+        rc = cli_messages_process(state, 0, &error);
       if (rc != CAI_OK) {
         cli_print_error(state, "input", &error);
         if (state->sink_failed || rc == CAI_ERR_NOMEM ||
@@ -6745,10 +6845,25 @@ cleanup:
   {
     cai_error decisions;
     cai_error_init(&decisions);
+    /* Settle handed-off admission/edit decisions, including Enter followed by
+     * Alt-Q in one terminal batch. Never claim or start work during shutdown.
+     */
+    if (state->input != NULL && state->input_controller != NULL) {
+      if (cai_input_controller_pump(state->input_controller, 32U, &decisions) !=
+              CAI_OK ||
+          (state->input_adapter != NULL &&
+           cai_cli_input_adapter_receive(state->input_adapter, 512U,
+                                         &decisions) != CAI_OK)) {
+        cli_print_error(state, "save pending input decisions", &decisions);
+        result = 1;
+      }
+      cai_error_cleanup(&decisions);
+      cai_error_init(&decisions);
+    }
     /* A discard and Alt-Q/EOF/host STOP can share one input batch, without an
      * idle callback. Flush only decisions already made, before detaching IDs;
      * still-queued or actively edited inbox messages remain recoverable. */
-    if (cai_cli_messages_flush_decisions(state->messages, state->sl,
+    if (cai_cli_messages_flush_decisions(state->messages, state->input,
                                          &decisions) != CAI_OK) {
       cli_print_error(state, "save incoming message decisions", &decisions);
       cai_app_bridge_fail(bridge, &decisions);
@@ -6834,6 +6949,8 @@ cleanup:
     (void)sl_output_stream_end(state->sl);
     sl_destroy(state->sl);
   }
+  cai_cli_input_adapter_close(state->input_adapter);
+  cai_input_controller_close(state->input_controller);
   if (state->temporary.root[0] != '\0' || state->temporary.cwd_fd >= 0 ||
       state->temporary.parent_fd >= 0) {
     cai_error cleanup_error;

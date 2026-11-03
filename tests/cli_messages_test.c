@@ -10,13 +10,6 @@ typedef struct capture {
   char text[32768];
   size_t used;
 } capture;
-static int unreadable_queue(const sl_t *sl, size_t index,
-                            sl_prompt_queue_entry_info_t *info) {
-  (void)sl;
-  (void)index;
-  (void)info;
-  return SL_ERROR_IO;
-}
 static int capture_write(void *context, const void *bytes, size_t count,
                          cai_error *error) {
   capture *out = context;
@@ -247,11 +240,80 @@ static void cancel_wait(cai_cli_messages *sender) {
   lc_message_close(message);
   lc_error_cleanup(&error);
 }
-static sl_t *message_editor(void) {
-  sl_t *sl = sl_create();
-  assert(sl != NULL);
-  assert(sl_set_prompt_queue(sl, 1, 8, 3) == SL_OK);
-  return sl;
+static cai_input_queue *message_editor_limit(size_t limit) {
+  cai_input_queue_config config;
+  cai_input_queue *queue = NULL;
+  cai_input_queue_config_init(&config);
+  config.max_entries = limit;
+  assert(cai_input_queue_open(&config, &queue, NULL) == CAI_OK);
+  return queue;
+}
+static cai_input_queue *message_editor(void) {
+  return message_editor_limit(8U);
+}
+static size_t pending_count(cai_input_queue *queue) {
+  cai_input_state state;
+  assert(cai_input_queue_get_state(queue, &state, NULL) == CAI_OK);
+  return state.count;
+}
+static int pending_info(cai_input_queue *queue, size_t index,
+                        cai_input_entry *out) {
+  cai_input_queue_client *client = NULL;
+  int rc = cai_input_queue_client_open(queue, &client, NULL);
+  if (rc == CAI_OK)
+    rc = cai_input_queue_entry_at(client, index, out, NULL);
+  cai_input_queue_client_close(client);
+  return rc;
+}
+static int pending_action(cai_input_queue *queue, cai_input_operation operation,
+                          unsigned long long id, int enabled) {
+  cai_input_queue_client *client = NULL;
+  cai_input_request request;
+  cai_input_result result;
+  cai_input_entry entry;
+  cai_input_state state;
+  int rc;
+  memset(&request, 0, sizeof(request));
+  request.request_id = 1U;
+  request.operation = operation;
+  request.enabled = enabled;
+  if (id != 0U) {
+    assert(cai_input_queue_lookup(queue, id, &entry, NULL) == CAI_OK);
+    request.item_id = id;
+    request.item_revision = entry.revision;
+  }
+  assert(cai_input_queue_get_state(queue, &state, NULL) == CAI_OK);
+  request.queue_revision = state.revision;
+  rc = cai_input_queue_client_open(queue, &client, NULL);
+  if (rc == CAI_OK)
+    rc = cai_input_queue_request(client, &request, &result, NULL);
+  cai_input_queue_client_close(client);
+  return rc == CAI_OK && result.outcome == CAI_INPUT_ACCEPTED ? CAI_OK
+                                                              : CAI_ERR_INVALID;
+}
+static int pending_approve(cai_input_queue *queue, unsigned long long id) {
+  return pending_action(queue, CAI_INPUT_APPROVE, id, 0);
+}
+static int pending_reject(cai_input_queue *queue, unsigned long long id) {
+  return pending_action(queue, CAI_INPUT_WITHDRAW, id, 0);
+}
+static int pending_auto(cai_input_queue *queue, int enabled) {
+  return pending_action(queue, CAI_INPUT_AUTO_APPROVAL, 0U, enabled);
+}
+static int pending_take(cai_input_queue *queue, size_t index, char **text) {
+  cai_input_entry entry;
+  cai_input_claim claim;
+  int rc = pending_info(queue, index, &entry);
+  if (rc == CAI_OK)
+    rc = cai_input_queue_set_ready(queue, entry.id, 1, NULL);
+  if (rc == CAI_OK)
+    rc = cai_input_queue_claim(queue, entry.id, entry.revision, &claim, NULL);
+  if (rc == CAI_OK) {
+    *text = claim.text;
+    claim.text = NULL;
+    cai_input_claim_cleanup(&claim);
+  }
+  return rc;
 }
 static void send_named(cai_cli_messages *sender, const char *queue,
                        const char *text) {
@@ -474,7 +536,7 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
   cai_error error;
   lc_error local;
   lc_lease *guard = NULL;
-  sl_t *old_sl, *new_sl;
+  cai_input_queue *old_sl, *new_sl;
   message_doc doc;
   capture output;
   char parent[PATH_MAX], one[PATH_MAX], two[PATH_MAX], link[PATH_MAX];
@@ -506,7 +568,7 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
   old_sl = message_editor();
   send_named(sender, name, "Held in old conversation");
   assert(cai_cli_messages_sync(old, old_sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(old_sl) == 1U);
+  assert(pending_count(old_sl) == 1U);
   assert(cai_cli_messages_new(pouch, 2000L, &new_owner, &error) == CAI_OK);
   assert(cai_cli_messages_start(new_owner, "new-conversation", one, NULL,
                                 &error) == CAI_OK);
@@ -514,7 +576,7 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
   assert(strcmp(old->instance, new_owner->instance) != 0);
   new_sl = message_editor();
   assert(cai_cli_messages_sync(new_owner, new_sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(new_sl) == 0U);
+  assert(pending_count(new_sl) == 0U);
   /* Force a stale consumer's delivery callback, independently of which
    * process wins the next dequeue. It must defer, never ACK or accept. */
   memset(&doc, 0, sizeof(doc));
@@ -534,14 +596,14 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
   assert(lc_consumer_service_wait(old->service, &local) == LC_OK);
   send_named(sender, name, "Only the new conversation receives this");
   assert(cai_cli_messages_sync(new_owner, new_sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(new_sl) == 1U);
+  assert(pending_count(new_sl) == 1U);
   assert(strcmp(new_owner->links->doc.pending_for, "new-conversation") == 0);
   assert(cai_cli_messages_sync(old, old_sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(old_sl) == 1U);
+  assert(pending_count(old_sl) == 1U);
   assert(strcmp(old->links->doc.pending_for, "old-conversation") == 0);
   cai_cli_messages_close(old);
   old = NULL;
-  sl_destroy(old_sl);
+  cai_input_queue_close(old_sl);
   /* A displaced process exiting cannot clear the current binding. */
   assert(mailbox_guard(new_owner, &guard, &local) == LC_OK);
   assert(lease_finish(guard, LC_OK, &local) == LC_OK);
@@ -563,17 +625,17 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
          strstr(output.text, other->queue) != NULL);
   cai_cli_messages_close(new_owner);
   new_owner = NULL;
-  sl_destroy(new_sl);
+  cai_input_queue_close(new_sl);
   /* Resuming the original conversation restores its own undecided message. */
   assert(cai_cli_messages_new(pouch, 2000L, &old, &error) == CAI_OK);
   assert(cai_cli_messages_start(old, "old-conversation", one, NULL, &error) ==
          CAI_OK);
   old_sl = message_editor();
   assert(cai_cli_messages_sync(old, old_sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(old_sl) == 1U);
+  assert(pending_count(old_sl) == 1U);
   assert(strcmp(old->links->doc.text, "Held in old conversation") == 0);
   cai_cli_messages_close(old);
-  sl_destroy(old_sl);
+  cai_input_queue_close(old_sl);
   cai_cli_messages_close(other);
   other = NULL;
   /* An explicit takeover reserves the former automatic name. Reallocation
@@ -729,8 +791,8 @@ static void queue_overrides(cai_cli_pouch *pouch, const char *workspace) {
   cai_error error;
   capture output;
   message_doc doc;
-  sl_t *sl = message_editor();
-  sl_prompt_queue_entry_info_t held;
+  cai_input_queue *sl = message_editor();
+  cai_input_entry held;
   char too_long[130];
   cai_error_init(&error);
   assert(cai_cli_messages_new(pouch, 2000L, &sender, &error) == CAI_OK);
@@ -741,7 +803,7 @@ static void queue_overrides(cai_cli_pouch *pouch, const char *workspace) {
                                 "before-rename", &error) == CAI_OK);
   send_named(sender, "before-rename", "Keep this pending approval");
   assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_info(sl, 0U, &held) == SL_OK && held.held);
+  assert(pending_info(sl, 0U, &held) == CAI_OK && held.held);
   assert(cai_cli_messages_set_queue(receiver, "bad/name", &error) != CAI_OK);
   memset(too_long, 'a', sizeof(too_long) - 1U);
   too_long[sizeof(too_long) - 1U] = '\0';
@@ -774,11 +836,11 @@ static void queue_overrides(cai_cli_pouch *pouch, const char *workspace) {
   lonejson_cleanup(&message_map, &doc);
   assert(cai_cli_messages_is_message(receiver, held.id));
   assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(sl) == 1U);
+  assert(pending_count(sl) == 1U);
   send_named(sender, "full-name", "Delivered to the new full name");
   send_named(receiver, "override-sender", "Reply uses the new sender name");
   assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(sl) == 2U);
+  assert(pending_count(sl) == 2U);
   assert(run_send(receiver, "{\"operation\":\"list\"}", &output, &error) ==
          CAI_OK);
   assert(strstr(output.text, "Current queue: full-name") != NULL);
@@ -789,7 +851,7 @@ static void queue_overrides(cai_cli_pouch *pouch, const char *workspace) {
   assert(cai_cli_messages_set_queue(receiver, "full-name", &error) == CAI_OK);
   send_named(sender, "full-name", "Reclaimed listener receives again");
   assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(sl) == 3U);
+  assert(pending_count(sl) == 3U);
   memset(&fake_client, 0, sizeof(fake_client));
   fake_pouch = *pouch;
   fake_pouch.sessions = &fake_client;
@@ -803,7 +865,7 @@ static void queue_overrides(cai_cli_pouch *pouch, const char *workspace) {
   cai_cli_messages_close(other);
   cai_cli_messages_close(receiver);
   cai_cli_messages_close(sender);
-  sl_destroy(sl);
+  cai_input_queue_close(sl);
   cai_error_cleanup(&error);
 }
 static void delete_conversation_inbox(cai_cli_pouch *pouch) {
@@ -871,8 +933,8 @@ int main(int argc, char **argv) {
   cai_error error;
   lc_error local;
   capture output;
-  sl_t *sl;
-  sl_prompt_queue_entry_info_t first, second;
+  cai_input_queue *sl;
+  cai_input_entry first, second;
   message_doc duplicate, expired, loaded;
   char key[300];
   char expired_text[] = "expired";
@@ -914,39 +976,42 @@ int main(int argc, char **argv) {
                   "\"First inbound message\"}",
                   &output, &error) == CAI_OK);
   assert(strstr(output.text, "\"status\":\"delivered\"") != NULL);
-  sl = sl_create();
+  sl = message_editor();
   assert(sl != NULL);
-  assert(sl_set_prompt_queue(sl, 1, 8, 3) == SL_OK);
   assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(sl) == 1U);
-  assert(sl_prompt_queue_info(sl, 0U, &first) == SL_OK && first.held &&
-         first.mode == SL_PROMPT_QUEUE_MODE_QUEUED);
+  assert(pending_count(sl) == 1U);
+  assert(pending_info(sl, 0U, &first) == CAI_OK && first.held &&
+         first.intent == CAI_INPUT_QUEUED);
   assert(receiver->links != NULL);
   duplicate = receiver->links->doc;
   strcpy(duplicate.kind, "message");
   assert(deliver_direct(receiver, &duplicate) == LC_OK);
   assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(sl) == 1U);
-  assert(sl_prompt_queue_info(sl, 0U, &second) == SL_OK &&
-         second.id == first.id);
+  assert(pending_count(sl) == 1U);
+  assert(pending_info(sl, 0U, &second) == CAI_OK && second.id == first.id);
   assert(run_send(sender,
                   "{\"operation\":\"send\",\"recipient\":\"receiver\",\"text\":"
                   "\"Second inbound message\"}",
                   &output, &error) == CAI_OK);
   assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(sl) == 2U);
-  assert(sl_prompt_queue_approve(sl, first.id) == SL_OK);
-  assert(sl_prompt_queue_info(sl, 0U, &first) == SL_OK && !first.held &&
-         first.mode == SL_PROMPT_QUEUE_MODE_QUEUED);
-  assert(sl_set_auto_approval(sl, 1) == SL_OK);
-  assert(sl_prompt_queue_info(sl, 1U, &second) == SL_OK && !second.held);
-  assert(sl_set_auto_approval(sl, 0) == SL_OK);
-  assert(sl_prompt_queue_reject(sl, first.id) == SL_OK);
+  assert(pending_count(sl) == 2U);
+  assert(pending_approve(sl, first.id) == CAI_OK);
+  assert(pending_info(sl, 0U, &first) == CAI_OK && !first.held &&
+         first.intent == CAI_INPUT_QUEUED);
+  assert(pending_auto(sl, 1) == CAI_OK);
+  assert(pending_info(sl, 1U, &second) == CAI_OK && !second.held);
+  assert(pending_auto(sl, 0) == CAI_OK);
+  assert(pending_reject(sl, first.id) == CAI_OK);
   {
-    sl_t broken = *sl;
-    broken.prompt_queue_info = unreadable_queue;
-    assert(cai_cli_messages_flush_decisions(receiver, &broken, &error) ==
+    cai_cli_pouch broken = *receiver->pouch;
+    lc_client client = *broken.sessions;
+    cai_cli_pouch *original = receiver->pouch;
+    client.acquire = fail_acquire;
+    broken.sessions = &client;
+    receiver->pouch = &broken;
+    assert(cai_cli_messages_flush_decisions(receiver, sl, &error) ==
            CAI_ERR_TRANSPORT);
+    receiver->pouch = original;
     cai_error_cleanup(&error);
     cai_error_init(&error);
     inbox_key(key, &duplicate);
@@ -957,46 +1022,43 @@ int main(int argc, char **argv) {
   /* Shutdown flush writes only explicit removals; it must not retire the
    * second, still-queued message or need a delivery/discovery pass. */
   assert(cai_cli_messages_flush_decisions(receiver, sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(sl) == 1U);
+  assert(pending_count(sl) == 1U);
   inbox_key(key, &duplicate);
   assert(load_doc(receiver, key, &loaded, &error) == CAI_OK);
   assert(strcmp(loaded.kind, "rejected") == 0);
   assert(loaded.text == NULL && loaded.pending_for[0] == '\0');
   lonejson_cleanup(&message_map, &loaded);
   /* Undecided messages survive close/reopen in the encrypted inbox. */
-  cai_cli_messages_detach(receiver, sl);
-  sl_destroy(sl);
+  cai_input_queue_close(sl);
   cai_cli_messages_close(receiver);
   receiver = NULL;
   assert(cai_cli_messages_new(&b, 2000L, &receiver, &error) == CAI_OK);
   assert(cai_cli_messages_start(receiver, "receiver", argv[1], "receiver",
                                 &error) == CAI_OK);
-  sl = sl_create();
+  sl = message_editor_limit(1U);
   assert(sl != NULL);
-  assert(sl_set_prompt_queue(sl, 1, 8, 3) == SL_OK);
   assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(sl) == 1U);
+  assert(pending_count(sl) == 1U);
   /* A full editor queue retains new durable messages until capacity is free. */
-  assert(sl_set_prompt_queue(sl, 1, 1, 1) == SL_OK);
   assert(run_send(sender,
                   "{\"operation\":\"send\",\"recipient\":\"receiver\",\"text\":"
                   "\"Overflow inbox\"}",
                   &output, &error) == CAI_OK);
   assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(sl) == 1U);
-  assert(sl_prompt_queue_info(sl, 0U, &first) == SL_OK);
-  assert(sl_prompt_queue_reject(sl, first.id) == SL_OK);
+  assert(pending_count(sl) == 1U);
+  assert(pending_info(sl, 0U, &first) == CAI_OK);
+  assert(pending_reject(sl, first.id) == CAI_OK);
   assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(sl) == 1U);
+  assert(pending_count(sl) == 1U);
   /* Acknowledged messages use the normal hook even when auto-approved. */
-  assert(sl_set_auto_approval(sl, 1) == SL_OK);
-  assert(sl_prompt_queue_info(sl, 0U, &first) == SL_OK && !first.held &&
-         first.mode == SL_PROMPT_QUEUE_MODE_QUEUED);
+  assert(pending_auto(sl, 1) == CAI_OK);
+  assert(pending_info(sl, 0U, &first) == CAI_OK && !first.held &&
+         first.intent == CAI_INPUT_QUEUED);
   {
     char *text = NULL;
-    assert(sl_prompt_queue_take(sl, 0U, &text) == SL_OK);
+    assert(pending_take(sl, 0U, &text) == CAI_OK);
     assert(strstr(text, "Overflow inbox") != NULL);
-    sl_free_string(sl, text);
+    free(text);
     assert(cai_cli_messages_consumed(receiver, first.id, &error) == CAI_OK);
   }
   /* An offline target fails promptly at its configured ACK deadline. */
@@ -1026,7 +1088,7 @@ int main(int argc, char **argv) {
   expired.deadline_ms = 1;
   assert(deliver_direct(receiver, &expired) == LC_OK);
   assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
-  assert(sl_prompt_queue_count(sl) == 0U);
+  assert(pending_count(sl) == 0U);
   expired.deadline_ms = realtime_ms() + 2000L;
   persistence_failure(receiver, &expired);
   expired.text = controls;
@@ -1043,7 +1105,7 @@ int main(int argc, char **argv) {
     large[MESSAGE_BYTES] = '\0';
     assert(deliver_direct(receiver, &expired) == LC_OK);
     assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
-    assert(sl_prompt_queue_count(sl) == 1U);
+    assert(pending_count(sl) == 1U);
     free(large);
   }
   expired.text = expired_text;
@@ -1058,7 +1120,7 @@ int main(int argc, char **argv) {
                   "{\"operation\":\"send\",\"recipient\":\"receiver\",\"text\":"
                   "\"Cannot send after stop\"}",
                   &output, &error) != CAI_OK);
-  sl_destroy(sl);
+  cai_input_queue_close(sl);
   cai_cli_messages_close(receiver);
   cai_cli_messages_close(sender);
   workspace_mailboxes(&a, argv[1]);

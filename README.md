@@ -170,8 +170,8 @@ settings. An old conversation does not implicitly approve its workspace.
 
 The musl SDK presets build the terminal coding agent as a statically linked
 Linux x86_64, aarch64 or armhf executable. The `cai` convenience preset selects
-the same x86_64 musl producer. It adds pinned softline 0.15.0 for the prompt and
-[libmdf 0.19.0](https://github.com/c89systems/libmdf) for streamed Markdown
+the same x86_64 musl producer. It adds pinned softline 0.16.0 for the prompt and
+[libmdf 0.21.0](https://github.com/c89systems/libmdf) for streamed Markdown
 rendering and its public theme palette, and liblockdc 0.27.0 with
 [liblql 0.4.1](https://github.com/c89systems/liblql) for durable storage.
 It uses libpslog 0.12.0 for logging.
@@ -237,21 +237,27 @@ approval can take focus only at an empty ordinary prompt: stash a draft with
 Alt-K first, then use Alt-A and Alt-N to reject the message. With a nonempty
 ordinary draft, Alt-N clears that draft and leaves pending approvals alone.
 
-Softline's queued-turns profile handles conversation input: Enter starts an
+Softline's backend queue adapter handles conversation input: Enter starts an
 idle turn or queues the next turn while busy. Alt-Enter queues steering, or
 marks the newest pending entry as steering when the editor is empty. Alt-E
-edits pending input. Steering entries remain in Softline until the runtime's next
-response/tool boundary. The application does not keep a second UI queue.
+edits pending input. Accepted entries belong to the conversation's core queue;
+Softline presents its editable mirror until the runtime's next response/tool
+boundary. `/new` and `/resume` switch queues as well as prompt recall. Pending
+text, approval/edit holds and stopped work stay with their original conversation
+across switches and restarts. An in-flight frontend request cannot move into
+another conversation when the selection changes.
+An unsubmitted draft stays local and remains editable while accepted backend
+work proceeds. Editing an accepted entry acquires a backend hold on that entry.
 Read-only local commands such as `/goal`, `/status`, `/model` and `/tier list`
-use the same Softline queue but can run between feed writes, even while
-inference is pending. Approval and active edits remain under Softline's control;
+use the same queue but can run between feed writes, even while
+inference is pending. Native keys request backend approval and edit holds;
 inspecting state does not restart FIFO delivery stopped by Escape. Model,
 reasoning, tier, goal and theme changes remain editable until the next safe
 response/tool boundary with either Enter or Alt-Enter. Commands execute locally
 and never become model steering text. `/quit` and `/exit` use the native queue
 but can shut down an active turn; Alt-Q saves the draft and exits directly.
 All typed slash and `!COMMAND` inputs enter Softline's visible, editable queue,
-including while idle. Its native policy keeps approval, execution readiness and
+including while idle. Backend policy keeps approval, execution readiness and
 Escape's stopped backlog separate. A fresh `/goal resume` can run after Escape
 without releasing old stopped entries. Editing an old stopped entry retains
 its stop; Alt-Enter explicitly promotes that entry. Whole-turn commands such as
@@ -602,7 +608,17 @@ user-facing model, review, instructions, skills, image, terminal, and session
 options. Interactive startup shows `Welcome to cai. Send /help for usage.` in
 the status line, including after replaying a resumed conversation. `/help`
 renders Markdown tables of slash commands and prompt keys through libmdf;
-it is handled locally and does not send a model request. Cai requests concise
+it is handled locally and does not send a model request. Softline completes
+slash commands and aliases at the start of a draft. Type a prefix and press
+Tab to accept its dim suggestion; further Tabs cycle matching candidates.
+`@` completes workspace-relative file paths after whitespace or at draft start.
+Directories end in `/`; another Tab resolves their immediate children. Spaces
+inside a matching filename stay part of the path. Hidden files are included
+except `.git`; directory symlinks are listed without traversal. `$` completes
+names from the active runtime's loaded skills catalog, without rescanning skills.
+Softline removes `@` and `$` when completion ends or the draft is submitted;
+the slash stays on commands. Enter sends actual draft text, never an unaccepted
+suggestion. Completion is available while responses stream. Cai requests concise
 provider reasoning summaries by default; the
 `--reasoning-summary` flag overrides that choice. Provider-issued summaries
 put their first nonblank line in Softline's `!` message bar with the active

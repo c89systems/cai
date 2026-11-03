@@ -1,8 +1,12 @@
 # Local and backend-backed input queues
 
-Status: proposed implementation contract, 2026-11-01. This refines the
-[attachable frontend architecture](frontend-architecture.md). Names and C shapes
-below are illustrative, not implemented public APIs.
+Status: implemented in-process queue boundary, 2026-11-03. Public core headers
+`input_queue.h` and `input_controller.h`, the Lua runtime attachment and
+`cli/input_adapter.c` implement the authority and Softline bridge described
+here. Each conversation journals its own queue. Network transport, application
+lifetime detach/reattach and a separate application owner remain future work in
+the [attachable frontend architecture](frontend-architecture.md). Illustrative
+C shapes below explain responsibilities; installed headers define exact APIs.
 
 Softline must retain its existing local queue as the constructor default. A
 constructor may instead select an application-supplied remote queue backend.
@@ -96,7 +100,7 @@ config.queue_backend_context = cai_queue_bridge;
 editor = sl_create_with_config(&config);
 ```
 
-The fields do not exist in 0.15.0. The intended contract is:
+These constructor fields are available in Softline 0.16.0. The bridge contract is:
 
 - NULL backend preserves local constructors, queue profiles, callbacks, keys,
   delivery and return semantics. No CAI behavior is imposed on other users.
@@ -274,11 +278,10 @@ The application facade supplies local/remote clients and adapter composition.
 Host Lua callbacks run on their owning thread through the existing dispatcher;
 the controller or network thread does not call Lua functions directly.
 
-Softline's constructor/callbacks and matching result/update methods must be
-public upstream APIs. The adapter may only ship when that contract is available
-and verified. Current Softline 0.15.0 lacks this complete remote-queue contract;
-its existing local queue must continue to work while upstream implements it.
-This document does not authorize editing another checkout.
+Softline 0.16.0 provides the public constructor/callbacks and matching
+result/update methods. The adapter must use those APIs and verify their actual
+contract, including uncertain outcomes and native edit holds. This document
+does not authorize editing another checkout.
 
 Focused tests should prove:
 

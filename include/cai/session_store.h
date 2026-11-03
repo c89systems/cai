@@ -32,6 +32,14 @@ typedef struct cai_agent_session_event {
   long long utc_offset_seconds;
 } cai_agent_session_event;
 
+/** Project an idempotent model-input delivery into its ordinary turn/steering
+ * event for presentation and indexing. Other event types are copied unchanged.
+ * No allocation or I/O: output strings borrow source for the same lifetime.
+ * Persist the original event, including its delivery receipt, unchanged. */
+int cai_agent_session_event_project_input(const cai_agent_session_event *source,
+                                          cai_agent_session_event *out,
+                                          cai_error *error);
+
 /**
  * Consume one journal event during synchronous replay. event and all of its
  * strings are borrowed only for this call; copy any data that must outlive it.

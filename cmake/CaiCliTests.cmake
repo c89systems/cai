@@ -510,6 +510,22 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_auth_dependency_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")
     set_tests_properties(cai_cli_auth_dependency PROPERTIES TIMEOUT 15)
+    add_test(NAME cai_cli_completions COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_completions_test.sh"
+      "$<TARGET_FILE:cai_cli_mock_fixture>")
+    set_tests_properties(cai_cli_completions PROPERTIES TIMEOUT 30)
+    add_executable(cai_cli_completion_resolver_test tests/cli_completion_resolver_test.c)
+    add_executable(cai_cli_input_adapter_test tests/cli_input_adapter_test.c)
+    target_link_libraries(cai_cli_input_adapter_test PRIVATE cai_cli_support)
+    cai_configure_cli_target(cai_cli_input_adapter_test)
+    target_compile_options(cai_cli_input_adapter_test PRIVATE -UNDEBUG)
+    add_test(NAME cai_cli_input_adapter COMMAND cai_cli_input_adapter_test)
+    set_tests_properties(cai_cli_input_adapter PROPERTIES LABELS "cli;local;offline" TIMEOUT 10)
+    target_link_libraries(cai_cli_completion_resolver_test PRIVATE cai_cli_support)
+    target_link_options(cai_cli_completion_resolver_test PRIVATE "-Wl,--wrap=sl_set_completion_providers")
+    cai_configure_cli_target(cai_cli_completion_resolver_test)
+    target_compile_options(cai_cli_completion_resolver_test PRIVATE -UNDEBUG)
+    add_test(NAME cai_cli_completion_resolver COMMAND cai_cli_completion_resolver_test "${CMAKE_CURRENT_BINARY_DIR}")
     add_test(NAME cai_cli_login
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_login_test.sh"
         "$<TARGET_FILE:cai_cli>")

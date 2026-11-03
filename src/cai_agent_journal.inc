@@ -23,6 +23,7 @@ typedef struct cai_journal_edit {
   cai_usage_accounting accounting;
   cai_session_state_doc metadata;
   lonejson_json_value history;
+  lonejson_json_value input_checkpoint;
 } cai_journal_edit;
 static const lonejson_field cai_journal_edit_fields[] = {
     LONEJSON_FIELD_U64_REQ(cai_journal_edit, revision, "revision"),
@@ -35,6 +36,8 @@ static const lonejson_field cai_journal_edit_fields[] = {
                           &cai_journal_usage_map),
     LONEJSON_FIELD_OBJECT(cai_journal_edit, metadata, "metadata",
                           &cai_session_state_map),
+    LONEJSON_FIELD_JSON_VALUE_OMIT_NULL(cai_journal_edit, input_checkpoint,
+                                        "input_checkpoint"),
     LONEJSON_FIELD_JSON_VALUE_REQ(cai_journal_edit, history, "history_append")};
 LONEJSON_MAP_DEFINE(cai_journal_edit_map, cai_journal_edit,
                     cai_journal_edit_fields);
@@ -43,6 +46,7 @@ typedef struct cai_journal_source {
   cai_journal_edit edit;
   lonejson_generator generator;
   lonejson_spooled cursor;
+  cai_source *input_checkpoint;
   char board[CAI_TODO_BOARD_NAME_MAX + 1U];
   unsigned char input[4096], escaped[6];
   size_t begin, end, escape_begin, escape_end;
@@ -134,7 +138,23 @@ static void cai_journal_close(void *context) {
   cai_journal_source *source = context;
   lonejson_generator_cleanup(&source->generator);
   CAI_LJ->json_value_cleanup(CAI_LJ, &source->edit.history);
+  CAI_LJ->json_value_cleanup(CAI_LJ, &source->edit.input_checkpoint);
+  cai_source_close(source->input_checkpoint);
   cai_free_mem(NULL, source);
+}
+static lonejson_read_result cai_journal_checkpoint_read(void *context,
+                                                        unsigned char *bytes,
+                                                        size_t capacity) {
+  cai_journal_source *source = context;
+  lonejson_read_result result = lonejson_default_read_result();
+  cai_error error;
+  cai_error_init(&error);
+  result.bytes_read =
+      cai_source_read(source->input_checkpoint, bytes, capacity, &error);
+  result.error_code = error.code;
+  result.eof = result.bytes_read == 0U && error.code == CAI_OK;
+  cai_error_cleanup(&error);
+  return result;
 }
 static int cai_session_journal_source_mode(cai_session *session,
                                            cai_source **out, int seed,
@@ -204,6 +224,15 @@ static int cai_session_journal_source_mode(cai_session *session,
   CAI_SESSION_AGENT_IMPL(session)->history_runtime->json_value_init(
       CAI_SESSION_AGENT_IMPL(session)->history_runtime, &source->edit.history);
   lonejson_error_init(&local);
+  CAI_LJ->json_value_init(CAI_LJ, &source->edit.input_checkpoint);
+  if (rc == CAI_OK && seed != 0 && impl->input_checkpoint_source != NULL)
+    rc = impl->input_checkpoint_source(impl->input_checkpoint_context,
+                                       &source->input_checkpoint, error);
+  if (rc == CAI_OK && source->input_checkpoint != NULL &&
+      source->edit.input_checkpoint.methods->set_reader(
+          &source->edit.input_checkpoint, cai_journal_checkpoint_read, source,
+          &local) != LONEJSON_STATUS_OK)
+    rc = cai_set_error(error, CAI_ERR_NOMEM, "prepare pending input baseline");
   if (rc == CAI_OK && source->edit.history.methods->set_reader(
                           &source->edit.history, cai_journal_history_read,
                           source, &local) != LONEJSON_STATUS_OK)
@@ -313,7 +342,36 @@ typedef struct cai_journal_restore {
   cai_journal_record *record;
   cai_error *error;
   int seen, complete;
+  int input_seen;
+  cai_input_checkpoint_restore *input_checkpoint;
 } cai_journal_restore;
+static lonejson_status cai_journal_checkpoint_chunk(void *context,
+                                                    const void *bytes,
+                                                    size_t count,
+                                                    lonejson_error *error) {
+  cai_journal_restore *restore = context;
+  cai_session_impl *session = CAI_SESSION_IMPL(restore->session);
+  int rc = CAI_OK;
+  (void)error;
+  if (strcmp(restore->record->record_type, "commit") != 0) {
+    cai_set_error(restore->error, CAI_ERR_PROTOCOL,
+                  "input baseline requires a committed journal edit");
+    return LONEJSON_STATUS_CALLBACK_FAILED;
+  }
+  restore->input_seen = 1;
+  if (session->input_checkpoint_chunk != NULL)
+    rc = session->input_checkpoint_chunk(session->input_checkpoint_context,
+                                         bytes, count, 0, restore->error);
+  else {
+    if (restore->input_checkpoint == NULL)
+      rc = cai_input_checkpoint_begin(NULL, &restore->input_checkpoint,
+                                      restore->error);
+    if (rc == CAI_OK)
+      rc = cai_input_checkpoint_feed(restore->input_checkpoint, bytes, count,
+                                     restore->error);
+  }
+  return rc == CAI_OK ? LONEJSON_STATUS_OK : LONEJSON_STATUS_CALLBACK_FAILED;
+}
 static lonejson_status cai_journal_string_begin(void *context,
                                                 lonejson_error *error) {
   cai_journal_restore *restore = context;
@@ -545,6 +603,10 @@ int cai_session_restore_journal_source(cai_session *session, cai_source *source,
     lonejson_json_value_set_parse_sink(&record.data, cai_journal_discard, NULL,
                                        &local);
     lonejson_json_value_init(json, &record.state.history);
+    lonejson_json_value_init(json, &record.state.input_checkpoint);
+    lonejson_json_value_set_parse_sink(&record.state.input_checkpoint,
+                                       cai_journal_checkpoint_chunk, &restore,
+                                       &local);
     record.state.history.methods->set_parse_visitor(&record.state.history,
                                                     &visitor, &restore, &local);
     result = lonejson_stream_next(stream, &record, &local);
@@ -601,6 +663,18 @@ int cai_session_restore_journal_source(cai_session *session, cai_source *source,
         rc = cai_set_error(error, CAI_ERR_INVALID,
                            "invalid journal usage accounting");
       if (rc == CAI_OK) {
+        if (restore.input_seen && impl->input_checkpoint_chunk != NULL)
+          rc = impl->input_checkpoint_chunk(impl->input_checkpoint_context,
+                                            NULL, 0U, 1, error);
+        else if (restore.input_checkpoint != NULL) {
+          cai_input_queue *queue = NULL;
+          unsigned long long through;
+          rc = cai_input_checkpoint_finish(restore.input_checkpoint, &queue,
+                                           &through, error);
+          cai_input_queue_close(queue);
+        }
+      }
+      if (rc == CAI_OK) {
         impl->usage = record.state.accounting;
         impl->usage.limit_exceeded =
             cai_usage_accounting_exceeds(&impl->usage, &impl->usage_limits);
@@ -612,6 +686,7 @@ int cai_session_restore_journal_source(cai_session *session, cai_source *source,
       rc = cai_set_error(error, CAI_ERR_INVALID,
                          "unknown session journal record");
     lonejson_cleanup(&cai_journal_record_map, &record);
+    cai_input_checkpoint_close(restore.input_checkpoint);
   }
   if (stream != NULL)
     lonejson_stream_close(stream);

@@ -1,7 +1,7 @@
 #ifndef CAI_CLI_MESSAGES_H
 #define CAI_CLI_MESSAGES_H
 #include "pouch.h"
-#include <softline/softline.h>
+#include <cai/input_queue.h>
 
 typedef struct cai_cli_messages cai_cli_messages;
 /* Enqueue once without a delivery deadline, receipt listener or session. */
@@ -23,18 +23,17 @@ const char *cai_cli_messages_name(const cai_cli_messages *messages);
 int cai_cli_messages_set_queue(cai_cli_messages *messages, const char *name,
                                cai_error *error);
 int cai_cli_messages_fd(const cai_cli_messages *messages);
-int cai_cli_messages_sync(cai_cli_messages *messages, sl_t *sl,
+int cai_cli_messages_sync(cai_cli_messages *messages, cai_input_queue *queue,
                           cai_error *error);
 /* Persist native removals before detaching/destroying the editor. Never reads
  * new deliveries or changes the queue; retained entries and edits stay pending.
  */
-int cai_cli_messages_flush_decisions(cai_cli_messages *messages, sl_t *sl,
-                                     cai_error *error);
-int cai_cli_messages_consumed(cai_cli_messages *messages, sl_prompt_id_t id,
+int cai_cli_messages_flush_decisions(cai_cli_messages *messages,
+                                     cai_input_queue *queue, cai_error *error);
+int cai_cli_messages_consumed(cai_cli_messages *messages, unsigned long long id,
                               cai_error *error);
 int cai_cli_messages_is_message(const cai_cli_messages *messages,
-                                sl_prompt_id_t id);
-void cai_cli_messages_detach(cai_cli_messages *messages, sl_t *sl);
+                                unsigned long long id);
 void cai_cli_messages_stop(cai_cli_messages *messages);
 /* Cancel sends already in progress, including lease acquisition and enqueue.
  * A later send starts with a fresh cancellation sequence. Thread-safe. */

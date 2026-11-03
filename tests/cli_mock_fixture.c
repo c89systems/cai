@@ -151,18 +151,16 @@ static int fixture_late_steer(void *context,
   cli_state *state = context;
   const char *mode = getenv("CAI_TEST_LATE_STEER");
   int rc = fixture_event_callback(context, event, error);
-  size_t index;
   if (rc != CAI_OK || inserted || event->type != CAI_AGENT_EVENT_RUN_COMPLETED)
     return rc;
   inserted = 1;
-  index = sl_prompt_queue_count(state->sl);
   /* Admission after the final active boundary deterministically reproduces
    * the live session's idle S entry with a Q theme command behind it. */
-  if (sl_prompt_queue_append(state->sl, "LATE_STEER", strcmp(mode, "held") == 0,
-                             NULL) != SL_OK ||
-      sl_prompt_queue_set_mode(state->sl, index, SL_PROMPT_QUEUE_MODE_STEER) !=
-          SL_OK ||
-      sl_prompt_queue_append(state->sl, "/theme gruvbox", 0, NULL) != SL_OK)
+  if (cli_input_request(state, CAI_INPUT_OFFER, "LATE_STEER",
+                        CAI_INPUT_STEERING, strcmp(mode, "held") == 0, NULL,
+                        NULL, error) != CAI_OK ||
+      cli_input_request(state, CAI_INPUT_OFFER, "/theme gruvbox",
+                        CAI_INPUT_QUEUED, 0, NULL, NULL, error) != CAI_OK)
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "inject late steer fixture");
   return CAI_OK;
 }

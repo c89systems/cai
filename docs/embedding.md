@@ -98,8 +98,42 @@ prompt recall, logs, exports and delivered inbox messages. An open conversation
 is omitted and cannot be deleted. Shared stores and workspace files remain.
 Prompt recall is per-conversation, so switching sessions also switches recall.
 
+Core hosts can use `<cai/input_queue.h>` and `<cai/input_controller.h>` without
+linking Softline or libcai_app. `cai_agent_runtime_pending_input` borrows the
+conversation's queue on its owner thread. Its incremental acceptance, edits,
+stop/approval decisions and model claims use the existing session journal;
+ordinary commits do not serialize a queue snapshot. Atomic trim and portable
+export include a streamed pending-state baseline because earlier queue events
+can be removed by a history cut.
+An undispatched claim for a closed/interrupted child is retained as a queued
+parent turn; a child delivery already acknowledged in the parent is not
+repeated. A recovered manual-review pause still requires a replacement review
+handoff before queued parent turns run.
+
+`cai_input_controller_select` binds that authority to an asynchronous mailbox.
+Frontend `connect`, `request` and `poll` use copied data and wakeup descriptors;
+the host schedules bounded `pump` on the queue owner. Submission success means
+handoff, not acceptance: consume the explicit accepted/rejected/unknown result.
+Selection changes reject unadmitted requests for the old conversation. Accepted
+entries remain in the old queue. Slow observers disconnect from deltas and
+resynchronize without removing work. Deselect before closing the runtime;
+detach frontend connections before freeing their callback contexts. No worker
+thread or HTTP listener is created by this core controller.
+
+Lua `runtime:pending_input()` returns an owner-thread attachment with `state()`,
+one-based `entry(index)`, `request(table)`, `set_ready(index, boolean)`,
+`claim(index)` and `close()`. Requests use operation names such as `offer`,
+`begin_edit`, `end_edit`, `approve`, `withdraw`, `set_intent`, `stop`, `resume`,
+`clear`, `auto_approval`, `synchronize` and `resolve`. IDs/revisions/tokens are
+decimal strings, `intent` is `queued` or `steer`, and `enabled=true` on an offer
+requires approval. Omitted request IDs increase per attachment. Edit acquisition
+returns its revision and token; supply both on replacement. Set `queue_revision`
+from `state()` for resume/clear/auto-approval. Classifying host slash actions and
+publishing readiness remain host responsibilities. Closing a Lua attachment
+keeps accepted work; closing its runtime disables all further queue operations.
+
 `/compact` uses the agent worker, leaving the application event loop responsive.
-It stays in Softline's native editable queue until the parent conversation has
+It stays in the conversation's queue, editable through Softline, until the parent has
 no active turn, reviewer, pending control, or shell execution. Application event
 observers receive the normal run and compaction lifecycle events; manual
 compaction's `RUN_STARTED` has a NULL prompt payload. Escape or host cancellation
@@ -308,10 +342,11 @@ for an independently dimmed timestamp beside `>`.
 The completed status message includes its DTG but shares Softline's status
 style until an independently styled status metadata slot is available.
 
-`/tools` configures libmdf's row-streaming table generator so large catalogs
-do not accumulate a full table in the renderer. Descriptions are retained in
-full. Column widths follow libmdf's header/first-row layout; bounded tables
-such as `/status` retain full-table layout. Command rendering errors are
+`/tools` uses the normal full-table layout. libmdf 0.21.0 automatically switches
+the current table to row streaming at 64 KiB or 1024 retained rows, emitting
+buffered rows once before continuing. Descriptions are retained in full, and
+small tables preserve widths calculated from the complete table. The ordinary
+Markdown feed and sink remain unchanged. Command rendering errors are
 reported inline so subsequent commands and conversation turns remain usable.
 
 `<cai/dtg.h>` provides an allocation-free parser/formatter independent of
@@ -362,7 +397,7 @@ parent on completion, failure or cancellation.
 Tool activity verbs and durations use the effective palette's H3 foreground
 with normal weight; commands, paths, tool labels and slash-command text use
 H2 foreground in bold. Neutral/success/failure symbols stay gray/green/red.
-The application copies foregrounds from libmdf 0.19.0's public palette into
+The application copies foregrounds from libmdf's public palette into
 libcai's dependency-free `cai_tool_display_set_palette` API (Lua
 `display:set_palette(activity_foreground, label_foreground)`). Palette changes
 preserve active call identity, output limits and partial UTF-8/SGR decoding.
@@ -476,7 +511,7 @@ still apply.
 reopening the conversation or writing config.ini. `/status` shows the effective
 mode and any queued change. Changes remain editable in Softline until the
 runtime is idle: the active turn, child runtimes, shell capture and managed
-terminal processes must finish first. Esc preserves Softline's stopped queue.
+terminal processes must finish first. Esc preserves the conversation's stopped queue.
 The selected mode applies to later tools and new children; it is not stored in
 the conversation commit. Restarting the application uses startup settings.
 

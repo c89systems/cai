@@ -82,6 +82,7 @@ files=(
   lua/cai_lua_dtg.inc
   lua/cai_lua_skills.inc
   lua/cai_lua_plugins.inc
+  lua/cai_lua_input_queue.inc
   lua/cai_lua.exports
 )
 

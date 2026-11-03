@@ -9,6 +9,7 @@
 
 #include "cai_decimal.h"
 #include "cai_execution.h"
+#include "cai_input_queue_codec.h"
 #include "cai_internal.h"
 #include "cai_mcp_search.h"
 #include "cai_terminal_text.h"
@@ -427,6 +428,8 @@ cai_runtime_subagent_result_cleanup(cai_runtime_subagent_result *result);
 
 typedef struct cai_runtime_input_node {
   char *text;
+  unsigned long long *input_events;
+  size_t input_event_count, input_event_cursor;
   unsigned long long journal_sequence;
   unsigned long long history_start_sequence;
   unsigned long long history_tail_sequence;
@@ -448,6 +451,23 @@ typedef enum cai_runtime_input_kind {
   CAI_RUNTIME_INPUT_INTERACTIVE = 3,
   CAI_RUNTIME_INPUT_GOAL = 4
 } cai_runtime_input_kind;
+
+/* Claimed work is execution state, never another editable frontend queue. */
+typedef struct cai_runtime_input_dispatch {
+  struct cai_runtime_input_dispatch *next;
+  char *text, *target;
+  unsigned long long sequence;
+  cai_runtime_input_kind kind;
+  cai_agent_runtime *pinned_child;
+  int inflight, failed;
+  unsigned long long *input_events;
+  size_t input_event_count, input_event_cursor;
+} cai_runtime_input_dispatch;
+typedef struct cai_runtime_input_origin {
+  struct cai_runtime_input_origin *next;
+  char *session;
+  unsigned long long sequence;
+} cai_runtime_input_origin;
 
 typedef enum cai_runtime_goal_control_kind {
   CAI_RUNTIME_GOAL_CREATE = 1,
@@ -647,6 +667,13 @@ struct cai_agent_runtime {
   /* Serialize durable event acceptance without holding the UI/state mutex
    * across a host store callback. Waiters release lock through condition. */
   int journal_writing;
+  cai_input_queue *input_queue;
+  cai_runtime_input_dispatch *input_dispatch;
+  cai_runtime_input_dispatch *input_history_pending;
+  cai_runtime_input_origin *input_origins;
+  unsigned long long input_checkpoint_after;
+  unsigned long long input_checkpoint_through;
+  cai_input_checkpoint_restore *input_checkpoint_reader;
   unsigned long long journal_v2_start_sequence;
   int history_compaction_pending;
   /* Inline compaction is a distinct non-steerable task, as in Codex. */
@@ -770,6 +797,9 @@ struct cai_agent_runtime {
   struct cai_agent_runtime *active_review;
   struct cai_agent_runtime *active_subagent;
   size_t child_input_users;
+  /* Close child admission before taking its final handoff snapshot. Existing
+   * pinned deliveries drain first; later submissions belong to the parent. */
+  int child_finishing;
   /* Borrowed until handoff/child destruction. The parent outlives its child;
    * parent->lock protects published child pointers and admission pins. */
   struct cai_agent_runtime *parent_runtime;
@@ -1238,6 +1268,7 @@ static void cai_runtime_input_node_free(cai_runtime_input_node *node) {
     return;
   }
   cai_free_mem(NULL, node->text);
+  cai_free_mem(NULL, node->input_events);
   cai_free_mem(NULL, node);
 }
 
@@ -2843,6 +2874,9 @@ static int cai_runtime_append_journal_event_locked(
   }
   while (runtime->journal_writing)
     pthread_cond_wait(&runtime->condition, &runtime->lock);
+  if (runtime->next_event_sequence == ULLONG_MAX)
+    return cai_set_error(error, CAI_ERR_LIMIT,
+                         "session journal event identities exhausted");
   runtime->journal_writing = 1;
   event.sequence = runtime->next_event_sequence + 1U;
   event.type = type;
@@ -2867,6 +2901,7 @@ static int cai_runtime_append_journal_event_locked(
 }
 
 #include "cai_runtime_execution.inc"
+#include "cai_runtime_input_queue.inc"
 
 static void cai_runtime_mark_commit_event_locked(cai_agent_runtime *runtime,
                                                  unsigned long long sequence) {
@@ -3167,6 +3202,9 @@ cai_runtime_commit_reserved_mode(cai_agent_runtime *runtime, int emit_event,
   if (runtime->session_store == NULL) {
     return CAI_OK;
   }
+  rc = cai_runtime_queue_own_history(runtime, error);
+  if (rc != CAI_OK)
+    return rc;
   if (commit_event == NULL && emit_event) {
     rc = cai_runtime_reserve_commit_event(runtime, &commit_event, error);
     if (rc != CAI_OK) {
@@ -3225,10 +3263,12 @@ cai_runtime_commit_reserved_mode(cai_agent_runtime *runtime, int emit_event,
           ? 0U
           : runtime->journal_v2_start_sequence;
   if (cut != NULL) {
+    runtime->input_checkpoint_through = cut->through_sequence;
     rc = runtime->session_store->trim(
         runtime->session_store->context, runtime->session_scope,
         runtime->session_id, cut, cai_runtime_make_trim_source, &trim,
         applied_event_sequence, error);
+    runtime->input_checkpoint_through = 0U;
     if (rc == CAI_OK && !trim.prepared)
       rc = cai_set_error(error, CAI_ERR_INVALID,
                          "store did not prepare a trim replacement");
@@ -4932,7 +4972,10 @@ static int cai_runtime_deliver_steering(void *context, cai_session *session,
   pthread_mutex_lock(&runtime->lock);
   while (rc == CAI_OK && runtime->steering_head != NULL) {
     input = runtime->steering_head;
-    rc = cai_session_history_own_event(session, input->journal_sequence, error);
+    rc = cai_runtime_own_input_events(runtime, input, error);
+    if (rc == CAI_OK)
+      rc = cai_session_history_own_event(session, input->journal_sequence,
+                                         error);
     if (rc == CAI_OK)
       rc = cai_session_add_steering_text(session, input->text, error);
     if (rc == CAI_OK) {
@@ -5290,6 +5333,8 @@ static int cai_runtime_replay_journal_event(
   if (event->sequence > runtime->next_event_sequence) {
     runtime->next_event_sequence = event->sequence;
   }
+  if (strncmp(event->type, "input_queue", 11U) == 0)
+    return cai_runtime_queue_replay(runtime, event, error);
   if (!cai_session_history_visible(runtime->session, event->sequence))
     return CAI_OK;
   if (strcmp(event->type, "execution") == 0 ||
@@ -6011,6 +6056,8 @@ static void *cai_runtime_worker(void *context) {
       rc = cai_session_history_begin(runtime->session, CAI_AGENT_HISTORY_TURN,
                                      start, input->journal_sequence,
                                      input->text, &error);
+      if (rc == CAI_OK)
+        rc = cai_runtime_own_input_events(runtime, input, &error);
       pthread_mutex_lock(&runtime->lock);
       runtime->history_turn_open = rc == CAI_OK;
       pthread_mutex_unlock(&runtime->lock);
@@ -7330,6 +7377,8 @@ static int cai_runtime_export_idle_locked(const cai_agent_runtime *runtime,
   if (runtime->state == CAI_AGENT_SAMPLING ||
       runtime->state == CAI_AGENT_DISPATCHING_TOOL ||
       runtime->turn_head != NULL || runtime->steering_head != NULL ||
+      runtime->input_dispatch != NULL ||
+      runtime->input_history_pending != NULL ||
       runtime->shell_context_head != NULL || runtime->shell_context_applying) {
     return cai_set_error(
         error, CAI_ERR_INVALID,
@@ -7477,6 +7526,10 @@ int cai_agent_runtime_trim_history(cai_agent_runtime *runtime, size_t count,
   pthread_mutex_lock(&runtime->lock);
   rc = cai_runtime_history_ready(runtime, error);
   old_watermark = runtime->commit_event_sequence;
+  if (rc == CAI_OK && runtime->input_origins != NULL)
+    rc = cai_set_error(error, CAI_ERR_INVALID,
+                       "trim the parent conversation while subagent input "
+                       "receipts are retained");
   through = runtime->next_event_sequence;
   journal_replace = CAI_SESSION_IMPL(runtime->session)->journal_replace;
   journal_keep = CAI_SESSION_IMPL(runtime->session)->journal_keep_bytes;
@@ -8263,6 +8316,12 @@ int cai_agent_runtime_open(cai_client *client,
   if (rc == CAI_OK) {
     rc = cai_agent_new_session(runtime->agent, &runtime->session, error);
   }
+  if (rc == CAI_OK) {
+    cai_session_impl *session = CAI_SESSION_IMPL(runtime->session);
+    session->input_checkpoint_source = cai_runtime_input_checkpoint_source;
+    session->input_checkpoint_chunk = cai_runtime_input_checkpoint_chunk;
+    session->input_checkpoint_context = runtime;
+  }
   if (rc == CAI_OK)
     CAI_SESSION_IMPL(runtime->session)->todo = runtime->todo;
   if (rc == CAI_OK) {
@@ -8470,7 +8529,8 @@ int cai_agent_runtime_open(cai_client *client,
     }
     if (rc == CAI_OK && runtime->session_store != NULL &&
         (config->resume_latest || config->resume_session_id != NULL)) {
-      runtime->next_event_sequence = runtime->applied_event_sequence;
+      if (runtime->next_event_sequence < runtime->applied_event_sequence)
+        runtime->next_event_sequence = runtime->applied_event_sequence;
       runtime->journal_v2_start_sequence =
           CAI_SESSION_IMPL(runtime->session)->input_ack_start_sequence != 0U
               ? CAI_SESSION_IMPL(runtime->session)->input_ack_start_sequence
@@ -8612,6 +8672,7 @@ int cai_agent_runtime_open(cai_client *client,
     cai_free_mem(NULL, runtime->review_handoff);
     cai_free_mem(NULL, runtime->review_handoff_report);
     cai_free_mem(NULL, runtime->review_report);
+    cai_runtime_queue_cleanup(runtime);
     close(runtime->wakeup_read_fd);
     close(runtime->wakeup_write_fd);
     pthread_cond_destroy(&runtime->condition);
@@ -8632,10 +8693,11 @@ static int cai_runtime_accepts_turn(cai_agent_run_state state) {
          state == CAI_AGENT_FAILED || state == CAI_AGENT_CANCELLED;
 }
 
-static int cai_runtime_enqueue_input(cai_agent_runtime *runtime,
-                                     const char *text,
-                                     cai_runtime_input_kind kind, int *started,
-                                     cai_error *error) {
+static int cai_runtime_enqueue_input_origin(
+    cai_agent_runtime *runtime, const char *text, cai_runtime_input_kind kind,
+    int *started, const char *origin_session,
+    unsigned long long origin_sequence, const unsigned long long *input_events,
+    size_t input_event_count, cai_error *error) {
   cai_runtime_input_node *node;
   cai_runtime_event_node *event_node;
   cai_agent_run_state previous_state;
@@ -8643,6 +8705,8 @@ static int cai_runtime_enqueue_input(cai_agent_runtime *runtime,
   int activated;
   int type;
   int rc;
+  cai_runtime_input_origin *origin = NULL;
+  char *delivery_data = NULL;
 
   if (started != NULL)
     *started = 0;
@@ -8662,6 +8726,22 @@ static int cai_runtime_enqueue_input(cai_agent_runtime *runtime,
     cai_runtime_input_node_free(node);
     return cai_set_error(error, CAI_ERR_NOMEM, "failed to copy agent input");
   }
+  if (input_event_count != 0U) {
+    if (input_events == NULL ||
+        input_event_count > (size_t)-1 / sizeof(*input_events)) {
+      cai_runtime_input_node_free(node);
+      return cai_set_error(error, CAI_ERR_INVALID, "invalid input provenance");
+    }
+    node->input_events =
+        cai_alloc(NULL, input_event_count * sizeof(*input_events));
+    if (node->input_events == NULL) {
+      cai_runtime_input_node_free(node);
+      return cai_set_error(error, CAI_ERR_NOMEM, "copy input provenance");
+    }
+    memcpy(node->input_events, input_events,
+           input_event_count * sizeof(*input_events));
+    node->input_event_count = input_event_count;
+  }
   activated = 0;
   pthread_mutex_lock(&runtime->lock);
   /* Admission must validate queue capacity/state after any in-flight durable
@@ -8676,6 +8756,14 @@ static int cai_runtime_enqueue_input(cai_agent_runtime *runtime,
     pthread_mutex_unlock(&runtime->lock);
     cai_runtime_input_node_free(node);
     return cai_set_error(error, CAI_ERR_CANCELLED, "agent runtime is closing");
+  }
+  if (origin_session != NULL && cai_runtime_origin_seen_locked(
+                                    runtime, origin_session, origin_sequence)) {
+    pthread_mutex_unlock(&runtime->lock);
+    cai_runtime_input_node_free(node);
+    if (started != NULL)
+      *started = 1;
+    return CAI_OK;
   }
   if (kind == CAI_RUNTIME_INPUT_GOAL) {
     if (runtime->review_mode ||
@@ -8699,19 +8787,21 @@ static int cai_runtime_enqueue_input(cai_agent_runtime *runtime,
     node->goal_continuation = 1;
     kind = CAI_RUNTIME_INPUT_TURN;
   }
-  if ((kind == CAI_RUNTIME_INPUT_INTERACTIVE ||
+  if (origin_session == NULL &&
+      (kind == CAI_RUNTIME_INPUT_INTERACTIVE ||
        kind == CAI_RUNTIME_INPUT_STEERING) &&
       (runtime->active_subagent != NULL || runtime->active_review != NULL)) {
     cai_agent_runtime *child = runtime->active_subagent != NULL
                                    ? runtime->active_subagent
                                    : runtime->active_review;
-    if (!runtime->disable_subagent_steering) {
+    if (!runtime->disable_subagent_steering && !runtime->child_finishing) {
       /* Admission may mirror a child journal write back to this parent. Pin
        * the borrowed child, but do not keep the parent mutex across it. */
       runtime->child_input_users++;
       pthread_mutex_unlock(&runtime->lock);
-      rc = cai_runtime_enqueue_input(child, text, CAI_RUNTIME_INPUT_STEERING,
-                                     started, error);
+      rc = cai_runtime_enqueue_input_origin(child, text,
+                                            CAI_RUNTIME_INPUT_STEERING, started,
+                                            NULL, 0U, NULL, 0U, error);
       pthread_mutex_lock(&runtime->lock);
       runtime->child_input_users--;
       pthread_cond_broadcast(&runtime->condition);
@@ -8859,9 +8949,28 @@ static int cai_runtime_enqueue_input(cai_agent_runtime *runtime,
   /* This synchronous append is the acceptance point. In particular, do not
    * report an immediate turn as accepted until it can survive a process crash
    * before the worker reaches its first commit. */
-  rc = cai_runtime_append_journal_event_locked(
-      runtime, journal_type, node->text, &node->journal_sequence, error);
-  if (rc != CAI_OK) {
+  if (origin_session != NULL) {
+    origin = cai_runtime_origin_new(origin_session, origin_sequence, error);
+    rc = origin != NULL ? cai_runtime_delivery_data(
+                              origin_session, origin_sequence, kind,
+                              strcmp(origin_session, runtime->session_id) == 0,
+                              text, &delivery_data, error)
+                        : CAI_ERR_NOMEM;
+  } else
+    rc = CAI_OK;
+  if (rc == CAI_OK)
+    rc = cai_runtime_append_journal_event_locked(
+        runtime, origin != NULL ? "input_queue_delivery" : journal_type,
+        origin != NULL ? delivery_data : node->text, &node->journal_sequence,
+        error);
+  cai_free_mem(NULL, delivery_data);
+  /* A child append can commit before its parent observation fails. Keep the
+   * committed work and receipt; the caller resolves its original identity. */
+  if (rc != CAI_OK && (origin == NULL || node->journal_sequence == 0U)) {
+    if (origin != NULL) {
+      cai_free_mem(NULL, origin->session);
+      cai_free_mem(NULL, origin);
+    }
     if (activated) {
       runtime->state = previous_state;
     }
@@ -8869,6 +8978,15 @@ static int cai_runtime_enqueue_input(cai_agent_runtime *runtime,
     cai_runtime_event_node_free(event_node);
     cai_runtime_input_node_free(node);
     return rc;
+  }
+  if (origin != NULL) {
+    if (strcmp(origin->session, runtime->session_id) == 0) {
+      cai_free_mem(NULL, origin->session);
+      cai_free_mem(NULL, origin);
+    } else {
+      origin->next = runtime->input_origins;
+      runtime->input_origins = origin;
+    }
   }
   if (event_node != NULL) {
     cai_runtime_append_event_node_locked(runtime, event_node);
@@ -8908,7 +9026,29 @@ static int cai_runtime_enqueue_input(cai_agent_runtime *runtime,
   if (started != NULL)
     *started = 1;
   cai_runtime_log_input_accepted(runtime, kind);
-  return CAI_OK;
+  return rc;
+}
+
+static int cai_runtime_enqueue_input(cai_agent_runtime *runtime,
+                                     const char *text,
+                                     cai_runtime_input_kind kind, int *started,
+                                     cai_error *error) {
+  return cai_runtime_enqueue_input_origin(runtime, text, kind, started, NULL,
+                                          0U, NULL, 0U, error);
+}
+
+int cai_agent_runtime_pending_input(cai_agent_runtime *runtime,
+                                    cai_input_queue **out, cai_error *error) {
+  int rc = cai_runtime_owner(runtime, error);
+  if (out == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "pending input queue output is required");
+  *out = NULL;
+  if (rc == CAI_OK)
+    rc = cai_runtime_queue_ensure(runtime, error);
+  if (rc == CAI_OK)
+    *out = runtime->input_queue;
+  return rc;
 }
 
 const char *cai_agent_runtime_model(cai_agent_runtime *runtime) {
@@ -9520,9 +9660,11 @@ int cai_agent_runtime_update_settings(
   active =
       runtime->state == CAI_AGENT_SAMPLING ||
       runtime->state == CAI_AGENT_DISPATCHING_TOOL ||
-      runtime->turn_head != NULL || runtime->steering_head != NULL ||
-      runtime->shell_context_head != NULL || runtime->shell_context_applying ||
-      runtime->goal_control_count != 0U || runtime->goal_control_inflight != 0U;
+      runtime->input_dispatch != NULL ||
+      runtime->input_history_pending != NULL || runtime->turn_head != NULL ||
+      runtime->steering_head != NULL || runtime->shell_context_head != NULL ||
+      runtime->shell_context_applying || runtime->goal_control_count != 0U ||
+      runtime->goal_control_inflight != 0U;
   if (rc == CAI_OK && !active) {
     if ((selected.present & CAI_AGENT_RUNTIME_SETTING_SERVICE_TIER) != 0U) {
       current.service_tier = selected.service_tier;
@@ -10431,6 +10573,7 @@ int cai_agent_runtime_start_review(cai_agent_runtime *parent,
   pthread_mutex_lock(&parent->lock);
   if (rc == CAI_OK && !parent->stopping) {
     parent->active_review = review;
+    parent->child_finishing = 0;
     review->parent_runtime = parent;
     parent->review_pause_pending = 1;
     rc = cai_runtime_append_journal_event_locked(parent, "review_pending",
@@ -10583,6 +10726,38 @@ cai_runtime_make_review_handoff(cai_agent_runtime *review, char **out_context,
   return CAI_OK;
 }
 
+static int cai_runtime_child_terminal(cai_agent_runtime *parent,
+                                      cai_agent_runtime *child,
+                                      cai_agent_run_state *state,
+                                      cai_error *error) {
+  int rc = cai_agent_runtime_state(child, state, error);
+  int terminal;
+  if (rc != CAI_OK)
+    return rc;
+  terminal = *state == CAI_AGENT_COMPLETED || *state == CAI_AGENT_FAILED ||
+             *state == CAI_AGENT_CANCELLED;
+  pthread_mutex_lock(&parent->lock);
+  parent->child_finishing = terminal;
+  if (parent->child_input_users != 0U)
+    terminal = 0;
+  pthread_mutex_unlock(&parent->lock);
+  /* An admission pinned before the fence may already have started another
+   * child turn. Re-read after the fence, without nesting parent/child locks. */
+  if (terminal) {
+    rc = cai_agent_runtime_state(child, state, error);
+    if (rc != CAI_OK)
+      return rc;
+    terminal = *state == CAI_AGENT_COMPLETED || *state == CAI_AGENT_FAILED ||
+               *state == CAI_AGENT_CANCELLED;
+    if (!terminal) {
+      pthread_mutex_lock(&parent->lock);
+      parent->child_finishing = 0;
+      pthread_mutex_unlock(&parent->lock);
+    }
+  }
+  return terminal ? CAI_OK : CAI_ERR_INVALID;
+}
+
 static int cai_runtime_finish_review_internal(cai_agent_runtime *parent,
                                               cai_agent_runtime *review,
                                               int require_parent_owner,
@@ -10595,6 +10770,7 @@ static int cai_runtime_finish_review_internal(cai_agent_runtime *parent,
   cai_error event_error;
   unsigned long long handoff_marker_sequence;
   int rc;
+  cai_agent_run_state child_state;
 
   if (require_parent_owner) {
     rc = cai_runtime_owner(parent, error);
@@ -10614,6 +10790,11 @@ static int cai_runtime_finish_review_internal(cai_agent_runtime *parent,
   }
   pthread_mutex_unlock(&parent->lock);
 
+  rc = cai_runtime_child_terminal(parent, review, &child_state, error);
+  if (rc != CAI_OK)
+    return rc == CAI_ERR_INVALID
+               ? cai_set_error(error, rc, "review still has accepted work")
+               : rc;
   context = NULL;
   report = NULL;
   display = NULL;
@@ -11200,6 +11381,7 @@ static int cai_runtime_run_subagent(void *context, const void *params,
   if (rc == CAI_OK) {
     pthread_mutex_lock(&parent->lock);
     parent->active_subagent = child;
+    parent->child_finishing = 0;
     child->parent_runtime = parent;
     if (review)
       parent->active_review = child;
@@ -11223,15 +11405,15 @@ static int cai_runtime_run_subagent(void *context, const void *params,
       break;
     }
     pthread_mutex_unlock(&parent->lock);
-    rc = cai_agent_runtime_pump(child, 250L, error);
+    rc = cai_runtime_queue_deliver(parent, child, error);
+    if (rc == CAI_OK)
+      rc = cai_agent_runtime_pump(child, 250L, error);
     if (rc != CAI_OK)
       break;
-    rc = cai_agent_runtime_state(child, &child_state, error);
-    if (rc != CAI_OK)
-      break;
-    terminal = child_state == CAI_AGENT_COMPLETED ||
-               child_state == CAI_AGENT_FAILED ||
-               child_state == CAI_AGENT_CANCELLED;
+    rc = cai_runtime_child_terminal(parent, child, &child_state, error);
+    terminal = rc == CAI_OK;
+    if (rc == CAI_ERR_INVALID)
+      rc = CAI_OK;
   }
   handover = NULL;
   structured = NULL;
@@ -13047,6 +13229,15 @@ int cai_agent_runtime_pump_bounded(cai_agent_runtime *runtime, long timeout_ms,
                          "agent runtime pump is already active");
   }
   runtime->pumping = 1;
+  pthread_mutex_unlock(&runtime->lock);
+  rc = cai_runtime_queue_deliver(runtime, NULL, error);
+  pthread_mutex_lock(&runtime->lock);
+  if (rc != CAI_OK) {
+    runtime->pumping = 0;
+    pthread_cond_broadcast(&runtime->condition);
+    pthread_mutex_unlock(&runtime->lock);
+    return rc;
+  }
   if (runtime->event_head == NULL) {
     cai_runtime_wakeup_drain_locked(runtime);
   }
@@ -13079,6 +13270,10 @@ int cai_agent_runtime_pump_bounded(cai_agent_runtime *runtime, long timeout_ms,
     pthread_mutex_unlock(&runtime->lock);
     if (runtime->event_callback != NULL) {
       rc = runtime->event_callback(runtime->event_context, &node->event, error);
+      if (rc == CAI_OK && input_boundary)
+        rc = cai_runtime_queue_deliver(runtime, NULL, error);
+      if (rc == CAI_OK && input_boundary && runtime->parent_runtime != NULL)
+        rc = cai_runtime_queue_deliver(runtime->parent_runtime, runtime, error);
       if (rc != CAI_OK) {
         cai_runtime_event_node_free(node);
         pthread_mutex_lock(&runtime->lock);
@@ -13128,6 +13323,8 @@ int cai_agent_runtime_pump_bounded(cai_agent_runtime *runtime, long timeout_ms,
   pthread_mutex_unlock(&runtime->lock);
   if (close_deferred) {
     cai_agent_runtime_destroy(runtime);
+  } else if (rc == CAI_OK) {
+    rc = cai_runtime_queue_deliver(runtime, NULL, error);
   }
   return rc;
 }
@@ -13617,6 +13814,15 @@ static void cai_agent_runtime_destroy(cai_agent_runtime *runtime) {
       parent->active_review = NULL;
     if (parent->active_subagent == runtime)
       parent->active_subagent = NULL;
+    {
+      cai_runtime_input_dispatch *dispatch;
+      for (dispatch = parent->input_dispatch; dispatch != NULL;
+           dispatch = dispatch->next)
+        if (dispatch->pinned_child == runtime && !dispatch->inflight) {
+          dispatch->pinned_child = NULL;
+          --parent->child_input_users;
+        }
+    }
     while (parent->child_input_users != 0U)
       pthread_cond_wait(&parent->condition, &parent->lock);
     runtime->parent_runtime = NULL;
@@ -13695,6 +13901,7 @@ static void cai_agent_runtime_destroy(cai_agent_runtime *runtime) {
   cai_free_mem(NULL, runtime->review_handoff);
   cai_free_mem(NULL, runtime->review_handoff_report);
   cai_free_mem(NULL, runtime->review_report);
+  cai_runtime_queue_cleanup(runtime);
   close(runtime->wakeup_read_fd);
   close(runtime->wakeup_write_fd);
   pthread_cond_destroy(&runtime->condition);
@@ -13715,6 +13922,16 @@ void cai_agent_runtime_close(cai_agent_runtime *runtime) {
     return;
   }
   runtime->stopping = 1;
+  {
+    cai_runtime_input_dispatch *dispatch;
+    for (dispatch = runtime->input_dispatch; dispatch != NULL;
+         dispatch = dispatch->next)
+      if (dispatch->pinned_child != NULL && !dispatch->inflight) {
+        dispatch->pinned_child = NULL;
+        --runtime->child_input_users;
+      }
+    pthread_cond_broadcast(&runtime->condition);
+  }
   owner_callback = pthread_equal(runtime->owner_thread, pthread_self());
   worker_callback = runtime->worker_started &&
                     pthread_equal(runtime->worker_thread, pthread_self());

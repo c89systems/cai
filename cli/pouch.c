@@ -1698,10 +1698,14 @@ static int append_event(void *context, const char *scope, const char *id,
   cai_cli_session session;
   cai_cli_journal_context *journal = NULL;
   cli_record record;
+  cai_agent_session_event visible;
   lc_lease *lease;
   cai_source *source;
   char name[64];
   int rc;
+  rc = cai_agent_session_event_project_input(event, &visible, error);
+  if (rc != CAI_OK)
+    return rc;
   pouch = (cai_cli_pouch *)context;
   lease = NULL;
   source = NULL;
@@ -1727,16 +1731,16 @@ static int append_event(void *context, const char *scope, const char *id,
     rc = journal_append_source(pouch, &journal->session, journal->collection,
                                name, source, NULL, error);
   if (rc == CAI_OK && journal->session.first_prompt[0] == '\0' &&
-      event->data != NULL &&
-      (strcmp(event->type, "turn_submitted") == 0 ||
-       strcmp(event->type, "turn_queued") == 0)) {
+      visible.data != NULL &&
+      (strcmp(visible.type, "turn_submitted") == 0 ||
+       strcmp(visible.type, "turn_queued") == 0)) {
     rc = acquire(pouch, id, &lease, error);
     if (rc == CAI_OK)
       rc = get_session(lease, scope, id, &session, error);
     if (rc == CAI_OK) {
       if (session.first_prompt[0] == '\0') {
         preview(session.first_prompt, sizeof(session.first_prompt),
-                event->data);
+                visible.data);
         rc = update_session(lease, &session, error);
       }
       if (rc == CAI_OK)

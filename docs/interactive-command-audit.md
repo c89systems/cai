@@ -1,6 +1,8 @@
 # Interactive command policies
 
-CAI uses Softline 0.15.0's native queue policies. The complete inventory is
+CAI uses Softline 0.16.0's native backend queue editor with core-owned per-
+conversation authority. Native keys submit copied requests; acknowledgements
+and ordered observations update its mirror. The complete inventory is
 `cli_command_definitions` in `cli/app_run.c`; argument-specific query forms are
 resolved by `cli_command_delivery`. Admission, readiness, mode normalization and
 owner-thread consumption use that same classification. This replaces the earlier
@@ -21,7 +23,7 @@ are not aliases.
 | Turn | Wait until the turn, shell and foreground review finish. Normalize steering intent to visible `Q`; the original identity remains editable. |
 | Conversation prompt | Enter queues a new turn; Alt-Enter steers at a runtime input boundary. Native ordering and approval rules remain authoritative. |
 
-Feed and request commands are independent native managed entries: unrelated
+Feed and request commands are independent managed entries: unrelated
 queued conversation input cannot delay them, and an unready command does not
 block a later conversation steer. They remain approval-controlled, editable,
 cancellable and stopped when appropriate. Request readiness is false during

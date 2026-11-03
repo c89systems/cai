@@ -1,10 +1,26 @@
 # Attachable frontends and a persistent application controller
 
-Status: proposed implementation specification, 2026-11-01. This document
-describes a target architecture, not an implemented server or callable API.
+Status: target architecture, with the input-queue foundation implemented on
+2026-11-03. Core `input_queue.h` and `input_controller.h` provide conversation
+authority, copied asynchronous requests/results, revisioned observations and
+bounded subscriptions. libcai_app uses the Softline backend adapter. Runtime
+input persistence, crash recovery, context switching and trim/export use that
+authority. There is no HTTP listener or attach/reconnect executable. The wider
+application lifecycle/rendering extraction and owner-thread separation described
+below remain follow-up work; the current app event loop still owns both.
 Public headers remain authoritative for the current implementation. Proposed
 names below establish responsibilities; declaration-level API review is part
 of the corresponding implementation step.
+
+Cutover decisions confirmed on 2026-11-03: implement the in-process controller
+and Softline adapter first, without a listener, background-server executable,
+HTTP framework or attach/reconnect CLI. Softline 0.16.0 now supplies the required
+asynchronous queue-backend constructor and request/result/update API. Pending
+work belongs to each conversation: `/new` and `/resume` leave the previous
+conversation's queue behind rather than moving its text, approval or edit holds
+into another conversation. A frontend attachment observes only its selected
+conversation, and every in-flight request retains its original conversation
+identity even if selection changes before its result arrives.
 
 The product requirement is one embeddable agent application that can run with
 no frontend, retain active work while a frontend disconnects, and accept a
@@ -24,7 +40,7 @@ belongs to an optional application adapter, not to core libcai.
 | `cli/pouch*.c`, `cli/stores.c` | Shared-root client reuse, collection ownership and store-context lifetimes must survive frontend detachment. |
 | `cli/replay*.c`, execution records | Semantic replay and saved tool activity exist; current startup still performs separate recovery passes and a console rendering read. |
 | `include/cai/tools/todo.h` | The kanban route already demonstrates framework-neutral routing, but its synchronous sink is insufficient for a long-lived asynchronous event response. |
-| Softline 0.15.0 public header | Native editable queues, Q/S intent, approval, manual delivery and readiness policies exist. Queue IDs are handle-local; the policy callback is inspection-only and cannot block or mutate the queue. |
+| Softline 0.16.0 public header | Constructor-selected queue backends provide asynchronous requests, outcomes, ordered snapshots/deltas, revision-checked editing and reconciliation. Native local queues remain Softline's default; CAI's adapter selects backend authority. |
 
 The runtime has an inference/tool worker; its event consumer must continue
 pumping even with no viewers. Setting `event_callback = NULL` when detached
@@ -208,10 +224,11 @@ configured independent commands. CAI must not implement synthetic key handling,
 periodic queue scraping, whole-queue replacement or a private fork of Softline
 to make this work.
 
-The inspected 0.15.0 API does not establish the complete external-authority
-contract needed here. In particular its IDs are local, and the submission policy
-hook is nonblocking/read-only. It cannot itself durably accept a backend request
-or report every later editor/queue mutation to a remote authority.
+Softline 0.16.0 supplies this external-authority contract. Its callback means
+handoff, not durable acceptance. CAI must copy each outbound request, defer its
+application to the controller and return results/ordered observations on the
+editor owner thread. The callback must not wait for journal I/O, call owner-only
+runtime APIs or synchronously re-enter Softline.
 
 Before this cutover, validate a public managed-queue bridge with Softline:
 native admission/edit/approval/withdrawal notifications, asynchronous acceptance
@@ -224,10 +241,10 @@ Remote accepted text must not also be returned through the local prompt-delivery
 path. The bridge lives in libcai_app, with generic queue support in libcai;
 Softline itself depends on neither library nor the network transport.
 
-If the public dependency cannot express those semantics, produce a narrow
-upstream change request and gate the queue cutover on it. Do not claim that
-0.15.0 already supports them, replace its native editor, or maintain two
-authoritative queues. This specification does not authorize modifying Softline.
+If a remaining public API limitation prevents those semantics, produce a narrow
+upstream change request and gate the affected operation on it. Do not replace
+the native editor or maintain two authoritative queues. This specification does
+not authorize modifying Softline.
 
 ## 6. Commands and execution boundaries
 

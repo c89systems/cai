@@ -12535,7 +12535,9 @@ static int cai_lua_agent_runtime_refresh_mcp(lua_State *L) {
   return cai_lua_bool_result(L, rc, &error);
 }
 
+#include "cai_lua_input_queue.inc"
 static const luaL_Reg cai_lua_agent_runtime_methods[] = {
+    {"pending_input", cai_lua_runtime_pending_input},
     {"refresh_mcp", cai_lua_agent_runtime_refresh_mcp},
     {"can_compact", cai_lua_agent_runtime_can_compact},
     {"compact", cai_lua_agent_runtime_compact},
@@ -12972,6 +12974,8 @@ int luaopen_cai(lua_State *L) {
   cai_lua_metatable(L, CAI_LUA_AGENT, cai_lua_agent_methods, cai_lua_agent_gc);
   cai_lua_metatable(L, CAI_LUA_AGENT_RUNTIME, cai_lua_agent_runtime_methods,
                     cai_lua_agent_runtime_gc);
+  cai_lua_metatable(L, CAI_LUA_PENDING_INPUT, cai_lua_pending_input_methods,
+                    cai_lua_input_close);
   cai_lua_metatable(L, CAI_LUA_SESSION, cai_lua_session_methods,
                     cai_lua_session_gc);
   cai_lua_metatable(L, CAI_LUA_RESPONSE, cai_lua_response_methods,

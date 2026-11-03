@@ -1,3 +1,4 @@
+#include "cai_input_queue_codec.h"
 #include "cai_internal.h"
 #include "cai_plugins_internal.h"
 #include <cai/tools/todo.h>

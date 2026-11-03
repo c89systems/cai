@@ -83,8 +83,8 @@ set(CAI_MINIMUM_CURL_VERSION "7.86.0")
 set(CAI_LONEJSON_VERSION "0.45.0")
 set(CAI_LONEJSON_ABI_VERSION "26")
 set(CAI_PSLOG_VERSION "0.12.0")
-set(CAI_SOFTLINE_VERSION "0.15.0")
-set(CAI_LIBMDF_VERSION "0.19.0")
+set(CAI_SOFTLINE_VERSION "0.16.0")
+set(CAI_LIBMDF_VERSION "0.21.0")
 set(CAI_LOCKDC_VERSION "0.27.0")
 set(CAI_LIBLQL_VERSION "0.4.1")
 
@@ -329,33 +329,33 @@ if(CAI_BUILD_APP)
   if(CAI_TARGET_ID STREQUAL "x86_64-linux-gnu")
     set(_cai_liblql_sha256 "d6b3d12afcf6ba2582cb9103cc6a6a97a7378870d969e0755d467d72b9f43030")
     set(_cai_lockdc_sha256 "fb4806e36c2619ac789ca8c145f967c04ec440335e23d9bfeb8c3452e19297ea")
-    set(_cai_softline_sha256 "f69afc8e16a7bf6d0e7db82fa84743dbc2f346ecea8ac68beb1f5f6a6e4b98d1")
-    set(_cai_libmdf_sha256 "f4cf5c0c50c1909441ccc340f85e60849eeba29428a5e77e04c6b5b92bbab831")
+    set(_cai_softline_sha256 "34a8318f6837aabe05fcc50b2eb1d6861a7df2b2365e13bd915863d4aa29a493")
+    set(_cai_libmdf_sha256 "50dc84800203ad1051b8eecc92a636b6fe79b7ec554dfeea7bbd512b8cae89e3")
   elseif(CAI_TARGET_ID STREQUAL "x86_64-linux-musl")
     set(_cai_liblql_sha256 "0379c745309924310155f0270d4199263ba8273ae138d7e5d45c956588aa608a")
     set(_cai_lockdc_sha256 "19c8880502f25a285d14115cbaeb5b7af4e93b51cc79e8f0402ba5838fe6efd7")
-    set(_cai_softline_sha256 "bb918bc5358d76b0c367693d4559ab7e25b344febee46d30a9807a10a2d5a1e8")
-    set(_cai_libmdf_sha256 "eb128a3865e81c906fc77779a9bcaaa215845d5fb49a306c4838a894248d470e")
+    set(_cai_softline_sha256 "08398d993dbdfeddd3a13d6497cc0aa72596fd1ccbcbe5eab1e9d1357eedbf9f")
+    set(_cai_libmdf_sha256 "c3e7c247d7d5308a22d5c33965cbd72174072e930f6bbd45711d16c1616164fa")
   elseif(CAI_TARGET_ID STREQUAL "aarch64-linux-gnu")
     set(_cai_liblql_sha256 "664a9c52ca606caac3bc4421a5ff24c403cb49f4b21f3394f51af98e21998e14")
     set(_cai_lockdc_sha256 "114f7574863197c7ce638607c068d9f1282a32584f6b91d124263c328202407c")
-    set(_cai_softline_sha256 "c7a4b2c93999b9845a324c47b99ae13dc5c129047854f5c3d51e030fd6c21cd2")
-    set(_cai_libmdf_sha256 "8918427d0de9915c3a6e3f7eb4e510dbb326a018c4ff04323fed4f5298cf384a")
+    set(_cai_softline_sha256 "adb5ba9e3de8410fcf27053e4a4ba2aeba9b85f9169bbf8f92bc73827f8208cc")
+    set(_cai_libmdf_sha256 "0a4fdba26caed4a271c517e61c867389b560523560c8b713eaf878c0ef5c255c")
   elseif(CAI_TARGET_ID STREQUAL "aarch64-linux-musl")
     set(_cai_liblql_sha256 "bac01b66e77e10fd5b7b4fcfbf4f05b2e3950b18af93cf5aa7e0e680323c66a6")
     set(_cai_lockdc_sha256 "e4602b8461fdcf6b312882e08727e10596c54cdaf4e714929f2deb517761b6bf")
-    set(_cai_softline_sha256 "d2476ee51c69f58c17453c46a812caa9c0a3b23de665b6b39b0519803dc6b7d2")
-    set(_cai_libmdf_sha256 "01461ca30d94ef410c6b713882212020195d8d0e3fc18c5070b9f7e9ef987f2a")
+    set(_cai_softline_sha256 "d0f870c96d392153c1c3789e05c76304870adddc3659f34d57400da2d1233a27")
+    set(_cai_libmdf_sha256 "71c594fc64217c3001d90e26dd61029e62a4eab324ba4a45316ab3252225482b")
   elseif(CAI_TARGET_ID STREQUAL "armhf-linux-gnu")
     set(_cai_liblql_sha256 "e35bff9e4ca505707ca8ba4e9a9852c0e4cee7791c392bd97fff028898624372")
     set(_cai_lockdc_sha256 "7eb993163f06dad4508a1a7b823b0114958d07d4577a1fb085a35cccb56d00a7")
-    set(_cai_softline_sha256 "58f75adccb60b38e831423b1b08a83b32a5a4f5a209ad215fecc4c7c279dae4a")
-    set(_cai_libmdf_sha256 "5b8d9f1d061b3a2274505d2bacedb65b1104b081f4894a51f716596ce158b36d")
+    set(_cai_softline_sha256 "7980a2b0a9d3957160ebc2dd47c777f139266d126568d1d655ca0f13c4ca5e67")
+    set(_cai_libmdf_sha256 "803e9ca0f915d9e5edd73e9172db8548e58b193a1bc71974678b5e6b1efafabd")
   elseif(CAI_TARGET_ID STREQUAL "armhf-linux-musl")
     set(_cai_liblql_sha256 "84e244c555f879637f913697a1cf203f5260b22714e19f0dc40d40e405646c25")
     set(_cai_lockdc_sha256 "2685f82d7887d9fdd41eac08425d9b3fbd65bbc62a90fb50ae46ed1c66a03ee9")
-    set(_cai_softline_sha256 "0240d348a6f6b6dbf098bb9cb08fcd8b0c4fbb4a5ec5776059e579e4e2a215c3")
-    set(_cai_libmdf_sha256 "7767eea3ea251f2dc6e41f31c440ec127105e33ddd59ff8f983664c914e14731")
+    set(_cai_softline_sha256 "37643ae0209ba6e37af22f3e38479fb3be47d7614f3a001c8dae560b0e59ca2c")
+    set(_cai_libmdf_sha256 "3be7fc75b0d7be33f28ad68ef438d84d4c441a2263f628053474afa53c112af5")
   endif()
   set(_cai_liblql_name "liblql-${CAI_LIBLQL_VERSION}-${CAI_TARGET_ID}")
   set(_cai_liblql_prefix "${CAI_DEPS_DIR}/${_cai_liblql_name}")
@@ -392,7 +392,7 @@ if(CAI_BUILD_APP)
     _cai_softline_archive)
   cai_download_tarball(
     "softline ${CAI_SOFTLINE_VERSION} ${CAI_TARGET_ID}"
-    "https://github.com/sa6mwa/softline/releases/download/v${CAI_SOFTLINE_VERSION}/${_cai_softline_name}.tar.gz"
+    "https://github.com/c89systems/softline/releases/download/v${CAI_SOFTLINE_VERSION}/${_cai_softline_name}.tar.gz"
     "${_cai_softline_archive}" "${_cai_softline_prefix}"
     "${_cai_softline_sha256}"
     "${_cai_softline_prefix}/include/softline/softline.h")
@@ -727,6 +727,9 @@ set(CAI_SOURCES
   src/cai_error.c
   src/cai_http.c
   src/cai_input_item.c
+  src/cai_input_queue.c
+  src/cai_input_queue_codec.c
+  src/cai_input_controller.c
   src/cai_lj.c
   src/cai_log.c
   src/cai_mcp.c
@@ -910,7 +913,7 @@ if(CAI_BUILD_APP)
   find_package(lockdc CONFIG REQUIRED COMPONENTS static)
   # The product and fixture entrypoints share these exact sources/options.
   # Compile them once per configuration; keep fixture substitutions in main.
-  add_library(cai_cli_support OBJECT cli/identity.c cli/app_control.c cli/options.c cli/help.c cli/config.c cli/runtime_options.c cli/mcp.c cli/skills.c cli/status.c cli/reasoning.c cli/literal.c cli/shell.c cli/login.c
+  add_library(cai_cli_support OBJECT cli/identity.c cli/app_control.c cli/completion.c cli/input_adapter.c cli/options.c cli/help.c cli/config.c cli/runtime_options.c cli/mcp.c cli/skills.c cli/status.c cli/reasoning.c cli/literal.c cli/shell.c cli/login.c
     cli/review_report.c cli/pouch.c cli/pouch_stream.c cli/quota_refresh.c cli/session_commands.c
     cli/log.c cli/response.c cli/messages.c cli/message_names.c cli/todo.c cli/theme.c cli/stores.c cli/temp.c cli/replay.c cli/replay_tools.c cli/tool_result.c)
   target_link_libraries(cai_cli_support PUBLIC cai_static
@@ -1006,9 +1009,25 @@ if(CAI_BUILD_TESTS AND CAI_BUILD_LUA)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua/dtg_test.lua")
   set_tests_properties(cai_lua_dtg PROPERTIES LABELS "unit;local;offline"
     TIMEOUT 3 ENVIRONMENT "${CAI_LUA_TEST_ENV}")
+  add_test(NAME cai_lua_input_queue COMMAND cai_lua_runner
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua/input_queue_test.lua")
+  set_tests_properties(cai_lua_input_queue PROPERTIES LABELS "unit;local;offline"
+    TIMEOUT 5 ENVIRONMENT "${CAI_LUA_TEST_ENV}")
 endif()
 
 if(CAI_BUILD_TESTS)
+  add_executable(cai_input_queue_test tests/input_queue_test.c)
+  add_executable(cai_input_controller_test tests/input_controller_test.c)
+  target_link_libraries(cai_input_controller_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_input_controller_test)
+  target_compile_options(cai_input_controller_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_input_controller COMMAND cai_input_controller_test)
+  set_tests_properties(cai_input_controller PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
+  target_link_libraries(cai_input_queue_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_input_queue_test)
+  target_compile_options(cai_input_queue_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_input_queue COMMAND cai_input_queue_test)
+  set_tests_properties(cai_input_queue PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   add_executable(cai_plugins_test tests/plugins_test.c)
   add_executable(cai_plugin_process_test tests/plugin_process_test.c)
   if(CAI_TARGET_ID MATCHES "-linux-musl$")

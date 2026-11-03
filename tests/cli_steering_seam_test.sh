@@ -178,10 +178,12 @@ if [[ "$protocol" == responses ]]; then
   ]}')"
   send '/review uncommitted\r'; expect ChildBarrier
   send 'REVIEWER_STEER\033\r'; expect 'S 1. REVIEWER_STEER'
+  send 'REVIEWER_SECOND_STEER\033\r'; expect 'S 2. REVIEWER_SECOND_STEER'
   absent "$term/feed" REVIEWER_STEER
   release; expect 'Fix parser'; expect 'Worked for'
   [[ $(requests) == $((before+2)) ]]
   last_request; contains "$root/request" REVIEWER_STEER
+  contains "$root/request" REVIEWER_SECOND_STEER
   contains "$root/request" ', a code reviewer'
   ordered_feed '> REVIEWER_STEER' '# Review findings'
   terminal_close

@@ -67,7 +67,7 @@ static const lonejson_field argument_fields[] = {
 LONEJSON_MAP_DEFINE(arguments_map, send_args, argument_fields);
 typedef struct message_link {
   struct message_link *next;
-  sl_prompt_id_t prompt_id;
+  unsigned long long prompt_id;
   message_doc doc;
 } message_link;
 struct cai_cli_messages {
@@ -82,6 +82,11 @@ struct cai_cli_messages {
       workspace[PATH_MAX], waiting[LC_XID_STRING_SIZE], waiting_recipient[129];
   char hostname[256], host_id[33];
   message_link *links;
+  cai_input_queue *input;
+  cai_input_queue_client *input_client;
+  unsigned long long input_request;
+  size_t blocked_count;
+  int capacity_blocked;
 };
 static lonejson_int64 realtime_ms(void) {
   struct timespec now;
@@ -1068,26 +1073,52 @@ static int list_mailboxes(cai_cli_messages *m, cai_sink *output,
   lc_error_cleanup(&local);
   return rc;
 }
-int cai_cli_messages_is_message(const cai_cli_messages *m, sl_prompt_id_t id) {
+int cai_cli_messages_is_message(const cai_cli_messages *m,
+                                unsigned long long id) {
   message_link *link;
   for (link = m != NULL ? m->links : NULL; link != NULL; link = link->next)
     if (link->prompt_id == id)
       return 1;
   return 0;
 }
-void cai_cli_messages_detach(cai_cli_messages *m, sl_t *sl) {
-  sl_prompt_queue_entry_info_t info;
-  size_t i = 0U;
-  while (i < sl_prompt_queue_count(sl)) {
-    if (sl_prompt_queue_info(sl, i, &info) != SL_OK)
-      break;
-    if (cai_cli_messages_is_message(m, info.id) &&
-        sl_prompt_queue_reject(sl, info.id) == SL_OK)
-      continue;
-    i++;
-  }
+static int input_bind(cai_cli_messages *m, cai_input_queue *queue,
+                      cai_error *error) {
+  int rc;
+  if (m->input == queue)
+    return CAI_OK;
+  if (m->input_client != NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "incoming message context changed without closing");
+  rc = cai_input_queue_client_open(queue, &m->input_client, error);
+  if (rc == CAI_OK)
+    m->input = queue;
+  return rc;
 }
-static int finish_message(cai_cli_messages *m, sl_prompt_id_t id,
+static int input_request(cai_cli_messages *m, cai_input_operation operation,
+                         const char *origin, const char *text,
+                         unsigned long long *id, cai_error *error) {
+  cai_input_request request;
+  cai_input_result result;
+  int rc;
+  if (m->input_request == ~(unsigned long long)0)
+    return cai_cli_error(error, CAI_ERR_LIMIT,
+                         "incoming message request identities exhausted");
+  memset(&request, 0, sizeof(request));
+  request.request_id = ++m->input_request;
+  request.operation = operation;
+  request.text = text;
+  request.enabled = 1;
+  snprintf(request.origin, sizeof(request.origin), "%s", origin);
+  rc = cai_input_queue_request(m->input_client, &request, &result, error);
+  if (rc == CAI_OK && result.outcome != CAI_INPUT_ACCEPTED)
+    rc = cai_cli_error(error,
+                       result.code != CAI_OK ? result.code : CAI_ERR_TRANSPORT,
+                       result.reason);
+  if (rc == CAI_OK && id != NULL)
+    *id = result.item_id;
+  return rc;
+}
+static int finish_message(cai_cli_messages *m, unsigned long long id,
                           const char *kind, cai_error *error) {
   message_link **link, *found;
   message_doc tombstone;
@@ -1101,8 +1132,15 @@ static int finish_message(cai_cli_messages *m, sl_prompt_id_t id,
     strcpy(tombstone.kind, kind);
     tombstone.pending_for[0] = '\0';
     tombstone.text = NULL;
-    if (save_doc(m, &tombstone, error) != CAI_OK)
-      return error->code;
+    {
+      int saved = save_doc(m, &tombstone, error);
+      if (saved != CAI_OK)
+        return saved;
+    }
+    if (m->input_client != NULL &&
+        input_request(m, CAI_INPUT_FORGET_ORIGIN, found->doc.id, NULL, NULL,
+                      error) != CAI_OK)
+      return error != NULL ? error->code : CAI_ERR_TRANSPORT;
     *link = found->next;
     lonejson_cleanup(&message_map, &found->doc);
     free(found);
@@ -1110,35 +1148,33 @@ static int finish_message(cai_cli_messages *m, sl_prompt_id_t id,
   }
   return CAI_OK;
 }
-int cai_cli_messages_consumed(cai_cli_messages *m, sl_prompt_id_t id,
+int cai_cli_messages_consumed(cai_cli_messages *m, unsigned long long id,
                               cai_error *error) {
   return finish_message(m, id, "consumed", error);
 }
-int cai_cli_messages_flush_decisions(cai_cli_messages *m, sl_t *sl,
-                                     cai_error *error) {
+int cai_cli_messages_flush_decisions(cai_cli_messages *m,
+                                     cai_input_queue *queue, cai_error *error) {
   message_link *link;
-  sl_prompt_queue_entry_info_t info, draft;
-  size_t j;
-  int present, rc;
-  if (m == NULL || sl == NULL)
+  cai_input_entry entry;
+  cai_input_origin_status status;
+  int rc;
+  if (m == NULL || queue == NULL)
     return CAI_OK;
-  /* A native rejection removes the ID; editing retains it in the draft. */
-  if (sl_prompt_queue_draft_info(sl, &draft) != SL_OK)
-    return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                         "inspect queued message edit");
+  rc = input_bind(m, queue, error);
+  if (rc != CAI_OK)
+    return rc;
   link = m->links;
   while (link != NULL) {
-    sl_prompt_id_t id = link->prompt_id;
+    unsigned long long id = link->prompt_id;
     message_link *next = link->next;
-    present = draft.id == id;
-    for (j = 0U; !present && j < sl_prompt_queue_count(sl); j++) {
-      if (sl_prompt_queue_info(sl, j, &info) != SL_OK)
-        return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                             "inspect incoming message queue");
-      present = info.id == id;
-    }
-    if (!present && sl_last_prompt_id(sl) != id) {
-      rc = finish_message(m, id, "rejected", error);
+    rc = cai_input_queue_find_origin(queue, link->doc.id, &entry, &status,
+                                     error);
+    if (rc != CAI_OK)
+      return rc;
+    if (status != CAI_INPUT_ORIGIN_PENDING) {
+      rc = finish_message(
+          m, id, status == CAI_INPUT_ORIGIN_CLAIMED ? "consumed" : "rejected",
+          error);
       if (rc != CAI_OK)
         return rc;
     }
@@ -1146,7 +1182,8 @@ int cai_cli_messages_flush_decisions(cai_cli_messages *m, sl_t *sl,
   }
   return CAI_OK;
 }
-int cai_cli_messages_sync(cai_cli_messages *m, sl_t *sl, cai_error *error) {
+int cai_cli_messages_sync(cai_cli_messages *m, cai_input_queue *queue,
+                          cai_error *error) {
   lc_query_req query;
   lc_query_res result;
   lc_query_key_handler handler;
@@ -1154,24 +1191,28 @@ int cai_cli_messages_sync(cai_cli_messages *m, sl_t *sl, cai_error *error) {
   message_page page;
   message_doc doc;
   message_link *link;
-  sl_prompt_queue_entry_info_t draft;
+  cai_input_state pending;
+  cai_input_entry entry;
+  cai_input_origin_status origin_status;
   char *cursor = NULL, *text, selector[256];
   size_t i, capacity;
   uint64_t notification;
   int dirty, rc = CAI_OK;
-  if (m == NULL || sl == NULL)
+  if (m == NULL || queue == NULL)
     return CAI_OK;
   while (read(m->fd, &notification, sizeof(notification)) > 0) {
   }
-  rc = cai_cli_messages_flush_decisions(m, sl, error);
+  rc = cai_cli_messages_flush_decisions(m, queue, error);
   if (rc != CAI_OK)
     return rc;
-  if (sl_prompt_queue_draft_info(sl, &draft) != SL_OK)
-    return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                         "inspect queued message capacity");
-  if (sl_prompt_queue_count(sl) + (draft.id != 0 ? 1U : 0U) >=
-      sl_prompt_queue_capacity(sl))
-    return CAI_OK;
+  if (m->capacity_blocked) {
+    rc = cai_input_queue_get_state(queue, &pending, error);
+    if (rc != CAI_OK)
+      return rc;
+    if (pending.count != 0U && pending.count >= m->blocked_count)
+      return CAI_OK;
+    m->capacity_blocked = 0;
+  }
   pthread_mutex_lock(&m->lock);
   dirty = m->dirty;
   m->dirty = 0;
@@ -1208,13 +1249,6 @@ int cai_cli_messages_sync(cai_cli_messages *m, sl_t *sl, cai_error *error) {
       rc = cai_cli_error(error, CAI_ERR_NOMEM, "copy message query cursor");
     lc_query_res_cleanup(&result);
     for (i = 0U; rc == CAI_OK && i < page.count; i++) {
-      if (sl_prompt_queue_count(sl) + (draft.id != 0 ? 1U : 0U) >=
-          sl_prompt_queue_capacity(sl)) {
-        pthread_mutex_lock(&m->lock);
-        m->dirty = 1;
-        pthread_mutex_unlock(&m->lock);
-        break;
-      }
       rc = load_doc(m, page.keys[i], &doc, error);
       if (rc != CAI_OK) {
         lonejson_cleanup(&message_map, &doc);
@@ -1225,6 +1259,37 @@ int cai_cli_messages_sync(cai_cli_messages *m, sl_t *sl, cai_error *error) {
           find_doc(m, doc.id) != NULL) {
         lonejson_cleanup(&message_map, &doc);
         continue;
+      }
+      if (cai_input_queue_find_origin(queue, doc.id, &entry, &origin_status,
+                                      NULL) == CAI_OK) {
+        link = calloc(1U, sizeof(*link));
+        if (link == NULL) {
+          lonejson_cleanup(&message_map, &doc);
+          rc = cai_cli_error(error, CAI_ERR_NOMEM,
+                             "restore pending message link");
+          break;
+        }
+        link->prompt_id = entry.id;
+        link->doc = doc;
+        link->next = m->links;
+        m->links = link;
+        if (origin_status != CAI_INPUT_ORIGIN_PENDING)
+          rc = finish_message(m, entry.id,
+                              origin_status == CAI_INPUT_ORIGIN_CLAIMED
+                                  ? "consumed"
+                                  : "rejected",
+                              error);
+        continue;
+      }
+      rc = cai_input_queue_get_state(queue, &pending, error);
+      if (rc != CAI_OK || pending.count >= 128U) {
+        m->capacity_blocked = rc == CAI_OK;
+        m->blocked_count = rc == CAI_OK ? pending.count : 0U;
+        pthread_mutex_lock(&m->lock);
+        m->dirty = 1;
+        pthread_mutex_unlock(&m->lock);
+        lonejson_cleanup(&message_map, &doc);
+        break;
       }
       capacity = strlen(doc.text != NULL ? doc.text : "") + 384U;
       text = malloc(capacity);
@@ -1243,12 +1308,23 @@ int cai_cli_messages_sync(cai_cli_messages *m, sl_t *sl, cai_error *error) {
                    : "[Agent message %s from %s (conversation %s)]\n\n%s",
                doc.id, doc.sender, doc.sender_session,
                doc.text != NULL ? doc.text : "");
-      if (sl_inject_queued_prompt(sl, text, &link->prompt_id) != SL_OK) {
+      rc = input_request(m, CAI_INPUT_OFFER, doc.id, text, &link->prompt_id,
+                         error);
+      if (rc != CAI_OK) {
         free(text);
         free(link);
         lonejson_cleanup(&message_map, &doc);
-        rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
-                           "inject incoming queued message");
+        if (rc == CAI_ERR_LIMIT) {
+          if (cai_input_queue_get_state(queue, &pending, NULL) == CAI_OK) {
+            m->capacity_blocked = pending.count != 0U;
+            m->blocked_count = pending.count;
+          }
+          pthread_mutex_lock(&m->lock);
+          m->dirty = 1;
+          pthread_mutex_unlock(&m->lock);
+          cai_error_cleanup(error);
+          rc = CAI_OK;
+        }
         break;
       }
       free(text);
@@ -1581,6 +1657,7 @@ void cai_cli_messages_close(cai_cli_messages *m) {
   if (m == NULL)
     return;
   cai_cli_messages_stop(m);
+  cai_input_queue_client_close(m->input_client);
   lc_consumer_service_close(m->service);
   lc_consumer_service_close(m->receipts_service);
   for (link = m->links; link != NULL; link = next) {

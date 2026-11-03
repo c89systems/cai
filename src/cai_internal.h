@@ -227,6 +227,11 @@ typedef struct cai_session_impl {
   size_t journal_keep_bytes;
   unsigned long long journal_revision;
   unsigned long long journal_applied_sequence;
+  /* Runtime-owned auxiliary admission state. Ordinary model commits omit it;
+   * atomic cuts and export seeds stream a recovery baseline through hooks. */
+  int (*input_checkpoint_source)(void *, cai_source **, cai_error *);
+  int (*input_checkpoint_chunk)(void *, const void *, size_t, int, cai_error *);
+  void *input_checkpoint_context;
   int journal_replace;
   lonejson_object_array journal_blocks;
   lonejson_object_array journal_hidden;

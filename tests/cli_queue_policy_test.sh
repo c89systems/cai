@@ -48,5 +48,36 @@ absent "$term/feed" '$ /output full'
 send '/status\r'; expect 'Use /tools for the full inventory.'
 send '\033\r'; expect 'applies from the next tool call'
 expect 'Q 1. STOPPED_ORDINARY_PROMPT'
+# Context changes leave accepted, stopped entries in their own conversation.
+# Switching back restores the queue rather than moving it into the new one.
+original=$(current_session_id)
+send '/new\r'; expect 'ID:'
+send '/status\r'; expect 'Metric'
+absent "$term/message" STOPPED_ORDINARY_PROMPT
+send '/resume 2\r'; expect 'Conversation resumed.'; expect 'Q 1. STOPPED_ORDINARY_PROMPT'
+absent "$term/feed" '> STOPPED_ORDINARY_PROMPT'
+send "/export $root/pending.jsonl\r"; expect "$root/pending.jsonl"
 terminal_close
 [[ $(requests) == $((before+2)) ]]
+terminal_start --resume "$original"
+expect 'Q 1. STOPPED_ORDINARY_PROMPT'
+terminal_close
+# A portable export seeds the current queue once. Historic queue deltas must
+# neither resurrect consumed commands nor misidentify local delivery receipts
+# as foreign child receipts when the conversation receives a new ID.
+run --import "$root/pending.jsonl"; ok
+imported=$(stdout_text)
+[[ -n "$imported" && "$imported" != "$original" ]]
+terminal_start --resume "$imported"
+expect 'Q 1. STOPPED_ORDINARY_PROMPT'
+send '/status\r'; expect 'Metric'
+[[ $(requests) == $((before+2)) ]]
+terminal_close
+# A headless editor has no idle/watch callbacks. EOF must still drain every
+# accepted prompt through the same owner queue and preserve their order.
+before_pipe=$(requests)
+command_plan '["PipeOneDone", "PipeTwoDone"]'
+printf 'PIPE_ONE_INPUT\nPIPE_TWO_INPUT\n' | "${base[@]}" -N >"$root/pipes.out" 2>"$root/pipes.err"
+contains "$root/pipes.out" PipeOneDone
+contains "$root/pipes.out" PipeTwoDone
+[[ $(requests) == $((before_pipe+2)) ]]
