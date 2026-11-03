@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname "$0")/cli_table_assertions.sh"
 
 cli=$1
 build_dir=$2
 fixture=$(mktemp -d "$build_dir/cli-sessions.XXXXXX")
 trap 'rm -rf "$fixture"' EXIT
-mkdir -p "$fixture/work-a" "$fixture/work-b" "$fixture/state"
-export XDG_CONFIG_HOME="$fixture/config" XDG_STATE_HOME="$fixture/state" XDG_CACHE_HOME="$fixture/cache" XDG_DATA_HOME="$fixture/data" OPENAI_API_KEY=fixture CAI_INSECURE=true
+mkdir -p "$fixture/home" "$fixture/work-a" "$fixture/work-b" "$fixture/state"
+export HOME="$fixture/home" XDG_CONFIG_HOME="$fixture/config" XDG_STATE_HOME="$fixture/state" XDG_CACHE_HOME="$fixture/cache" XDG_DATA_HOME="$fixture/data" OPENAI_API_KEY=fixture CAI_INSECURE=true CAI_MCP=false
 
 first=$(printf '/status\n/resume\n/quit\n' | "$cli" -p openai -N -C "$fixture/work-a")
-[[ "$first" == *"Status"* && "$first" == *"Model"* && "$first" == *"Reasoning effort"* ]]
+[[ "$first" == *"Status"* ]]
+table_contains /dev/stdin 1 Model <<<"$first"
+table_contains /dev/stdin 1 'Reasoning effort' <<<"$first"
 [[ "$first" == *"Conversations"* ]]
 first_id=$(printf '%s\n' "$first" | sed -n 's/^[[:space:]]*1  \([^ ]*\).*/\1/p')
 [[ -n "$first_id" ]]
@@ -18,10 +21,12 @@ first_id=$(printf '%s\n' "$first" | sed -n 's/^[[:space:]]*1  \([^ ]*\).*/\1/p')
 
 "$cli" --export "$first_id" -C "$fixture/work-a" >/dev/null
 journal="$fixture/data/cai/exports/$first_id/$first_id.jsonl"
-cat >> "$journal" <<'JSON'
-{"record_type":"event","sequence":2,"type":"assistant_text_delta","data":"Saved assistant answer"}
-{"record_type":"event","sequence":3,"type":"assistant_text_end","data":null}
-JSON
+# Startup/command diagnostics already occupy event IDs in the export. Append
+# fresh ordered IDs rather than conflicting with existing collection entries.
+sequence=$(jq -s '[.[] | select(.record_type == "event") | .sequence] | max // 0' "$journal")
+jq -cn --argjson sequence "$sequence" \
+  '{record_type:"event",sequence:($sequence+1),type:"assistant_text_delta",data:"Saved assistant answer"},
+   {record_type:"event",sequence:($sequence+2),type:"assistant_text_end",data:null}' >>"$journal"
 imported_id=$("$cli" --import "$journal" -C "$fixture/work-a")
 [[ -n "$imported_id" && "$imported_id" != "$first_id" ]]
 resumed=$(printf '/resume\n/quit\n' | "$cli" -p openai -C "$fixture/work-a")

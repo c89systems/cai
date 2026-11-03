@@ -106,8 +106,7 @@ has_since() {
 expect() { wait_for has_since "${send_offset:-0}" "$1" "${send_feed_offset:-0}"; }
 # Row-streamed tables choose widths before later aliases arrive. Assert cell
 # contents independently of wrapping, without joining different columns.
-table_column() { local column=$1; shift; awk -F '│' -v column="$((column+1))" 'NF > column {printf "%s", $column}' "$@" | tr -d '[:space:]'; }
-table_contains() { table_column "$2" "$1" | grep -F -- "$(printf '%s' "$3" | tr -d '[:space:]')" >/dev/null; }
+source "$support/cli_table_assertions.sh"
 table_since() { tail -c +$((${send_feed_offset:-0}+1)) "$term/feed" | table_column "$1" | grep -F -- "$(printf '%s' "$2" | tr -d '[:space:]')" >/dev/null; }
 expect_table() { wait_for table_since "$1" "$2"; }
 expect_prompt() { wait_for has "$term/prompt" "$1"; }

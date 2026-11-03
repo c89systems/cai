@@ -21,11 +21,11 @@ grep -Fq $'\033[0mMessage\033[0m' "$term/raw"
 grep -Fq $'\033[0mqueue:\033[0m' "$term/raw"
 # A code span must have a non-default style, independent of the theme color.
 grep -Eq $'\033\\[[0-9;]*[1-9][0-9;]*mtoggle-recovery\033\\[0m' "$term/raw"
-send '/tools\r'; expect 'agent_message'
+send '/tools\r'; expect_table 1 agent_message
 send '/queue off\r'; expect 'Messaging is disabled'
 send '/tools\r'; expect 'No MCP servers configured'
 tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/tools"
-absent "$root/tools" agent_message
+! table_contains "$root/tools" 1 agent_message
 [[ $(requests) == 0 ]]
 run --list; ok
 [[ $(wc -l <"$root/stdout") == 1 ]]

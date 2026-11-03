@@ -52,7 +52,7 @@ jq -se '.[0] | any(.tools[]; (.name // .function.name) == "plugin_echo")' "$root
 # Interactive control uses the common Softline command path and Markdown feed.
 plan "$(jq -n --argjson chat "$chat" '{chat:$chat,plan:[]}')"
 terminal_start -N
-send '/tools\r'; expect plugin_lua
+send '/tools\r'; expect_table 1 plugin_lua
 send '/tools unload plugin_lua\r'; expect 'Tool catalog updated'
 send '/tools reload\r'; expect 'Tool catalog updated'
 send '/reasoning-tool on\r'; expect 'Changes apply to this app'

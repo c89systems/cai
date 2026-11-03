@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname "$0")/cli_table_assertions.sh"
 
 cli=$1
 build_dir=$2
@@ -33,18 +34,22 @@ test ! -f "$fixture/state/cai/auth.json"
 
 openai=$(printf '/status\n/quit\n' | OPENAI_API_KEY=fixture "$cli" -N -p openai -C "$fixture/work")
 [[ "$openai" == *"Provider"* && "$openai" == *"openai"* ]]
-[[ "$openai" != *"Weekly limit"* && "$openai" != *"Credits left"* ]]
+! table_contains /dev/stdin 1 'Weekly limit' <<<"$openai"
+! table_contains /dev/stdin 1 'Credits left' <<<"$openai"
 router=$(printf '/status\n/quit\n' | OPENROUTER_API_KEY=fixture "$cli" -N -p openrouter -C "$fixture/work")
 [[ "$router" == *"Provider"* && "$router" == *"openrouter"* ]]
 [[ "$router" == *"Model"* && "$router" == *"openai/gpt-5.6-luna"* ]]
 berget=$(printf '/status\n/quit\n' | BERGET_API_KEY=fixture "$cli" -N -p berget -C "$fixture/work")
 [[ "$berget" == *"Provider"* && "$berget" == *"berget"* ]]
 [[ "$berget" == *"Model"* && "$berget" == *"zai-org/GLM-5.3-Flash"* ]]
-[[ "$berget" == *"Reasoning effort"* && "$berget" == *"medium"* ]]
-[[ "$berget" != *"Weekly limit"* && "$berget" != *"Credits left"* ]]
+table_contains /dev/stdin 1 'Reasoning effort' <<<"$berget"
+table_contains /dev/stdin 2 medium <<<"$berget"
+! table_contains /dev/stdin 1 'Weekly limit' <<<"$berget"
+! table_contains /dev/stdin 1 'Credits left' <<<"$berget"
 mv "$XDG_CONFIG_HOME/cai/models.json" "$fixture/models.saved"
 berget_no_file=$(printf '/status\n/quit\n' | BERGET_API_KEY=fixture "$cli" -N -p berget -C "$fixture/work")
-[[ "$berget_no_file" == *"Context window"* && "$berget_no_file" == *"1048576"* ]]
+table_contains /dev/stdin 1 'Context window' <<<"$berget_no_file"
+table_contains /dev/stdin 2 1048576 <<<"$berget_no_file"
 mv "$fixture/models.saved" "$XDG_CONFIG_HOME/cai/models.json"
 printf 'invalid\n' > "$fixture/invalid-models.json"
 if printf '/quit\n' | BERGET_API_KEY=fixture "$cli" -N -p berget -C "$fixture/work" \
