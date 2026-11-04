@@ -194,6 +194,11 @@ and code points above U+10FFFF. Nesting is bounded. No C-string assumptions for
 byte/text chunks. CBOR negative integers carry the unsigned argument directly,
 so the codec can represent the complete 64-bit CBOR integer domain.
 
+POSIX paths and runtime data fragments use byte strings: filesystem names need
+not be UTF-8, and producer fragments can split a Unicode scalar. Use text
+strings for validated labels/identifiers. Preserve exact bytes until the
+frontend applies its existing rendering/sanitization policy.
+
 The codec accepts successive byte fragments and emits borrowed tokens/chunks
 while consuming them, without a DOM or retained value. Definite strings can
 emit many data chunks. Indefinite strings accept definite chunks of the same

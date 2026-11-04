@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 #define CAI_CBOR_MAX_DEPTH 32U
+#define CAI_CBOR_MAX_CHUNK_BYTES (32U * 1024U)
 
 typedef enum cai_cbor_type {
   CAI_CBOR_UINT = 0,
@@ -52,7 +53,8 @@ typedef struct cai_cbor_encoder cai_cbor_encoder;
 
 /** Decode exactly one item. State is fixed-size and heap-owned; strings and
  * containers are not accumulated. feed accepts any fragment boundary and
- * emits DATA before the whole value arrives. Tokens are provisional until
+ * emits DATA in pieces of at most CAI_CBOR_MAX_CHUNK_BYTES before the whole
+ * value arrives. Tokens are provisional until
  * finish succeeds: consumers must not execute partially decoded requests.
  * Duplicate map-key policy belongs to the typed consumer, not this codec.
  * All callback/parse failures are terminal; close and open a fresh handle.
@@ -69,7 +71,8 @@ int cai_cbor_decoder_reset(cai_cbor_decoder *decoder, cai_error *error);
 void cai_cbor_decoder_close(cai_cbor_decoder *decoder);
 
 /** Write exactly one item to a borrowed synchronous sink. Each call emits
- * immediately, using at most a nine-byte header. Lengths are supplied by the
+ * immediately, using at most a nine-byte header and 32 KiB data writes.
+ * Lengths are supplied by the
  * producer; unknown lengths use indefinite strings/containers. No sizing pass,
  * backpatching, materialization or spooling is performed. The sink must outlive
  * the encoder. I/O and validation failures are terminal, including a short

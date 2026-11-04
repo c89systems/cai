@@ -331,6 +331,108 @@ static int refuse(void *context, const cai_cbor_token *token,
   (void)error;
   return CAI_ERR_CANCELLED;
 }
+typedef struct fragment_counter {
+  size_t bytes, calls;
+  int cancel;
+} fragment_counter;
+static int bounded_token(void *context, const cai_cbor_token *token,
+                         cai_error *error) {
+  fragment_counter *value = context;
+  (void)error;
+  if (token->type == CAI_CBOR_DATA) {
+    assert(token->length <= CAI_CBOR_MAX_CHUNK_BYTES);
+    value->bytes += token->length;
+    ++value->calls;
+    if (value->cancel)
+      return CAI_ERR_CANCELLED;
+  }
+  return CAI_OK;
+}
+static int bounded_write(void *context, const void *bytes, size_t count,
+                         cai_error *error) {
+  fragment_counter *value = context;
+  (void)bytes;
+  (void)error;
+  assert(count <= CAI_CBOR_MAX_CHUNK_BYTES);
+  value->bytes += count;
+  ++value->calls;
+  return value->cancel ? CAI_ERR_CANCELLED : CAI_OK;
+}
+static void bounded_fragments(void) {
+  size_t length = CAI_CBOR_MAX_CHUNK_BYTES * 2U;
+  char *bytes = malloc(length);
+  int cancel;
+  assert(bytes != NULL);
+  for (cancel = 0; cancel < 2; ++cancel) {
+    cai_sink_callbacks callbacks;
+    cai_sink *sink = NULL;
+    cai_cbor_encoder *encoder = NULL;
+    cai_cbor_decoder *decoder = NULL;
+    fragment_counter value;
+    memset(&value, 0, sizeof(value));
+    memset(&callbacks, 0, sizeof(callbacks));
+    memset(bytes, 'x', length);
+    bytes[CAI_CBOR_MAX_CHUNK_BYTES - 1U] = (char)0xc2;
+    bytes[CAI_CBOR_MAX_CHUNK_BYTES] = (char)0xa2;
+    if (cancel)
+      bytes[length - 1U] = (char)0xff;
+    value.cancel = cancel;
+    assert(cai_cbor_decoder_open(bounded_token, &value, &decoder, NULL) ==
+           CAI_OK);
+    assert(cai_cbor_decoder_feed(decoder, "\x7a\0\x01\0\0", 5U, NULL) ==
+           CAI_OK);
+    /* Cancellation must interrupt validation before an invalid distant tail.
+     * Successful delivery must split even one large caller-provided span. */
+    assert(cai_cbor_decoder_feed(decoder, bytes, length, NULL) ==
+           (cancel ? CAI_ERR_CANCELLED : CAI_OK));
+    assert(value.bytes == (cancel ? length / 2U : length));
+    assert(value.calls == (cancel ? 1U : 2U));
+    if (!cancel)
+      assert(cai_cbor_decoder_finish(decoder, NULL) == CAI_OK);
+    cai_cbor_decoder_close(decoder);
+    memset(&value, 0, sizeof(value));
+    callbacks.write = bounded_write;
+    callbacks.context = &value;
+    assert(cai_sink_from_callbacks(&callbacks, &sink, NULL) == CAI_OK);
+    assert(cai_cbor_encoder_open(sink, &encoder, NULL) == CAI_OK);
+    assert(write_token(encoder, CAI_CBOR_TEXT, length, 0, NULL, 0U) == CAI_OK);
+    value.bytes = value.calls = 0U;
+    value.cancel = cancel;
+    assert(write_token(encoder, CAI_CBOR_DATA, 0U, 0, bytes, length) ==
+           (cancel ? CAI_ERR_CANCELLED : CAI_OK));
+    assert(value.bytes == (cancel ? length / 2U : length));
+    assert(value.calls == (cancel ? 1U : 2U));
+    if (!cancel) {
+      assert(write_token(encoder, CAI_CBOR_END, CAI_CBOR_TEXT, 0, NULL, 0U) ==
+             CAI_OK);
+      assert(cai_cbor_encoder_finish(encoder, NULL) == CAI_OK);
+    }
+    cai_cbor_encoder_close(encoder);
+    cai_sink_close(sink);
+  }
+  {
+    cai_sink_callbacks callbacks;
+    cai_sink *sink = NULL;
+    cai_cbor_encoder *encoder = NULL;
+    fragment_counter value;
+    memset(&value, 0, sizeof(value));
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.write = bounded_write;
+    callbacks.context = &value;
+    assert(cai_sink_from_callbacks(&callbacks, &sink, NULL) == CAI_OK);
+    assert(cai_cbor_encoder_open(sink, &encoder, NULL) == CAI_OK);
+    assert(write_token(encoder, CAI_CBOR_BYTES, length / 2U, 0, NULL, 0U) ==
+           CAI_OK);
+    value.bytes = value.calls = 0U;
+    assert(write_token(encoder, CAI_CBOR_DATA, 0U, 0, bytes, length) ==
+           CAI_ERR_PROTOCOL);
+    /* Known length overruns must fail before sending even a valid prefix. */
+    assert(value.calls == 0U && value.bytes == 0U);
+    cai_cbor_encoder_close(encoder);
+    cai_sink_close(sink);
+  }
+  free(bytes);
+}
 static void reuse(void) {
   cai_cbor_decoder *decoder = NULL;
   cai_cbor_encoder *encoder = NULL;
@@ -418,6 +520,7 @@ int main(void) {
   truncations();
   encoder_failures();
   reuse();
+  bounded_fragments();
   memset(nesting, 0x81, sizeof(nesting));
   assert(cai_cbor_decoder_open(discard, NULL, &decoder, NULL) == CAI_OK);
   assert(cai_cbor_decoder_feed(decoder, nesting, CAI_CBOR_MAX_DEPTH, NULL) ==

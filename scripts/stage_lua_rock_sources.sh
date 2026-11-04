@@ -58,6 +58,7 @@ files=(
   README.md
   docs/model-metadata.md
   docs/embedding.md
+  docs/workspace-server.md
   docs/agent-messaging.md
   docs/kanban.md
   docs/journal.md

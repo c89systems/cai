@@ -123,14 +123,23 @@ static int utf8(cbor_frame *frame, const unsigned char *data, size_t count) {
   }
   return 1;
 }
-static int data(cbor_state *state, const void *bytes, size_t count,
-                cai_error *error) {
+static int data_room(cbor_state *state, const void *bytes, size_t count,
+                     cai_error *error) {
   cbor_frame *frame = top(state);
   if (frame == NULL ||
       (frame->type != CAI_CBOR_BYTES && frame->type != CAI_CBOR_TEXT) ||
       frame->indefinite || (count != 0U && bytes == NULL) ||
       (uint64_t)count > frame->remaining)
     return fail(state, error, CAI_ERR_PROTOCOL, "Invalid CBOR string data");
+  return CAI_OK;
+}
+static int data(cbor_state *state, const void *bytes, size_t count,
+                cai_error *error) {
+  cbor_frame *frame;
+  int rc = data_room(state, bytes, count, error);
+  if (rc != CAI_OK)
+    return rc;
+  frame = top(state);
   if (frame->type == CAI_CBOR_TEXT && !utf8(frame, bytes, count))
     return fail(state, error, CAI_ERR_PROTOCOL, "Invalid CBOR UTF-8 text");
   frame->remaining -= (uint64_t)count;
@@ -262,6 +271,8 @@ int cai_cbor_decoder_feed(cai_cbor_decoder *decoder, const void *bytes,
       size_t take = frame->remaining < (uint64_t)length
                         ? (size_t)frame->remaining
                         : length;
+      if (take > CAI_CBOR_MAX_CHUNK_BYTES)
+        take = CAI_CBOR_MAX_CHUNK_BYTES;
       rc = data(&decoder->state, input, take, error);
       if (rc == CAI_OK)
         rc = emit(decoder, CAI_CBOR_DATA, 0U, 0, input, take, error);
@@ -340,9 +351,20 @@ int cai_cbor_encoder_write(cai_cbor_encoder *encoder,
   if (rc != CAI_OK)
     return rc;
   if (token->type == CAI_CBOR_DATA) {
-    rc = data(&encoder->state, token->data, token->length, error);
-    if (rc == CAI_OK && token->length != 0U)
-      rc = cai_sink_write(encoder->sink, token->data, token->length, error);
+    size_t offset = 0U;
+    /* Reject a known length overrun before emitting any part of this call.
+     * UTF-8 validation and sink delivery then progress in bounded pieces. */
+    rc = data_room(&encoder->state, token->data, token->length, error);
+    while (rc == CAI_OK && offset < token->length) {
+      size_t take = token->length - offset;
+      const unsigned char *input = token->data;
+      if (take > CAI_CBOR_MAX_CHUNK_BYTES)
+        take = CAI_CBOR_MAX_CHUNK_BYTES;
+      rc = data(&encoder->state, input + offset, take, error);
+      if (rc == CAI_OK)
+        rc = cai_sink_write(encoder->sink, input + offset, take, error);
+      offset += take;
+    }
   } else if (token->type == CAI_CBOR_END) {
     cbor_frame *frame = top(&encoder->state);
     indefinite = frame != NULL && frame->indefinite;

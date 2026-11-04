@@ -121,6 +121,45 @@ static void short_io(void) {
   cai_wire_peer_close(a.peer);
   cai_wire_peer_close(b.peer);
 }
+static void streamed_records(void) {
+  int sockets[2], eof;
+  receiver a, b;
+  char bytes[2048];
+  size_t record, chunk, produced = 0U;
+  memset(&a, 0, sizeof(a));
+  memset(&b, 0, sizeof(b));
+  memset(bytes, 'x', sizeof(bytes));
+  assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+  assert(cai_wire_peer_open(sockets[0], 0U, observe, &a, &a.peer, NULL) ==
+         CAI_OK);
+  assert(cai_wire_peer_open(sockets[1], 0U, observe, &b, &b.peer, NULL) ==
+         CAI_OK);
+  for (record = 0U; record < 1024U; ++record) {
+    assert(cai_wire_peer_begin(a.peer, CAI_WIRE_CHUNK_SIZE + 3U, NULL) ==
+           CAI_OK);
+    assert(write_token(a.peer, CAI_CBOR_TEXT, CAI_WIRE_CHUNK_SIZE, NULL, 0U) ==
+           CAI_OK);
+    for (chunk = 0U; chunk < CAI_WIRE_CHUNK_SIZE / sizeof(bytes); ++chunk) {
+      assert(write_token(a.peer, CAI_CBOR_DATA, 0U, bytes, sizeof(bytes)) ==
+             CAI_OK);
+      produced += sizeof(bytes);
+      assert(cai_wire_peer_flush(a.peer, 0U, NULL) == CAI_OK);
+      assert(cai_wire_peer_read(b.peer, 0U, &eof, NULL) == CAI_OK && !eof);
+      /* Prove socket delivery while producing, including before this record
+       * is finished; no full record or logical stream is staged for sending. */
+      assert(b.bytes == produced);
+      if (chunk == 0U)
+        assert(b.begins == record + 1U && b.ends == record);
+    }
+    assert(write_token(a.peer, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U) ==
+           CAI_OK);
+    assert(cai_wire_peer_end(a.peer, NULL) == CAI_OK);
+    assert(b.ends == record + 1U && cai_wire_peer_pending(a.peer) == 0U);
+  }
+  assert(b.bytes == 32U * 1024U * 1024U);
+  cai_wire_peer_close(a.peer);
+  cai_wire_peer_close(b.peer);
+}
 static void backlog(void) {
   int sockets[2];
   receiver state;
@@ -201,6 +240,7 @@ static void invalid_open(void) {
 }
 int main(void) {
   short_io();
+  streamed_records();
   backlog();
   disconnects();
   sigpipe();
