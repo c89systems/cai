@@ -231,10 +231,13 @@ int cai_app_client_open(const cai_app_client_config *config, uint64_t now,
     return cai_cli_error(error, CAI_ERR_NOMEM, "allocate application client");
   client->owner = pthread_self();
   client->config = *config;
+  client->config.runtime_directory = client->config.workspace = NULL;
+  client->config.expected_instance = NULL;
   cai_workspace_client_config_init(&socket);
   socket.runtime_directory = config->runtime_directory;
   socket.workspace = config->workspace;
   socket.handshake_timeout_ms = config->handshake_timeout_ms;
+  socket.expected_instance = config->expected_instance;
   socket.backlog_limit = config->backlog_limit;
   socket.event = receive;
   socket.context = client;

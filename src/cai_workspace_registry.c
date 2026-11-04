@@ -370,8 +370,13 @@ int cai_workspace_registry_next(cai_workspace_registry *r,
     if (fd >= 0 || errno != ENOENT)
       break;
   }
-  if (fd < 0)
+  if (fd < 0) {
+    if (errno == ELOOP || errno == EACCES)
+      return cai_set_error_detail(error, CAI_ERR_INVALID,
+                                  "discovery record is unsafe or unreadable",
+                                  r->file);
     return io(error, "open discovery record");
+  }
   if (fstat(fd, &r->current) != 0 || !private_file(&r->current) ||
       r->current.st_size > 8192) {
     close(fd);

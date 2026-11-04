@@ -10,6 +10,7 @@ endif()
 file(RENAME "${root}/stage" "${root}/relocated")
 set(prefix "${root}/relocated")
 foreach(path include/cai/app.h include/cai/app_client.h include/cai/workspace_registry.h
+    include/cai/workspace_discovery.h
     lib/libcai_app.a lib/pkgconfig/cai-app.pc
     lib/cmake/cai_app/cai_app-config.cmake share/doc/libcai_app/embedding.md
     share/cai_app/dependencies.json
@@ -41,6 +42,7 @@ file(WRITE "${root}/source/main.c" [=[
 #include <cai/skills.h>
 #include <cai/app_client.h>
 #include <cai/workspace_registry.h>
+#include <cai/workspace_discovery.h>
 int main(int argc, char **argv) {
   cai_app *app = NULL;
   cai_app_status status;
@@ -48,11 +50,15 @@ int main(int argc, char **argv) {
   cai_skill_metadata *metadata = NULL;
   cai_app_client_config client;
   cai_workspace_registry *registry = NULL;
+  cai_workspace_discovery_config discovery;
   const cai_workspace_record *record = NULL;
   unsigned long long id;
   cai_error_init(&error);
   cai_app_client_config_init(&client);
   assert(client.event == NULL && client.handshake_timeout_ms == 0U);
+  assert(client.expected_instance == NULL);
+  cai_workspace_discovery_config_init(&discovery);
+  assert(discovery.selector == NULL && discovery.probe_timeout_ms == 0U);
   assert(cai_workspace_registry_open(NULL, &registry, &error) == CAI_ERR_INVALID);
   assert(registry == NULL);
   cai_error_cleanup(&error);

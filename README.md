@@ -163,7 +163,10 @@ prefixes apply). Empty is the default. Private runtime-directory metadata
 contains canonical workspace paths and server identities; native clients read
 these hints with `cai/workspace_registry.h` and verify them with an identity
 probe. A name is reserved by an OS lock for the server lifetime, without
-polling or lease renewals. Terminal selection by name is still pending.
+polling or lease renewals. `cai/workspace_discovery.h` offers native asynchronous
+name/ID/path resolution and incremental verified listing. Pin the result's
+instance in a workspace/app client greeting before attaching. Terminal
+selection by name is still pending.
 
 Agent startup requires workspace approval. On first use, run `cai -y`
 (`--yes` or `--force`) to approve the current directory and its descendants for

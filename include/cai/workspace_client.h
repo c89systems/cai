@@ -34,6 +34,12 @@ typedef struct cai_workspace_client_state {
 typedef struct cai_workspace_client_config {
   const char *runtime_directory;
   const char *workspace;
+  /** Optional 16-byte owner instance, copied at open. Guarded attachments are
+   * rejected by the host before acquiring authority if that instance changed.
+   * Probes verify the reply against it without attaching. NULL selects the
+   * current owner of this canonical workspace, without pinning an instance.
+   */
+  const unsigned char *expected_instance;
   /** Zero means no deadline: restoration may take time while this event loop
    * remains responsive. Otherwise bounds connect/WELCOME/initial ROLE. */
   uint64_t handshake_timeout_ms;

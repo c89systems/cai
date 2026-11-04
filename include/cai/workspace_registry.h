@@ -18,7 +18,8 @@ int cai_workspace_registry_open(const char *runtime_directory,
                                 cai_workspace_registry **out, cai_error *);
 /** Read one bounded record at a time. Borrowed until the next call/close.
  * CAI_OK with *out == NULL means end. A malformed/unsafe record returns an
- * error but advances; callers may continue listing. Other files are ignored.
+ * error but advances; callers may continue listing. System I/O/allocation
+ * failures abort the operation instead. Other files are ignored.
  * Records are hints, including crashed owners: validate canonical identity and
  * instance with a workspace client probe before presenting them as live.
  * Metadata has at most 4095 workspace bytes and 255 name bytes. Names are

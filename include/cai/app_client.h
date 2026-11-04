@@ -44,6 +44,9 @@ typedef struct cai_app_client_event {
 typedef struct cai_app_client_config {
   const char *runtime_directory;
   const char *workspace;
+  /** Optional 16-byte owner identity copied at open, checked by the server
+   * before admitting an attachment. Set from verified selector discovery. */
+  const unsigned char *expected_instance;
   uint64_t handshake_timeout_ms;
   size_t backlog_limit;
   /** Borrowed through close, invoked on the opening thread. May query state

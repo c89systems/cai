@@ -3,6 +3,7 @@
 #include "../cli/input_socket.h"
 #include "../cli/workspace_host.h"
 #include <assert.h>
+#include <cai/workspace_registry.h>
 #include <dirent.h>
 #include <lc/lc.h>
 #include <pthread.h>
@@ -95,6 +96,36 @@ static void connect(fixture *f, frontend *v) {
   config.event = observed;
   config.context = v;
   assert(cai_app_client_open(&config, ++f->clock, &v->client, NULL) == CAI_OK);
+}
+static void reject_instance(fixture *f) {
+  cai_app_client_config config;
+  cai_app_client *client;
+  cai_app_client_state state;
+  cai_workspace_registry *registry;
+  const cai_workspace_record *record;
+  unsigned char expected[16];
+  size_t i;
+  int rc = CAI_OK;
+  assert(cai_workspace_registry_open(f->runtime, &registry, NULL) == CAI_OK);
+  assert(cai_workspace_registry_next(registry, &record, NULL) == CAI_OK &&
+         record);
+  memcpy(expected, record->instance, sizeof(expected));
+  expected[15] ^= 1U;
+  cai_workspace_registry_close(registry);
+  cai_app_client_config_init(&config);
+  config.runtime_directory = f->runtime;
+  config.workspace = f->workspace;
+  config.expected_instance = expected;
+  assert(cai_app_client_open(&config, ++f->clock, &client, NULL) == CAI_OK);
+  for (i = 0U; i < 32U && rc == CAI_OK; ++i) {
+    server(f);
+    rc = cai_app_client_pump(client, ++f->clock, NULL);
+  }
+  assert(rc == CAI_ERR_TRANSPORT);
+  assert(cai_app_client_get_state(client, &state, NULL) == CAI_OK);
+  assert(state.transport.phase == CAI_WORKSPACE_FAILED &&
+         !state.transport.has_welcome);
+  cai_app_client_close(client);
 }
 static void open_frontend(fixture *f, frontend *v, int editor,
                           unsigned long long producer,
@@ -413,6 +444,7 @@ static void *run(void *unused) {
   assert(cai_cli_workspace_host_input(f->host, f->controller, "session",
                                       NULL) == CAI_OK);
   assert(cai_cli_workspace_host_ready(f->host, NULL) == CAI_OK);
+  reject_instance(f);
   cases(f);
   assert(cai_cli_workspace_host_input(f->host, NULL, NULL, NULL) == CAI_OK);
   cai_cli_workspace_host_close(f->host);

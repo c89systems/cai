@@ -16,8 +16,10 @@ struct cai_workspace_client {
   pthread_t owner;
   uint64_t now, role, role_generation;
   unsigned char instance[CAI_WORKSPACE_INSTANCE_BYTES];
+  unsigned char expected[CAI_WORKSPACE_INSTANCE_BYTES];
   size_t part, offset;
   int fd, pumping, writing, persistence;
+  int expecting;
   cai_attachment_phase server_phase;
 };
 static int valid(cai_workspace_client *client, cai_error *error) {
@@ -77,6 +79,9 @@ static int identity(cai_workspace_client *client,
   }
   if (event->type == CAI_PROTOCOL_COMPLETE) {
     if (client->part != 10U)
+      return invalid(error);
+    if (client->expecting && memcmp(client->instance, client->expected,
+                                    sizeof(client->instance)) != 0)
       return invalid(error);
     memcpy(client->state.instance, client->instance, sizeof(client->instance));
     client->state.persist = client->persistence;
@@ -158,6 +163,9 @@ static int welcome(cai_workspace_client *client,
   }
   if (event->type == CAI_PROTOCOL_COMPLETE) {
     if (client->part != 7U)
+      return invalid(error);
+    if (client->expecting && memcmp(client->instance, client->expected,
+                                    sizeof(client->instance)) != 0)
       return invalid(error);
     client->state.attachment = h->attachment;
     client->state.generation = h->generation;
@@ -304,16 +312,34 @@ static int connected(cai_workspace_client *client, cai_error *error) {
   client->state.phase = CAI_WORKSPACE_GREETING;
   memset(&header, 0, sizeof(header));
   header.kind = client->config.probe ? CAI_PROTOCOL_PROBE : CAI_PROTOCOL_HELLO;
-  rc = cai_protocol_peer_begin(client->wire, &header,
-                               1U + size_of_string(strlen(directory)) +
-                                   size_of_string(strlen(CAI_WORKSPACE_SCHEMA)),
-                               error);
+  rc =
+      cai_protocol_peer_begin(client->wire, &header,
+                              1U + size_of_string(strlen(directory)) +
+                                  size_of_string(strlen(CAI_WORKSPACE_SCHEMA)) +
+                                  (client->config.probe ? 0U
+                                   : client->expecting  ? 17U
+                                                        : 1U),
+                              error);
   if (rc == CAI_OK)
-    rc = token(client, CAI_CBOR_ARRAY, 2U, NULL, 0U, error);
+    rc = token(client, CAI_CBOR_ARRAY, client->config.probe ? 2U : 3U, NULL, 0U,
+               error);
   if (rc == CAI_OK)
     rc = string(client, CAI_CBOR_BYTES, directory, error);
   if (rc == CAI_OK)
     rc = string(client, CAI_CBOR_TEXT, CAI_WORKSPACE_SCHEMA, error);
+  if (rc == CAI_OK && !client->config.probe) {
+    if (!client->expecting)
+      rc = token(client, CAI_CBOR_NULL, 0U, NULL, 0U, error);
+    else {
+      rc = token(client, CAI_CBOR_BYTES, sizeof(client->expected), NULL, 0U,
+                 error);
+      if (rc == CAI_OK)
+        rc = token(client, CAI_CBOR_DATA, 0U, client->expected,
+                   sizeof(client->expected), error);
+      if (rc == CAI_OK)
+        rc = token(client, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U, error);
+    }
+  }
   if (rc == CAI_OK)
     rc = token(client, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, error);
   if (rc == CAI_OK)
@@ -342,6 +368,11 @@ int cai_workspace_client_open(const cai_workspace_client_config *config,
   client->fd = -1;
   client->config = *config;
   client->config.runtime_directory = client->config.workspace = NULL;
+  client->config.expected_instance = NULL;
+  client->expecting = config->expected_instance != NULL;
+  if (client->expecting)
+    memcpy(client->expected, config->expected_instance,
+           sizeof(client->expected));
   client->owner = pthread_self();
   client->now = now;
   if (config->handshake_timeout_ms != 0U)

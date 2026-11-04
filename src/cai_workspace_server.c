@@ -260,7 +260,7 @@ static int greeting(server_peer *peer, const cai_protocol_event *event,
     return CAI_OK;
   }
   if (event->type == CAI_PROTOCOL_COMPLETE) {
-    if (peer->part != 6U)
+    if (peer->part != (peer->probe ? 6U : 8U))
       goto invalid;
     peer->greeted = 1;
     if (peer->probe)
@@ -272,7 +272,8 @@ static int greeting(server_peer *peer, const cai_protocol_event *event,
     goto invalid;
   switch (peer->part) {
   case 0:
-    if (token->type != CAI_CBOR_ARRAY || token->argument != 2U)
+    if (token->type != CAI_CBOR_ARRAY ||
+        token->argument != (peer->probe ? 2U : 3U))
       goto invalid;
     peer->part = 1U;
     break;
@@ -305,9 +306,39 @@ static int greeting(server_peer *peer, const cai_protocol_event *event,
       goto invalid;
     break;
   case 5:
+    if (!peer->probe) {
+      if (token->type == CAI_CBOR_NULL)
+        peer->part = 7U;
+      else if (token->type == CAI_CBOR_BYTES &&
+               token->argument == CAI_WORKSPACE_INSTANCE_BYTES) {
+        peer->offset = 0U;
+        peer->part = 6U;
+      } else
+        goto invalid;
+      break;
+    }
     if (token->type != CAI_CBOR_END || token->argument != CAI_CBOR_ARRAY)
       goto invalid;
     peer->part = 6U;
+    break;
+  case 6:
+    if (token->type == CAI_CBOR_DATA) {
+      if (token->length > CAI_WORKSPACE_INSTANCE_BYTES - peer->offset ||
+          memcmp(token->data, peer->server->instance + peer->offset,
+                 token->length) != 0)
+        goto invalid;
+      peer->offset += token->length;
+    } else if (token->type == CAI_CBOR_END &&
+               token->argument == CAI_CBOR_BYTES &&
+               peer->offset == CAI_WORKSPACE_INSTANCE_BYTES)
+      peer->part = 7U;
+    else
+      goto invalid;
+    break;
+  case 7:
+    if (token->type != CAI_CBOR_END || token->argument != CAI_CBOR_ARRAY)
+      goto invalid;
+    peer->part = 8U;
     break;
   default:
     goto invalid;

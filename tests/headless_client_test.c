@@ -3,6 +3,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
 #include <cai/app_client.h>
+#include <cai/workspace_discovery.h>
 #include <cai/workspace_registry.h>
 #include <errno.h>
 #include <lc/lc.h>
@@ -94,6 +95,39 @@ static void step(view *v) {
   assert(rc == CAI_OK);
   assert(cai_app_client_get_state(v->client, &v->state, NULL) == CAI_OK);
 }
+static void discover(const char *runtime, const char *workspace,
+                     const char *name, unsigned char instance[16]) {
+  cai_workspace_discovery_config config;
+  cai_workspace_discovery_state state;
+  cai_workspace_discovery *query;
+  const cai_workspace_discovery_result *result;
+  struct pollfd fd;
+  uint64_t deadline, now, until = now_ms() + 10000U;
+  cai_workspace_discovery_config_init(&config);
+  config.runtime_directory = runtime;
+  config.selector = name ? name : workspace;
+  assert(cai_workspace_discovery_open(&config, now_ms(), &query, NULL) ==
+         CAI_OK);
+  do {
+    assert(cai_workspace_discovery_prepare(query, &fd, &deadline, NULL) ==
+           CAI_OK);
+    now = now_ms();
+    assert(now < until && deadline != 0U);
+    if (deadline > until)
+      deadline = until;
+    assert(poll(&fd, 1U, deadline > now ? (int)(deadline - now) : 0) >= 0 ||
+           errno == EINTR);
+    assert(cai_workspace_discovery_pump(query, now_ms(), NULL) == CAI_OK);
+    assert(cai_workspace_discovery_get_state(query, &state, NULL) == CAI_OK);
+  } while (state.phase == CAI_WORKSPACE_DISCOVERING);
+  assert(state.phase == CAI_WORKSPACE_FOUND);
+  result = cai_workspace_discovery_get_result(query);
+  assert(result && strcmp(result->record.workspace, workspace) == 0);
+  if (name)
+    assert(strcmp(result->record.name, name) == 0);
+  memcpy(instance, result->record.instance, 16U);
+  cai_workspace_discovery_close(query);
+}
 static void identify(const char *runtime, const char *workspace,
                      const char *name) {
   cai_workspace_client_config config;
@@ -104,9 +138,12 @@ static void identify(const char *runtime, const char *workspace,
   cai_workspace_registry *registry;
   const cai_workspace_record *record;
   size_t matches = 0U;
+  unsigned char instance[16];
+  discover(runtime, workspace, name, instance);
   cai_workspace_client_config_init(&config);
   config.runtime_directory = runtime;
   config.workspace = workspace;
+  config.expected_instance = instance;
   config.probe = 1;
   config.handshake_timeout_ms = 10000U;
   assert(cai_workspace_client_open(&config, now_ms(), &client, NULL) == CAI_OK);
@@ -143,6 +180,7 @@ static void identify(const char *runtime, const char *workspace,
 int main(int argc, char **argv) {
   cai_app_client_config config;
   view *v = calloc(1U, sizeof(*v));
+  unsigned char expected[16];
   int shutdown, work, abrupt;
   assert(argc == 4 && v != NULL);
   if (strcmp(argv[3], "probe") == 0 || strcmp(argv[3], "named") == 0) {
@@ -159,6 +197,8 @@ int main(int argc, char **argv) {
   cai_app_client_config_init(&config);
   config.runtime_directory = argv[1];
   config.workspace = argv[2];
+  discover(argv[1], argv[2], NULL, expected);
+  config.expected_instance = expected;
   config.event = event;
   config.context = v;
   config.transcript = transcript;

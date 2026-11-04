@@ -34,8 +34,9 @@ explicit takeover, shutdown and detach without owning stores or starting a
 process. Its identity-only probe verifies an owner during STARTING or READY
 without acquiring an attachment or changing authority/lifetime; the real
 headless executable is covered by that probe too. Native registry publication
-and incremental reading are implemented; live selector resolution,
-controller/frontend composition, automatic startup and the attach
+and incremental reading, native verified selector resolution and guarded
+instance admission are implemented. Controller/frontend composition,
+automatic startup and the attach
 CLI remain pending. Explicit foreground headless startup is implemented below.
 
 The application receiver now also provides `cai_app_start`/`cai_app_join`: an
@@ -288,16 +289,44 @@ operation unlinks ownership locks, and pruning never removes a socket. Native
 tests cover live-name conflicts, process-death recovery, changed-inode safety,
 malformed/unsafe records and default-stack worker use. The headless CLI tests
 verify flag/config/environment precedence and compare registry instance IDs
-with a real socket probe. Selector resolution and terminal workspace switching
+with a real socket probe. Terminal selector commands and workspace switching
 remain pending.
 
 Selector attachment must bind its selected server instance before the host
 admits an attachment. Merely comparing the later WELCOME is insufficient: an
 owner may restart between probe and attach, and rejecting the new WELCOME
 afterward would already have acquired/released control and affected a
-nonpersistent server's lifetime. An expected-instance greeting guard is part
-of the pending selector implementation; discovery hints alone never admit
-an attachment.
+nonpersistent server's lifetime. The core and typed app clients now accept
+`expected_instance`, copied at open. The host checks it in HELLO before
+admission; clients also check the complete reply. A mismatch never acquires
+or releases an attachment. NULL selects the current canonical workspace owner
+without pinning; guarded reconnects still require producer/request reconciliation.
+
+`workspace_discovery.h` now provides owner-thread prepare/pump lookup and
+listing. No runtime, renderer, storage client, process or worker is opened.
+It reads one candidate at a time and performs an identity-only probe, pinning
+the instance from a registry hint. STARTING and READY are verified outcomes;
+STOPPING, timeouts and changed instances cannot become successful selections.
+Passing no selector lists verified entries through borrowed callbacks. Lookup
+matches exact names and complete stable IDs without precedence; if a name
+matches another workspace's ID, AMBIGUOUS returns both live identities. Paths
+must be explicit (`/`, `./`, `../`, `.`, `..`, or a slash-containing path);
+relative paths require an absolute directory context. Bare names never fall
+back to the caller's cwd. Path lookup bypasses the registry and verifies the
+canonical endpoint directly. It creates no directories or server processes.
+
+The resolver retains only one result and one borrowed candidate, and reuses
+one probe slot. Local scanning requests a due timer; socket work contributes
+only its readiness/deadline. Completion has no descriptor or timer. Close
+cancels discovery without affecting server lifetime. Per-probe timeout zero
+selects ten seconds. Malformed/unsafe metadata is an inline observation and
+does not hide healthy entries; underlying directory I/O or allocation failure
+terminates the operation. A failed probe may prune its unchanged hint under
+the workspace lock; a live or changed owner is preserved. MISSING, AMBIGUOUS
+and UNAVAILABLE are typed outcomes rather than failures of the host. FOUND
+returns borrowed canonical identity, instance, phase and persistence; copy or
+use them before closing the resolver. Pin that instance in the subsequent
+client greeting so a restart between discovery and attach stays harmless.
 
 Attaching never overwrites the running server's configuration. Frontend flags
 apply locally. Explicit inference settings are ordinary acknowledged backend
@@ -387,9 +416,10 @@ control later cannot cause the same rejected request ID to execute.
 
 ## CBOR and framing
 
-The workspace host accepts `HELLO` with zero metadata and a definite two-item
-payload array: canonical workspace as bytes, then the text schema identity
-`cai.workspace`. Both are compared as chunks arrive, without gathering the
+The workspace host accepts `HELLO` with zero metadata and a definite three-item
+payload array: canonical workspace as bytes, the text schema identity
+`cai.workspace`, then NULL or the expected 16-byte instance as bytes. Identity
+fields are compared as chunks arrive, without gathering the
 greeting. Only successful record completion validates it. A completed greeting
 may wait while the application is STARTING; it acquires no authority until
 READY. Incomplete greetings expire after ten seconds. All connection slots,
@@ -397,8 +427,8 @@ including unfinished greetings, count toward the bounded transport capacity.
 When full, the listener is excluded from readiness interests to avoid spinning
 on connections the host cannot accept yet.
 
-Discovery uses `PROBE`, with the same canonical-workspace/schema payload and
-zero metadata as `HELLO`. It never becomes an attachment. A validated probe
+Discovery uses `PROBE`, with zero metadata and a definite two-item array of
+canonical workspace bytes and schema text. It never becomes an attachment. A validated probe
 receives one `IDENTITY` record with zero metadata and a definite five-item
 array: canonical workspace bytes, schema text, 16-byte server-instance bytes,
 persistence boolean and startup phase (`0` STARTING, `1` READY, `2` STOPPING).

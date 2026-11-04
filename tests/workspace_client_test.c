@@ -15,6 +15,7 @@ typedef struct observer {
   size_t welcomes, roles, identities, headers, complete, bytes;
   int reject, fail_output;
   cai_workspace_client *client;
+  const unsigned char *expected;
   uint64_t requests[16];
   size_t request_count;
 } observer;
@@ -95,6 +96,7 @@ static cai_workspace_client *open_client_mode(const char *runtime,
   config.event = observed;
   config.context = out;
   config.probe = probe;
+  config.expected_instance = out->expected;
   assert(cai_workspace_client_open(&config, 0U, &client, NULL) == CAI_OK);
   out->client = client;
   return client;
@@ -417,6 +419,96 @@ static void integration(const char *runtime, const char *workspace,
          fd.fd == -1);
   cai_workspace_client_close(a);
   cai_workspace_client_close(b);
+  cai_workspace_server_close(server);
+}
+static void guarded_rejection(cai_workspace_server *server, const char *root,
+                              const unsigned char *expected, int probe_mode,
+                              uint64_t now) {
+  cai_attachment_state before, after;
+  observer out;
+  cai_workspace_client *client;
+  unsigned char input[16];
+  int rc = CAI_OK;
+  size_t i;
+  memcpy(input, expected, sizeof(input));
+  memset(&out, 0, sizeof(out));
+  out.expected = input;
+  assert(cai_workspace_server_get_state(server, &before, NULL) == CAI_OK);
+  client = open_client_mode(root, root, 0U, &out, probe_mode);
+  /* Changing the caller's buffer must not change the selected owner. */
+  memcpy(input, cai_workspace_server_instance(server), sizeof(input));
+  for (i = 0U; i < 8U && rc == CAI_OK; ++i) {
+    rc = cai_workspace_client_pump(client, now, NULL);
+    assert(cai_workspace_server_pump(server, now, NULL) == CAI_OK);
+  }
+  assert(rc == (probe_mode ? CAI_ERR_PROTOCOL : CAI_ERR_TRANSPORT));
+  assert(snapshot(client).phase == CAI_WORKSPACE_FAILED);
+  assert(!snapshot(client).has_welcome && !snapshot(client).has_identity);
+  assert(!out.welcomes && !out.roles && !out.identities);
+  assert(cai_workspace_server_get_state(server, &after, NULL) == CAI_OK);
+  assert(after.phase == before.phase && after.count == before.count &&
+         after.generation == before.generation &&
+         after.controller == before.controller &&
+         after.deadline_ms == before.deadline_ms &&
+         after.stop_reason == before.stop_reason);
+  cai_workspace_client_close(client);
+}
+static void instance_guard(const char *root, int persist) {
+  cai_workspace_server_config config;
+  cai_workspace_server *server;
+  cai_workspace_client *a, *b, *query;
+  cai_attachment_state state;
+  observer oa, ob, oq;
+  admissions admission;
+  unsigned char old[16], expected[16];
+  memset(&admission, 0, sizeof(admission));
+  memset(&oa, 0, sizeof(oa));
+  memset(&ob, 0, sizeof(ob));
+  memset(&oq, 0, sizeof(oq));
+  cai_workspace_server_config_init(&config);
+  config.runtime_directory = config.workspace = root;
+  config.lifetime.persist = persist;
+  config.lifetime.first_attachment_timeout_ms = 1000U;
+  config.event = admitted;
+  config.context = &admission;
+  assert(cai_workspace_server_open(&config, &server, NULL) == CAI_OK);
+  memcpy(old, cai_workspace_server_instance(server), sizeof(old));
+  cai_workspace_server_close(server);
+  assert(cai_workspace_server_open(&config, &server, NULL) == CAI_OK);
+  admission.server = server;
+  assert(memcmp(old, cai_workspace_server_instance(server), sizeof(old)) != 0);
+  guarded_rejection(server, root, old, 0, 0U);
+  assert(cai_workspace_server_ready(server, 5U, NULL) == CAI_OK);
+  guarded_rejection(server, root, old, 0, 5U);
+  guarded_rejection(server, root, old, 1, 5U);
+  assert(!admission.attached && !admission.detached && !admission.completed);
+  oq.expected = cai_workspace_server_instance(server);
+  query = open_client_mode(root, root, 0U, &oq, 1);
+  exchange(server, query, NULL, 5U);
+  assert(snapshot(query).phase == CAI_WORKSPACE_IDENTIFIED &&
+         oq.identities == 1U);
+  cai_workspace_client_close(query);
+  memcpy(expected, cai_workspace_server_instance(server), sizeof(expected));
+  oa.expected = expected;
+  a = open_client(root, root, 0U, &oa);
+  memset(expected, 0, sizeof(expected));
+  exchange(server, a, NULL, 5U);
+  assert(snapshot(a).phase == CAI_WORKSPACE_CONNECTED && oa.welcomes == 1U);
+  b = open_client(root, root, 0U, &ob);
+  exchange(server, a, b, 5U);
+  guarded_rejection(server, root, old, 0, 6U);
+  assert(admission.attached == 2U && !admission.detached &&
+         !admission.completed);
+  assert(cai_workspace_server_authorize(server, snapshot(a).attachment,
+                                        snapshot(a).generation,
+                                        NULL) == CAI_OK);
+  cai_workspace_client_close(a);
+  cai_workspace_client_close(b);
+  assert(cai_workspace_server_pump(server, 7U, NULL) == CAI_OK);
+  assert(cai_workspace_server_get_state(server, &state, NULL) == CAI_OK);
+  assert(state.count == 0U && admission.detached == 2U);
+  assert(state.phase ==
+         (persist ? CAI_ATTACHMENT_READY : CAI_ATTACHMENT_STOPPING));
   cai_workspace_server_close(server);
 }
 static void stale_control(const char *runtime, const char *workspace) {
@@ -845,6 +937,8 @@ static void *run(void *unused) {
   assert(mkdtemp(root) != NULL);
   integration(root, root, 0);
   integration(root, root, 1);
+  instance_guard(root, 0);
+  instance_guard(root, 1);
   discovery(root, 0);
   discovery(root, 1);
   discovery_replies(root);
