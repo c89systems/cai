@@ -723,6 +723,7 @@ set(CAI_SOURCES
   src/cai_cbor.c
   src/cai_wire.c
   src/cai_wire_peer.c
+  src/cai_protocol.c
   src/cai_workspace.c
   src/cai_conversation.c
   src/cai_env.c
@@ -1047,6 +1048,12 @@ if(CAI_BUILD_TESTS)
   target_compile_options(cai_wire_peer_test PRIVATE -UNDEBUG)
   add_test(NAME cai_wire_peer COMMAND cai_wire_peer_test)
   set_tests_properties(cai_wire_peer PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
+  add_executable(cai_protocol_test tests/protocol_test.c)
+  target_link_libraries(cai_protocol_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_protocol_test)
+  target_compile_options(cai_protocol_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_protocol COMMAND cai_protocol_test)
+  set_tests_properties(cai_protocol PROPERTIES LABELS "unit;local;offline" TIMEOUT 10)
   add_executable(cai_workspace_test tests/workspace_test.c)
   target_link_libraries(cai_workspace_test PRIVATE ${_cai_internal_link_target})
   cai_configure_cli_target(cai_workspace_test)

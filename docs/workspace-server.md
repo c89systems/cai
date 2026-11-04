@@ -11,8 +11,10 @@ Current implementation progress: libcai now contains the incremental codec
 ownership races and killed-owner recovery. The core attachment controller
 (`attachment.h`) implements roles, generation-checked admission and persistent
 versus last-client lifetime. Input-controller handoffs carry the original
-authority generation and check it on owner-thread dispatch. The application
-controller/frontend cutover, typed socket attachment protocol and
+authority generation and check it on owner-thread dispatch. Typed protocol
+envelopes (`protocol.h`) stream metadata/payload tokens and distinguish
+provisional data from validated record completion. The application
+controller/frontend cutover, connection handshake and
 headless/attach CLI are still pending;
 the transport primitives alone do not enable those CLI modes.
 
@@ -223,13 +225,29 @@ headers and bodies and rejects zero, oversized, truncated or multiple-root
 payloads. Outbound readiness retains only bounded unsent chunks, not an entire
 replay or export. A short send, EINTR, EAGAIN, EOF and SIGPIPE are handled.
 
-Messages use small integer keys for kind, request ID, server instance,
-workspace, conversation epoch, control generation, event sequence and payload.
-Semantic kinds include HELLO/WELCOME, ATTACH/DETACH, TAKEOVER/ROLE, REQUEST/
+Each message is a definite eight-pair map with ascending integer keys:
+0 kind, 1 request ID, 2 conversation epoch, 3 control generation, 4 event
+sequence, 5 stream identity, 6 attachment identity and 7 payload. Metadata
+values are unsigned integers, zero when inapplicable. Payload is one CBOR item;
+its schema is specific to the kind. Require the exact envelope shape/key order;
+reject duplicates, missing keys and unknown keys. Workspace and server-instance
+identity belong in the greeting payload. An attachment field supplied by a peer
+does not authenticate that peer: admission uses its bound connection identity.
+
+Semantic kinds include HELLO/WELCOME (attachment handshake), DETACH,
+TAKEOVER/ROLE, REQUEST/
 RESULT, STATUS, QUEUE snapshot/items/end/change, EVENT, REPLAY begin/item/end,
 stream begin/chunk/end, synchronization required and shutdown. Unknown
 operation/required schema fails explicitly. Do not introduce pre-1.0 version
 negotiation, compatibility translation or multiple protocol generations.
+
+The typed decoder emits HEADER, borrowed PAYLOAD tokens and then COMPLETE, only
+after the wire decoder validates the complete record. This is a parse boundary,
+not a durable-admission receipt. Provisional tokens may
+prepare a bounded command; they must not execute it. Producers derive framing
+lengths directly from metadata and known payload fields/chunks. They emit the
+envelope and payload without a sizing serialization. Large logical values use
+successive records, and do not require a payload accumulator.
 
 The greeting identifies the implementation schema, server instance, canonical
 workspace and capabilities so a rebuilt client cannot misinterpret a still

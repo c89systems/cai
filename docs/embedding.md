@@ -154,6 +154,17 @@ and a bounded copied write backlog, without a socket worker. Poll for POLLOUT
 only while `cai_wire_peer_pending()` is nonzero. Drop a failed/overflowed peer
 and reconcile at the application layer; never retry part of a failed record.
 
+`<cai/protocol.h>` adds typed attachment envelopes without retaining their
+payloads. Pass `cai_protocol_decoder_event` directly as the wire decoder/peer
+callback. HEADER/PAYLOAD notifications expose borrowed metadata/tokens;
+COMPLETE means the record is fully validated, not that work was durably
+accepted. The host still checks authenticated connection identity, control
+generation and the kind-specific payload. `cai_protocol_peer_begin` emits
+known metadata and framing immediately; write payload tokens with
+`cai_wire_peer_write`, then
+finish with `cai_protocol_peer_end`. Derive the payload's encoded length from
+its known fields, and split large/unknown-length values into chunk records.
+
 `<cai/workspace.h>` derives a canonical workspace identity and private endpoint,
 owns its native listener lock, validates peer credentials and reclaims stale
 sockets after a crash. Discovery never opens conversation storage. These are

@@ -349,6 +349,11 @@ cai_plugins_reload
 cai_plugins_run
 cai_plugins_unload
 cai_plugins_visit
+cai_protocol_decoder_close
+cai_protocol_decoder_event
+cai_protocol_decoder_open
+cai_protocol_peer_begin
+cai_protocol_peer_end
 cai_reasoning_tool_config_init
 cai_response_conversation_id
 cai_response_create_params_add_custom_tool
