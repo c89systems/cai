@@ -41,10 +41,20 @@ selected=$(printf '/resume 2\n/quit\n' | "$cli" -p openai -C "$fixture/work-a")
 exact=$(printf '/quit\n' | "$cli" -p openai --resume "$imported_id" -C "$fixture/work-a")
 [[ "$exact" == *"Saved assistant answer"* ]]
 isolated=$(printf '/resume\n/quit\n' | "$cli" -p openai --new -C "$fixture/work-b")
+isolated_id=$(printf '%s\n' "$isolated" | sed -n 's/^[[:space:]]*1  \([^ ]*\).*/\1/p')
+[[ -n "$isolated_id" ]]
 [[ "$isolated" != *"$first_id"* && "$isolated" != *"$second_id"* && "$isolated" != *"$imported_id"* ]]
-all=$("$cli" -l -C "$fixture/work-b")
+for flag in -l --list; do
+  local_rows=$("$cli" "$flag" -C "$fixture/work-b")
+  [[ "$local_rows" != *"$first_id"* && "$local_rows" != *"$second_id"* && "$local_rows" != *"$imported_id"* ]]
+  [[ "$local_rows" == *"$isolated_id"* ]]
+done
+all=$("$cli" -L -C "$fixture/work-b")
 [[ "$all" == *"$first_id"* && "$all" == *"$second_id"* && "$all" == *"$imported_id"* ]]
+[[ "$("$cli" --list-all -C "$fixture/work-b")" == "$all" ]]
+[[ "$("$cli" -L --state-dir "$fixture/another-state" -C "$fixture/work-b")" == 'No conversations.' ]]
 numbered=$("$cli" --resume -C "$fixture/work-a")
+[[ "$("$cli" -l -C "$fixture/work-a")" == "$numbered" ]]
 [[ "$numbered" == *"1  $second_id"* && "$numbered" == *"2  $imported_id"* ]]
 [[ "$numbered" != *"Conversations"* ]]
 slash_export=$(printf '/export\n/quit\n' | "$cli" -p openai -C "$fixture/work-b")

@@ -356,6 +356,8 @@ static int cli_read_options(int argc, char *const *argv,
           options->verbosity++;
         else if (flag[j] == 'l')
           options->list = 1;
+        else if (flag[j] == 'L')
+          options->list_all = 1;
         else if (flag[j] == 'k')
           options->insecure = 1;
         else if (flag[j] == 'y')
@@ -420,6 +422,10 @@ static int cli_read_options(int argc, char *const *argv,
     }
     if (strcmp(flag, "-l") == 0 || strcmp(flag, "--list") == 0) {
       options->list = 1;
+      continue;
+    }
+    if (strcmp(flag, "-L") == 0 || strcmp(flag, "--list-all") == 0) {
+      options->list_all = 1;
       continue;
     }
     if ((strcmp(flag, "--resume") == 0 || strcmp(flag, "-R") == 0) &&
@@ -729,11 +735,11 @@ int cai_cli_validate_options(cai_cli_options *options) {
                                           "berget",  "custom", NULL};
   if (options->headless &&
       (options->non_interactive || options->review || options->review_and_fix ||
-       options->list || options->resume_list || options->delete_list ||
-       options->delete_id != NULL || options->login || options->chrome_setup ||
-       options->chrome_remove || options->export_id != NULL ||
-       options->import_file != NULL || options->install_skill != NULL ||
-       options->message != NULL)) {
+       options->list || options->list_all || options->resume_list ||
+       options->delete_list || options->delete_id != NULL || options->login ||
+       options->chrome_setup || options->chrome_remove ||
+       options->export_id != NULL || options->import_file != NULL ||
+       options->install_skill != NULL || options->message != NULL)) {
     cai_cli_option_error(options,
                          "--headless cannot be combined with batch, review "
                          "or utility modes");
@@ -745,10 +751,11 @@ int cai_cli_validate_options(cai_cli_options *options) {
   }
   if (options->temporary &&
       (options->resume_id != NULL || options->resume_list || options->list ||
-       options->delete_id != NULL || options->delete_list || options->login ||
-       options->chrome_setup || options->chrome_remove ||
-       options->export_id != NULL || options->import_file != NULL ||
-       options->install_skill != NULL || options->message != NULL)) {
+       options->list_all || options->delete_id != NULL ||
+       options->delete_list || options->login || options->chrome_setup ||
+       options->chrome_remove || options->export_id != NULL ||
+       options->import_file != NULL || options->install_skill != NULL ||
+       options->message != NULL)) {
     cai_cli_option_error(options, "%s",
                          "--temp starts a new conversation; it cannot be "
                          "combined with resume or utility commands");
@@ -788,21 +795,21 @@ int cai_cli_validate_options(cai_cli_options *options) {
                          "isolated --review does not support Chrome tools");
     return -1;
   }
-  if ((options->list + options->resume_list + options->delete_list +
-       (options->delete_id != NULL) + options->login + options->chrome_setup +
-       options->chrome_remove + (options->export_id != NULL) +
-       (options->import_file != NULL) + (options->install_skill != NULL) +
-       (options->message != NULL)) > 1) {
-    cai_cli_option_error(
-        options, "%s",
-        "select only one of --list, --resume without ID, --delete, --login, "
-        "--export, --import, --install-skill, or --message\n");
+  if ((options->list + options->list_all + options->resume_list +
+       options->delete_list + (options->delete_id != NULL) + options->login +
+       options->chrome_setup + options->chrome_remove +
+       (options->export_id != NULL) + (options->import_file != NULL) +
+       (options->install_skill != NULL) + (options->message != NULL)) > 1) {
+    cai_cli_option_error(options, "%s",
+                         "select only one of --list, --list-all, --resume "
+                         "without ID, --delete, --login, "
+                         "--export, --import, --install-skill, or --message\n");
     return -1;
   }
-  if ((options->list || options->resume_list || options->delete_list ||
-       options->delete_id != NULL || options->export_id != NULL ||
-       options->import_file != NULL || options->install_skill != NULL ||
-       options->message != NULL) &&
+  if ((options->list || options->list_all || options->resume_list ||
+       options->delete_list || options->delete_id != NULL ||
+       options->export_id != NULL || options->import_file != NULL ||
+       options->install_skill != NULL || options->message != NULL) &&
       (options->new_session || options->resume_id != NULL || options->review ||
        options->review_and_fix || options->goal != NULL ||
        options->instruction_count != 0U || options->non_interactive)) {
@@ -910,9 +917,9 @@ int cai_cli_validate_options(cai_cli_options *options) {
                          "--login cannot be combined with session work\n");
     return -1;
   }
-  if (options->list || options->resume_list || options->export_id != NULL ||
-      options->import_file != NULL || options->install_skill != NULL ||
-      options->message != NULL)
+  if (options->list || options->list_all || options->resume_list ||
+      options->export_id != NULL || options->import_file != NULL ||
+      options->install_skill != NULL || options->message != NULL)
     return 1;
   if (strcmp(options->provider, "custom") == 0) {
     if (options->endpoint == NULL ||

@@ -1078,8 +1078,10 @@ Starting `cai` resumes the newest session for the canonical current directory.
 `-N`/`--new` starts fresh; `/new` does the same inside the prompt and confirms
 the new session ID and workspace in a Markdown summary after opening it
 successfully. When messaging is enabled, the summary includes its active queue.
-`-l`/`--list` shows all conversations across directories. `-R`/`--resume` without
-an ID and `/resume` show a numbered list for the current directory only;
+`-l`/`--list` shows a numbered conversation list for the current directory.
+`-L`/`--list-all` lists conversations across all directories in the configured
+session store. `-R`/`--resume` without an ID and `/resume` show the same
+numbered list for the current directory;
 `/resume <number>` loads an entry. Rows show ID, directory, and a first-prompt
 preview, clipped to the terminal width or 80 columns without a terminal.
 `-R ID`/`--resume ID` addresses a saved session in the current directory directly.
@@ -1707,7 +1709,7 @@ unlinked file-backed spool with bounded reads, then renders through libmdf.
 Markdown rendering detects stdout: terminals allow ANSI styling, while pipes
 and files receive escape-free UTF-8 rendered at 80 columns.
 Help, version, listing, export, and import keep their normal stdout results.
-Utility commands (`--list`/`-l`, `--resume` without an ID, `--export`,
+Utility commands (`--list`/`-l`, `--list-all`/`-L`, `--resume` without an ID, `--export`,
 `--import`, and `--login`) default to warning-level diagnostics on stderr.
 Agent sessions and review modes retain all levels by default. Login URLs,
 callback guidance, and successful login results are normal stdout output.

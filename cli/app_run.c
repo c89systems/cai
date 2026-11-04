@@ -5733,10 +5733,11 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       goto cleanup;
     }
     if (valid <= 0 || early.chrome_setup || early.chrome_remove ||
-        early.login || early.list || early.resume_list || early.delete_list ||
-        early.delete_id != NULL || early.export_id != NULL ||
-        early.import_file != NULL || early.install_skill != NULL ||
-        early.message != NULL || early.review || early.non_interactive) {
+        early.login || early.list || early.list_all || early.resume_list ||
+        early.delete_list || early.delete_id != NULL ||
+        early.export_id != NULL || early.import_file != NULL ||
+        early.install_skill != NULL || early.message != NULL || early.review ||
+        early.non_interactive) {
       cai_cli_error(&error, CAI_ERR_INVALID,
                     "controller startup accepts agent options, not utility or "
                     "terminal modes");
@@ -5847,7 +5848,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   state->batch = state->options.review || state->options.non_interactive;
   utility_mode =
       state->options.chrome_setup || state->options.chrome_remove ||
-      state->options.login || state->options.list ||
+      state->options.login || state->options.list || state->options.list_all ||
       state->options.resume_list || state->options.delete_list ||
       state->options.delete_id != NULL || state->options.export_id != NULL ||
       state->options.import_file != NULL ||
@@ -5983,12 +5984,12 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       result = 1;
     goto cleanup;
   }
-  if (state->options.list || state->options.resume_list ||
-      state->options.delete_list) {
+  if (state->options.list || state->options.list_all ||
+      state->options.resume_list || state->options.delete_list) {
     cai_sink *destination;
     destination = NULL;
     rc = cai_cli_pouch_list(&state->pouch,
-                            state->options.list ? NULL : state->workspace,
+                            state->options.list_all ? NULL : state->workspace,
                             &state->sessions, &state->session_count, &error);
     if (rc == CAI_OK && state->options.delete_list)
       rc = cai_cli_sessions_deletable(&state->pouch, state->sessions,
@@ -5996,9 +5997,10 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     if (rc == CAI_OK)
       rc = cai_sink_stdout(&destination, &error);
     if (rc == CAI_OK)
-      rc = cai_cli_sessions_print(
-          destination, state->sessions, state->session_count,
-          !state->options.list, mdf_terminal_width(STDOUT_FILENO, 80), &error);
+      rc =
+          cai_cli_sessions_print(destination, state->sessions,
+                                 state->session_count, !state->options.list_all,
+                                 mdf_terminal_width(STDOUT_FILENO, 80), &error);
     cai_sink_close(destination);
     if (rc != CAI_OK)
       cli_print_error(state, "list conversations", &error);

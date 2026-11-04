@@ -177,8 +177,10 @@ through 64 KiB), with optional temporary-file spooling up to 1 MiB and prefix
 truncation at the storage cap. This word decision storage is explicitly
 accepted; it is not a reason to collect complete remote prompts in CAI. The
 earlier partial-word emission request is withdrawn. These public methods are
-not yet in CAI's pinned libmdf 0.21.0; the remote adapter cutover remains pending
-their release. No Softline quote API is required.
+not yet in CAI's pinned libmdf 0.21.0. Keep the existing rendering adapter while
+finishing the server/client work; adopting `write_literal` is a later adapter
+change and does not gate the remaining architecture. No Softline quote API is
+required.
 
 ## Confirmed product decisions
 
@@ -374,6 +376,8 @@ a second owner or mutate config.ini.
 | `cai -x`, `cai --headless` | Start this workspace server in the foreground, without a terminal frontend, with persistence enabled by default. Fail clearly if already served. Log JSON through libpslog to stdout/stderr with normal automatic color detection. |
 | `cai` | Discover and attach. If absent, launch a quiet server by exec of this executable, then attach after an explicit READY handshake. Server logs use the normal file policy, with no inherited terminal stdout/stderr. |
 | `cai -s SELECTOR` | Attach to an already-running workspace by name, path or stable ID. A name never invents a new directory or starts in the client's cwd. |
+| `cai -l`, `cai --list` | List saved conversations and session IDs for the selected current directory. Do not launch an agent server. |
+| `cai -L`, `cai --list-all` | List saved conversations across directories in the entire configured session store. Do not launch an agent server. |
 | `--workspace-name NAME` | Assign the workspace discovery name when starting its server. |
 | `/workspace` | List available running workspaces and identify the current one. |
 | `/workspace SELECTOR` | Reconnect this client; do not stop either server or carry accepted inputs across workspaces. |

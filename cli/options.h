@@ -110,7 +110,9 @@ typedef struct cai_cli_options {
   int argc;
   size_t instruction_count;
   int login;
+  /** Current-directory and whole-store listings are exclusive utility modes. */
   int list;
+  int list_all;
   int resume_list;
   int delete_list;
   int new_session;

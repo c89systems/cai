@@ -284,6 +284,49 @@ static int delete_options(void) {
   return 0;
 }
 
+/** Local/global listing aliases preserve utility validation and group parsing.
+ */
+static int listing_options(void) {
+  cai_cli_options options;
+  static char valid[][5][64] = {{"cai", "-l"},
+                                {"cai", "--list"},
+                                {"cai", "-L"},
+                                {"cai", "--list-all"},
+                                {"cai", "-kl"},
+                                {"cai", "-kL"},
+                                {"cai", "-p", "custom", "-L"},
+                                {"cai", "-LL"}};
+  int valid_lengths[] = {2, 2, 2, 2, 2, 2, 4, 2};
+  int global[] = {0, 0, 1, 1, 0, 1, 1, 1};
+  static char invalid[][5][64] = {{"cai", "-l", "-L"},
+                                  {"cai", "-lL"},
+                                  {"cai", "-L", "--resume"},
+                                  {"cai", "-L", "-N"},
+                                  {"cai", "-L", "-x"},
+                                  {"cai", "-L", "--temp"},
+                                  {"cai", "-L", "-i", "prompt"},
+                                  {"cai", "-L", "--login"},
+                                  {"cai", "-L", "--delete"},
+                                  {"cai", "-L", "--export", "id"},
+                                  {"cai", "--list", "--list-all"}};
+  int invalid_lengths[] = {3, 2, 3, 3, 3, 3, 4, 3, 3, 4, 3};
+  char *args[5];
+  size_t i, j;
+  for (i = 0U; i < sizeof(valid_lengths) / sizeof(valid_lengths[0]); ++i) {
+    for (j = 0U; j < (size_t)valid_lengths[i]; ++j)
+      args[j] = valid[i][j];
+    if (cai_cli_parse_options(valid_lengths[i], args, &options) != 1 ||
+        options.list != !global[i] || options.list_all != global[i])
+      return 1;
+  }
+  for (i = 0U; i < sizeof(invalid_lengths) / sizeof(invalid_lengths[0]); ++i) {
+    for (j = 0U; j < (size_t)invalid_lengths[i]; ++j)
+      args[j] = invalid[i][j];
+    if (cai_cli_parse_options(invalid_lengths[i], args, &options) != -1)
+      return 1;
+  }
+  return 0;
+}
 static int storage_options(void) {
   cai_cli_options options;
   char arguments[][64] = {"cai",
@@ -759,6 +802,7 @@ int main(void) {
          config_option_precedence() || replay_options() ||
          resume_alias_options() || delete_options() ||
          short_argument_options() || grouped_value_options() ||
-         help_columns() || shell_options() || storage_options() ||
-         tool_options() || capture_options() || messaging_options();
+         help_columns() || shell_options() || listing_options() ||
+         storage_options() || tool_options() || capture_options() ||
+         messaging_options();
 }
