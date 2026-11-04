@@ -61,6 +61,7 @@ files=(
   docs/workspace-server.md
   docs/terminal-attachment.md
   docs/workspace-wire-queue.md
+  docs/workspace-wire-history.md
   docs/agent-messaging.md
   docs/kanban.md
   docs/journal.md

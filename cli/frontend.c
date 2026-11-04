@@ -24,6 +24,14 @@
 /** Terminal-owner composition only. All runtime/storage policy stays behind
  * the socket. Wake bytes merely schedule transport progress after an editor
  * submission; they are not another input queue. */
+/** Inputs typed while the initial recall suffix is in flight. This is bounded
+ * native history state, never another model-input queue. Store positions let
+ * the completed snapshot avoid importing an already included entry twice. */
+typedef struct recall_pending {
+  struct recall_pending *next;
+  char *text;
+  uint64_t request, position;
+} recall_pending;
 typedef struct frontend_view {
   struct frontend_view *next;
   cai_cli_presenter ui;
@@ -35,6 +43,10 @@ typedef struct frontend_view {
   unsigned long long producer, epoch;
   sl_watch_id_t socket_watch, boot_watch, timer_watch, wake_watch;
   int socket_fd, boot_fd;
+  int history_loaded;
+  unsigned int history_limit;
+  recall_pending *recall_first, *recall_last;
+  size_t recall_count;
 } frontend_view;
 typedef struct frontend {
   const cai_app_config *application;
@@ -53,6 +65,14 @@ typedef struct frontend {
   long long theme_offsets[3];
   int full_output;
   int review_open;
+  int history_requested, history_loaded;
+  unsigned int history_limit;
+  uint64_t history_request, exit_save;
+  char *history_entry, *exit_draft;
+  frontend_view *exit_view;
+  size_t history_length;
+  char history_warning[192];
+  char history_command[256];
   char next_session[129];
   int pending_context, switching;
   cai_error error;
@@ -64,6 +84,11 @@ typedef struct frontend {
   unsigned long long startup_request, startup_producer;
   char startup_session[129];
   int startup_stage, startup_command;
+  int startup_control, startup_feeding;
+  struct {
+    uint64_t request, producer;
+    char session[129];
+  } hidden_recall[4];
   size_t instruction, action_length;
   char *action;
   size_t command_length;
@@ -114,6 +139,111 @@ static int tool_markdown(void *context, const char *bytes, size_t length) {
 static int notice(frontend *f, const char *message) {
   return cai_cli_presenter_notice(f->ui, message);
 }
+static void save_submission(void *context, const cai_input_request *request) {
+  frontend *f = context;
+  cai_error local;
+  recall_pending *pending = NULL;
+  if ((f->startup_feeding && f->startup_control) || f->history_limit == 0U ||
+      request->text[0] == '\0')
+    return;
+  if (!f->history_loaded) {
+    frontend_view *v = f->current;
+    pending = calloc(1U, sizeof(*pending));
+    if (pending != NULL)
+      pending->text = strdup(request->text);
+    if (pending == NULL || pending->text == NULL) {
+      free(pending);
+      snprintf(f->history_warning, sizeof(f->history_warning),
+               "Could not retain new prompt recall while loading.");
+      return;
+    }
+    if (v->recall_last != NULL)
+      v->recall_last->next = pending;
+    else
+      v->recall_first = pending;
+    v->recall_last = pending;
+    ++v->recall_count;
+    if (v->recall_count > f->history_limit) {
+      recall_pending *old = v->recall_first;
+      v->recall_first = old->next;
+      --v->recall_count;
+      free(old->text);
+      free(old);
+    }
+  }
+  if (f->state.transport.controller != f->state.transport.attachment)
+    return;
+  cai_error_init(&local);
+  if (pending != NULL && f->history_request != UINT64_MAX)
+    pending->request = f->history_request + 1U;
+  if (f->history_request == UINT64_MAX ||
+      cai_app_client_save_prompt(f->client, ++f->history_request,
+                                 f->state.transport.generation, request->text,
+                                 &local) != CAI_OK)
+    snprintf(f->history_warning, sizeof(f->history_warning),
+             "Prompt history was not saved: %s",
+             local.message != NULL ? local.message
+                                   : "request identity exhausted");
+  cai_error_cleanup(&local);
+}
+static int prompt_history(void *context, const cai_transcript_event *e,
+                          cai_error *error) {
+  frontend *f = context;
+  if (e->kind == CAI_TRANSCRIPT_REPLAY_BEGIN) {
+    f->history_limit = (unsigned int)e->visibility;
+    f->history_length = 0U;
+    if (sl_history_set_max_len(f->ui->sl, 0) != SL_OK ||
+        sl_history_set_max_len(f->ui->sl, (int)f->history_limit) != SL_OK)
+      return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                           "configure remote prompt recall");
+  } else if (e->kind == CAI_TRANSCRIPT_EVENT_BEGIN)
+    f->history_length = 0U;
+  else if (e->kind == CAI_TRANSCRIPT_DATA) {
+    if (e->length > CAI_CLI_INPUT_TEXT_MAX - f->history_length ||
+        e->offset != f->history_length)
+      return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                           "invalid prompt recall chunks");
+    if (f->history_entry == NULL) {
+      f->history_entry = malloc(CAI_CLI_INPUT_TEXT_MAX + 1U);
+      if (f->history_entry == NULL)
+        return cai_cli_error(error, CAI_ERR_NOMEM,
+                             "allocate one recalled input");
+    }
+    memcpy(f->history_entry + f->history_length, e->data, e->length);
+    f->history_length += e->length;
+    f->history_entry[f->history_length] = '\0';
+  } else if (e->kind == CAI_TRANSCRIPT_EVENT_END) {
+    if (f->history_length != 0U &&
+        sl_history_add(f->ui->sl, f->history_entry) != SL_OK)
+      return cai_cli_error(error, CAI_ERR_TRANSPORT, "import recalled prompt");
+    f->history_length = 0U;
+  } else if (e->kind == CAI_TRANSCRIPT_REPLAY_END ||
+             e->kind == CAI_TRANSCRIPT_ERROR) {
+    frontend_view *v = f->current;
+    while (v->recall_first != NULL) {
+      recall_pending *p = v->recall_first;
+      v->recall_first = p->next;
+      if (e->kind != CAI_TRANSCRIPT_REPLAY_END || p->position == 0U ||
+          p->position > e->watermark)
+        (void)sl_history_add(f->ui->sl, p->text);
+      free(p->text);
+      free(p);
+    }
+    v->recall_last = NULL;
+    v->recall_count = 0U;
+    f->history_loaded = 1;
+    v->history_loaded = e->kind == CAI_TRANSCRIPT_REPLAY_END;
+    v->history_limit = f->history_limit;
+    f->ready = f->bound;
+    if (sl_history_set_auto_add(f->ui->sl, 1) != SL_OK)
+      return CAI_ERR_TRANSPORT;
+    if (e->kind == CAI_TRANSCRIPT_ERROR &&
+        e->failure != CAI_TRANSCRIPT_CONTEXT_CLOSED)
+      (void)notice(f,
+                   e->reason != NULL ? e->reason : "Prompt recall unavailable");
+  }
+  return CAI_OK;
+}
 static int status(frontend *f) {
   const cai_app_view *view = NULL;
   cai_agent_goal_snapshot goal;
@@ -148,11 +278,15 @@ static int status(frontend *f) {
     if (cai_cli_status_apply(f->ui->sl, &f->status) != 0)
       return -1;
   }
-  if (f->ready && !f->welcomed) {
+  if (f->ready && f->history_loaded && !f->welcomed) {
     snprintf(message, sizeof(message),
              "Conversation attached. Send /help for usage.");
     f->welcomed = 1;
-  } else if (!f->ready)
+  } else if (f->exit_save != 0U)
+    snprintf(message, sizeof(message), "Saving draft before exit...");
+  else if (f->bound && !f->history_loaded)
+    snprintf(message, sizeof(message), "Loading prompt history...");
+  else if (!f->ready)
     snprintf(message, sizeof(message), "Connecting to workspace server...");
   else if (f->state.transport.controller != f->state.transport.attachment)
     snprintf(message, sizeof(message),
@@ -174,7 +308,25 @@ static int observed(void *context, const cai_app_client_event *event,
   frontend *f = context;
   f->state = *event->state;
   if (f->queue != NULL) {
-    int rc = cai_cli_input_socket_observe(f->queue, event, error);
+    int suppress = 0;
+    size_t i;
+    int rc;
+    if (event->type == CAI_APP_CLIENT_INPUT && event->input != NULL &&
+        event->input->type == CAI_INPUT_OBSERVATION_RESULT)
+      for (i = 0U; i < 4U; ++i)
+        if (f->hidden_recall[i].request != 0U &&
+            f->hidden_recall[i].request == event->request &&
+            f->hidden_recall[i].producer == f->state.producer &&
+            strcmp(f->hidden_recall[i].session, f->state.session) == 0) {
+          suppress = 1;
+          f->hidden_recall[i].request = 0U;
+          break;
+        }
+    if (suppress)
+      (void)sl_history_set_auto_add(f->ui->sl, 0);
+    rc = cai_cli_input_socket_observe(f->queue, event, error);
+    if (suppress)
+      (void)sl_history_set_auto_add(f->ui->sl, f->history_loaded);
     if (rc != CAI_OK)
       return rc;
   }
@@ -189,6 +341,28 @@ static int observed(void *context, const cai_app_client_event *event,
   if (event->type == CAI_APP_CLIENT_CONTROL_RESULT &&
       event->input->result.code != CAI_OK)
     (void)notice(f, event->input->result.reason);
+  if (event->type == CAI_APP_CLIENT_HISTORY_RESULT) {
+    frontend_view *v;
+    for (v = f->views; v != NULL; v = v->next) {
+      recall_pending *p;
+      for (p = v->recall_first; p != NULL; p = p->next)
+        if (p->request != 0U && p->request == event->request &&
+            event->input->result.code == CAI_OK)
+          p->position = event->input->result.item_id;
+    }
+    if (event->input->result.code != CAI_OK)
+      (void)notice(f, event->input->result.reason);
+    if (f->exit_save != 0U && event->request == f->exit_save) {
+      if (event->input->result.code == CAI_OK && f->current == f->exit_view &&
+          strcmp(sl_buffer(f->ui->sl), f->exit_draft) == 0)
+        f->quit = 1;
+      else if (event->input->result.code == CAI_OK)
+        (void)notice(f, "Draft changed while saving; exit cancelled.");
+      f->exit_save = 0U;
+      free(f->exit_draft);
+      f->exit_draft = NULL;
+    }
+  }
   if (event->type == CAI_APP_CLIENT_INPUT && event->input != NULL &&
       event->input->type == CAI_INPUT_OBSERVATION_RESULT &&
       event->input->result.request_id == f->startup_request &&
@@ -302,6 +476,13 @@ static int execution_body(void *context, const cai_app_execution_event *event,
                ? CAI_OK
                : CAI_ERR_TRANSPORT;
   length = strlen(r->data);
+  if (!event->replay && strcmp(r->kind, "command.completed") == 0 &&
+      r->call_id != NULL && f->history_command[0] != '\0' &&
+      strcmp(r->call_id, f->history_command) == 0) {
+    f->history_requested = f->history_loaded = f->current->history_loaded = 0;
+    (void)sl_history_set_auto_add(f->ui->sl, 0);
+    f->history_command[0] = '\0';
+  }
   f->ui->presentation_event = 1;
   f->ui->presentation_timestamp_ns = r->timestamp_ns;
   if (cai_cli_presenter_set_theme_scope(f->ui,
@@ -368,6 +549,11 @@ static int execution_body(void *context, const cai_app_execution_event *event,
     f->command_length += length;
     f->command[f->command_length] = '\0';
     if (r->final) {
+      if (strncmp(f->command, "/history", 8U) == 0 &&
+          (f->command[8] == ' ' || f->command[8] == '\t') &&
+          r->call_id != NULL && strlen(r->call_id) < sizeof(f->history_command))
+        snprintf(f->history_command, sizeof(f->history_command), "%s",
+                 r->call_id);
       rc = cai_cli_presenter_input(f->ui, f->command, 1);
       f->command_length = 0U;
     }
@@ -439,6 +625,8 @@ static int connect_target(frontend *f) {
   config.transcript_context = f;
   config.execution = execution;
   config.execution_context = f;
+  config.prompt_history = prompt_history;
+  config.prompt_history_context = f;
   rc = cai_app_client_open(&config, clock_ms(), &f->client, &f->error);
   if (rc == CAI_OK)
     rc = cai_cli_input_socket_reconnect(f->queue, f->client, &f->error);
@@ -686,17 +874,34 @@ static int startup_input(frontend *f) {
   request.mode = SL_PROMPT_QUEUE_MODE_QUEUED;
   request.text = value;
   f->startup_command = value[0] == '/' || value[0] == '!';
-  if (sl_queue_backend_request(f->ui->sl, &request, &id) != SL_OK) {
-    free(text);
-    f->startup_stage = 5;
-    return notice(
-        f, "Startup input handoff failed; its native receipt was retained.");
+  f->startup_control = prefix != NULL;
+  f->startup_feeding = 1;
+  {
+    int submitted = sl_queue_backend_request(f->ui->sl, &request, &id);
+    f->startup_feeding = 0;
+    if (submitted != SL_OK) {
+      free(text);
+      f->startup_stage = 5;
+      return notice(
+          f, "Startup input handoff failed; its native receipt was retained.");
+    }
   }
   free(text);
   f->startup_request = cai_cli_input_socket_last_issued(f->queue);
   f->startup_producer = f->state.producer;
   snprintf(f->startup_session, sizeof(f->startup_session), "%s",
            f->state.session);
+  if (f->startup_control) {
+    size_t i;
+    for (i = 0U; i < 4U; ++i)
+      if (f->hidden_recall[i].request == 0U) {
+        f->hidden_recall[i].request = f->startup_request;
+        f->hidden_recall[i].producer = f->startup_producer;
+        snprintf(f->hidden_recall[i].session,
+                 sizeof(f->hidden_recall[i].session), "%s", f->startup_session);
+        break;
+      }
+  }
   return 0;
 }
 static int service(frontend *f) {
@@ -739,6 +944,20 @@ static int service(frontend *f) {
         return -1;
       f->subscribed = 1;
     }
+    if (f->bound && !f->history_requested) {
+      rc = cai_app_client_prompt_history(
+          f->client, ++f->subscribe_request, f->state.conversation,
+          f->state.session, (unsigned int)f->options->prompt_history_limit,
+          &f->error);
+      if (rc != CAI_OK)
+        return -1;
+      f->history_requested = 1;
+    }
+    if (f->history_warning[0] != '\0') {
+      if (notice(f, f->history_warning) != 0)
+        return -1;
+      f->history_warning[0] = '\0';
+    }
     if (actions(f) != 0)
       return -1;
     if (startup_input(f) != 0)
@@ -751,6 +970,40 @@ static int quit_key(sl_t *sl, sl_key_t key, void *context,
   frontend *f = context;
   (void)sl;
   (void)key;
+  if (sl_buffer(sl)[0] != '\0') {
+    if (f->exit_save != 0U) {
+      *action = SL_KEY_ACTION_HANDLED;
+      return SL_OK;
+    }
+    if (!f->ready || f->history_limit == 0U ||
+        f->history_request == UINT64_MAX) {
+      *action = SL_KEY_ACTION_HANDLED;
+      return sl_set_status_message(
+          sl,
+          "Draft retained: history is unavailable; clear the draft to quit.");
+    }
+    f->exit_draft = strdup(sl_buffer(sl));
+    if (f->exit_draft == NULL)
+      return SL_ERROR_NOMEM;
+    f->exit_save = ++f->history_request;
+    f->exit_view = f->current;
+    if (cai_app_client_save_prompt(f->client, f->exit_save,
+                                   f->state.transport.generation, f->exit_draft,
+                                   &f->error) != CAI_OK) {
+      f->exit_save = 0U;
+      free(f->exit_draft);
+      f->exit_draft = NULL;
+      *action = SL_KEY_ACTION_HANDLED;
+      return sl_set_status_message(
+          sl, "Draft retained: could not save; clear it to quit.");
+    }
+    {
+      char byte = 'h';
+      (void)write(f->wake[1], &byte, 1U);
+    }
+    *action = SL_KEY_ACTION_HANDLED;
+    return SL_OK;
+  }
   f->quit = 1;
   *action = SL_KEY_ACTION_SUSPEND;
   return SL_OK;
@@ -864,6 +1117,7 @@ static int select_view(frontend *f, const char *session) {
       return -1;
     v->queue = f->queue;
     cai_cli_input_socket_set_wakeup(f->queue, f->wake[1]);
+    cai_cli_input_socket_prompt(f->queue, save_submission, f);
     sl_config_init(&config);
     config.line_max_len = CAI_CLI_INPUT_TEXT_MAX;
     cai_cli_input_adapter_configure(cai_cli_input_socket_adapter(f->queue),
@@ -873,6 +1127,9 @@ static int select_view(frontend *f, const char *session) {
         cai_cli_input_adapter_bind(cai_cli_input_socket_adapter(f->queue),
                                    f->ui->sl, &f->error) != CAI_OK ||
         sl_set_statusline(f->ui->sl, 1, 0) != SL_OK ||
+        sl_history_set_max_len(f->ui->sl, f->options->prompt_history_limit) !=
+            SL_OK ||
+        sl_history_set_auto_add(f->ui->sl, 0) != SL_OK ||
         sl_set_prompt_queue_profile(
             f->ui->sl, SL_PROMPT_QUEUE_PROFILE_QUEUED_TURNS) != SL_OK ||
         sl_set_prompt_theme(f->ui->sl, f->theme.prompt) != SL_OK ||
@@ -904,6 +1161,11 @@ static int select_view(frontend *f, const char *session) {
   }
   f->pending_context = f->switching = f->ready = f->bound = f->awaiting_bind =
       f->subscribed = f->welcomed = 0;
+  f->history_requested = f->history_loaded = v->history_loaded;
+  f->history_limit = v->history_loaded
+                         ? v->history_limit
+                         : (unsigned int)f->options->prompt_history_limit;
+  f->history_length = 0U;
   f->action_field = f->action_length = f->command_length = f->review_open = 0U;
   park_view(f);
   return sl_output_stream_begin(f->ui->sl) == SL_OK ? 0 : -1;
@@ -1060,6 +1322,12 @@ done:
       sl_destroy(editor);
     }
     cai_cli_input_socket_close(v->queue);
+    while (v->recall_first != NULL) {
+      recall_pending *p = v->recall_first;
+      v->recall_first = p->next;
+      free(p->text);
+      free(p);
+    }
     free(v);
   }
   if (f->wake[0] >= 0)
@@ -1071,6 +1339,8 @@ done:
   cai_error_cleanup(&f->error);
   free(f->action);
   free(f->command);
+  free(f->history_entry);
+  free(f->exit_draft);
   free(f);
   return rc;
 }

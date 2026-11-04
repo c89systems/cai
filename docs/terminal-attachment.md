@@ -33,7 +33,10 @@ cancel a later turn; stale generations and observers cannot cancel work.
 Each conversation retains its own complete editor and queue binding, including
 draft, undo state, provisional receipts and edit state. Switching parks that
 editor and unbinds its transport before selecting another. Returning resumes
-the original producer without moving input between conversations. Explicit
+the original producer and recall without moving input between conversations.
+[Prompt recall](workspace-wire-history.md) loads through a separate bounded
+channel on the same reader worker. Alt-Q waits for a durable draft-save receipt;
+neither draft text nor stored recall enters model context. Explicit
 startup inputs for an existing owner pass through the same editor/backend queue;
 commands wait for application before subsequent inputs. A newly launched owner
 receives the startup arguments itself, avoiding duplicate submission.
@@ -51,8 +54,8 @@ never execute on the attaching terminal.
 ## Remaining cutover work
 
 This is a working terminal/socket composition, not a claim of complete feature
-parity. Remote prompt-history recall and Alt-Q draft persistence, skill catalog
-completion, all pager/layout delegates, full shared help, review progress parity,
+parity. Skill catalog completion, all pager/layout delegates, full shared help,
+review progress parity,
 default replay-tail selection, workspace switching, concurrent first-launch
 reconciliation, immediate live command-progress events and explicit
 startup-configuration compatibility still require

@@ -129,6 +129,22 @@ int cai_cli_pouch_prompt_load(cai_cli_pouch *pouch, unsigned int limit,
                               void *context, cai_error *error);
 int cai_cli_pouch_prompt_append(cai_cli_pouch *pouch, const char *prompt,
                                 cai_error *error);
+/** One bounded input, with a retained retry identity. Same bytes are
+ * idempotent; changed bytes under that identity are rejected by the store. */
+int cai_cli_pouch_prompt_append_id(cai_cli_pouch *, const char *identity,
+                                   const char *prompt,
+                                   unsigned long long *position, cai_error *);
+/** Separate public reader sharing the existing SDK client, without replacing
+ * or releasing the context's owned prompt writer. Close with collection_close.
+ */
+int cai_cli_pouch_prompt_reader(cai_cli_pouch *, const char *session,
+                                lc_collection **, cai_error *);
+/** Range-read individual bounded prompt inputs; never collect the history.
+ * Use on the retained context reader worker. Metadata/cancellation are SDK
+ * callbacks; each emitted prompt belongs to one authenticated entry. */
+int cai_cli_pouch_prompt_scan(
+    lc_collection *, const lc_collection_read_opts *, lc_collection_read_res *,
+    int (*)(void *, uint64_t, const char *, cai_error *), void *, cai_error *);
 int cai_cli_pouch_retention(cai_cli_pouch *pouch, const char *id, long *days,
                             cai_error *error);
 int cai_cli_pouch_set_retention(cai_cli_pouch *pouch, const char *id, long days,

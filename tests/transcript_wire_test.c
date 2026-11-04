@@ -107,7 +107,10 @@ static void message(cai_cli_transcript_message *m, cai_protocol_kind kind) {
   m->header.kind = kind;
   m->header.conversation = 7U;
   m->header.request = 65536U;
-  m->header.stream = kind == CAI_PROTOCOL_SUBSCRIBE ? 0U : m->header.request;
+  m->header.stream =
+      kind == CAI_PROTOCOL_SUBSCRIBE || kind == CAI_PROTOCOL_HISTORY_GET
+          ? 0U
+          : m->header.request;
   m->header.sequence = kind == CAI_PROTOCOL_STREAM_BEGIN ||
                                kind == CAI_PROTOCOL_STREAM_CHUNK ||
                                kind == CAI_PROTOCOL_STREAM_END
@@ -130,10 +133,11 @@ static void message(cai_cli_transcript_message *m, cai_protocol_kind kind) {
 }
 static void roundtrips(void) {
   static const cai_protocol_kind kinds[] = {
-      CAI_PROTOCOL_SUBSCRIBE,    CAI_PROTOCOL_UNSUBSCRIBE,
-      CAI_PROTOCOL_REPLAY_BEGIN, CAI_PROTOCOL_STREAM_BEGIN,
-      CAI_PROTOCOL_STREAM_CHUNK, CAI_PROTOCOL_STREAM_END,
-      CAI_PROTOCOL_REPLAY_END,   CAI_PROTOCOL_SUBSCRIPTION_ERROR};
+      CAI_PROTOCOL_SUBSCRIBE,         CAI_PROTOCOL_HISTORY_GET,
+      CAI_PROTOCOL_UNSUBSCRIBE,       CAI_PROTOCOL_REPLAY_BEGIN,
+      CAI_PROTOCOL_STREAM_BEGIN,      CAI_PROTOCOL_STREAM_CHUNK,
+      CAI_PROTOCOL_STREAM_END,        CAI_PROTOCOL_REPLAY_END,
+      CAI_PROTOCOL_SUBSCRIPTION_ERROR};
   fixture *f = calloc(1U, sizeof(*f));
   unsigned char *binary = malloc(CAI_CLI_TRANSCRIPT_CHUNK);
   cai_cli_transcript_message m;
@@ -149,7 +153,8 @@ static void roundtrips(void) {
     open_fixture(f);
     assert(send(f, &m) == CAI_OK && f->complete != NULL);
     got = &f->complete->event;
-    if (kinds[i] == CAI_PROTOCOL_SUBSCRIBE)
+    if (kinds[i] == CAI_PROTOCOL_SUBSCRIBE ||
+        kinds[i] == CAI_PROTOCOL_HISTORY_GET)
       assert(strcmp(got->session, m.event.session) == 0 &&
              strcmp(got->collection, m.event.collection) == 0 &&
              got->position == m.event.position && got->sequence == UINT64_MAX);

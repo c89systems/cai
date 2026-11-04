@@ -26,7 +26,8 @@ lengths from those fields, with no preliminary serialization.
 the captured conversation epoch and view revision in envelope conversation and
 sequence. RESULT carries the original request ID/conversation; its sequence is
 zero. Result categories are 0 for an input receipt, 1 for binding rejection, and
-2 for an input observation reset, and 3 for a connection-control outcome.
+2 for an input observation reset, 3 for a connection-control outcome, and 4
+for a [prompt-save result](workspace-wire-history.md).
 Reset uses request zero. A control result does not advance producer request
 watermarks or update the accepted queue. Input operations
 follow `cai_input_operation` through RESOLVE; the trusted internal

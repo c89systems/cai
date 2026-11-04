@@ -42,9 +42,23 @@ send "/resume $original\r"; expect 'ATTACHED answer'
 send '/resume missing-session\r'; expect 'was not found'
 send '/status\r'; expect 'Session ID'
 send '/theme\r'; expect 'Softline themes and pairings'
-terminal_close
+send '/history 2\r'; expect '2 entries'
+send 'UNSUBMITTED draft survives Alt-Q\033q'
+wait_for test -s "$term/status"
+wait "$terminal_pid" || fail 'Draft-preserving quit failed'
+terminal_pid=
+[[ $(cat "$term/status") == 0 && ! -s "$term/stderr" ]]
+exec 7>&-
+exec {terminal_event_fd}>&-
+terminal_events=
+unset CAI_TEST_TERMINAL_EVENT_FD
 [[ $(requests) == 1 ]]
 kill -0 "$server_pid"
+terminal_start -s attach-fixture
+send '\033[A'; expect_prompt 'UNSUBMITTED draft survives Alt-Q'
+send '\025'
+terminal_close
+[[ $(requests) == 1 ]]
 plan '{"plan":["STARTUP answer"]}'
 saved_base=("${base[@]}")
 base=("$terminal_host" "$runtime_root" "$work" "${base[@]:1}")

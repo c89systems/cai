@@ -32,6 +32,7 @@ for mode in server_lifetime server_abrupt server_persist server_grace server_act
   if [[ $mode == server_commands ]]; then
     [[ $(requests) == $((before+3)) ]]
     tail -3 "$root/peer/requests.jsonl" | jq -es '.[1].reasoning.effort == "low"' >/dev/null
+    ! rg -F 'RECALL ONLY' "$root/peer/requests.jsonl"
   elif [[ $mode == server_persist || $mode == server_config_persist || $mode == server_input || $mode == server_wire || $mode == server_typed ]]; then
     [[ $(requests) == $((before+1)) ]]
   elif [[ $mode != server_active ]]; then

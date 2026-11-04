@@ -34,7 +34,13 @@ struct cai_app_client {
       stream_high, event_sequence, event_offset;
   char transcript_session[129], transcript_collection[21];
   int event_open, event_has_data;
+  cai_app_transcript_state history;
+  uint64_t history_stream, history_epoch, history_offset, history_sequence;
+  char history_session[129];
+  int history_open;
 };
+static int receive_history(cai_app_client *, const cai_protocol_event *,
+                           cai_error *);
 static int receive_transcript(cai_app_client *, const cai_protocol_event *,
                               cai_error *);
 static void discard_execution(cai_app_client *c) {
@@ -148,7 +154,10 @@ static int receive(void *context, const cai_protocol_event *event,
       event->header->kind == CAI_PROTOCOL_STREAM_CHUNK ||
       event->header->kind == CAI_PROTOCOL_STREAM_END ||
       event->header->kind == CAI_PROTOCOL_SUBSCRIPTION_ERROR)
-    return receive_transcript(client, event, error);
+    return event->header->request == client->history_stream &&
+                   client->history_stream != 0U
+               ? receive_history(client, event, error)
+               : receive_transcript(client, event, error);
   if (event->header->kind != CAI_PROTOCOL_QUEUE_BEGIN &&
       event->header->kind != CAI_PROTOCOL_QUEUE_ITEM &&
       event->header->kind != CAI_PROTOCOL_QUEUE_END &&
@@ -231,6 +240,9 @@ static int receive(void *context, const cai_protocol_event *event,
       client->state.last_request = o.last_request;
     break;
   case CAI_PROTOCOL_RESULT:
+    if (m->category == CAI_CLI_INPUT_HISTORY_RESULT)
+      return notify(client, CAI_APP_CLIENT_HISTORY_RESULT, m->header.request,
+                    &o, error);
     if (m->category == CAI_CLI_INPUT_CONTROL_RESULT)
       return notify(client, CAI_APP_CLIENT_CONTROL_RESULT, m->header.request,
                     &o, error);
@@ -552,6 +564,143 @@ static int send_transcript(cai_app_client *c,
   out.write = output_write;
   out.end = output_end;
   return cai_cli_transcript_write(&out, m, error);
+}
+static int receive_history(cai_app_client *c, const cai_protocol_event *event,
+                           cai_error *error) {
+  const cai_cli_transcript_message *m = NULL;
+  const cai_transcript_event *e;
+  cai_app_transcript_state *s = &c->history;
+  int rc;
+  if (c->transcript_decoder == NULL) {
+    rc = cai_cli_transcript_decoder_open(&c->transcript_decoder, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
+  rc = cai_cli_transcript_decode(c->transcript_decoder, event, &m, error);
+  if (rc != CAI_OK || m == NULL)
+    return rc;
+  e = &m->event;
+  switch (e->kind) {
+  case CAI_TRANSCRIPT_REPLAY_BEGIN:
+    if (!s->subscribing || e->session == NULL ||
+        strcmp(e->session, c->history_session) != 0 || e->conversation == 0U ||
+        (c->history_epoch != 0U && e->conversation != c->history_epoch) ||
+        e->visibility > 2147483647U)
+      return invalid(error);
+    s->subscribing = 0;
+    s->active = s->replaying = 1;
+    s->conversation = e->conversation;
+    s->watermark = e->watermark;
+    s->sequence = s->position = 0U;
+    c->history_open = 0;
+    break;
+  case CAI_TRANSCRIPT_EVENT_BEGIN:
+    if (!s->active || c->history_open || e->conversation != s->conversation ||
+        e->sequence <= s->sequence || e->sequence > s->watermark ||
+        e->type == NULL || strcmp(e->type, "prompt_history") != 0 ||
+        !e->has_data)
+      return invalid(error);
+    c->history_open = 1;
+    c->history_offset = 0U;
+    c->history_sequence = e->sequence;
+    break;
+  case CAI_TRANSCRIPT_DATA:
+    if (!c->history_open || e->conversation != s->conversation ||
+        e->sequence != c->history_sequence || e->offset != c->history_offset ||
+        e->length > CAI_CLI_INPUT_TEXT_MAX - c->history_offset ||
+        (e->length != 0U && memchr(e->data, '\0', e->length) != NULL))
+      return invalid(error);
+    c->history_offset += e->length;
+    break;
+  case CAI_TRANSCRIPT_EVENT_END:
+    if (!c->history_open || e->conversation != s->conversation ||
+        e->sequence != c->history_sequence || e->offset != c->history_offset ||
+        e->position != e->sequence || e->position <= s->position ||
+        e->position > s->watermark)
+      return invalid(error);
+    break;
+  case CAI_TRANSCRIPT_REPLAY_END:
+    if (!s->active || c->history_open || e->conversation != s->conversation ||
+        e->watermark != s->watermark)
+      return invalid(error);
+    break;
+  case CAI_TRANSCRIPT_ERROR:
+    s->active = s->replaying = s->subscribing = c->history_open = 0;
+    break;
+  }
+  rc =
+      c->config.prompt_history != NULL
+          ? c->config.prompt_history(c->config.prompt_history_context, e, error)
+          : CAI_OK;
+  if (rc == CAI_OK && e->kind == CAI_TRANSCRIPT_EVENT_END) {
+    s->position = e->position;
+    s->sequence = e->sequence;
+    c->history_open = 0;
+  } else if (rc == CAI_OK && e->kind == CAI_TRANSCRIPT_REPLAY_END)
+    s->active = s->replaying = 0;
+  return rc;
+}
+int cai_app_client_prompt_history(cai_app_client *c, uint64_t request,
+                                  uint64_t conversation, const char *session,
+                                  unsigned int limit, cai_error *error) {
+  cai_cli_transcript_message m;
+  int rc = valid(c, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (c->config.prompt_history == NULL || session == NULL ||
+      session[0] == '\0' || strnlen(session, 129U) > 128U ||
+      request <= c->stream_high || limit > 2147483647U)
+    return cai_cli_error(
+        error, CAI_ERR_INVALID,
+        "valid prompt-history callback, session and fresh stream required");
+  memset(&m, 0, sizeof(m));
+  m.header.kind = CAI_PROTOCOL_HISTORY_GET;
+  m.header.request = request;
+  m.header.conversation = conversation;
+  m.event.session = session;
+  m.event.position = limit;
+  rc = send_transcript(c, &m, error);
+  if (rc == CAI_OK) {
+    c->history_stream = c->stream_high = request;
+    c->history_epoch = conversation;
+    strcpy(c->history_session, session);
+    memset(&c->history, 0, sizeof(c->history));
+    c->history.subscribing = 1;
+  }
+  return rc;
+}
+int cai_app_client_save_prompt(cai_app_client *c, uint64_t request,
+                               uint64_t generation, const char *prompt,
+                               cai_error *error) {
+  cai_cli_input_wire_message m;
+  int rc = valid(c, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (!c->state.ready || request == 0U || prompt == NULL ||
+      strnlen(prompt, CAI_CLI_INPUT_TEXT_MAX + 1U) > CAI_CLI_INPUT_TEXT_MAX)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "bound client and bounded prompt required");
+  memset(&m, 0, sizeof(m));
+  m.header.kind = CAI_PROTOCOL_HISTORY_APPEND;
+  m.header.request = request;
+  m.header.generation = generation;
+  m.header.conversation = c->state.conversation;
+  m.request.text = prompt;
+  {
+    cai_cli_input_wire_output out;
+    out.context = c;
+    out.begin = output_begin;
+    out.write = output_write;
+    out.end = output_end;
+    /* input output_begin permits receipts/resolution from observers. History
+     * mutations additionally require current local authority before handoff. */
+    if (c->state.transport.controller != c->state.transport.attachment ||
+        generation != c->state.transport.generation)
+      return cai_cli_error(error, CAI_ERR_INVALID,
+                           "prompt save requires workspace control");
+    rc = cai_cli_input_wire_write(&out, &m, error);
+  }
+  return rc;
 }
 int cai_app_client_subscribe(cai_app_client *c, uint64_t request,
                              uint64_t conversation, const char *session,

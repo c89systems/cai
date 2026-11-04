@@ -35,7 +35,10 @@ typedef enum cai_app_client_event_type {
   CAI_APP_CLIENT_STATUS,
   /** input->result is a connection control outcome, independent of the queue.
    */
-  CAI_APP_CLIENT_CONTROL_RESULT
+  CAI_APP_CLIENT_CONTROL_RESULT,
+  /** Durable prompt save outcome; request IDs are independent of queue IDs.
+   * input->result.item_id is the committed prompt collection position. */
+  CAI_APP_CLIENT_HISTORY_RESULT
 } cai_app_client_event_type;
 typedef struct cai_app_client_event {
   cai_app_client_event_type type;
@@ -90,6 +93,12 @@ typedef struct cai_app_client_config {
    * close. */
   int (*execution)(void *, const cai_app_execution_event *, cai_error *);
   void *execution_context;
+  /** Prompt recall only, outside transcript/model context. Ordered bounded
+   * spans use the transcript event shapes; visibility on BEGIN is the retained
+   * entry limit. ENTRY_END accepts one input; REPLAY_END completes the load.
+   * No complete history or prompt body is retained by this client. */
+  int (*prompt_history)(void *, const cai_transcript_event *, cai_error *);
+  void *prompt_history_context;
 } cai_app_client_config;
 void cai_app_client_config_init(cai_app_client_config *);
 /** Explicit connect only: never forks, opens stores or submits input. All
@@ -135,6 +144,19 @@ int cai_app_client_shutdown(cai_app_client *, uint64_t request,
  * are independent of input IDs. Only repeat the last identical control. */
 int cai_app_client_cancel(cai_app_client *, uint64_t request,
                           uint64_t original_generation, cai_error *);
+/** Load a bounded prompt-history suffix for an explicit session. Zero limit
+ * uses server policy. Shares the subscription request-ID namespace; independent
+ * of the ordinary transcript stream. Observers may read without taking over. */
+int cai_app_client_prompt_history(cai_app_client *, uint64_t request,
+                                  uint64_t conversation, const char *session,
+                                  unsigned int limit, cai_error *);
+/** Save one bounded input without submitting it to the model. Await
+ * HISTORY_RESULT before claiming durability or exiting after a draft save.
+ * Controller only; unchanged repeats of the most recent request are idempotent.
+ * No auto retry. */
+int cai_app_client_save_prompt(cai_app_client *, uint64_t request,
+                               uint64_t original_generation, const char *,
+                               cai_error *);
 /** Subscribe to the active session without opening stores or queue producers.
  * Epoch zero resolves the explicitly named session. A resume position requires
  * its original collection identity and last accepted sequence. Request IDs

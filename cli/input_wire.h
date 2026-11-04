@@ -7,7 +7,8 @@ typedef enum cai_cli_input_result_kind {
   CAI_CLI_INPUT_RECEIPT = 0,
   CAI_CLI_INPUT_BIND_REJECTED,
   CAI_CLI_INPUT_RESET,
-  CAI_CLI_INPUT_CONTROL_RESULT
+  CAI_CLI_INPUT_CONTROL_RESULT,
+  CAI_CLI_INPUT_HISTORY_RESULT
 } cai_cli_input_result_kind;
 typedef struct cai_cli_input_wire_message {
   cai_protocol_header header;

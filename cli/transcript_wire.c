@@ -23,6 +23,7 @@ static int invalid(cai_error *error) {
 static const char *shape(cai_protocol_kind kind) {
   switch (kind) {
   case CAI_PROTOCOL_SUBSCRIBE:
+  case CAI_PROTOCOL_HISTORY_GET:
     return "ssuu";
   case CAI_PROTOCOL_UNSUBSCRIBE:
     return "";
@@ -45,7 +46,8 @@ static const char *shape(cai_protocol_kind kind) {
 static size_t capacity(cai_protocol_kind kind, size_t index) {
   if (kind == CAI_PROTOCOL_SUBSCRIPTION_ERROR)
     return 192U;
-  if ((kind == CAI_PROTOCOL_SUBSCRIBE || kind == CAI_PROTOCOL_REPLAY_BEGIN) &&
+  if ((kind == CAI_PROTOCOL_SUBSCRIBE || kind == CAI_PROTOCOL_HISTORY_GET ||
+       kind == CAI_PROTOCOL_REPLAY_BEGIN) &&
       index == 1U)
     return 21U;
   return 129U;
@@ -57,7 +59,7 @@ static int valid_header(const cai_protocol_header *h) {
   if (shape(h->kind) == NULL || h->request == 0U ||
       (record ? h->sequence == 0U : h->sequence != 0U))
     return 0;
-  if (h->kind == CAI_PROTOCOL_SUBSCRIBE)
+  if (h->kind == CAI_PROTOCOL_SUBSCRIBE || h->kind == CAI_PROTOCOL_HISTORY_GET)
     return h->stream == 0U;
   if (h->stream != h->request)
     return 0;
@@ -69,6 +71,7 @@ static int pack(const cai_cli_transcript_message *m, field *f,
   const cai_transcript_event *e = &m->event;
   switch (m->header.kind) {
   case CAI_PROTOCOL_SUBSCRIBE:
+  case CAI_PROTOCOL_HISTORY_GET:
     f[0].bytes = e->session;
     f[1].bytes = e->collection;
     f[2].value = e->position;
@@ -122,6 +125,7 @@ static int unpack(cai_cli_transcript_decoder *d, cai_error *error) {
   e->sequence = d->message.header.sequence;
   switch (d->message.header.kind) {
   case CAI_PROTOCOL_SUBSCRIBE:
+  case CAI_PROTOCOL_HISTORY_GET:
     e->session = f[0].bytes;
     e->collection = f[1].bytes;
     e->position = f[2].value;

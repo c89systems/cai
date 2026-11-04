@@ -2570,6 +2570,8 @@ static int cli_prompt_configure(cli_state *state, cai_error *error) {
       (unsigned int)limit, error);
   if (rc != CAI_OK)
     return rc;
+  cai_cli_workspace_host_prompt_limit(state->workspace_host,
+                                      (unsigned int)limit);
   if (state->controller)
     return CAI_OK;
   if (rc == CAI_OK &&
@@ -2913,7 +2915,7 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
   }
   rc = cli_session_log(state, cai_agent_runtime_session_id(state->runtime),
                        error);
-  if (rc == CAI_OK && state->interactive)
+  if (rc == CAI_OK && (state->interactive || state->controller))
     rc = cli_prompt_configure(state, error);
   if (rc != CAI_OK)
     return rc;

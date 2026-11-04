@@ -23,6 +23,8 @@ static const char *format(cai_protocol_kind kind) {
   switch (kind) {
   case CAI_PROTOCOL_SYNCHRONIZE:
     return "us";
+  case CAI_PROTOCOL_HISTORY_APPEND:
+    return "t";
   case CAI_PROTOCOL_REQUEST:
     return "uuuuuubut";
   case CAI_PROTOCOL_QUEUE_BEGIN:
@@ -98,6 +100,9 @@ static int pack(const cai_cli_input_wire_message *m, field *f,
   const cai_input_observation *o = &m->observation;
   const cai_input_state *s = &o->state;
   switch (m->header.kind) {
+  case CAI_PROTOCOL_HISTORY_APPEND:
+    f[0].text = r->text;
+    break;
   case CAI_PROTOCOL_SYNCHRONIZE:
     f[0].number = m->producer;
     f[1].text = m->session;
@@ -174,6 +179,11 @@ static int unpack(cai_cli_input_wire_decoder *d, cai_error *error) {
   o->conversation = m->header.conversation;
   o->state.view_revision = m->header.sequence;
   switch (m->header.kind) {
+  case CAI_PROTOCOL_HISTORY_APPEND:
+    r->text = f[0].text;
+    if (r->text == NULL)
+      return invalid(error);
+    break;
   case CAI_PROTOCOL_SYNCHRONIZE:
     m->producer = f[0].number;
     m->session = f[1].text;
@@ -238,12 +248,13 @@ static int unpack(cai_cli_input_wire_decoder *d, cai_error *error) {
     o->change.state = o->state;
     return entry_unpack(f + 12U, &o->change.entry, error);
   case CAI_PROTOCOL_RESULT:
-    if (f[0].number > CAI_CLI_INPUT_CONTROL_RESULT ||
+    if (f[0].number > CAI_CLI_INPUT_HISTORY_RESULT ||
         f[3].number > CAI_INPUT_UNKNOWN || f[4].number > CAI_ERR_LIMIT)
       return invalid(error);
     m->category = (cai_cli_input_result_kind)f[0].number;
     o->type = m->category == CAI_CLI_INPUT_RECEIPT ||
-                      m->category == CAI_CLI_INPUT_CONTROL_RESULT
+                      m->category == CAI_CLI_INPUT_CONTROL_RESULT ||
+                      m->category == CAI_CLI_INPUT_HISTORY_RESULT
                   ? CAI_INPUT_OBSERVATION_RESULT
                   : CAI_INPUT_OBSERVATION_DISCONNECTED;
     o->producer = f[1].number;
@@ -302,6 +313,7 @@ int cai_cli_input_wire_decode(cai_cli_input_wire_decoder *d,
         (event->header->kind == CAI_PROTOCOL_RESULT &&
          event->header->sequence != 0U) ||
         ((event->header->kind == CAI_PROTOCOL_REQUEST ||
+          event->header->kind == CAI_PROTOCOL_HISTORY_APPEND ||
           event->header->kind == CAI_PROTOCOL_SYNCHRONIZE) &&
          (event->header->request == 0U || event->header->sequence != 0U)))
       return invalid(error);

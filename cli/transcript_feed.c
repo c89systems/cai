@@ -19,6 +19,7 @@ typedef struct subscriber {
   char expected[21], *cursor;
   ring *history, *live;
   int pending, prepared, active, replaying, error;
+  unsigned int limit;
   cai_transcript_failure failure;
   int code;
   char reason[192];
@@ -26,6 +27,8 @@ typedef struct subscriber {
 struct cai_cli_transcript_publisher {
   cai_cli_pouch *pouch;
   cai_cli_pouch_transcript *reader;
+  lc_collection *prompt_reader;
+  unsigned int prompt_limit;
   char session[129];
   char workspace[PATH_MAX];
   uint64_t conversation;
@@ -34,7 +37,7 @@ struct cai_cli_transcript_publisher {
   pthread_t worker;
   int descriptors[2], stopping;
   size_t next;
-  subscriber peers[PEERS];
+  subscriber peers[2U * PEERS];
 };
 typedef struct job {
   cai_cli_transcript_publisher *feed;
@@ -43,6 +46,8 @@ typedef struct job {
       progress;
   char *cursor;
   int prepared;
+  int prompts;
+  unsigned int limit;
 } job;
 static void wake(cai_cli_transcript_publisher *f) {
   char byte = 't';
@@ -56,12 +61,16 @@ static void drain(cai_cli_transcript_publisher *f) {
     n = read(f->descriptors[0], bytes, sizeof(bytes));
   } while (n > 0 || (n < 0 && errno == EINTR));
 }
-static subscriber *find(cai_cli_transcript_publisher *f, uint64_t attachment) {
+static subscriber *find_lane(cai_cli_transcript_publisher *f,
+                             uint64_t attachment, int prompts) {
   size_t i;
-  for (i = 0U; i < PEERS; ++i)
+  for (i = prompts ? PEERS : 0U; i < (prompts ? 2U * PEERS : PEERS); ++i)
     if (f->peers[i].attachment == attachment)
       return &f->peers[i];
   return NULL;
+}
+static subscriber *find(cai_cli_transcript_publisher *f, uint64_t attachment) {
+  return find_lane(f, attachment, 0);
 }
 void cai_cli_transcript_frame_borrow(cai_cli_transcript_frame *frame) {
   frame->event.type = frame->type;
@@ -288,6 +297,68 @@ static int prepare(job *j, cai_error *error) {
   e.visibility = head.recovery_revision;
   return add(j, &e, error);
 }
+static int prompt_event(void *context, uint64_t position, const char *prompt,
+                        cai_error *error) {
+  job *j = context;
+  cai_transcript_event e;
+  size_t offset = 0U, length = strlen(prompt);
+  int rc;
+  memset(&e, 0, sizeof(e));
+  e.kind = CAI_TRANSCRIPT_EVENT_BEGIN;
+  e.type = "prompt_history";
+  e.sequence = position;
+  e.has_data = 1;
+  rc = add(j, &e, error);
+  while (rc == CAI_OK && offset < length) {
+    size_t n = length - offset;
+    if (n > CAI_CLI_TRANSCRIPT_CHUNK)
+      n = CAI_CLI_TRANSCRIPT_CHUNK;
+    e.kind = CAI_TRANSCRIPT_DATA;
+    e.offset = offset;
+    e.data = prompt + offset;
+    e.length = n;
+    rc = add(j, &e, error);
+    offset += n;
+  }
+  if (rc == CAI_OK) {
+    e.kind = CAI_TRANSCRIPT_EVENT_END;
+    e.position = position;
+    e.offset = offset;
+    e.data = NULL;
+    e.length = 0U;
+    j->sequence = position;
+    rc = add(j, &e, error);
+  }
+  return rc;
+}
+static int prepare_prompts(job *j, cai_error *error) {
+  cai_cli_transcript_publisher *f = j->feed;
+  lc_collection_info info;
+  lc_error local;
+  cai_transcript_event begin;
+  int rc = CAI_OK;
+  memset(&info, 0, sizeof(info));
+  if (j->limit != 0U && f->prompt_reader == NULL)
+    rc = cai_cli_pouch_prompt_reader(f->pouch, f->session, &f->prompt_reader,
+                                     error);
+  lc_error_init(&local);
+  if (rc == CAI_OK && j->limit != 0U && f->prompt_reader != NULL &&
+      f->prompt_reader->describe(f->prompt_reader, &info, &local) != LC_OK)
+    rc = cai_cli_lc_error(error, &local);
+  lc_error_cleanup(&local);
+  if (rc != CAI_OK)
+    return rc;
+  j->watermark = info.upper_position;
+  j->after = j->progress =
+      info.upper_position > j->limit ? info.upper_position - j->limit : 0U;
+  memset(&begin, 0, sizeof(begin));
+  begin.kind = CAI_TRANSCRIPT_REPLAY_BEGIN;
+  begin.session = f->session;
+  begin.collection = info.collection_id;
+  begin.watermark = j->watermark;
+  begin.visibility = j->limit;
+  return add(j, &begin, error);
+}
 static void *worker(void *context) {
   cai_cli_transcript_publisher *f = context;
   for (;;) {
@@ -301,8 +372,8 @@ static void *worker(void *context) {
     j.feed = f;
     pthread_mutex_lock(&f->lock);
     while (!f->stopping && !found) {
-      for (i = 0U; i < PEERS; ++i) {
-        size_t index = (f->next + i) % PEERS;
+      for (i = 0U; i < 2U * PEERS; ++i) {
+        size_t index = (f->next + i) % (2U * PEERS);
         subscriber *s = &f->peers[index];
         if (!s->active || !s->pending)
           continue;
@@ -315,10 +386,12 @@ static void *worker(void *context) {
         j.watermark = s->watermark;
         j.progress = s->progress;
         j.prepared = s->prepared;
+        j.prompts = index >= PEERS;
+        j.limit = s->limit;
         j.cursor = s->cursor;
         s->cursor = NULL;
         s->pending = 0;
-        f->next = (index + 1U) % PEERS;
+        f->next = (index + 1U) % (2U * PEERS);
         found = 1;
         break;
       }
@@ -333,12 +406,12 @@ static void *worker(void *context) {
     cai_error_init(&error);
     lc_collection_read_opts_init(&options);
     lc_collection_read_res_init(&result);
-    rc = f->reader == NULL
+    rc = !j.prompts && f->reader == NULL
              ? cai_cli_pouch_transcript_open(f->pouch, f->workspace, f->session,
                                              &f->reader, &error)
              : CAI_OK;
     if (rc == CAI_OK && !j.prepared)
-      rc = prepare(&j, &error);
+      rc = j.prompts ? prepare_prompts(&j, &error) : prepare(&j, &error);
     options.has_after = options.has_through = options.has_first_n = 1;
     options.after = j.after;
     options.through = j.watermark;
@@ -346,9 +419,14 @@ static void *worker(void *context) {
     options.cursor = j.cursor;
     options.cancelled = cancelled;
     options.cancel_context = &j;
-    if (rc == CAI_OK)
-      rc = cai_cli_pouch_transcript_read(f->reader, &options, &result,
-                                         read_event, &j, &error);
+    if (rc == CAI_OK && j.prompts && j.after >= j.watermark)
+      result.last_examined_position = j.watermark;
+    else if (rc == CAI_OK)
+      rc = j.prompts
+               ? cai_cli_pouch_prompt_scan(f->prompt_reader, &options, &result,
+                                           prompt_event, &j, &error)
+               : cai_cli_pouch_transcript_read(f->reader, &options, &result,
+                                               read_event, &j, &error);
     if (rc == CAI_OK && result.last_examined_position < j.watermark &&
         (result.last_examined_position <= j.progress ||
          result.checkpoint_cursor == NULL))
@@ -372,6 +450,9 @@ static void *worker(void *context) {
         s->replaying = 0;
         wake(f);
       } else {
+        s->prepared = 1;
+        s->watermark = j.watermark;
+        s->after = j.after;
         s->cursor = result.checkpoint_cursor;
         result.checkpoint_cursor = NULL;
         s->sequence = j.sequence;
@@ -385,6 +466,7 @@ static void *worker(void *context) {
     cai_error_cleanup(&error);
   }
   cai_cli_pouch_transcript_close(f->reader);
+  lc_collection_close(f->prompt_reader);
   f->reader = NULL;
   return NULL;
 }
@@ -541,6 +623,16 @@ void cai_cli_transcript_feed_detach(cai_cli_transcript_publisher *f,
     s->token = token;
     pthread_cond_broadcast(&f->condition);
   }
+  s = find_lane(f, attachment, 1);
+  if (s != NULL) {
+    uint64_t token = s->token;
+    free(s->history);
+    free(s->live);
+    free(s->cursor);
+    memset(s, 0, sizeof(*s));
+    s->token = token;
+    pthread_cond_broadcast(&f->condition);
+  }
   pthread_mutex_unlock(&f->lock);
 }
 int cai_cli_transcript_feed_fd(cai_cli_transcript_publisher *f) {
@@ -553,15 +645,15 @@ void cai_cli_transcript_feed_drain(cai_cli_transcript_publisher *f) {
   drain(f);
   pthread_mutex_unlock(&f->lock);
 }
-int cai_cli_transcript_feed_ready(cai_cli_transcript_publisher *f,
-                                  uint64_t attachment, int *failed) {
+static int lane_ready(cai_cli_transcript_publisher *f, uint64_t attachment,
+                      int prompts, int *failed) {
   subscriber *s;
   int ready = 0;
   *failed = 0;
   if (f == NULL)
     return 0;
   pthread_mutex_lock(&f->lock);
-  s = find(f, attachment);
+  s = find_lane(f, attachment, prompts);
   if (s != NULL) {
     *failed = s->error;
     ready = s->error || (s->history != NULL && s->history->count != 0U) ||
@@ -570,16 +662,15 @@ int cai_cli_transcript_feed_ready(cai_cli_transcript_publisher *f,
   pthread_mutex_unlock(&f->lock);
   return ready;
 }
-int cai_cli_transcript_feed_next(cai_cli_transcript_publisher *f,
-                                 uint64_t attachment,
-                                 cai_cli_transcript_frame *out) {
+static int lane_next(cai_cli_transcript_publisher *f, uint64_t attachment,
+                     int prompts, cai_cli_transcript_frame *out) {
   subscriber *s;
   ring *r = NULL;
   int found = 0;
   if (f == NULL)
     return 0;
   pthread_mutex_lock(&f->lock);
-  s = find(f, attachment);
+  s = find_lane(f, attachment, prompts);
   if (s != NULL && s->error) {
     memset(out, 0, sizeof(*out));
     out->event.kind = CAI_TRANSCRIPT_ERROR;
@@ -620,7 +711,7 @@ void cai_cli_transcript_feed_close(cai_cli_transcript_publisher *f) {
   pthread_cond_broadcast(&f->condition);
   pthread_mutex_unlock(&f->lock);
   pthread_join(f->worker, NULL);
-  for (i = 0U; i < PEERS; ++i) {
+  for (i = 0U; i < 2U * PEERS; ++i) {
     free(f->peers[i].history);
     free(f->peers[i].live);
     free(f->peers[i].cursor);
@@ -630,4 +721,71 @@ void cai_cli_transcript_feed_close(cai_cli_transcript_publisher *f) {
   pthread_cond_destroy(&f->condition);
   pthread_mutex_destroy(&f->lock);
   free(f);
+}
+int cai_cli_transcript_feed_ready(cai_cli_transcript_publisher *f, uint64_t a,
+                                  int *failed) {
+  return lane_ready(f, a, 0, failed);
+}
+int cai_cli_transcript_feed_next(cai_cli_transcript_publisher *f, uint64_t a,
+                                 cai_cli_transcript_frame *frame) {
+  return lane_next(f, a, 0, frame);
+}
+int cai_cli_transcript_feed_prompt_ready(cai_cli_transcript_publisher *f,
+                                         uint64_t a, int *failed) {
+  return lane_ready(f, a, 1, failed);
+}
+int cai_cli_transcript_feed_prompt_next(cai_cli_transcript_publisher *f,
+                                        uint64_t a,
+                                        cai_cli_transcript_frame *frame) {
+  return lane_next(f, a, 1, frame);
+}
+void cai_cli_transcript_feed_prompt_limit(cai_cli_transcript_publisher *f,
+                                          unsigned int limit) {
+  if (f != NULL) {
+    pthread_mutex_lock(&f->lock);
+    f->prompt_limit = limit;
+    pthread_mutex_unlock(&f->lock);
+  }
+}
+int cai_cli_transcript_feed_prompts(cai_cli_transcript_publisher *f,
+                                    uint64_t attachment, uint64_t stream,
+                                    unsigned int limit, cai_error *error) {
+  subscriber *s;
+  size_t i;
+  if (f == NULL || attachment == 0U || stream == 0U)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "prompt-history context required");
+  pthread_mutex_lock(&f->lock);
+  s = find_lane(f, attachment, 1);
+  if (s == NULL)
+    for (i = PEERS; i < 2U * PEERS; ++i)
+      if (f->peers[i].attachment == 0U) {
+        s = &f->peers[i];
+        break;
+      }
+  if (s == NULL || f->stopping || s->token == UINT64_MAX) {
+    pthread_mutex_unlock(&f->lock);
+    return cai_cli_error(error, CAI_ERR_LIMIT,
+                         "prompt-history subscriber limit reached");
+  }
+  if (s->history == NULL)
+    s->history = calloc(1U, sizeof(*s->history));
+  if (s->history == NULL) {
+    pthread_mutex_unlock(&f->lock);
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate prompt-history channel");
+  }
+  ++s->token;
+  s->attachment = attachment;
+  s->stream = stream;
+  s->limit = limit != 0U && limit < f->prompt_limit ? limit : f->prompt_limit;
+  s->after = s->sequence = s->progress = s->watermark = 0U;
+  s->active = s->pending = s->replaying = 1;
+  s->prepared = s->error = 0;
+  s->history->count = s->history->start = 0U;
+  free(s->cursor);
+  s->cursor = NULL;
+  pthread_cond_broadcast(&f->condition);
+  pthread_mutex_unlock(&f->lock);
+  return CAI_OK;
 }

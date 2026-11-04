@@ -8,8 +8,10 @@ cai_app_client_get_state
 cai_app_client_get_view
 cai_app_client_open
 cai_app_client_prepare
+cai_app_client_prompt_history
 cai_app_client_pump
 cai_app_client_request
+cai_app_client_save_prompt
 cai_app_client_shutdown
 cai_app_client_subscribe
 cai_app_client_takeover

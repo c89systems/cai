@@ -8,6 +8,7 @@
 #include "transcript_feed.h"
 #include <cai/workspace_server.h>
 #include <limits.h>
+#include <openssl/sha.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -20,6 +21,12 @@ typedef struct host_peer {
   cai_input_connection *input;
   unsigned long long binding_request, snapshot_request;
   uint64_t stream, stream_high, status_revision;
+  uint64_t prompt_stream, prompt_request, prompt_generation,
+      prompt_conversation;
+  unsigned char prompt_digest[SHA256_DIGEST_LENGTH];
+  int prompt_code;
+  unsigned long long prompt_position;
+  char prompt_reason[192];
   int detached, binding;
   uint64_t cancel_request, cancel_generation, cancel_conversation;
   int cancel_code;
@@ -32,6 +39,8 @@ struct cai_cli_workspace_host {
   cai_input_controller_config admission;
   cai_input_controller *input;
   cai_cli_transcript_publisher *history;
+  cai_cli_pouch *pouch;
+  unsigned int prompt_limit;
   char session[129];
   uint64_t generation;
   cai_app_view status;
@@ -133,6 +142,38 @@ static int transcript_request(host_peer *peer, const cai_protocol_event *event,
                               "Transcript subscription is not active", error);
     return CAI_OK;
   }
+  if (m->header.kind == CAI_PROTOCOL_HISTORY_GET) {
+    cai_error_init(&local);
+    rc = peer->host->history != NULL && m->event.session != NULL &&
+                 strcmp(m->event.session, peer->host->session) == 0 &&
+                 m->header.request > peer->stream_high &&
+                 m->event.position <= UINT_MAX && m->event.sequence == 0U &&
+                 (m->event.collection == NULL || m->event.collection[0] == '\0')
+             ? cai_input_controller_conversation(peer->host->input, &epoch,
+                                                 &local)
+             : cai_cli_error(
+                   &local, CAI_ERR_INVALID,
+                   "active conversation and fresh history request required");
+    if (rc == CAI_OK && m->header.conversation != 0U &&
+        m->header.conversation != epoch)
+      rc = cai_cli_error(&local, CAI_ERR_INVALID,
+                         "prompt-history conversation changed");
+    if (m->header.request > peer->stream_high)
+      peer->stream_high = m->header.request;
+    if (rc == CAI_OK)
+      rc = cai_cli_transcript_feed_prompts(
+          peer->host->history, peer->attachment, m->header.request,
+          (unsigned int)m->event.position, &local);
+    if (rc == CAI_OK)
+      peer->prompt_stream = m->header.request;
+    else
+      rc = transcript_error(
+          peer, m->header.request, CAI_TRANSCRIPT_FAILED, rc,
+          local.message != NULL ? local.message : "prompt-history unavailable",
+          error);
+    cai_error_cleanup(&local);
+    return rc;
+  }
   if (m->header.request <= peer->stream_high)
     return transcript_error(peer, m->header.request, CAI_TRANSCRIPT_FAILED,
                             CAI_ERR_INVALID, "Fresh subscription ID required",
@@ -225,6 +266,77 @@ static int authorize(void *context, uint64_t attachment, uint64_t generation,
                                    attachment, generation, error);
   return rc;
 }
+static int append_prompt(host_peer *peer, const cai_cli_input_wire_message *m,
+                         cai_error *error) {
+  cai_cli_workspace_host *host = peer->host;
+  cai_cli_input_wire_message result;
+  cai_error local;
+  unsigned long long epoch = 0U;
+  unsigned char digest[SHA256_DIGEST_LENGTH];
+  char identity[112], instance[33];
+  size_t i;
+  int rc;
+  cai_error_init(&local);
+  SHA256((const unsigned char *)m->request.text, strlen(m->request.text),
+         digest);
+  if (m->header.request < peer->prompt_request ||
+      (m->header.request == peer->prompt_request &&
+       (m->header.generation != peer->prompt_generation ||
+        m->header.conversation != peer->prompt_conversation ||
+        memcmp(digest, peer->prompt_digest, sizeof(digest)) != 0)))
+    rc = cai_cli_error(&local, CAI_ERR_INVALID,
+                       "prompt save identity is stale or changed");
+  else if (m->header.request == peer->prompt_request) {
+    rc = peer->prompt_code;
+    if (rc != CAI_OK)
+      cai_cli_error(&local, rc, peer->prompt_reason);
+  } else {
+    rc = authorize(host, peer->attachment, m->header.generation, &local);
+    if (rc == CAI_OK)
+      rc = host->input != NULL && peer->input != NULL && !peer->binding
+               ? cai_input_controller_conversation(host->input, &epoch, &local)
+               : cai_cli_error(&local, CAI_ERR_INVALID,
+                               "bound prompt-history context required");
+    if (rc == CAI_OK && epoch != m->header.conversation)
+      rc = cai_cli_error(&local, CAI_ERR_INVALID,
+                         "prompt-history conversation changed");
+    if (rc == CAI_OK && (host->pouch == NULL || host->prompt_limit == 0U))
+      rc = cai_cli_error(&local, CAI_ERR_INVALID, "prompt history is disabled");
+    if (rc == CAI_OK) {
+      const unsigned char *bytes = cai_workspace_server_instance(host->server);
+      for (i = 0U; i < 16U; ++i)
+        snprintf(instance + 2U * i, 3U, "%02x", (unsigned int)bytes[i]);
+      snprintf(identity, sizeof(identity), "saved-%s-%llu-%llu", instance,
+               (unsigned long long)peer->attachment,
+               (unsigned long long)m->header.request);
+      peer->prompt_position = 0U;
+      rc =
+          cai_cli_pouch_prompt_append_id(host->pouch, identity, m->request.text,
+                                         &peer->prompt_position, &local);
+    }
+    peer->prompt_request = m->header.request;
+    peer->prompt_generation = m->header.generation;
+    peer->prompt_conversation = m->header.conversation;
+    memcpy(peer->prompt_digest, digest, sizeof(digest));
+    peer->prompt_code = rc;
+    snprintf(peer->prompt_reason, sizeof(peer->prompt_reason), "%s",
+             local.message != NULL ? local.message : "");
+  }
+  memset(&result, 0, sizeof(result));
+  result.header.kind = CAI_PROTOCOL_RESULT;
+  result.header.request = m->header.request;
+  result.header.conversation = m->header.conversation;
+  result.category = CAI_CLI_INPUT_HISTORY_RESULT;
+  result.observation.result.code = rc;
+  result.observation.result.item_id = rc == CAI_OK ? peer->prompt_position : 0U;
+  result.observation.result.outcome =
+      rc == CAI_OK ? CAI_INPUT_ACCEPTED : CAI_INPUT_REJECTED;
+  snprintf(result.observation.result.reason,
+           sizeof(result.observation.result.reason), "%s",
+           local.message != NULL ? local.message : "");
+  cai_error_cleanup(&local);
+  return send_message(peer, &result, error);
+}
 static int message(void *context, const cai_workspace_server_event *event,
                    cai_error *error) {
   cai_cli_workspace_host *host = context;
@@ -264,7 +376,8 @@ static int message(void *context, const cai_workspace_server_event *event,
   if (peer == NULL || peer->detached)
     return cai_cli_error(error, CAI_ERR_PROTOCOL,
                          "workspace input attachment is unavailable");
-  if (event->message->header->kind == CAI_PROTOCOL_SUBSCRIBE ||
+  if (event->message->header->kind == CAI_PROTOCOL_HISTORY_GET ||
+      event->message->header->kind == CAI_PROTOCOL_SUBSCRIBE ||
       event->message->header->kind == CAI_PROTOCOL_UNSUBSCRIBE)
     return transcript_request(peer, event->message, error);
   if (event->message->header->kind == CAI_PROTOCOL_CANCEL) {
@@ -329,6 +442,8 @@ static int message(void *context, const cai_workspace_server_event *event,
   rc = cai_cli_input_wire_decode(peer->decoder, event->message, &m, error);
   if (rc != CAI_OK || m == NULL)
     return rc;
+  if (m->header.kind == CAI_PROTOCOL_HISTORY_APPEND)
+    return append_prompt(peer, m, error);
   if (m->header.kind == CAI_PROTOCOL_SYNCHRONIZE) {
     unsigned long long epoch = 0U;
     cai_error binding;
@@ -475,8 +590,16 @@ int cai_cli_workspace_host_input(cai_cli_workspace_host *host,
                              "Conversation closed", NULL);
       host->peers[i].stream = 0U;
     }
+  for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i)
+    if (host->peers[i].prompt_stream != 0U) {
+      (void)transcript_error(&host->peers[i], host->peers[i].prompt_stream,
+                             CAI_TRANSCRIPT_CONTEXT_CLOSED, CAI_ERR_CANCELLED,
+                             "Conversation closed", NULL);
+      host->peers[i].prompt_stream = 0U;
+    }
   cai_cli_transcript_feed_close(host->history);
   host->history = NULL;
+  host->pouch = NULL;
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
     host_peer *peer = &host->peers[i];
     cai_error local;
@@ -512,10 +635,22 @@ int cai_cli_workspace_host_history(cai_cli_workspace_host *host,
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "Open conversation required for transcript");
   rc = cai_input_controller_conversation(host->input, &epoch, error);
-  return rc == CAI_OK ? cai_cli_transcript_feed_open(
-                            pouch, cai_workspace_server_directory(host->server),
-                            host->session, epoch, &host->history, error)
-                      : rc;
+  if (rc == CAI_OK)
+    rc = cai_cli_transcript_feed_open(
+        pouch, cai_workspace_server_directory(host->server), host->session,
+        epoch, &host->history, error);
+  if (rc == CAI_OK) {
+    host->pouch = pouch;
+    cai_cli_transcript_feed_prompt_limit(host->history, host->prompt_limit);
+  }
+  return rc;
+}
+void cai_cli_workspace_host_prompt_limit(cai_cli_workspace_host *host,
+                                         unsigned int limit) {
+  if (host != NULL) {
+    host->prompt_limit = limit;
+    cai_cli_transcript_feed_prompt_limit(host->history, limit);
+  }
 }
 int cai_cli_workspace_host_open(const char *runtime_directory,
                                 const char *workspace, const char *name,
@@ -627,6 +762,18 @@ int cai_cli_workspace_host_prepare(cai_cli_workspace_host *host,
     }
   }
   if (host->history != NULL) {
+    for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
+      host_peer *peer = &host->peers[i];
+      size_t pending;
+      int failed;
+      if (!peer->detached && peer->prompt_stream != 0U &&
+          cai_cli_transcript_feed_prompt_ready(host->history, peer->attachment,
+                                               &failed) &&
+          cai_workspace_server_pending(host->server, peer->attachment, &pending,
+                                       NULL) == CAI_OK &&
+          (failed || pending <= 65536U))
+        *timeout = 0L;
+    }
     fds[*count].fd = cai_cli_transcript_feed_fd(host->history);
     fds[(*count)++].events = POLLIN;
   }
@@ -716,6 +863,25 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
       cai_cli_log_error(host->logger, "workspace input output", &local);
       (void)cai_workspace_server_disconnect(host->server, peer->attachment,
                                             NULL);
+    }
+    if (rc == CAI_OK && peer->prompt_stream != 0U) {
+      cai_cli_transcript_frame frame;
+      int failed;
+      if (cai_workspace_server_pending(host->server, peer->attachment, &pending,
+                                       &local) == CAI_OK &&
+          cai_cli_transcript_feed_prompt_ready(host->history, peer->attachment,
+                                               &failed) &&
+          (failed || pending <= 65536U) &&
+          cai_cli_transcript_feed_prompt_next(host->history, peer->attachment,
+                                              &frame)) {
+        rc = send_transcript(peer, &frame.event, &local);
+        if (frame.event.kind == CAI_TRANSCRIPT_ERROR ||
+            frame.event.kind == CAI_TRANSCRIPT_REPLAY_END)
+          peer->prompt_stream = 0U;
+      }
+      if (rc != CAI_OK)
+        (void)cai_workspace_server_disconnect(host->server, peer->attachment,
+                                              NULL);
     }
     cai_error_cleanup(&local);
   }

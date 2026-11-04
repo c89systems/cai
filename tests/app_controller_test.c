@@ -847,7 +847,32 @@ typedef struct typed_view {
   uint64_t transcript_sequence, transcript_offset;
   char transcript_type[129], transcript_text[128];
   size_t transcript_length;
+  size_t history_ends, history_entries, history_bytes, history_last_bytes,
+      history_results;
+  uint64_t history_limit;
+  int history_code;
 } typed_view;
+static int typed_history(void *context, const cai_transcript_event *event,
+                         cai_error *error) {
+  typed_view *v = context;
+  (void)error;
+  if (event->kind == CAI_TRANSCRIPT_REPLAY_BEGIN)
+    v->history_limit = event->visibility;
+  else if (event->kind == CAI_TRANSCRIPT_EVENT_BEGIN)
+    v->history_bytes = 0U;
+  else if (event->kind == CAI_TRANSCRIPT_DATA) {
+    assert(event->offset == v->history_bytes);
+    v->history_bytes += event->length;
+  } else if (event->kind == CAI_TRANSCRIPT_EVENT_END) {
+    assert(event->offset == v->history_bytes);
+    ++v->history_entries;
+    v->history_last_bytes = v->history_bytes;
+  } else if (event->kind == CAI_TRANSCRIPT_REPLAY_END)
+    ++v->history_ends;
+  else if (event->kind == CAI_TRANSCRIPT_ERROR)
+    assert(event->failure == CAI_TRANSCRIPT_CONTEXT_CLOSED);
+  return CAI_OK;
+}
 static int typed_transcript(void *context, const cai_transcript_event *event,
                             cai_error *error) {
   typed_view *v = context;
@@ -916,6 +941,9 @@ static int typed_event(void *context, const cai_app_client_event *event,
     assert(view->runtime_ready && view->running && view->provider != NULL &&
            view->session_id != NULL && view->log_path != NULL);
     ++v->statuses;
+  } else if (event->type == CAI_APP_CLIENT_HISTORY_RESULT) {
+    ++v->history_results;
+    v->history_code = o->result.code;
   } else if (o->type == CAI_INPUT_OBSERVATION_SNAPSHOT_END)
     ++v->snapshots;
   else if (o->type == CAI_INPUT_OBSERVATION_RESULT) {
@@ -1034,6 +1062,8 @@ static void typed_open(typed_view *v, unsigned long long producer,
   config.transcript_context = v;
   config.execution = typed_execution;
   config.execution_context = v;
+  config.prompt_history = typed_history;
+  config.prompt_history_context = v;
   assert(cai_app_client_open(&config, monotonic_ms(), &v->client, NULL) ==
          CAI_OK);
   typed_wait(v, &v->roles, 1U);
@@ -1208,7 +1238,58 @@ static void server_commands(int argc, char **argv) {
   opens = cai_test_storage_open_count();
   typed_open(a, 0U, NULL);
   typed_open(b, 0U, NULL);
-  assert(cai_app_client_subscribe(a->client, 1U, a->state.conversation,
+  {
+    char *large = malloc(66050U);
+    size_t n;
+    assert(large != NULL);
+    assert(cai_app_client_save_prompt(
+               b->client, 1U, b->state.transport.generation,
+               "OBSERVER RECALL ONLY", NULL) == CAI_ERR_INVALID);
+    assert(cai_app_client_save_prompt(a->client, 1U,
+                                      a->state.transport.generation,
+                                      "RECALL ONLY", NULL) == CAI_OK);
+    typed_wait(a, &a->history_results, 1U);
+    assert(a->history_code == CAI_OK);
+    assert(cai_app_client_save_prompt(a->client, 1U,
+                                      a->state.transport.generation,
+                                      "RECALL ONLY", NULL) == CAI_OK);
+    typed_wait(a, &a->history_results, 2U);
+    assert(a->history_code == CAI_OK);
+    assert(cai_app_client_save_prompt(a->client, 1U,
+                                      a->state.transport.generation, "changed",
+                                      NULL) == CAI_OK);
+    typed_wait(a, &a->history_results, 3U);
+    assert(a->history_code == CAI_ERR_INVALID);
+    for (n = 2U; n <= 40U; ++n) {
+      assert(cai_app_client_save_prompt(a->client, n,
+                                        a->state.transport.generation,
+                                        "RECALL ONLY", NULL) == CAI_OK);
+      typed_wait(a, &a->history_results, n + 2U);
+      assert(a->history_code == CAI_OK);
+    }
+    memset(large, 'q', 66049U);
+    large[66049] = '\0';
+    assert(cai_app_client_save_prompt(a->client, 41U,
+                                      a->state.transport.generation, large,
+                                      NULL) == CAI_ERR_INVALID);
+    large[66048] = '\0';
+    assert(cai_app_client_save_prompt(a->client, 41U,
+                                      a->state.transport.generation, large,
+                                      NULL) == CAI_OK);
+    typed_wait(a, &a->history_results, 43U);
+    assert(a->history_code == CAI_OK);
+    assert(cai_app_client_prompt_history(a->client, 1U, a->state.conversation,
+                                         a->state.session, 0U, NULL) == CAI_OK);
+    typed_wait(a, &a->history_ends, 1U);
+    assert(a->history_limit == 200U && a->history_entries == 41U &&
+           a->history_last_bytes == 66048U);
+    assert(cai_app_client_prompt_history(b->client, 1U, b->state.conversation,
+                                         b->state.session, 2U, NULL) == CAI_OK);
+    typed_wait(b, &b->history_ends, 1U);
+    assert(b->history_limit == 2U && b->history_entries == 2U);
+    free(large);
+  }
+  assert(cai_app_client_subscribe(a->client, 2U, a->state.conversation,
                                   a->state.session, NULL, 0U, 0U,
                                   NULL) == CAI_OK);
   typed_wait(a, &a->replay_ends, 1U);
@@ -1237,6 +1318,10 @@ static void server_commands(int argc, char **argv) {
   typed_command(a, 21U, "/history -2", 0);
   typed_command(a, 22U, "/status",
                 1); /* Ordinary failures do not stop owner. */
+  assert(cai_app_client_prompt_history(a->client, 3U, a->state.conversation,
+                                       a->state.session, 0U, NULL) == CAI_OK);
+  typed_wait(a, &a->history_ends, 2U);
+  assert(a->history_limit == 17U && a->history_entries == 58U);
   typed_request(b, 1U, CAI_INPUT_OFFER, "/quit", b->state.transport.generation);
   assert(b->result.outcome == CAI_INPUT_REJECTED);
   typed_command(a, 23U, "/t gruvbox", 1);
@@ -1274,7 +1359,7 @@ static void server_commands(int argc, char **argv) {
     assert(cai_app_client_bind(a->client, 2U, 0U, 0U, NULL, NULL) == CAI_OK);
     typed_wait(a, &a->snapshots, snapshots + 1U);
     a->transcript_sequence = 0U;
-    assert(cai_app_client_subscribe(a->client, 2U, a->state.conversation,
+    assert(cai_app_client_subscribe(a->client, 4U, a->state.conversation,
                                     a->state.session, NULL, 0U, 0U,
                                     NULL) == CAI_OK);
     typed_wait(a, &a->replay_ends, ends + 1U);
@@ -1283,6 +1368,22 @@ static void server_commands(int argc, char **argv) {
            strstr(a->command_call, ":29:") != NULL);
     typed_command(a, 1U, "/status",
                   1); /* New producer restarts its request IDs. */
+    typed_command(a, 2U, "/history 0", 1);
+    assert(cai_app_client_prompt_history(a->client, 5U, a->state.conversation,
+                                         a->state.session, 0U, NULL) == CAI_OK);
+    typed_wait(a, &a->history_ends, 3U);
+    assert(a->history_limit == 0U && a->history_entries == 58U);
+    assert(cai_app_client_save_prompt(a->client, 42U,
+                                      a->state.transport.generation,
+                                      "DISABLED RECALL ONLY", NULL) == CAI_OK);
+    typed_wait(a, &a->history_results, 44U);
+    assert(a->history_code == CAI_ERR_INVALID);
+    typed_command(a, 3U, "/history 3", 1);
+    assert(cai_app_client_save_prompt(a->client, 43U,
+                                      a->state.transport.generation,
+                                      "RESTORED RECALL ONLY", NULL) == CAI_OK);
+    typed_wait(a, &a->history_results, 45U);
+    assert(a->history_code == CAI_OK);
   }
   idle_cpu(&h);
   cai_app_client_close(b->client);

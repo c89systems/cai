@@ -99,6 +99,7 @@ typedef struct prompt_read {
   prompt_record record;
   int initialized, rc;
   int (*emit)(void *, const char *, cai_error *);
+  int (*position_emit)(void *, uint64_t, const char *, cai_error *);
   void *context;
   cai_error *error;
 } prompt_read;
@@ -142,8 +143,15 @@ static int prompt_read_boundary(void *context,
     return LC_OK;
   if (lonejson_curl_parse_finish(&read->parser) != LONEJSON_STATUS_OK)
     read->rc = cai_cli_lj_error(read->error, &read->parser.error);
+  if (read->rc == CAI_OK && strlen(read->record.prompt) > 66048U)
+    read->rc = cai_cli_error(read->error, CAI_ERR_LIMIT,
+                             "stored prompt exceeds input limit");
   if (read->rc == CAI_OK)
-    read->rc = read->emit(read->context, read->record.prompt, read->error);
+    read->rc =
+        read->position_emit != NULL
+            ? read->position_emit(read->context, metadata->position,
+                                  read->record.prompt, read->error)
+            : read->emit(read->context, read->record.prompt, read->error);
   prompt_read_cleanup(read);
   return read->rc == CAI_OK ? LC_OK : LC_ERR_INVALID;
 }
@@ -172,7 +180,11 @@ int cai_cli_pouch_prompt_load(cai_cli_pouch *pouch, unsigned int limit,
   read.emit = emit;
   read.context = context;
   read.error = error;
-  read.json = lonejson_new(NULL, &json_error);
+  {
+    lonejson_config limits = lonejson_default_config();
+    limits.max_dynamic_string_bytes = 66048U;
+    read.json = lonejson_new(&limits, &json_error);
+  }
   rc = read.json != NULL ? CAI_OK : cai_cli_lj_error(error, &json_error);
   if (rc == CAI_OK && pouch->prompt_history->describe(pouch->prompt_history,
                                                       &info, &local) != LC_OK)
@@ -198,28 +210,74 @@ int cai_cli_pouch_prompt_load(cai_cli_pouch *pouch, unsigned int limit,
   lc_error_cleanup(&local);
   return rc;
 }
+int cai_cli_pouch_prompt_append_id(cai_cli_pouch *pouch, const char *id,
+                                   const char *prompt,
+                                   unsigned long long *position,
+                                   cai_error *error) {
+  prompt_record record;
+  cai_source *source = NULL;
+  int rc;
+  if (pouch->prompt_history == NULL || pouch->prompt_history_read_only ||
+      prompt == NULL || strnlen(prompt, 66049U) > 66048U)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "prompt-history collection is not open");
+  record.prompt = prompt;
+  rc = cai_cli_mapped_source(&prompt_map, &record, &source, error);
+  if (rc == CAI_OK)
+    rc = collection_append_source(pouch, pouch->prompt_history, id, source,
+                                  NULL, position, NULL, error);
+  cai_source_close(source);
+  return rc;
+}
 int cai_cli_pouch_prompt_append(cai_cli_pouch *pouch, const char *prompt,
                                 cai_error *error) {
   unsigned char nonce[16];
   char id[33];
   size_t i;
-  prompt_record record;
-  cai_source *source = NULL;
-  int rc;
-  if (pouch->prompt_history == NULL || pouch->prompt_history_read_only ||
-      prompt == NULL)
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "prompt-history collection is not open");
   if (RAND_bytes(nonce, sizeof(nonce)) != 1)
     return cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "generate prompt append identity");
-  for (i = 0U; i < sizeof(nonce); i++)
+  for (i = 0U; i < sizeof(nonce); ++i)
     snprintf(id + i * 2U, 3U, "%02x", (unsigned int)nonce[i]);
-  record.prompt = prompt;
-  rc = cai_cli_mapped_source(&prompt_map, &record, &source, error);
-  if (rc == CAI_OK)
-    rc = collection_append_source(pouch, pouch->prompt_history, id, source,
-                                  NULL, NULL, NULL, error);
-  cai_source_close(source);
+  return cai_cli_pouch_prompt_append_id(pouch, id, prompt, NULL, error);
+}
+int cai_cli_pouch_prompt_reader(cai_cli_pouch *pouch, const char *session,
+                                lc_collection **out, cai_error *error) {
+  return open_history_collection(pouch, session, "prompts", 0, 1, out, error);
+}
+int cai_cli_pouch_prompt_scan(lc_collection *collection,
+                              const lc_collection_read_opts *source,
+                              lc_collection_read_res *result,
+                              int (*emit)(void *, uint64_t, const char *,
+                                          cai_error *),
+                              void *context, cai_error *error) {
+  prompt_read read;
+  lc_collection_read_opts options = *source;
+  lc_sink sink;
+  lc_error local;
+  lonejson_error json_error;
+  int rc;
+  memset(&read, 0, sizeof(read));
+  memset(&sink, 0, sizeof(sink));
+  read.position_emit = emit;
+  read.context = context;
+  read.error = error;
+  {
+    lonejson_config limits = lonejson_default_config();
+    limits.max_dynamic_string_bytes = 66048U;
+    read.json = lonejson_new(&limits, &json_error);
+  }
+  lc_error_init(&local);
+  rc = read.json != NULL ? CAI_OK : cai_cli_lj_error(error, &json_error);
+  options.on_metadata = prompt_read_boundary;
+  options.metadata_context = &read;
+  sink.write = prompt_read_write;
+  sink.impl = &read;
+  if (rc == CAI_OK &&
+      collection->read(collection, &options, &sink, result, &local) != LC_OK)
+    rc = read.rc != CAI_OK ? read.rc : cai_cli_lc_error(error, &local);
+  prompt_read_cleanup(&read);
+  lonejson_free(read.json);
+  lc_error_cleanup(&local);
   return rc;
 }

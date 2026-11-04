@@ -34,4 +34,14 @@ int cai_cli_transcript_feed_next(cai_cli_transcript_publisher *, uint64_t,
                                  cai_cli_transcript_frame *);
 void cai_cli_transcript_frame_borrow(cai_cli_transcript_frame *);
 void cai_cli_transcript_feed_close(cai_cli_transcript_publisher *);
+/** Prompt recall shares the retained reader worker, without another SDK
+ * client or a materialized history. Each channel has its own bounded ring. */
+void cai_cli_transcript_feed_prompt_limit(cai_cli_transcript_publisher *,
+                                          unsigned int);
+int cai_cli_transcript_feed_prompts(cai_cli_transcript_publisher *, uint64_t,
+                                    uint64_t, unsigned int, cai_error *);
+int cai_cli_transcript_feed_prompt_ready(cai_cli_transcript_publisher *,
+                                         uint64_t, int *);
+int cai_cli_transcript_feed_prompt_next(cai_cli_transcript_publisher *,
+                                        uint64_t, cai_cli_transcript_frame *);
 #endif

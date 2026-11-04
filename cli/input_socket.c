@@ -12,6 +12,8 @@ struct cai_cli_input_socket {
   unsigned long long producer, base, highest, source_high, item_namespace;
   int fixed, detached;
   int wakeup;
+  void (*submitted)(void *, const cai_input_request *);
+  void *submitted_context;
   cai_error error;
 };
 static int unavailable(cai_error *error, const char *message) {
@@ -58,6 +60,11 @@ static int request(void *context, const cai_input_scope *scope,
   cai_cli_input_socket *s = context;
   int rc;
   cai_error_cleanup(&s->error);
+  if (s->submitted != NULL &&
+      (value->operation == CAI_INPUT_OFFER ||
+       value->operation == CAI_INPUT_END_EDIT) &&
+      value->text != NULL)
+    s->submitted(s->submitted_context, value);
   rc = submit(s, scope, value, &s->error);
   if (rc == CAI_OK && s->wakeup >= 0) {
     char byte = 'q';
@@ -127,6 +134,14 @@ void cai_cli_input_socket_set_wakeup(cai_cli_input_socket *s, int descriptor) {
 cai_cli_input_adapter *cai_cli_input_socket_adapter(cai_cli_input_socket *s) {
   return s != NULL ? s->adapter : NULL;
 }
+void cai_cli_input_socket_prompt(cai_cli_input_socket *s,
+                                 void (*fn)(void *, const cai_input_request *),
+                                 void *context) {
+  if (s != NULL) {
+    s->submitted = fn;
+    s->submitted_context = context;
+  }
+}
 int cai_cli_input_socket_disconnect(cai_cli_input_socket *s, cai_error *error) {
   cai_input_observation observation;
   int rc;
@@ -177,7 +192,8 @@ int cai_cli_input_socket_observe(cai_cli_input_socket *s,
   if (event->type == CAI_APP_CLIENT_BIND_REJECTED)
     return cai_cli_input_socket_disconnect(s, error);
   if (event->type == CAI_APP_CLIENT_STATUS ||
-      event->type == CAI_APP_CLIENT_CONTROL_RESULT)
+      event->type == CAI_APP_CLIENT_CONTROL_RESULT ||
+      event->type == CAI_APP_CLIENT_HISTORY_RESULT)
     return CAI_OK;
   if (event->type != CAI_APP_CLIENT_INPUT || event->input == NULL)
     return unavailable(error, "Typed input observation required");
