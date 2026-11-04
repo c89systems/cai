@@ -6,7 +6,7 @@ Status: implemented queue authority and socket input binding, 2026-11-04. Public
 here. Each conversation journals its own queue. The terminal-free application
 owner exposes in-process input connect/resume, owned observations and status
 wakeups. Workspace sockets now carry input requests and queue observations
-using the [wire payload contract](workspace-wire-queue.md). Transcript/command
+using the [wire payload contract](workspace-wire-queue.md). Command/status
 presentation and the terminal client cutover remain future work in the
 [attachable frontend architecture](frontend-architecture.md). Illustrative
 C shapes below explain responsibilities; installed headers define exact APIs.
@@ -15,11 +15,50 @@ observations without opening storage or materializing a baseline. Its explicit
 bind/resume and original scopes use the same receipts and admission gate as
 in-process connections.
 
+The Softline bridge now has one transport-independent observation/editor path.
+`cli/input_local.c` binds a native connection directly; `cli/input_socket.c`
+borrows the public application client and forwards its validated input events.
+The latter creates no runtime, worker or SDK client and owns no socket pump.
+Its request callback only hands off bounded work. Snapshots still arrive one
+entry at a time and become the explicit bounded editor mirror only at END.
+Native policies, approval FIFO, editing, drafts and Q/S intent remain in
+Softline/backend authority. The mirror cannot consume model input.
+
+A retained socket editor belongs to one persistent session/producer. Its
+per-handle request IDs map above the larger of the backend's processed
+watermark and the frontend's retained last-issued ID. Recreating an editor
+requires preserving that last-issued ID with the producer identity; processed
+receipts alone cannot account for uncertain handoffs. Retaining the same
+editor across an explicit reconnect preserves its mapping and unresolved
+proposals. No failed binding silently opens another producer, shifts the ID
+mapping or resubmits a proposal. Unexplained producer advancement fails
+submission explicitly rather than recycling an ID. Other integrations use
+their own logical producers.
+
+Item/revision tokens belong to that retained editor binding, independently of
+the live runtime epoch. A verified rebind to the same session/producer can
+change the epoch without breaking an original unknown edit's identity.
+New submissions still carry their live request scope; old mutations are never
+upgraded/retried. RESOLVE uses a new inspection request and settles both that
+receipt and the original unknown proposal through Softline's public result
+API. It cannot recreate a consumed queue entry or restore a released edit hold.
+Transport loss preserves the mirror, draft and unknown outcomes. A different
+session/producer requires a different editor binding.
+
+`cai_input_socket` verifies this bridge against a real Unix workspace host and
+Softline on a default worker stack, with storage opening prohibited. It covers
+resumed watermarks, observer rejection, editing, lost offer/edit acknowledgements,
+explicit reconnect/resolve, runtime-epoch rebinding, draft preservation, wrong
+producer/client events and ID overflow. Native queue and journal tests remain
+separate. This bridge is ready for composition; a complete socket terminal
+frontend and executable process management remain pending.
+
 Softline must retain its existing local queue as the constructor default. A
 constructor may instead select an application-supplied remote queue backend.
 "Remote" describes authority: the same adapter works with an in-process CAI
-controller or one reached over HTTP. Softline never depends on CAI, HTTP,
-liblockdc or a server thread.
+controller or the Unix workspace client. HTTP can use this boundary later.
+Softline never depends on CAI, the transport protocol, liblockdc or a server
+thread.
 
 ## 1. Exact ownership boundary
 

@@ -28,7 +28,7 @@ int main(void) {
   assert(cai_input_queue_open(&qc, &second, NULL) == CAI_OK);
   assert(cai_input_controller_open(NULL, &controller, NULL) == CAI_OK);
   assert(cai_input_controller_select(controller, first, NULL) == CAI_OK);
-  assert(cai_cli_input_adapter_open(controller, &adapter, NULL) == CAI_OK);
+  assert(cai_cli_input_local_open(controller, &adapter, NULL) == CAI_OK);
   assert(openpty(&descriptors[0], &descriptors[1], NULL, NULL, NULL) == 0);
   sl_config_init(&config);
   config.input_fd = descriptors[1];

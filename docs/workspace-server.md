@@ -79,6 +79,15 @@ without a worker or idle polling. Failed initial binding and interrupted
 baselines do not change the last validated session identity. Socket command,
 status and terminal presentation remain to be connected to the frontend.
 
+The constructor-selected Softline queue bridge now supports that public client
+as well as direct native connections, with one shared editor observation path.
+Its socket binding preserves per-editor request IDs, drafts and unresolved
+outcomes across explicit reconnects, and rejects a replacement producer. It
+keeps item identities stable across verified runtime epoch changes, while new
+requests carry the live epoch/generation. This is a frontend component without
+a runtime, storage client or worker; the complete terminal loop and executable
+composition are not yet connected to it.
+
 The storage-to-consumer transcript reader now streams decoded event chunks and
 discards commit state without materializing records. It retains a public
 collection receiver, uses native bounds/cursors/cancellation, and commits an

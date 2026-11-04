@@ -5990,8 +5990,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     rc =
         cai_input_controller_open(&admission, &state->input_controller, &error);
     if (rc == CAI_OK && state->interactive)
-      rc = cai_cli_input_adapter_open(state->input_controller,
-                                      &state->input_adapter, &error);
+      rc = cai_cli_input_local_open(state->input_controller,
+                                    &state->input_adapter, &error);
     if (rc != CAI_OK) {
       cli_print_error(state, "initialize input controller", &error);
       goto cleanup;

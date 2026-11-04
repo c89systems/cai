@@ -1,11 +1,12 @@
 #include "input_adapter.h"
-#include "pouch_stream.h"
+#include "error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 struct cai_cli_input_adapter {
-  cai_input_connection *connection;
+  cai_cli_input_transport transport;
+  int detached;
   sl_t *editor;
   sl_watch_id_t watch;
   unsigned long long conversation, view;
@@ -59,9 +60,9 @@ static int request(void *context, const sl_queue_request_t *source) {
   cai_cli_input_adapter *adapter = context;
   cai_input_request target;
   const char *revision = source->queue_revision;
-  unsigned long long conversation = adapter->conversation, view;
+  unsigned long long conversation = adapter->conversation, view, key;
   cai_input_scope scope;
-  if (adapter->connection == NULL)
+  if (adapter->detached)
     return SL_ERROR_IO;
   memset(&target, 0, sizeof(target));
   if (revision != NULL &&
@@ -69,9 +70,10 @@ static int request(void *context, const sl_queue_request_t *source) {
        !decimal(&revision, &view) || *revision++ != '.' ||
        !decimal(&revision, &target.queue_revision) || *revision != '\0'))
     return SL_ERROR_INVALID;
-  if (!identity(source->item_id, conversation, &target.item_id) ||
-      !identity(source->item_revision, conversation, &target.item_revision) ||
-      !identity(source->edit_token, conversation, &target.edit_token))
+  key = adapter->transport.identity(adapter->transport.context, conversation);
+  if (!identity(source->item_id, key, &target.item_id) ||
+      !identity(source->item_revision, key, &target.item_revision) ||
+      !identity(source->edit_token, key, &target.edit_token))
     return SL_ERROR_INVALID;
   target.request_id = source->request_id;
   target.operation = (cai_input_operation)source->operation;
@@ -83,38 +85,36 @@ static int request(void *context, const sl_queue_request_t *source) {
   target.target_request_id = source->target_request_id;
   scope.conversation = conversation;
   scope.generation = 0U;
-  return cai_input_connection_request(adapter->connection, &scope, &target,
-                                      NULL) == CAI_OK
+  return adapter->transport.request(adapter->transport.context, &scope, &target,
+                                    NULL) == CAI_OK
              ? SL_OK
              : SL_ERROR_IO;
 }
 static void detach(void *context) {
   cai_cli_input_adapter *adapter = context;
   adapter->editor = NULL;
-  cai_input_connection_close(adapter->connection);
-  adapter->connection = NULL;
+  if (!adapter->detached && adapter->transport.close != NULL)
+    adapter->transport.close(adapter->transport.context);
+  adapter->detached = 1;
   snapshot_clear(adapter);
 }
 static const sl_queue_backend_t callbacks = {
     request, detach, (1UL << (SL_QUEUE_RESOLVE + 1)) - 1UL, 0U};
-int cai_cli_input_adapter_open(cai_input_controller *controller,
+int cai_cli_input_adapter_open(const cai_cli_input_transport *transport,
                                cai_cli_input_adapter **out, cai_error *error) {
   cai_cli_input_adapter *adapter;
-  int rc;
-  if (out == NULL)
+  if (out != NULL)
+    *out = NULL;
+  if (out == NULL || transport == NULL || transport->request == NULL ||
+      transport->identity == NULL ||
+      ((transport->poll == NULL) != (transport->fd == NULL)))
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "input adapter output is required");
-  *out = NULL;
+                         "input transport and adapter output are required");
   adapter = calloc(1U, sizeof(*adapter));
   if (adapter == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM,
                          "allocate Softline input adapter");
-  rc =
-      cai_input_controller_connect(controller, 0U, &adapter->connection, error);
-  if (rc != CAI_OK) {
-    free(adapter);
-    return rc;
-  }
+  adapter->transport = *transport;
   *out = adapter;
   return CAI_OK;
 }
@@ -156,15 +156,36 @@ static void entry_copy(adapter_entry *target, const cai_input_entry *source,
     target->entry.edit_token = target->token;
   }
 }
-static int receive_one(cai_cli_input_adapter *adapter,
-                       const cai_input_observation *observation,
-                       cai_error *error) {
+static sl_queue_request_id_t resolved_request(cai_cli_input_adapter *adapter,
+                                              sl_queue_request_id_t id) {
+  sl_queue_backend_info_t info;
+  sl_queue_pending_info_t pending;
+  size_t i;
+  if (sl_queue_backend_info(adapter->editor, &info) != SL_OK)
+    return 0U;
+  for (i = 0U; i < info.pending_count; ++i)
+    if (sl_queue_backend_pending(adapter->editor, i, &pending) == SL_OK &&
+        pending.request.request_id == id &&
+        pending.request.operation == SL_QUEUE_RESOLVE)
+      return pending.request.target_request_id;
+  return 0U;
+}
+int cai_cli_input_adapter_observe(cai_cli_input_adapter *adapter,
+                                  const cai_input_observation *observation,
+                                  cai_error *error) {
   sl_queue_change_t change;
   adapter_entry one, *owned = NULL;
   sl_queue_entry_t *entries = NULL;
   char revision[96], item[48];
+  unsigned long long key;
   size_t i;
   int rc;
+  if (adapter == NULL || adapter->editor == NULL || adapter->detached ||
+      observation == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "bound input adapter and observation required");
+  key = adapter->transport.identity(adapter->transport.context,
+                                    observation->conversation);
   if (observation->type == CAI_INPUT_OBSERVATION_SNAPSHOT_BEGIN) {
     snapshot_clear(adapter);
     if (observation->state.count > 128U)
@@ -213,6 +234,7 @@ static int receive_one(cai_cli_input_adapter *adapter,
     snapshot_clear(adapter);
   if (observation->type == CAI_INPUT_OBSERVATION_RESULT) {
     sl_queue_result_t result;
+    sl_queue_request_id_t target;
     char item_revision[48], token[48];
     memset(&result, 0, sizeof(result));
     result.request_id = (sl_queue_request_id_t)observation->result.request_id;
@@ -221,19 +243,28 @@ static int receive_one(cai_cli_input_adapter *adapter,
                         ? observation->result.reason
                         : NULL;
     if (observation->result.item_id != 0U) {
-      id_text(item, sizeof(item), observation->conversation,
-              observation->result.item_id);
+      id_text(item, sizeof(item), key, observation->result.item_id);
       result.item_id = item;
-      id_text(item_revision, sizeof(item_revision), observation->conversation,
+      id_text(item_revision, sizeof(item_revision), key,
               observation->result.item_revision);
       result.item_revision = item_revision;
     }
     if (observation->result.edit_token != 0U) {
-      id_text(token, sizeof(token), observation->conversation,
-              observation->result.edit_token);
+      id_text(token, sizeof(token), key, observation->result.edit_token);
       result.edit_token = token;
     }
-    rc = sl_queue_backend_result(adapter->editor, &result);
+    target = resolved_request(adapter, result.request_id);
+    rc = SL_OK;
+    if (target != 0U) {
+      sl_queue_request_id_t resolver = result.request_id;
+      /* The backend receipt acknowledges the RESOLVE operation. Its outcome
+       * also settles the original unknown proposal, without another offer. */
+      result.request_id = target;
+      rc = sl_queue_backend_result(adapter->editor, &result);
+      result.request_id = resolver;
+    }
+    if (rc == SL_OK)
+      rc = sl_queue_backend_result(adapter->editor, &result);
   } else {
     memset(&change, 0, sizeof(change));
     change.kind = SL_QUEUE_DISCONNECTED;
@@ -259,8 +290,7 @@ static int receive_one(cai_cli_input_adapter *adapter,
                                  "copy frontend queue snapshot");
           }
           for (i = 0U; i < change.count; ++i) {
-            entry_copy(&owned[i], &adapter->snapshot[i],
-                       observation->conversation);
+            entry_copy(&owned[i], &adapter->snapshot[i], key);
             entries[i] = owned[i].entry;
           }
           change.entries = entries;
@@ -278,12 +308,11 @@ static int receive_one(cai_cli_input_adapter *adapter,
         change.index = event->index;
         change.request_id = (sl_queue_request_id_t)event->request_id;
         if (event->type == CAI_INPUT_UPSERT) {
-          entry_copy(&one, &event->entry, observation->conversation);
+          entry_copy(&one, &event->entry, key);
           change.entries = &one.entry;
           change.count = 1U;
         } else if (event->type == CAI_INPUT_REMOVE) {
-          id_text(item, sizeof(item), observation->conversation,
-                  event->entry.id);
+          id_text(item, sizeof(item), key, event->entry.id);
           change.item_id = item;
         }
       }
@@ -307,14 +336,16 @@ int cai_cli_input_adapter_receive(cai_cli_input_adapter *adapter,
                                   size_t maximum, cai_error *error) {
   cai_input_observation *observation = NULL;
   int rc = CAI_OK;
-  if (adapter == NULL || adapter->editor == NULL || maximum == 0U)
+  if (adapter == NULL || adapter->editor == NULL || maximum == 0U ||
+      adapter->detached || adapter->transport.poll == NULL)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "bound input adapter is required");
   while (maximum-- != 0U) {
-    rc = cai_input_connection_poll(adapter->connection, &observation, error);
+    rc = adapter->transport.poll(adapter->transport.context, &observation,
+                                 error);
     if (rc != CAI_OK || observation == NULL)
       break;
-    rc = receive_one(adapter, observation, error);
+    rc = cai_cli_input_adapter_observe(adapter, observation, error);
     cai_input_observation_close(observation);
     if (rc != CAI_OK)
       break;
@@ -343,12 +374,14 @@ static int wakeup(sl_t *editor, const sl_watch_event_t *event, void *context) {
 }
 int cai_cli_input_adapter_bind(cai_cli_input_adapter *adapter, sl_t *editor,
                                cai_error *error) {
-  if (adapter == NULL || editor == NULL || adapter->connection == NULL ||
+  if (adapter == NULL || editor == NULL || adapter->detached ||
       adapter->editor != NULL)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "unbound input adapter and editor are required");
   adapter->editor = editor;
-  if (sl_watch_add(editor, cai_input_connection_fd(adapter->connection),
+  if (adapter->transport.fd == NULL)
+    return CAI_OK;
+  if (sl_watch_add(editor, adapter->transport.fd(adapter->transport.context),
                    SL_WATCH_READ | SL_WATCH_ERROR | SL_WATCH_HANGUP, wakeup,
                    adapter, &adapter->watch) != SL_OK) {
     adapter->editor = NULL;
@@ -360,8 +393,8 @@ int cai_cli_input_adapter_bind(cai_cli_input_adapter *adapter, sl_t *editor,
 void cai_cli_input_adapter_close(cai_cli_input_adapter *adapter) {
   if (adapter == NULL)
     return;
-  if (adapter->connection != NULL)
-    cai_input_connection_close(adapter->connection);
+  if (!adapter->detached && adapter->transport.close != NULL)
+    adapter->transport.close(adapter->transport.context);
   snapshot_clear(adapter);
   free(adapter);
 }

@@ -86,3 +86,13 @@ journal recovery), and `cai_app_workspace_server` (real sockets and inference).
 and thread ownership, reset/rebind, partial EOF and consumer cancellation. The
 workspace-server checks use this public client for real inference and producer
 reconnect, and interrupt a large initial snapshot through another attachment.
+
+The shared Softline adapter can now consume those public client observations
+through `cli/input_socket.c`, using the same snapshot/change/result path as its
+native connection binding. A retained editor maps its own request IDs onto its
+durable producer namespace, preserves unknown outcomes across reconnect, and
+settles original proposals after RESOLVE. It does not own a socket pump or
+storage context. Its opaque item tokens remain stable across a verified runtime
+epoch change while new requests retain the live protocol scope. The
+`cai_input_socket` test exercises real socket/editor handoffs and the failure
+cases; final terminal/process composition is still pending.
