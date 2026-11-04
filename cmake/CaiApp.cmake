@@ -40,6 +40,16 @@ if(CAI_BUILD_SHARED)
   cai_configure_c_target(cai_app_shared)
 endif()
 if(CAI_BUILD_TESTS)
+  add_executable(cai_app_controller_test tests/app_controller_test.c tests/cli_storage_fixture.c)
+  target_link_libraries(cai_app_controller_test PRIVATE cai_app_static)
+  target_link_options(cai_app_controller_test PRIVATE "-Wl,--wrap=lc_client_open"
+    "-Wl,--wrap=mdf_create" "-Wl,--wrap=sl_create_with_config")
+  cai_configure_cli_target(cai_app_controller_test)
+  target_compile_options(cai_app_controller_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_app_controller COMMAND bash
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_controller_test.sh"
+    "$<TARGET_FILE:cai_app_controller_test>")
+  set_tests_properties(cai_app_controller PROPERTIES LABELS "cli;local;offline" TIMEOUT 20)
   add_executable(cai_app_mcp_environment_test tests/mcp_environment_test.c)
   target_link_libraries(cai_app_mcp_environment_test PRIVATE cai_cli_support cai_app_static)
   target_link_options(cai_app_mcp_environment_test PRIVATE "-Wl,--wrap=cai_mcp_streamable_http_client_open")

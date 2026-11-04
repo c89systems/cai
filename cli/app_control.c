@@ -13,6 +13,13 @@ static void free_string(const char *string) {
   memcpy(&owned, &string, sizeof(owned));
   free(owned);
 }
+/* Called under the snapshot lock. Notifications coalesce; consumers copy the
+ * newest snapshot rather than accumulating one object per model fragment. */
+static void status_wake(cai_app_bridge *b) {
+  uint64_t value = 1U;
+  while (write(b->status_fd, &value, sizeof(value)) < 0 && errno == EINTR) {
+  }
+}
 
 void cai_app_status_init(cai_app_status *s) {
   if (s != NULL)
@@ -110,6 +117,14 @@ int cai_app_bridge_open(cai_app_bridge **out, const cai_app_config *config,
     free(b);
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "open host control wakeup");
   }
+  b->status_fd = eventfd(0U, EFD_CLOEXEC | EFD_NONBLOCK);
+  if (b->status_fd < 0) {
+    close(b->fd);
+    pthread_mutex_destroy(&b->lock);
+    free(b);
+    return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "open application status wakeup");
+  }
   b->config = config;
   *out = b;
   return CAI_OK;
@@ -124,7 +139,9 @@ void cai_app_bridge_begin(cai_app_bridge *b) {
   b->status.outcome = CAI_APP_RUNNING;
   b->accepting = 1;
   b->failed = 0;
+  b->stop_requested = 0;
   b->next_id = 0U;
+  status_wake(b);
   pthread_mutex_unlock(&b->lock);
 }
 int cai_app_bridge_control(cai_app_bridge *b, cai_app_control_type type,
@@ -174,8 +191,19 @@ int cai_app_bridge_control(cai_app_bridge *b, cai_app_control_type type,
     b->head = c;
   b->tail = c;
   b->count++;
+  if (type == CAI_APP_STOP)
+    b->stop_requested = 1;
   pthread_mutex_unlock(&b->lock);
   return CAI_OK;
+}
+int cai_app_bridge_stopping(cai_app_bridge *b) {
+  int stopping;
+  if (b == NULL)
+    return 0;
+  pthread_mutex_lock(&b->lock);
+  stopping = b->stop_requested;
+  pthread_mutex_unlock(&b->lock);
+  return stopping;
 }
 int cai_app_bridge_shell_stop(cai_app_bridge *b) {
   cai_app_command *c;
@@ -218,6 +246,7 @@ void cai_app_bridge_ack(cai_app_bridge *b, cai_app_command *c, int status,
   b->status.control_status = status;
   if (error_copy(&b->status.control_error, error) != CAI_OK)
     b->status.control_error.code = CAI_ERR_NOMEM;
+  status_wake(b);
   pthread_mutex_unlock(&b->lock);
   if (b->config->control_callback != NULL)
     b->config->control_callback(b->config->control_context, c->id, status,
@@ -232,6 +261,20 @@ int cai_app_bridge_status(cai_app_bridge *b, cai_app_status *out,
     return cai_cli_error(error, CAI_ERR_INVALID, "status output is required");
   pthread_mutex_lock(&b->lock);
   rc = status_copy(out, &b->status, error);
+  pthread_mutex_unlock(&b->lock);
+  return rc;
+}
+int cai_app_bridge_observe(cai_app_bridge *b, cai_app_status *out,
+                           cai_error *error) {
+  uint64_t value;
+  int rc;
+  if (out == NULL || b == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID, "status output is required");
+  pthread_mutex_lock(&b->lock);
+  rc = status_copy(out, &b->status, error);
+  if (rc == CAI_OK)
+    while (read(b->status_fd, &value, sizeof(value)) > 0 || errno == EINTR) {
+    }
   pthread_mutex_unlock(&b->lock);
   return rc;
 }
@@ -283,6 +326,7 @@ int cai_app_bridge_publish(cai_app_bridge *b, cai_agent_runtime *runtime,
   } else {
     b->status.runtime_ready = 0;
   }
+  status_wake(b);
   pthread_mutex_unlock(&b->lock);
   return CAI_OK;
 }
@@ -292,6 +336,7 @@ void cai_app_bridge_error(cai_app_bridge *b, const cai_error *error) {
   pthread_mutex_lock(&b->lock);
   if (!b->failed && error_copy(&b->status.error, error) != CAI_OK)
     b->status.error.code = CAI_ERR_NOMEM;
+  status_wake(b);
   pthread_mutex_unlock(&b->lock);
 }
 void cai_app_bridge_fail(cai_app_bridge *b, const cai_error *error) {
@@ -304,6 +349,7 @@ void cai_app_bridge_fail(cai_app_bridge *b, const cai_error *error) {
     b->failed = 1;
     b->status.outcome = CAI_APP_FAILED;
   }
+  status_wake(b);
   pthread_mutex_unlock(&b->lock);
 }
 void cai_app_bridge_outcome(cai_app_bridge *b, cai_app_outcome outcome) {
@@ -313,6 +359,7 @@ void cai_app_bridge_outcome(cai_app_bridge *b, cai_app_outcome outcome) {
       b->status.outcome = outcome;
     if (outcome == CAI_APP_RUNNING && !b->failed)
       cai_error_cleanup(&b->status.error);
+    status_wake(b);
     pthread_mutex_unlock(&b->lock);
   }
 }
@@ -333,6 +380,7 @@ void cai_app_bridge_end(cai_app_bridge *b, int code, const cai_error *error) {
     b->status.outcome = CAI_APP_COMPLETED;
   if (b->status.outcome == CAI_APP_FAILED && b->status.error.code == CAI_OK)
     cai_cli_error(&b->status.error, CAI_ERR_INVALID, "application failed");
+  status_wake(b);
   pthread_mutex_unlock(&b->lock);
   cai_error_init(&abandoned);
   cai_cli_error(&abandoned, CAI_ERR_INVALID,
@@ -346,6 +394,7 @@ void cai_app_bridge_close(cai_app_bridge *b) {
     return;
   cai_app_status_cleanup(&b->status);
   close(b->fd);
+  close(b->status_fd);
   pthread_mutex_destroy(&b->lock);
   free(b);
 }

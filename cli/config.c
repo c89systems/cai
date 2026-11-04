@@ -850,9 +850,35 @@ static int tool_environment(cai_config *cfg, const char *prefix,
   }
   return 1;
 }
-int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
-                      cai_config **configuration,
-                      const cai_app_config *application, cai_error *error) {
+static const char *startup_environment(const cai_config_context *startup,
+                                       const char *prefix, const char *suffix) {
+  char name[384];
+  if (snprintf(name, sizeof(name), "%s%s", prefix, suffix) >= (int)sizeof(name))
+    return NULL;
+  return startup != NULL && startup->environment != NULL
+             ? cai_environment_get(startup->environment, name)
+             : getenv(name);
+}
+static int startup_path(char *out, size_t capacity, const char *path,
+                        const char *directory,
+                        const cai_config_context *startup, cai_error *error) {
+  int n;
+  if (path[0] != '~' || path[1] != '/')
+    return absolute_path(out, capacity, path, directory, NULL, error);
+  {
+    const char *home = startup_environment(startup, "", "HOME");
+    if (home == NULL || home[0] != '/')
+      return fail(error, path, "set an absolute HOME to expand this path");
+    n = snprintf(out, capacity, "%s/%s", home, path + 2U);
+  }
+  return n < 0 || (size_t)n >= capacity
+             ? fail(error, path, "application path is too long")
+             : 1;
+}
+int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
+                         cai_config **configuration,
+                         const cai_app_config *application,
+                         const cai_config_context *startup, cai_error *error) {
   cai_cli_options early, defaults, documented;
   cai_config *cfg = NULL;
   const char *value, *resolved;
@@ -860,6 +886,7 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
   char config_root[PATH_MAX];
   char home_root[PATH_MAX];
   char workspace[PATH_MAX];
+  char startup_directory[PATH_MAX];
   cai_config_context context;
   struct stat workspace_status;
   size_t i;
@@ -880,14 +907,14 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
   snprintf(defaults.default_api_key_env, sizeof(defaults.default_api_key_env),
            "%sAPI_KEY", defaults.environment_prefix);
   defaults.config_file =
-      app_environment(cfg, defaults.environment_prefix, "CONFIG");
-  defaults.home_dir =
-      app_environment(cfg, defaults.environment_prefix, "PATHS_HOME_DIR");
+      startup_environment(startup, defaults.environment_prefix, "CONFIG");
+  defaults.home_dir = startup_environment(startup, defaults.environment_prefix,
+                                          "PATHS_HOME_DIR");
   if (defaults.home_dir == NULL)
     defaults.home_dir =
-        app_environment(cfg, defaults.environment_prefix, "HOME");
+        startup_environment(startup, defaults.environment_prefix, "HOME");
   defaults.config_dir =
-      app_environment(cfg, defaults.environment_prefix, "CONFIG_DIR");
+      startup_environment(startup, defaults.environment_prefix, "CONFIG_DIR");
   rc = cai_cli_read_options(argc, argv, &defaults, &early);
   config_dir_flag = early.config_dir != defaults.config_dir;
   home_flag = early.home_dir != defaults.home_dir;
@@ -921,26 +948,38 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
     if (early.home_dir == NULL)
       early.home_dir = application->home_directory;
   }
-  if (realpath(early.directory != NULL ? early.directory : ".", workspace) ==
-          NULL ||
+  {
+    const char *directory = startup != NULL ? startup->directory : NULL;
+    const char *path = early.directory != NULL ? early.directory : ".";
+    if (directory == NULL) {
+      if (getcwd(startup_directory, sizeof(startup_directory)) == NULL)
+        return fail(error, NULL, "cannot capture startup directory");
+      directory = startup_directory;
+    }
+    if (startup_path(selected, sizeof(selected), path, directory, startup,
+                     error) < 0)
+      return -1;
+  }
+  if (realpath(selected, workspace) == NULL ||
       stat(workspace, &workspace_status) != 0 ||
       !S_ISDIR(workspace_status.st_mode))
     return fail(error, early.directory, "cannot resolve workspace directory");
   memset(&context, 0, sizeof(context));
   context.directory = workspace;
+  context.environment = startup != NULL ? startup->environment : NULL;
   config_root[0] = '\0';
   if (early.home_dir != NULL) {
     if (early.home_dir[0] == '\0')
       return fail(error, "home_dir",
                   "application home must be a nonempty path");
-    if (absolute_path(home_root, sizeof(home_root), early.home_dir, workspace,
-                      NULL, error) < 0)
+    if (startup_path(home_root, sizeof(home_root), early.home_dir, workspace,
+                     startup, error) < 0)
       return -1;
     early.home_dir = home_root;
   }
   if (early.config_dir != NULL &&
-      absolute_path(config_root, sizeof(config_root), early.config_dir,
-                    workspace, NULL, error) < 0)
+      startup_path(config_root, sizeof(config_root), early.config_dir,
+                   workspace, startup, error) < 0)
     return -1;
   if (early.config_dir == NULL) {
     if (early.home_dir != NULL) {
@@ -948,9 +987,11 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
                    early.home_dir);
       if (n < 0 || (size_t)n >= sizeof(config_root))
         return fail(error, NULL, "application home path too long");
-    } else if (cai_cli_xdg_path(config_root, sizeof(config_root),
-                                "XDG_CONFIG_HOME", ".config",
-                                defaults.program_name, error) != CAI_OK)
+    } else if (cai_cli_xdg_path_values(
+                   config_root, sizeof(config_root),
+                   startup_environment(startup, "", "XDG_CONFIG_HOME"),
+                   startup_environment(startup, "", "HOME"), ".config",
+                   defaults.program_name, error) != CAI_OK)
       return -1;
   }
   rc = app_schema(&context, &cfg, error);
@@ -1244,4 +1285,10 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
       return fail(error, "ui.status_fields", reason);
   }
   return 1;
+}
+int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
+                      cai_config **configuration,
+                      const cai_app_config *application, cai_error *error) {
+  return cai_cli_configure_at(argc, argv, options, configuration, application,
+                              NULL, error);
 }

@@ -86,6 +86,7 @@ typedef struct cli_state {
   char capacity_retry_message[192];
   const cai_app_config *application;
   cai_app_bridge *bridge;
+  int controller;
   sl_watch_id_t host_watch;
   int has_host_watch;
   int host_stopped;
@@ -311,6 +312,9 @@ static int cli_load_model_metadata(const cai_cli_options *options, char **out,
 
 static void cli_print_error(cli_state *state, const char *operation,
                             const cai_error *error) {
+  if (state->controller && error != NULL && error->code == CAI_ERR_CANCELLED &&
+      cai_app_bridge_stopping(state->bridge))
+    return; /* Orderly startup/replay STOP is not an application failure. */
   cai_app_bridge_error(state->bridge, error);
   cai_cli_log_error(cli_logger(state), operation, error);
 }
@@ -812,6 +816,8 @@ static int cli_tool_markdown(void *context, const char *text, size_t length) {
 }
 
 static int cli_markdown(cli_state *state, const char *text) {
+  if (state->controller)
+    return 0; /* Typed controls have their own structured acknowledgement. */
   if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0)
     return -1;
   if (state->batch) {
@@ -1360,6 +1366,9 @@ static int cli_prompt_ready(cli_state *state, const char *text,
                             int *ready, cai_error *error) {
   int rc;
   *ready = 0;
+  if (state->controller && (text[0] == '/' || text[0] == '!'))
+    return CAI_OK; /* Preserve accepted actions until a frontend can present
+                      them. */
   if (cli_command_at_feed_boundary(text)) {
     if (strcmp(text, "/tools") == 0 && state->mcp_initialized &&
         !cai_cli_mcp_ready(&state->mcp))
@@ -1736,147 +1745,10 @@ static void cli_log_event(cli_state *state,
   }
 }
 
-static int cli_event_body(void *context, const cai_agent_runtime_event *event,
-                          cai_error *error) {
-  cli_state *state;
-  state = (cli_state *)context;
-  if (state->application != NULL &&
-      state->application->event_callback != NULL) {
-    int observed = state->application->event_callback(
-        state->application->event_context, event, error);
-    if (observed != CAI_OK) {
-      if (error->code == CAI_OK)
-        cai_cli_error(error, observed, "application event observer failed");
-      cai_app_bridge_fail(state->bridge, error);
-      return observed;
-    }
-  }
-  cli_log_event(state, event);
-  if (event->type == CAI_AGENT_EVENT_COMPACTION_STARTED ||
-      event->type == CAI_AGENT_EVENT_COMPACTION_PROGRESS)
-    state->compaction_active = 1;
-  else if (event->type == CAI_AGENT_EVENT_COMPACTION_COMPLETED ||
-           event->type == CAI_AGENT_EVENT_RUN_COMPLETED ||
-           event->type == CAI_AGENT_EVENT_RUN_FAILED ||
-           event->type == CAI_AGENT_EVENT_RUN_CANCELLED)
-    state->compaction_active = 0;
-  if (event->parent_tool_call_id == NULL && !state->batch) {
-    int notified = cli_settings_notice(state, error);
-    if (notified != CAI_OK)
-      return notified;
-  }
-  if (event->type == CAI_AGENT_EVENT_REQUEST_RETRY) {
-    if (!state->batch &&
-        (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0))
-      return CAI_ERR_TRANSPORT;
-    cai_cli_response_close(&state->final_response);
-    cai_cli_reasoning_reset(&state->reasoning);
-    snprintf(state->capacity_retry_message,
-             sizeof(state->capacity_retry_message), "%.*s",
-             (int)(event->data_length < sizeof(state->capacity_retry_message)
-                       ? event->data_length
-                       : sizeof(state->capacity_retry_message) - 1U),
-             event->data != NULL ? event->data : "");
-  } else if (event->type == CAI_AGENT_EVENT_REQUEST_RETRY_STARTED ||
-             event->type == CAI_AGENT_EVENT_RUN_STARTED ||
-             event->type == CAI_AGENT_EVENT_RUN_COMPLETED ||
-             event->type == CAI_AGENT_EVENT_RUN_FAILED ||
-             event->type == CAI_AGENT_EVENT_RUN_CANCELLED)
-    state->capacity_retry_message[0] = '\0';
-  if (state->interactive &&
-      (event->type == CAI_AGENT_EVENT_RUN_STARTED ||
-       event->type == CAI_AGENT_EVENT_RUN_COMPLETED ||
-       event->type == CAI_AGENT_EVENT_RUN_FAILED ||
-       event->type == CAI_AGENT_EVENT_RUN_CANCELLED ||
-       event->type == CAI_AGENT_EVENT_TOOL_CALL_COMPLETED ||
-       event->type == CAI_AGENT_EVENT_TOOL_CALL_FAILED ||
-       event->type == CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED))
-    cai_cli_status_maybe_refresh_branch(&state->status, state->workspace);
-  if (event->type == CAI_AGENT_EVENT_INPUT_BOUNDARY) {
-    int rc = cli_host_process(state, error);
-    return rc != CAI_OK ? rc : cli_messages_process(state, 1, error);
-  }
-  if (!state->batch) {
-    int scope;
-    int themed;
-    if (state->review_block && event->parent_tool_call_id == NULL &&
-        (event->type == CAI_AGENT_EVENT_RUN_FAILED ||
-         event->type == CAI_AGENT_EVENT_RUN_CANCELLED)) {
-      int finished = cli_review_boundary(state, 0, error);
-      if (finished != CAI_OK)
-        return finished;
-    }
-    scope = cli_event_theme_scope(event);
-    themed = scope < 0 ? CAI_OK : cli_set_theme_scope(state, scope, error);
-    if (themed != CAI_OK)
-      return themed;
-  }
-  if (event->type == CAI_AGENT_EVENT_MCP_UPDATED) {
-    cai_cli_mcp_applied(&state->mcp);
-    if (cai_cli_mcp_ready(&state->mcp) && state->mcp_notice_pending) {
-      state->mcp_notice_pending = 0;
-      return cli_markdown(state, event->data != NULL
-                                     ? event->data
-                                     : "MCP connections updated.") == 0
-                 ? CAI_OK
-                 : CAI_ERR_TRANSPORT;
-    }
-    return CAI_OK;
-  }
-  if (event->type == CAI_AGENT_EVENT_SUBAGENT_STARTED)
-    state->foreground_subagent = 1;
-  if (event->type == CAI_AGENT_EVENT_SUBAGENT_HANDED_OFF ||
-      (event->parent_tool_call_id == NULL &&
-       (event->type == CAI_AGENT_EVENT_RUN_FAILED ||
-        event->type == CAI_AGENT_EVENT_RUN_CANCELLED)))
-    state->foreground_subagent = 0;
-  if (event->parent_tool_call_id != NULL &&
-      strcmp(event->parent_tool_call_id, "/review") == 0) {
-    if (event->type == CAI_AGENT_EVENT_RUN_CANCELLED)
-      state->automation_failed = 1;
-    if (event->type == CAI_AGENT_EVENT_TEXT_DELTA)
-      return CAI_OK; /* Render the validated findings rather than JSON deltas.
-                      */
-    if (event->type == CAI_AGENT_EVENT_REVIEW_REPORT) {
-      char *formatted = NULL;
-      int rc = cai_cli_review_format(event->data, event->data_length,
-                                     "markdown", &formatted) == 0
-                   ? CAI_OK
-                   : CAI_ERR_PROTOCOL;
-      if (rc == CAI_OK &&
-          (cli_finish_response(state) != 0 ||
-           cli_finish_reasoning(state) != 0 ||
-           cli_tool_markdown(state, formatted, strlen(formatted)) != 0 ||
-           cli_finish_response(state) != 0))
-        rc = CAI_ERR_TRANSPORT;
-      free(formatted);
-      return rc;
-    }
-  }
-  if (event->type == CAI_AGENT_EVENT_POLICY_DIAGNOSTIC_STARTED) {
-    if (!state->batch &&
-        (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0))
-      return CAI_ERR_TRANSPORT;
-    cai_cli_response_close(&state->final_response);
-    cai_cli_reasoning_reset(&state->reasoning);
-    if (!state->batch && cli_prompt(state, event->data) != 0)
-      return CAI_ERR_TRANSPORT;
-  }
-  if (event->type == CAI_AGENT_EVENT_REVIEW_REPORT &&
-      event->parent_tool_call_id == NULL && state->options.review) {
-    char *report;
-    if (event->data == NULL || event->data_length == (size_t)-1 ||
-        memchr(event->data, '\0', event->data_length) != NULL)
-      return CAI_ERR_PROTOCOL;
-    report = (char *)malloc(event->data_length + 1U);
-    if (report == NULL)
-      return CAI_ERR_NOMEM;
-    memcpy(report, event->data, event->data_length);
-    report[event->data_length] = '\0';
-    free(state->review_report);
-    state->review_report = report;
-    state->review_report_length = event->data_length;
-  }
+/* Backend lifecycle is independent of terminal presentation. */
+static int cli_event_lifecycle(cli_state *state,
+                               const cai_agent_runtime_event *event,
+                               cai_error *error) {
   if (event->parent_tool_call_id == NULL) {
     if (event->type == CAI_AGENT_EVENT_GOAL_CHANGED && state->starting_goal &&
         state->startup_goal_pending > 0U)
@@ -1930,6 +1802,158 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
       cai_cli_reasoning_reset(&state->reasoning);
       cai_cli_response_close(&state->final_response);
     }
+  }
+  return CAI_OK;
+}
+
+static int cli_event_body(void *context, const cai_agent_runtime_event *event,
+                          cai_error *error) {
+  cli_state *state;
+  state = (cli_state *)context;
+  if (state->application != NULL &&
+      state->application->event_callback != NULL) {
+    int observed = state->application->event_callback(
+        state->application->event_context, event, error);
+    if (observed != CAI_OK) {
+      if (error->code == CAI_OK)
+        cai_cli_error(error, observed, "application event observer failed");
+      cai_app_bridge_fail(state->bridge, error);
+      return observed;
+    }
+  }
+  cli_log_event(state, event);
+  if (event->type == CAI_AGENT_EVENT_COMPACTION_STARTED ||
+      event->type == CAI_AGENT_EVENT_COMPACTION_PROGRESS)
+    state->compaction_active = 1;
+  else if (event->type == CAI_AGENT_EVENT_COMPACTION_COMPLETED ||
+           event->type == CAI_AGENT_EVENT_RUN_COMPLETED ||
+           event->type == CAI_AGENT_EVENT_RUN_FAILED ||
+           event->type == CAI_AGENT_EVENT_RUN_CANCELLED)
+    state->compaction_active = 0;
+  if (event->parent_tool_call_id == NULL && !state->batch &&
+      !state->controller) {
+    int notified = cli_settings_notice(state, error);
+    if (notified != CAI_OK)
+      return notified;
+  }
+  if (event->type == CAI_AGENT_EVENT_REQUEST_RETRY) {
+    if (!state->batch && !state->controller &&
+        (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0))
+      return CAI_ERR_TRANSPORT;
+    cai_cli_response_close(&state->final_response);
+    cai_cli_reasoning_reset(&state->reasoning);
+    snprintf(state->capacity_retry_message,
+             sizeof(state->capacity_retry_message), "%.*s",
+             (int)(event->data_length < sizeof(state->capacity_retry_message)
+                       ? event->data_length
+                       : sizeof(state->capacity_retry_message) - 1U),
+             event->data != NULL ? event->data : "");
+  } else if (event->type == CAI_AGENT_EVENT_REQUEST_RETRY_STARTED ||
+             event->type == CAI_AGENT_EVENT_RUN_STARTED ||
+             event->type == CAI_AGENT_EVENT_RUN_COMPLETED ||
+             event->type == CAI_AGENT_EVENT_RUN_FAILED ||
+             event->type == CAI_AGENT_EVENT_RUN_CANCELLED)
+    state->capacity_retry_message[0] = '\0';
+  if (state->interactive &&
+      (event->type == CAI_AGENT_EVENT_RUN_STARTED ||
+       event->type == CAI_AGENT_EVENT_RUN_COMPLETED ||
+       event->type == CAI_AGENT_EVENT_RUN_FAILED ||
+       event->type == CAI_AGENT_EVENT_RUN_CANCELLED ||
+       event->type == CAI_AGENT_EVENT_TOOL_CALL_COMPLETED ||
+       event->type == CAI_AGENT_EVENT_TOOL_CALL_FAILED ||
+       event->type == CAI_AGENT_EVENT_TERMINAL_COMMAND_COMPLETED))
+    cai_cli_status_maybe_refresh_branch(&state->status, state->workspace);
+  if (event->type == CAI_AGENT_EVENT_INPUT_BOUNDARY) {
+    int rc = cli_host_process(state, error);
+    return rc != CAI_OK ? rc : cli_messages_process(state, 1, error);
+  }
+  if (!state->batch && !state->controller) {
+    int scope;
+    int themed;
+    if (state->review_block && event->parent_tool_call_id == NULL &&
+        (event->type == CAI_AGENT_EVENT_RUN_FAILED ||
+         event->type == CAI_AGENT_EVENT_RUN_CANCELLED)) {
+      int finished = cli_review_boundary(state, 0, error);
+      if (finished != CAI_OK)
+        return finished;
+    }
+    scope = cli_event_theme_scope(event);
+    themed = scope < 0 ? CAI_OK : cli_set_theme_scope(state, scope, error);
+    if (themed != CAI_OK)
+      return themed;
+  }
+  if (event->type == CAI_AGENT_EVENT_MCP_UPDATED) {
+    cai_cli_mcp_applied(&state->mcp);
+    if (cai_cli_mcp_ready(&state->mcp) && state->mcp_notice_pending) {
+      state->mcp_notice_pending = 0;
+      return cli_markdown(state, event->data != NULL
+                                     ? event->data
+                                     : "MCP connections updated.") == 0
+                 ? CAI_OK
+                 : CAI_ERR_TRANSPORT;
+    }
+    return CAI_OK;
+  }
+  if (event->type == CAI_AGENT_EVENT_SUBAGENT_STARTED)
+    state->foreground_subagent = 1;
+  if (event->type == CAI_AGENT_EVENT_SUBAGENT_HANDED_OFF ||
+      (event->parent_tool_call_id == NULL &&
+       (event->type == CAI_AGENT_EVENT_RUN_FAILED ||
+        event->type == CAI_AGENT_EVENT_RUN_CANCELLED)))
+    state->foreground_subagent = 0;
+  if (state->controller)
+    return cli_event_lifecycle(state, event, error);
+  if (event->parent_tool_call_id != NULL &&
+      strcmp(event->parent_tool_call_id, "/review") == 0) {
+    if (event->type == CAI_AGENT_EVENT_RUN_CANCELLED)
+      state->automation_failed = 1;
+    if (event->type == CAI_AGENT_EVENT_TEXT_DELTA)
+      return CAI_OK; /* Render the validated findings rather than JSON deltas.
+                      */
+    if (event->type == CAI_AGENT_EVENT_REVIEW_REPORT) {
+      char *formatted = NULL;
+      int rc = cai_cli_review_format(event->data, event->data_length,
+                                     "markdown", &formatted) == 0
+                   ? CAI_OK
+                   : CAI_ERR_PROTOCOL;
+      if (rc == CAI_OK &&
+          (cli_finish_response(state) != 0 ||
+           cli_finish_reasoning(state) != 0 ||
+           cli_tool_markdown(state, formatted, strlen(formatted)) != 0 ||
+           cli_finish_response(state) != 0))
+        rc = CAI_ERR_TRANSPORT;
+      free(formatted);
+      return rc;
+    }
+  }
+  if (event->type == CAI_AGENT_EVENT_POLICY_DIAGNOSTIC_STARTED) {
+    if (!state->batch &&
+        (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0))
+      return CAI_ERR_TRANSPORT;
+    cai_cli_response_close(&state->final_response);
+    cai_cli_reasoning_reset(&state->reasoning);
+    if (!state->batch && cli_prompt(state, event->data) != 0)
+      return CAI_ERR_TRANSPORT;
+  }
+  if (event->type == CAI_AGENT_EVENT_REVIEW_REPORT &&
+      event->parent_tool_call_id == NULL && state->options.review) {
+    char *report;
+    if (event->data == NULL || event->data_length == (size_t)-1 ||
+        memchr(event->data, '\0', event->data_length) != NULL)
+      return CAI_ERR_PROTOCOL;
+    report = (char *)malloc(event->data_length + 1U);
+    if (report == NULL)
+      return CAI_ERR_NOMEM;
+    memcpy(report, event->data, event->data_length);
+    report[event->data_length] = '\0';
+    free(state->review_report);
+    state->review_report = report;
+    state->review_report_length = event->data_length;
+  }
+  {
+    int rc = cli_event_lifecycle(state, event, error);
+    if (rc != CAI_OK)
+      return rc;
   }
   if (state->batch) {
     if (event->parent_tool_call_id == NULL && !state->options.review) {
@@ -2800,6 +2824,8 @@ static int cli_replay_event(void *context, const cai_agent_session_event *event,
                             cai_error *error) {
   cli_state *state = context;
   int rc;
+  if (cai_app_bridge_stopping(state->bridge))
+    return cai_cli_error(error, CAI_ERR_CANCELLED, "startup was stopped");
   if (strcmp(event->type, "assistant_text_delta") == 0 ||
       strcmp(event->type, "subagent") == 0 ||
       strcmp(event->type, "turn_submitted") == 0)
@@ -3164,7 +3190,7 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
   config.event_callback = cli_event;
   config.review_event_callback = cli_review_event;
   config.review_event_context = state;
-  config.synchronize_input_boundaries = state->interactive;
+  config.synchronize_input_boundaries = state->interactive || state->controller;
   config.event_context = state;
   if (!state->options.review && !state->suppress_replay) {
     state->pouch.replay_begin = cli_replay_begin;
@@ -3187,7 +3213,7 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
   config.mcp_options = state->mcp.options;
   config.mcp_client_count =
       state->options.review ? 0U : state->mcp.client_count;
-  if (config.replay_callback != NULL && !state->batch &&
+  if (config.replay_callback != NULL && !state->batch && !state->controller &&
       state->options.replay_turns != 0L &&
       cai_cli_replay_open(state->options.replay_turns < 0L
                               ? (size_t)LONG_MAX
@@ -3913,9 +3939,18 @@ static int cli_host_process(cli_state *state, cai_error *error) {
         (void)cai_agent_runtime_cancel_turn(state->review_runtime, NULL);
       if (state->sl != NULL)
         (void)sl_cancel(state->sl);
+    } else if (state->controller && cai_app_bridge_stopping(state->bridge)) {
+      rc =
+          cai_cli_error(&applied, CAI_ERR_CANCELLED, "application is stopping");
     } else if (state->runtime == NULL) {
       rc = cai_cli_error(&applied, CAI_ERR_INVALID,
                          "agent runtime is not ready");
+    } else if (state->controller &&
+               (command->type == CAI_APP_QUEUE_PROMPT ||
+                command->type == CAI_APP_STEER) &&
+               (command->text[0] == '/' || command->text[0] == '!')) {
+      rc = cai_cli_error(&applied, CAI_ERR_INVALID,
+                         "terminal commands require a frontend attachment");
     } else if (command->type == CAI_APP_QUEUE_PROMPT) {
       if (state->batch) {
         rc = cai_agent_runtime_submit_queued(state->runtime, command->text,
@@ -3926,11 +3961,15 @@ static int cli_host_process(cli_state *state, cai_error *error) {
         }
       } else {
         rc = cli_input_request(state, CAI_INPUT_OFFER, command->text,
-                               CAI_INPUT_QUEUED, 1, NULL, NULL, &applied);
+                               CAI_INPUT_QUEUED, !state->controller, NULL, NULL,
+                               &applied);
       }
     } else if (command->type == CAI_APP_STEER) {
-      rc = cai_agent_runtime_submit_steering(state->runtime, command->text,
-                                             &applied);
+      rc = state->controller
+               ? cli_input_request(state, CAI_INPUT_OFFER, command->text,
+                                   CAI_INPUT_STEERING, 0, NULL, NULL, &applied)
+               : cai_agent_runtime_submit_steering(state->runtime,
+                                                   command->text, &applied);
     } else if (command->type == CAI_APP_CANCEL_TURN) {
       rc = cai_agent_runtime_cancel_turn(state->review_runtime != NULL
                                              ? state->review_runtime
@@ -3985,14 +4024,14 @@ static int cli_host_process(cli_state *state, cai_error *error) {
 /* Both descriptors are level-triggered. Batch runs wake immediately for host
  * commands instead of waiting for the runtime's timed condition variable. */
 static int cli_pump(cli_state *state, long timeout, cai_error *error) {
-  struct pollfd descriptors[3];
+  struct pollfd descriptors[5];
   int fd, rc;
   rc = cai_cli_pouch_ownership_check(&state->pouch, error);
   if (rc != CAI_OK) {
     (void)cai_agent_runtime_cancel_turn(state->runtime, NULL);
     return rc;
   }
-  if (timeout > 0L) {
+  if (timeout != 0L) {
     rc = cai_agent_runtime_wakeup_fd(state->runtime, &fd, error);
     if (rc != CAI_OK)
       return rc;
@@ -4000,10 +4039,16 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
     descriptors[0].fd = fd;
     descriptors[1].fd = state->bridge != NULL ? state->bridge->fd : -1;
     descriptors[2].fd = cai_cli_pouch_ownership_fd(&state->pouch);
+    descriptors[3].fd = state->controller
+                            ? cai_input_controller_fd(state->input_controller)
+                            : -1;
+    descriptors[4].fd = state->controller && state->messages != NULL
+                            ? cai_cli_messages_fd(state->messages)
+                            : -1;
     descriptors[0].events = descriptors[1].events = descriptors[2].events =
-        POLLIN;
+        descriptors[3].events = descriptors[4].events = POLLIN;
     do {
-      rc = poll(descriptors, 3U, (int)timeout);
+      rc = poll(descriptors, 5U, (int)timeout);
     } while (rc < 0 && errno == EINTR);
     if (rc < 0)
       return cai_cli_error(error, CAI_ERR_TRANSPORT, "wait for app events");
@@ -4014,7 +4059,7 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
     (void)cai_agent_runtime_cancel_turn(state->runtime, NULL);
     return rc;
   }
-  rc = state->interactive
+  rc = state->interactive || state->controller
            ? cai_agent_runtime_pump_bounded(state->runtime, timeout, 4U, error)
            : cai_agent_runtime_pump(state->runtime, timeout, error);
   if (rc == CAI_OK)
@@ -6003,7 +6048,8 @@ static int cli_temp_stop(void *context) {
 
 static int cli_app_run_state(cli_state *state, int argc, char **argv,
                              const cai_app_config *application,
-                             cai_app_bridge *bridge) {
+                             cai_app_bridge *bridge,
+                             const cai_config_context *startup) {
   cai_client_config client_config;
   cai_chatgpt_auth_config auth_config;
   cai_cli_pouch *auth_store = NULL;
@@ -6025,11 +6071,36 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   cai_cli_temp_init(&state->temporary);
   state->application = application;
   state->bridge = bridge;
+  state->controller = startup != NULL;
   state->timer_fd = -1;
   cai_cli_shell_init(&state->shell);
   result = 1;
   metadata_json = NULL;
   cai_error_init(&error);
+  if (state->controller) {
+    cai_cli_options early;
+    int valid = cai_cli_read_options(argc, argv, NULL, &early);
+    if (valid < 0) {
+      cai_cli_error(&error, CAI_ERR_INVALID, early.diagnostic);
+      result = 2;
+      goto cleanup;
+    }
+    if (valid <= 0 || early.chrome_setup || early.chrome_remove ||
+        early.login || early.list || early.resume_list || early.delete_list ||
+        early.delete_id != NULL || early.export_id != NULL ||
+        early.import_file != NULL || early.install_skill != NULL ||
+        early.message != NULL || early.review || early.non_interactive) {
+      cai_cli_error(&error, CAI_ERR_INVALID,
+                    "controller startup accepts agent options, not utility or "
+                    "terminal modes");
+      result = 2;
+      goto cleanup;
+    }
+    if (cai_app_bridge_stopping(bridge)) {
+      cai_cli_error(&error, CAI_ERR_CANCELLED, "startup was stopped");
+      goto cleanup;
+    }
+  }
   if (argc > 1 && (strncmp(argv[1], "chrome-extension://", 19U) == 0 ||
                    strcmp(argv[1], "--chrome-native-host") == 0)) {
     int explicit_mode = strcmp(argv[1], "--chrome-native-host") == 0;
@@ -6067,13 +6138,15 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     result = rc == CAI_OK ? 0 : 1;
     goto cleanup;
   }
-  parsed = cai_cli_configure(argc, argv, &state->options, &state->configuration,
-                             application, &error);
+  parsed =
+      cai_cli_configure_at(argc, argv, &state->options, &state->configuration,
+                           application, startup, &error);
   /* Process installation belongs to this legacy synchronous receiver, whose
    * wrapper owns/restores process resources. Configuration resolution itself
    * is reusable by an independent controller without mutating its host. */
-  if (parsed > 0 && state->configuration->apply_environment(
-                        state->configuration, &error) != CAI_OK)
+  if (parsed > 0 && !state->controller &&
+      state->configuration->apply_environment(state->configuration, &error) !=
+          CAI_OK)
     parsed = -1;
   if (parsed > 0) {
     const char *reason =
@@ -6112,6 +6185,10 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       cai_cli_error(&error, CAI_ERR_INVALID, state->options.diagnostic);
     goto cleanup;
   }
+  if (state->controller && cai_app_bridge_stopping(bridge)) {
+    cai_cli_error(&error, CAI_ERR_CANCELLED, "startup was stopped");
+    goto cleanup;
+  }
   snprintf(state->welcome, sizeof(state->welcome),
            "Welcome to %s. Send /help for usage.", state->options.program_name);
   state->batch = state->options.review || state->options.non_interactive;
@@ -6123,11 +6200,13 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       state->options.import_file != NULL ||
       state->options.install_skill != NULL || state->options.message != NULL;
   default_log_level = utility_mode ? PSLOG_LEVEL_WARN : PSLOG_LEVEL_TRACE;
-  if (cai_cli_log_new(
-          &state->log, default_log_level, !state->batch && !utility_mode,
-          application != NULL ? application->logger : NULL, &error) != CAI_OK)
+  if (cai_cli_log_new(&state->log, default_log_level,
+                      !state->batch && !utility_mode && !state->controller,
+                      application != NULL ? application->logger : NULL,
+                      &error) != CAI_OK)
     goto cleanup;
-  (void)setlocale(LC_CTYPE, "");
+  if (!state->controller)
+    (void)setlocale(LC_CTYPE, "");
   result = 1;
   if (realpath(state->options.directory, state->workspace) == NULL) {
     cli_diagnostic(state, PSLOG_LEVEL_ERROR, "cannot resolve workspace");
@@ -6156,7 +6235,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     result = cai_cli_install_skill(&state->options, state->log->logger);
     goto cleanup;
   }
-  if (!state->batch && !utility_mode) {
+  if (!state->batch && !utility_mode && !state->controller) {
     rc = cai_cli_log_interactive_at(state->log, state->options.log_dir, &error);
     if (rc != CAI_OK) {
       cli_print_error(state, "open interactive log", &error);
@@ -6330,9 +6409,10 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       cli_print_error(state, "open authentication store", &error);
       goto cleanup;
     }
-    if (auth_file == NULL && getenv("HOME") != NULL) {
+    if (auth_file == NULL &&
+        cai_environment_get(state->environment, "HOME") != NULL) {
       rc = snprintf(auth_path, sizeof(auth_path), "%s/.codex/auth.json",
-                    getenv("HOME"));
+                    cai_environment_get(state->environment, "HOME"));
       if (rc > 0 && (size_t)rc < sizeof(auth_path) &&
           access(auth_path, F_OK) == 0)
         auth_file = auth_path;
@@ -6351,7 +6431,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       }
     }
   }
-  state->interactive = !state->options.review &&
+  state->interactive = !state->controller && !state->options.review &&
                        !state->options.non_interactive &&
                        isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
   if (state->interactive &&
@@ -6361,7 +6441,9 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     goto cleanup;
   }
 
-  cai_cli_status_init(&state->status, state->workspace, getenv("HOME"));
+  if (!state->controller)
+    cai_cli_status_init(&state->status, state->workspace,
+                        cai_environment_get(state->environment, "HOME"));
   (void)cai_cli_status_fields_parse(state->options.status_fields,
                                     &state->status.fields);
   result = 1;
@@ -6386,54 +6468,58 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       cli_print_error(state, "initialize input controller", &error);
       goto cleanup;
     }
-    prompt_config.prompt_theme = getenv("NO_COLOR") != NULL
-                                     ? SL_PROMPT_THEME_PLAIN
-                                     : state->theme.prompt;
-    if (state->interactive)
-      cai_cli_input_adapter_configure(state->input_adapter, &prompt_config);
-    prompt_config.line_max_len = 65536U + 512U;
-    prompt_config.history_max_len = state->options.prompt_history_limit;
-    snprintf(state->clipboard_template, sizeof(state->clipboard_template),
-             "%s/*", state->clipboard_directory);
-    prompt_config.image_paste_path_template = state->clipboard_template;
-    state->sl = sl_create_with_config(&prompt_config);
-    if (state->sl == NULL) {
-      cli_diagnostic(state, PSLOG_LEVEL_ERROR,
-                     "failed to create softline prompt\n");
-      goto cleanup;
-    }
-    if (state->interactive &&
-        (cai_cli_input_adapter_bind(state->input_adapter, state->sl, &error) !=
-             CAI_OK ||
-         sl_watch_add(state->sl,
-                      cai_input_controller_fd(state->input_controller),
-                      SL_WATCH_READ | SL_WATCH_ERROR | SL_WATCH_HANGUP,
-                      cli_input_wakeup, state, &state->input_watch) != SL_OK)) {
-      cli_print_error(state, "attach Softline input adapter", &error);
-      goto cleanup;
-    }
-    state->has_input_watch = state->interactive;
-    if (state->interactive &&
-        cai_cli_completions_open(&state->completions, state->sl,
-                                 state->workspace, cli_completion_catalog,
-                                 state) != SL_OK) {
-      cli_diagnostic(state, PSLOG_LEVEL_ERROR,
-                     "failed to configure prompt completions");
-      goto cleanup;
+    if (!state->controller) {
+      prompt_config.prompt_theme = getenv("NO_COLOR") != NULL
+                                       ? SL_PROMPT_THEME_PLAIN
+                                       : state->theme.prompt;
+      if (state->interactive)
+        cai_cli_input_adapter_configure(state->input_adapter, &prompt_config);
+      prompt_config.line_max_len = 65536U + 512U;
+      prompt_config.history_max_len = state->options.prompt_history_limit;
+      snprintf(state->clipboard_template, sizeof(state->clipboard_template),
+               "%s/*", state->clipboard_directory);
+      prompt_config.image_paste_path_template = state->clipboard_template;
+      state->sl = sl_create_with_config(&prompt_config);
+      if (state->sl == NULL) {
+        cli_diagnostic(state, PSLOG_LEVEL_ERROR,
+                       "failed to create softline prompt\n");
+        goto cleanup;
+      }
+      if (state->interactive &&
+          (cai_cli_input_adapter_bind(state->input_adapter, state->sl,
+                                      &error) != CAI_OK ||
+           sl_watch_add(
+               state->sl, cai_input_controller_fd(state->input_controller),
+               SL_WATCH_READ | SL_WATCH_ERROR | SL_WATCH_HANGUP,
+               cli_input_wakeup, state, &state->input_watch) != SL_OK)) {
+        cli_print_error(state, "attach Softline input adapter", &error);
+        goto cleanup;
+      }
+      state->has_input_watch = state->interactive;
+      if (state->interactive &&
+          cai_cli_completions_open(&state->completions, state->sl,
+                                   state->workspace, cli_completion_catalog,
+                                   state) != SL_OK) {
+        cli_diagnostic(state, PSLOG_LEVEL_ERROR,
+                       "failed to configure prompt completions");
+        goto cleanup;
+      }
     }
   }
-  state->width = cli_render_width();
+  state->width = state->controller ? 80 : cli_render_width();
   if ((state->interactive &&
        (sl_bind_key(state->sl, SL_KEY_ESCAPE, cli_cancel_editor, NULL) !=
             SL_OK ||
         sl_set_statusline(state->sl, 1, 0) != SL_OK ||
         sl_set_status_message(state->sl, state->welcome) != SL_OK)) ||
-      (!state->batch && sl_output_stream_begin(state->sl) != SL_OK)) {
+      (!state->batch && !state->controller &&
+       sl_output_stream_begin(state->sl) != SL_OK)) {
     cli_diagnostic(state, PSLOG_LEVEL_ERROR,
                    "failed to initialize terminal renderers\n");
     goto cleanup;
   }
-  if (cli_renderer_create(state, &state->render_theme, &state->renderer,
+  if (!state->controller &&
+      cli_renderer_create(state, &state->render_theme, &state->renderer,
                           &error) != CAI_OK) {
     cli_print_error(state, "initialize Markdown renderer", &error);
     goto cleanup;
@@ -6443,7 +6529,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
                    "cannot render startup introduction");
     goto cleanup;
   }
-  if (!state->batch && cli_tool_display_init(state, &error) != CAI_OK) {
+  if (!state->batch && !state->controller &&
+      cli_tool_display_init(state, &error) != CAI_OK) {
     cli_print_error(state, "initialize tool renderer", &error);
     goto cleanup;
   }
@@ -6643,6 +6730,23 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     cli_print_error(state, "start work", &error);
     goto cleanup;
   }
+  if (state->controller) {
+    while (!state->exit_requested) {
+      rc = cli_pump(state, 0L, &error);
+      if (rc == CAI_OK)
+        rc = cli_advance_automation(state, &error);
+      if (rc == CAI_OK)
+        rc = cli_sync_status(state, &error);
+      if (rc == CAI_OK && !state->exit_requested)
+        rc = cli_pump(state, -1L, &error);
+      if (rc != CAI_OK) {
+        cli_print_error(state, "controller event", &error);
+        goto cleanup;
+      }
+    }
+    result = 0;
+    goto cleanup;
+  }
   if (state->options.non_interactive) {
     rc = cli_run_noninteractive(state, &error);
     if (rc != CAI_OK) {
@@ -6746,6 +6850,12 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   }
   result = 0;
 cleanup:
+  if (error.code == CAI_ERR_CANCELLED && cai_app_bridge_stopping(bridge)) {
+    cai_error_cleanup(&error);
+    cai_error_init(&error);
+    (void)cli_host_process(state, &error);
+    result = error.code == CAI_OK ? 0 : 1;
+  }
   {
     cai_error decisions;
     cai_error_init(&decisions);
@@ -6876,10 +6986,12 @@ cleanup:
     if (rc != CAI_OK) {
       cai_cli_log_error(state->log != NULL ? state->log->logger : NULL,
                         "clean temporary workspace", &cleanup_error);
-      fprintf(stderr, "Cannot clean temporary workspace %s: %s\n",
-              state->temporary.root,
-              cleanup_error.message != NULL ? cleanup_error.message
-                                            : "cleanup failed");
+      cai_app_bridge_error(bridge, &cleanup_error);
+      if (!state->controller)
+        fprintf(stderr, "Cannot clean temporary workspace %s: %s\n",
+                state->temporary.root,
+                cleanup_error.message != NULL ? cleanup_error.message
+                                              : "cleanup failed");
       result = 1;
     }
     cai_error_cleanup(&cleanup_error);
@@ -6906,8 +7018,10 @@ cleanup:
  * stack budget. Its owner outlives every runtime, lease service and UI
  * callback.
  */
-int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
-                    cai_app_bridge *bridge) {
+static int cli_app_receive(int argc, char **argv,
+                           const cai_app_config *application,
+                           cai_app_bridge *bridge,
+                           const cai_config_context *startup) {
   cli_state *state = calloc(1U, sizeof(*state));
   int code;
   if (state == NULL) {
@@ -6918,9 +7032,19 @@ int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
       fputs("cannot allocate application state\n", stderr);
     return 1;
   }
-  code = cli_app_run_state(state, argc, argv, application, bridge);
+  code = cli_app_run_state(state, argc, argv, application, bridge, startup);
   free(state);
   return code;
+}
+int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
+                    cai_app_bridge *bridge) {
+  return cli_app_receive(argc, argv, application, bridge, NULL);
+}
+int cai_cli_app_controller_run(int argc, char **argv,
+                               const cai_app_config *application,
+                               cai_app_bridge *bridge,
+                               const cai_config_context *startup) {
+  return cli_app_receive(argc, argv, application, bridge, startup);
 }
 
 int cai_cli_app_main(int argc, char **argv, const cai_app_config *application) {

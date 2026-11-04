@@ -25,6 +25,12 @@ typedef struct app_impl {
   size_t string_count;
   int running;
   cai_app_bridge *bridge;
+  pthread_t owner;
+  int asynchronous, controller_code;
+  int argument_count;
+  char **arguments;
+  char *directory;
+  cai_config_context startup;
 } app_impl;
 typedef struct process_state {
   char **environment;
@@ -122,6 +128,9 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
                          "invalid application arguments");
   *exit_code = 1;
   app = self->impl;
+  if (app->running)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "application is already running");
   if (pthread_mutex_trylock(&application_lock) != 0)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "an application is already running");
@@ -161,6 +170,97 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
   pthread_mutex_unlock(&application_lock);
   return rc;
 }
+static void controller_arguments_close(app_impl *app) {
+  int i;
+  for (i = 0; app->arguments != NULL && i <= app->argument_count; ++i)
+    free(app->arguments[i]);
+  free(app->arguments);
+  app->arguments = NULL;
+  free(app->directory);
+  app->directory = NULL;
+  cai_environment_close(app->startup.environment);
+  memset(&app->startup, 0, sizeof(app->startup));
+}
+static void *controller_run(void *context) {
+  app_impl *app = context;
+  app->controller_code =
+      cai_cli_app_controller_run(app->argument_count + 1, app->arguments,
+                                 &app->config, app->bridge, &app->startup);
+  cai_app_bridge_end(app->bridge, app->controller_code, NULL);
+  return NULL;
+}
+int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
+                  const char *const *argv, cai_error *error) {
+  app_impl *app;
+  int i, rc;
+  if (self == NULL || argc < 0 || argc == INT_MAX ||
+      (argc > 0 && argv == NULL) ||
+      (context != NULL && context->directory != NULL &&
+       context->directory[0] != '/'))
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "invalid controller startup arguments");
+  app = self->impl;
+  if (app->running)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "application is already running");
+  app->argument_count = argc;
+  app->directory = context != NULL && context->directory != NULL
+                       ? strdup(context->directory)
+                       : getcwd(NULL, 0U);
+  if (app->directory == NULL)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "capture controller directory");
+  app->startup.directory = app->directory;
+  if (context != NULL && context->environment != NULL) {
+    rc = cai_environment_retain(context->environment, error);
+    if (rc == CAI_OK)
+      app->startup.environment = context->environment;
+  } else
+    rc = cai_environment_open(NULL, &app->startup.environment, error);
+  if (rc == CAI_OK) {
+    app->arguments = calloc((size_t)argc + 2U, sizeof(*app->arguments));
+    if (app->arguments == NULL)
+      rc = cai_cli_error(error, CAI_ERR_NOMEM, "copy controller arguments");
+  }
+  for (i = 0; rc == CAI_OK && i <= argc; ++i) {
+    const char *value = i == 0 ? (app->config.invocation_name != NULL
+                                      ? app->config.invocation_name
+                                      : app->config.program_name)
+                               : argv[i - 1];
+    if (value == NULL)
+      rc = cai_cli_error(error, CAI_ERR_INVALID, "null controller argument");
+    else if ((app->arguments[i] = strdup(value)) == NULL)
+      rc = cai_cli_error(error, CAI_ERR_NOMEM, "copy controller argument");
+  }
+  if (rc == CAI_OK) {
+    app->running = app->asynchronous = 1;
+    cai_app_bridge_begin(app->bridge);
+    if (pthread_create(&app->owner, NULL, controller_run, app) != 0) {
+      rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "start controller owner");
+      cai_app_bridge_end(app->bridge, 1, error);
+      app->running = app->asynchronous = 0;
+    }
+  }
+  if (rc != CAI_OK)
+    controller_arguments_close(app);
+  return rc;
+}
+int cai_app_join(cai_app *self, int *exit_code, cai_error *error) {
+  app_impl *app;
+  if (self == NULL || exit_code == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "controller join outputs required");
+  app = self->impl;
+  if (!app->asynchronous || pthread_equal(app->owner, pthread_self()))
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "join requires another running controller owner");
+  if (pthread_join(app->owner, NULL) != 0)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT, "join controller owner");
+  *exit_code = app->controller_code;
+  app->running = app->asynchronous = 0;
+  controller_arguments_close(app);
+  return CAI_OK;
+}
 int cai_app_control(cai_app *self, cai_app_control_type type, const char *text,
                     unsigned long long *id, cai_error *error) {
   app_impl *app;
@@ -178,6 +278,15 @@ int cai_app_get_status(const cai_app *self, cai_app_status *out,
     return cai_cli_error(error, CAI_ERR_INVALID, "application is required");
   app = self->impl;
   return cai_app_bridge_status(app->bridge, out, error);
+}
+int cai_app_status_fd(const cai_app *self) {
+  const app_impl *app = self != NULL ? self->impl : NULL;
+  return app != NULL ? app->bridge->status_fd : -1;
+}
+int cai_app_observe_status(const cai_app *self, cai_app_status *out,
+                           cai_error *error) {
+  const app_impl *app = self != NULL ? self->impl : NULL;
+  return cai_app_bridge_observe(app != NULL ? app->bridge : NULL, out, error);
 }
 size_t cai_app_option_count(const cai_app *self) {
   return self != NULL ? cai_cli_help_count() : 0U;
@@ -255,6 +364,8 @@ int cai_app_open(const cai_app_config *config, cai_app **out,
   app->shell.write_help = cai_app_write_help;
   app->shell.control = cai_app_control;
   app->shell.get_status = cai_app_get_status;
+  app->shell.start = cai_app_start;
+  app->shell.join = cai_app_join;
   app->shell.close = cai_app_close;
   app->config.setting_count = config->setting_count;
   app->string_count = base_count + 3U * config->setting_count;

@@ -223,6 +223,36 @@ retain their original authority generation. Explicit detach drains pending
 output without waiting for server shutdown; close releases immediately. The
 executable must coordinate autostart, reconnect reconciliation and shutdown.
 
+`cai_app_start(app, context, argc, argv, error)` starts a terminal-free owner
+without blocking the host on session restoration. The optional
+`cai_config_context` supplies an absolute startup directory and immutable
+environment; omitted members are captured before start returns. Arguments are
+copied. This path uses the shared configuration/runtime/store setup, durable
+input queue and goal pursuit, creates no Softline/libmdf objects and leaves
+host process state alone. Separate controllers may share a Pouch root through
+the existing SDK client registry. Their callbacks run on their own owner
+threads; hosts must marshal access to a scripting VM or another event loop.
+
+Watch `cai_app_status_fd(app)` for POLLIN and call `cai_app_observe_status` with
+an initialized owned snapshot. These notifications coalesce into the latest
+state and are drained atomically with the copy; no status object accumulates
+for each model fragment. The existing `get_status` remains a nondraining
+thread-safe query. Readiness is `running && runtime_ready`; a failed start is
+reported through final status/error. Native event/replay callbacks continue to
+receive the borrowed semantic stream. The typed control API accepts prompts,
+steering, goal operations, cancellation and STOP. Slash/! commands require the
+frontend presentation layer and are rejected on this terminal-free surface;
+restored frontend actions stay queued. Socket application bindings and the
+Softline client cutover are still pending.
+
+An idle controller stays open until STOP. After observing shutdown, call
+`cai_app_join` outside UI/owner callbacks, then close or start the receiver
+again. Join itself does not request STOP. STOP also sets a cancellation signal
+checked at journal replay boundaries. Individual dependency calls without
+cancellation callbacks remain nonpreemptible through this API, including
+configuration-file loading and initial store opening. Utility/review/batch CLI
+modes use the synchronous receiver.
+
 Lua `runtime:pending_input()` returns an owner-thread attachment with `state()`,
 one-based `entry(index)`, `request(table)`, `set_ready(index, boolean)`,
 `claim(index)` and `close()`. Requests use operation names such as `offer`,

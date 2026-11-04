@@ -13,4 +13,10 @@
 int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
                       cai_config **configuration,
                       const cai_app_config *application, cai_error *error);
+/* Explicit startup context for a controller owner. Does not consult cwd or
+ * process environment when both context members are supplied. */
+int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
+                         cai_config **configuration,
+                         const cai_app_config *application,
+                         const cai_config_context *startup, cai_error *error);
 #endif

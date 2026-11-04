@@ -10,9 +10,10 @@ typedef struct cai_app_command {
 } cai_app_command;
 typedef struct cai_app_bridge {
   pthread_mutex_t lock;
-  int fd;
+  int fd, status_fd;
   int accepting;
   int failed;
+  int stop_requested;
   size_t count;
   unsigned long long next_id;
   cai_app_command *head, *tail;
@@ -30,6 +31,8 @@ int cai_app_bridge_control(cai_app_bridge *bridge, cai_app_control_type type,
                            cai_error *error);
 int cai_app_bridge_status(cai_app_bridge *bridge, cai_app_status *out,
                           cai_error *error);
+int cai_app_bridge_observe(cai_app_bridge *bridge, cai_app_status *out,
+                           cai_error *error);
 int cai_app_bridge_publish(cai_app_bridge *bridge, cai_agent_runtime *runtime,
                            cai_error *error);
 void cai_app_bridge_error(cai_app_bridge *bridge, const cai_error *error);
@@ -39,11 +42,16 @@ cai_app_command *cai_app_bridge_take(cai_app_bridge *bridge);
  * after terminal restoration; drain notifications to avoid spinning while
  * non-STOP commands are deferred. A later submission signals again. */
 int cai_app_bridge_shell_stop(cai_app_bridge *bridge);
+int cai_app_bridge_stopping(cai_app_bridge *bridge);
 void cai_app_bridge_ack(cai_app_bridge *bridge, cai_app_command *command,
                         int status, const cai_error *error);
 void cai_app_bridge_outcome(cai_app_bridge *bridge, cai_app_outcome outcome);
 int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
                     cai_app_bridge *bridge);
+int cai_cli_app_controller_run(int argc, char **argv,
+                               const cai_app_config *application,
+                               cai_app_bridge *bridge,
+                               const cai_config_context *context);
 int cai_cli_app_main(int argc, char **argv, const cai_app_config *application);
 size_t cai_cli_help_count(void);
 const cai_app_option *cai_cli_help_at(size_t index);

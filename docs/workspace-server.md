@@ -35,6 +35,19 @@ process. The application controller/frontend cutover, Softline client adapter
 and headless/attach CLI are still pending; these core components alone do not
 enable those CLI modes.
 
+The application receiver now also provides `cai_app_start`/`cai_app_join`: an
+asynchronous terminal-free owner using the shared startup, runtime, durable
+input queue, integrations and goal pursuit. It creates no Softline/libmdf
+objects and does not install process environment, cwd, locale or signals.
+Startup captures explicit directory/environment contexts; native runtime/replay
+observers receive borrowed events on the owner. A coalescing status descriptor
+reports readiness, controls and shutdown without idle polling. This is the
+backend ownership entry point, not yet a socket application server. The
+synchronous terminal receiver remains to be composed over it. Remote command
+presentation, frontend attachments and Lua asynchronous observations are still
+pending; the current terminal-free typed control surface rejects slash/! input
+and leaves restored frontend actions queued.
+
 ## Confirmed product decisions
 
 - One server process owns each canonical workspace directory. A

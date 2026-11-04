@@ -17,6 +17,15 @@ Public headers remain authoritative for the current implementation. Proposed
 names below establish responsibilities; declaration-level API review is part
 of the corresponding implementation step.
 
+The 2026-11-04 implementation now includes a terminal-free application owner
+through `cai_app_start`/`cai_app_join`, with explicit startup context, durable
+input, native event/replay observations and a coalescing status wakeup. Its
+startup and runtime code is shared with the synchronous receiver; the latter's
+terminal loop has not yet been replaced by a client composition. Socket
+application binding, remote command presentation, Softline client lifecycle
+and asynchronous Lua observations remain part of the cutover, not completed
+features. See the current public `app.h` contracts and workspace specification.
+
 Cutover decisions confirmed on 2026-11-03: implement the in-process controller
 and Softline adapter first, without a listener, background-server executable,
 HTTP framework or attach/reconnect CLI. Softline 0.16.0 now supplies the required

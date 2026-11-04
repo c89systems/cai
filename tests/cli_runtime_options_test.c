@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
 #include "../cli/config.h"
 #include "../cli/runtime_options.h"
 #include <stdio.h>
@@ -750,6 +751,65 @@ static int theme_offset_settings(const char *path) {
   return failed;
 }
 
+static int startup_context(const char *workspace) {
+  cai_config_context context;
+  cai_config *configuration = NULL;
+  cai_cli_options options;
+  cai_environment *environment = NULL;
+  char home[8192], canonical[4096], expected[8192];
+  const char *entries[4];
+  char program[] = "cai", no_config[] = "--no-config", select[] = "-C";
+  char current[] = ".", home_path[] = "~/", agents[] = "--agents-md";
+  char policy[] = "policy.md";
+  char *args[6];
+  int failed = 0, mode;
+  args[0] = program;
+  args[1] = no_config;
+  args[2] = select;
+  args[3] = current;
+  args[4] = agents;
+  args[5] = policy;
+  if (realpath(workspace, canonical) == NULL)
+    return 1;
+  snprintf(home, sizeof(home), "HOME=%s", canonical);
+  entries[0] = home;
+  context.directory = canonical;
+  for (mode = 0; mode < 3; ++mode) {
+    entries[1] = mode == 0 ? "CAI_CONFIG_DIR=captured-config"
+                           : "CAI_CONFIG_DIR=~/captured-config";
+    entries[2] = mode == 2 ? "CAI_HOME=~/unified" : NULL;
+    entries[3] = NULL;
+    if (cai_environment_open(entries, &environment, NULL) != CAI_OK)
+      return 1;
+    context.environment = environment;
+    args[3] = mode == 0 ? current : home_path;
+    if (cai_cli_configure_at(6, args, &options, &configuration, NULL, &context,
+                             NULL) != 1)
+      failed = 1;
+    else {
+      failed |= strcmp(options.directory, canonical) != 0;
+      snprintf(expected, sizeof(expected), "%s/captured-config", canonical);
+      failed |= options.config_dir == NULL ||
+                strcmp(options.config_dir, expected) != 0;
+      snprintf(expected, sizeof(expected), "%s/policy.md", canonical);
+      failed |=
+          options.agents_md == NULL || strcmp(options.agents_md, expected) != 0;
+      snprintf(expected, sizeof(expected),
+               mode == 2 ? "%s/unified/state" : "%s/.local/state/cai",
+               canonical);
+      failed |= strcmp(options.state_dir, expected) != 0;
+      failed |=
+          strcmp(cai_config_getenv(configuration, "HOME"), canonical) != 0;
+    }
+    cai_config_close(configuration);
+    configuration = NULL;
+    cai_environment_close(environment);
+  }
+  if (failed)
+    fputs("startup context lost workspace/environment path origins\n", stderr);
+  return failed;
+}
+
 int main(int argc, char **argv) {
   static const char *const env[] = {"CAI_TODO",       "CAI_CHROME",
                                     "CAI_WEB_SEARCH", "CAI_SEARXNG",
@@ -801,6 +861,7 @@ int main(int argc, char **argv) {
   failed |= review_fix_settings(path);
   failed |= yield_settings(path);
   failed |= theme_offset_settings(path);
+  failed |= startup_context(argv[1]);
   unlink(path);
   return failed != 0;
 }

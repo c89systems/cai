@@ -199,13 +199,14 @@ typedef struct cai_app_config {
 } cai_app_config;
 
 typedef struct cai_app cai_app;
-/** Synchronous terminal application receiver. Use on the host's main thread.
- * One run owns the process terminal, environment, locale and signals;
+/** Application receiver. The synchronous run uses the host's main thread.
+ * That terminal run owns process terminal, environment, locale and signals;
  * hosts must serialize other use of those resources. They are restored before
  * return, including error paths. Workspace selection never changes the host
  * cwd; subprocesses receive an explicit working directory. Repeated runs are
- * supported; concurrent or recursive runs are rejected. Borrowed loggers may
- * receive calls from native workers and must be thread-safe. */
+ * supported; concurrent or recursive runs are rejected. start instead selects
+ * an independent terminal-free controller owner. Borrowed loggers may receive
+ * calls from native workers and must be thread-safe. */
 struct cai_app {
   /** argv contains only CAI options (exclude the program name). Empty is valid.
    * Returns CAI status for invocation/restoration errors. On CAI_OK, exit_code
@@ -237,6 +238,12 @@ struct cai_app {
    * After run returns, running is false and outcome/exit_code/error describe
    * that invocation. A later run resets the result. */
   int (*get_status)(const cai_app *self, cai_app_status *out, cai_error *error);
+  /** Start a terminal-free controller on its owner thread. See cai_app_start.
+   */
+  int (*start)(cai_app *self, const cai_config_context *context, int argc,
+               const char *const *argv, cai_error *error);
+  /** Explicitly blocking; never call from an owner callback. */
+  int (*join)(cai_app *self, int *exit_code, cai_error *error);
   void (*close)(cai_app *self);
   void *impl;
 };
@@ -249,6 +256,25 @@ int cai_app_open(const cai_app_config *config, cai_app **out, cai_error *error);
 /** Run synchronously with options only, excluding argv[0]. See cai_app.run. */
 int cai_app_run(cai_app *self, int argc, const char *const *argv,
                 int *exit_code, cai_error *error);
+/** Asynchronously start a controller, without acquiring stdin/stdout, creating
+ * Softline/libmdf objects, changing cwd/environment/locale/signals or starting
+ * a listener. Context and arguments are captured/copied before return; NULL
+ * context members capture cwd/environment once. Explicit directory must be
+ * absolute. Accepts agent startup options, not utility/review/batch modes.
+ * Typed prompt/steer/goal/cancel/STOP controls use the same backend queue and
+ * runtime as the terminal receiver. Slash/! input requires a frontend and is
+ * rejected by this control surface. Borrowed owner callbacks and logger remain
+ * configured by open. Runtime events/replay stream to those callbacks.
+ * CAI_OK means the owner started, not that restoration succeeded. get_status
+ * exposes STARTING (running, !runtime_ready), readiness and startup failure.
+ * The controller stays alive while idle until STOP. Call join before close or
+ * another run/start. Serialize start/join/run/close on a given receiver. */
+int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
+                  const char *const *argv, cai_error *error);
+/** Wait for a started controller, returning its CLI-style exit code. Does not
+ * request STOP. Never call from its callbacks. Query status for error detail.
+ * Once joined, the receiver may be started again. */
+int cai_app_join(cai_app *self, int *exit_code, cai_error *error);
 /** Return the option count without loading configuration or starting UI. */
 size_t cai_app_option_count(const cai_app *self);
 /** Borrow a zero-based help entry; NULL self/out-of-range returns NULL. */
@@ -264,8 +290,21 @@ int cai_app_control(cai_app *self, cai_app_control_type type, const char *text,
  * its owned values and failure leaves them unchanged. Thread-safe. */
 int cai_app_get_status(const cai_app *self, cai_app_status *out,
                        cai_error *error);
-/** Close after run has returned, outside its callbacks. Calls made during run
- * are ignored. NULL is accepted. Must not race other receiver calls. */
+/** Borrow a level-triggered status wakeup descriptor, or -1 for NULL. Watch
+ * POLLIN and call observe_status; never close/read/write this descriptor.
+ * Notifications coalesce into the newest snapshot, with bounded storage and
+ * no idle timer. Multiple consumers can use get_status, but exactly one host
+ * loop owns draining this notification channel. Valid until app close. */
+int cai_app_status_fd(const cai_app *self);
+/** Atomically copy the newest owned status and drain its wakeup. Publication
+ * racing this operation remains readable afterward. Initialize out first.
+ * Allocation failure leaves out and the notification unchanged. Thread-safe.
+ */
+int cai_app_observe_status(const cai_app *self, cai_app_status *out,
+                           cai_error *error);
+/** Close after run returns or an asynchronous controller is joined, outside
+ * its callbacks. Calls made before then are ignored. NULL is accepted.
+ * Must not race other receiver calls. */
 void cai_app_close(cai_app *self);
 
 /** Independent shared kanban access for HTTP hosts and other embedders.
