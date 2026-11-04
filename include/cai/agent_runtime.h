@@ -6,6 +6,7 @@
 
 #include <cai/cai.h>
 #include <cai/chrome.h>
+#include <cai/execution.h>
 #include <cai/history.h>
 #include <cai/input_queue.h>
 #include <cai/plugins.h>
@@ -1288,6 +1289,28 @@ int cai_agent_runtime_get_instruction_status(cai_agent_runtime *runtime,
                                              cai_error *error);
 /** Return the runtime's stable session identifier, borrowed until close. */
 const char *cai_agent_runtime_session_id(const cai_agent_runtime *runtime);
+typedef struct cai_agent_execution cai_agent_execution;
+/** Record host-side operator output outside model context using the runtime's
+ * existing execution journal. Requires record_transcript. Copies kind,
+ * tool_name, call_id and field (each at most 1024 bytes); other identity/model/
+ * timestamp fields come from the runtime. Uses offset, line_start, code and
+ * http_status; metadata.data/final are unused. Close every stream before its
+ * runtime. All operations require that runtime's owner thread. */
+int cai_agent_runtime_execution_open(cai_agent_runtime *runtime,
+                                     const cai_execution_record *metadata,
+                                     cai_agent_execution **out,
+                                     cai_error *error);
+/** Incremental UTF-8 text, including fragments splitting a character. At most
+ * 4 KiB of pending text is retained, plus bounded per-record serialization
+ * storage; no whole document or encoded document JSON is gathered.
+ * A failure poisons this stream: never retry uncertain journal appends. */
+int cai_agent_execution_write(cai_agent_execution *writer, const void *bytes,
+                              size_t length, cai_error *error);
+/** Emit the last chunk and explicit final marker, including an empty field.
+ * Does not start inference or change the runtime outcome. */
+int cai_agent_execution_finish(cai_agent_execution *writer, cai_error *error);
+/** Discard retained bytes; never flushes or implicitly finishes. */
+void cai_agent_execution_close(cai_agent_execution *writer);
 /**
  * Stream the current agent handover projection as Markdown to sink.
  *

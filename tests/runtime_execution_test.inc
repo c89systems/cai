@@ -296,7 +296,8 @@ static int execution_test_append(void *context, const char *scope,
       record.source_sequence != event->sequence)
     s->invalid = 1;
   if ((s->mode == 2 && strcmp(record.kind, "tool.arguments") == 0) ||
-      (s->mode == 4 && strcmp(record.kind, "compaction.started") == 0)) {
+      (s->mode == 4 && strcmp(record.kind, "compaction.started") == 0) ||
+      (s->mode == 6 && strcmp(record.kind, "operator.fail") == 0)) {
     cai_execution_record_cleanup(&record);
     return cai_set_error(error, CAI_ERR_TRANSPORT, "execution append failure");
   }
@@ -397,6 +398,184 @@ static void execution_test_cleanup(execution_test_state *s) {
     free(node->json);
     free(node);
   }
+}
+
+static void test_runtime_operator_execution_body(test_state *state) {
+  cai_client_config client_config;
+  cai_client *client = NULL;
+  cai_agent_runtime_config config;
+  cai_agent_runtime *runtime = NULL;
+  cai_agent_execution *writer = NULL;
+  cai_agent_session_store store;
+  execution_test_state *s = calloc(1U, sizeof(*s));
+  cai_execution_record *metadata = calloc(1U, sizeof(*metadata));
+  cai_execution_record *decoded = calloc(1U, sizeof(*decoded));
+  execution_test_node *node;
+  cai_error error;
+  char label[] = "operator.text", text[4096];
+  size_t offset = 0U, records;
+  int rc;
+  cai_error_init(&error);
+  if (s == NULL || metadata == NULL || decoded == NULL) {
+    test_fail(state, "operator_allocate", "fixture allocation failed");
+    goto done;
+  }
+  cai_client_config_init(&client_config);
+  client_config.api_key = "fixture";
+  expect_int(state, "operator_client",
+             cai_client_open(&client_config, &client, &error), CAI_OK);
+  if (client == NULL)
+    goto done;
+  memset(&store, 0, sizeof(store));
+  store.context = s;
+  store.commit = execution_test_commit;
+  store.load_latest = test_runtime_session_store_load;
+  store.append_event = execution_test_append;
+  store.load_events_after = execution_test_load;
+  cai_agent_runtime_config_init(&config);
+  config.workspace_directory = "/tmp";
+  config.session_store = &store;
+  config.disable_default_session_store = 1;
+  config.disable_terminal = config.disable_chrome = config.disable_web_search =
+      1;
+  config.record_transcript = 1;
+  expect_int(state, "operator_runtime",
+             cai_agent_runtime_open(client, &config, &runtime, &error), CAI_OK);
+  if (runtime == NULL)
+    goto done;
+  metadata->kind = label;
+  metadata->call_id = "command:session:1:2:3";
+  metadata->field = "text";
+  metadata->line_start = 1;
+  expect_int(
+      state, "operator_open",
+      cai_agent_runtime_execution_open(runtime, metadata, &writer, &error),
+      CAI_OK);
+  label[0] = 'X'; /* Metadata is owned, not borrowed from the host. */
+  memset(text, 'x', sizeof(text));
+  text[sizeof(text) - 1U] = (char)0xce;
+  expect_int(state, "operator_first",
+             cai_agent_execution_write(writer, text, sizeof(text), &error),
+             CAI_OK);
+  expect_int(state, "operator_emitted_before_finish", s->records, 1);
+  expect_int(state, "operator_split_utf8",
+             cai_agent_execution_write(writer, "\273\n", 2U, &error), CAI_OK);
+  expect_int(state, "operator_finish",
+             cai_agent_execution_finish(writer, &error), CAI_OK);
+  expect_int(state, "operator_double_finish",
+             cai_agent_execution_finish(writer, &error), CAI_ERR_INVALID);
+  expect_int(state, "operator_late_write",
+             cai_agent_execution_write(writer, "x", 1U, &error),
+             CAI_ERR_INVALID);
+  cai_agent_execution_close(writer);
+  writer = NULL;
+  for (node = s->first; node != NULL; node = node->next) {
+    rc = cai_execution_record_parse(node->json, decoded, &error);
+    expect_int(state, "operator_valid_chunk", rc, CAI_OK);
+    expect_str(state, "operator_copied_kind", decoded->kind, "operator.text");
+    expect_str(state, "operator_call", decoded->call_id, metadata->call_id);
+    expect_int(state, "operator_offset", (long)decoded->offset, (long)offset);
+    offset += strlen(decoded->data);
+    expect_int(state, "operator_final", decoded->final, node->next == NULL);
+    cai_execution_record_cleanup(decoded);
+  }
+  expect_int(state, "operator_total_bytes", (long)offset, 4098L);
+  {
+    double percent;
+    int available;
+    expect_int(state, "operator_context_status",
+               cai_agent_runtime_context_percent(runtime, &percent, &available,
+                                                 &error),
+               CAI_OK);
+    expect_int(state, "operator_sideband_only", available, 0);
+  }
+  metadata->kind = "operator.empty";
+  expect_int(
+      state, "operator_empty_open",
+      cai_agent_runtime_execution_open(runtime, metadata, &writer, &error),
+      CAI_OK);
+  records = (size_t)s->records;
+  expect_int(state, "operator_empty_finish",
+             cai_agent_execution_finish(writer, &error), CAI_OK);
+  expect_int(state, "operator_empty_record", s->records, (long)records + 1L);
+  cai_agent_execution_close(writer);
+  writer = NULL;
+  expect_int(
+      state, "operator_abort_open",
+      cai_agent_runtime_execution_open(runtime, metadata, &writer, &error),
+      CAI_OK);
+  expect_int(state, "operator_abort_write",
+             cai_agent_execution_write(writer, "unfinished", 10U, &error),
+             CAI_OK);
+  records = (size_t)s->records;
+  cai_agent_execution_close(writer);
+  writer = NULL;
+  expect_int(state, "operator_close_never_flushes", s->records, (long)records);
+  expect_int(
+      state, "operator_invalid_open",
+      cai_agent_runtime_execution_open(runtime, metadata, &writer, &error),
+      CAI_OK);
+  expect_int(state, "operator_nul",
+             cai_agent_execution_write(writer, "\0", 1U, &error),
+             CAI_ERR_PROTOCOL);
+  expect_int(state, "operator_sticky_failure",
+             cai_agent_execution_finish(writer, &error), CAI_ERR_PROTOCOL);
+  expect_int(state, "operator_failed_never_appends", s->records, (long)records);
+  cai_agent_execution_close(writer);
+  writer = NULL;
+  expect_int(
+      state, "operator_incomplete_open",
+      cai_agent_runtime_execution_open(runtime, metadata, &writer, &error),
+      CAI_OK);
+  expect_int(state, "operator_incomplete_write",
+             cai_agent_execution_write(writer, "\316", 1U, &error), CAI_OK);
+  expect_int(state, "operator_incomplete_finish",
+             cai_agent_execution_finish(writer, &error), CAI_ERR_PROTOCOL);
+  expect_int(state, "operator_incomplete_not_stored", s->records,
+             (long)records);
+  cai_agent_execution_close(writer);
+  writer = NULL;
+  metadata->kind = "operator.fail";
+  s->mode = 6;
+  expect_int(
+      state, "operator_failure_open",
+      cai_agent_runtime_execution_open(runtime, metadata, &writer, &error),
+      CAI_OK);
+  expect_int(state, "operator_failure_write",
+             cai_agent_execution_write(writer, text, sizeof(text), &error),
+             CAI_ERR_TRANSPORT);
+  records = (size_t)s->records;
+  expect_int(state, "operator_failure_no_retry",
+             cai_agent_execution_write(writer, "retry", 5U, &error),
+             CAI_ERR_TRANSPORT);
+  expect_int(state, "operator_failure_no_finish",
+             cai_agent_execution_finish(writer, &error), CAI_ERR_TRANSPORT);
+  expect_int(state, "operator_failure_not_reappended", s->records,
+             (long)records);
+done:
+  cai_agent_execution_close(writer);
+  cai_agent_runtime_close(runtime);
+  cai_client_close(client);
+  if (s != NULL)
+    execution_test_cleanup(s);
+  if (decoded != NULL)
+    cai_execution_record_cleanup(decoded);
+  free(decoded);
+  free(metadata);
+  free(s);
+  cai_error_cleanup(&error);
+}
+static void *runtime_operator_execution_thread(void *context) {
+  test_runtime_operator_execution_body(context);
+  return NULL;
+}
+static void test_runtime_operator_execution(test_state *state) {
+  pthread_t thread;
+  int rc =
+      pthread_create(&thread, NULL, runtime_operator_execution_thread, state);
+  expect_int(state, "operator_default_worker_stack", rc, 0);
+  if (rc == 0)
+    expect_int(state, "operator_join", pthread_join(thread, NULL), 0);
 }
 typedef struct execution_test_inspection {
   int heading, arguments, controls;

@@ -3,8 +3,8 @@
 CAI uses Softline 0.16.0's native backend queue editor with core-owned per-
 conversation authority. Native keys submit copied requests; acknowledgements
 and ordered observations update its mirror. The complete inventory is
-`cli_command_definitions` in `cli/app_run.c`; argument-specific query forms are
-resolved by `cli_command_delivery`. Admission, readiness, mode normalization and
+`cli_command_definitions` in `cli/commands.c`; argument-specific query forms are
+resolved by `cai_cli_command_delivery`. Admission, readiness, mode normalization and
 owner-thread consumption use that same classification. This replaces the earlier
 audit's historical classifications.
 

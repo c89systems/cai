@@ -62,9 +62,11 @@ the active queue without opening a runtime or store. Their owned observations
 include the producer identity and processed request watermark. Attachment
 admission runs on the controller owner with the authenticated identity and
 original authority generation; trusted native `control()` is a separate host
-surface. Remote command presentation and Lua
-asynchronous observations remain pending. The terminal-free owner rejects new
-slash/! input explicitly and leaves restored frontend actions queued.
+surface. The owner now executes backend slash/! commands through the shared
+handler and publishes bounded Markdown replies in execution history. Terminal
+actions are delegated to their originating producer; the frontend consumer and
+Lua asynchronous observations remain pending. See
+[command execution](workspace-commands.md).
 
 `cai_app_start_server` now adds the workspace socket host to that same owner.
 It opens endpoint ownership before stores, publishes READY only after runtime
@@ -118,7 +120,7 @@ bind/resume/takeover/shutdown/detach. It never opens a runtime/store or gathers
 a queue snapshot. Its event loop has one descriptor and a handshake deadline,
 without a worker or idle polling. Failed initial binding and interrupted
 baselines do not change the last validated session identity. Socket command
-and terminal presentation remain to be connected to the frontend. Typed status
+results and terminal presentation remain to be connected to the frontend. Typed status
 is delivered independently; its semantic revisions do not generate timer or
 per-token traffic. Partial frames never replace the last completed view.
 
@@ -154,8 +156,8 @@ The existing terminal path now shares a frontend-owned Softline/libmdf presenter
 for documents, tool styling, timestamps, prompt markers, geometry and theme
 switching. Its standalone link has no application or Pouch objects. The socket
 adapter will use this same presenter; it does not yet consume socket spans or
-replace the synchronous terminal lifecycle. Status/command dispatch, final
-replay selection and CLI process composition remain pending.
+replace the synchronous terminal lifecycle. Frontend status/command application,
+final replay selection and CLI process composition remain pending.
 
 Submitted prompts belong to the libmdf feed. The current native terminal path
 supplies an already available accepted string; the presenter uses public

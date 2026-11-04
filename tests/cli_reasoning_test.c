@@ -637,7 +637,7 @@ static int test_output_failure(int operation) {
     replay.data = "Heading\n\nOutput unavailable.\n\n";
     rc = cli_replay_render(&state, &replay, NULL);
   } else if (operation == 18) {
-    rc = cli_dispatch_command(&state, "/quit", NULL, &handled);
+    rc = cli_dispatch_command(&state, "/quit", NULL, NULL, &handled);
     if (state.exit_requested)
       rc = CAI_OK; /* A failed receipt must prevent command side effects. */
   } else if (operation >= 15) {

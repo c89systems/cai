@@ -79,6 +79,25 @@ int cai_cli_command_is_theme(const char *line) {
          cli_word_is(name, length, "/review-theme-offset");
 }
 
+int cai_cli_command_frontend(const char *line) {
+  const char *arg, *name;
+  size_t length = strcspn(line, " \t");
+  arg = line + length;
+  arg += strspn(arg, " \t");
+  name = cai_cli_command_name(line, &length);
+  return cai_cli_command_is_theme(line) || cli_word_is(name, length, "/help") ||
+         cli_word_is(name, length, "/output") ||
+         cli_word_is(name, length, "/quit") ||
+         cli_word_is(name, length, "/exit") ||
+         cli_word_is(name, length, "/shell") ||
+         cli_word_is(name, length, "/shellshare") ||
+         cli_word_is(name, length, "!sh") ||
+         cli_word_is(name, length, "!sh+") ||
+         (cli_word_is(name, length, "/log") && arg[0] != '\0') ||
+         (cli_word_is(name, length, "/todo") &&
+          cli_word_is(arg, strcspn(arg, " \t"), "layout"));
+}
+
 cli_command_boundary cai_cli_command_delivery(const char *line) {
   const char *arg, *name;
   size_t length, arg_length, word_length, i;

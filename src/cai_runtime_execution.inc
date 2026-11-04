@@ -10,10 +10,11 @@ typedef struct cai_runtime_execution_stream {
   int journal_only;
 } cai_runtime_execution_stream;
 
-static void cai_runtime_execution_init(cai_runtime_execution_stream *s,
-                                       cai_agent_runtime *runtime,
-                                       const char *kind, const char *tool,
-                                       const char *call, const char *field) {
+static void cai_runtime_execution_identity(cai_runtime_execution_stream *s,
+                                           cai_agent_runtime *runtime,
+                                           const char *kind, const char *tool,
+                                           const char *call,
+                                           const char *field) {
   memset(s, 0, sizeof(*s));
   s->runtime = runtime;
   s->record.kind = kind;
@@ -24,14 +25,22 @@ static void cai_runtime_execution_init(cai_runtime_execution_stream *s,
   s->record.tool_name = tool;
   s->record.call_id = call;
   s->record.field = field;
+  s->next_line_start = 1;
+  cai_runtime_timestamp(&s->record.timestamp_ns, &s->record.utc_offset_seconds);
+}
+
+/* Worker-generated records can use the worker's current request identity. */
+static void cai_runtime_execution_init(cai_runtime_execution_stream *s,
+                                       cai_agent_runtime *runtime,
+                                       const char *kind, const char *tool,
+                                       const char *call, const char *field) {
+  cai_runtime_execution_identity(s, runtime, kind, tool, call, field);
   if (runtime->agent != NULL)
     s->record.model = CAI_AGENT_IMPL(runtime->agent)->model;
   s->record.base_url = CAI_CLIENT_IMPL(runtime->client)->base_url;
   if (runtime->session != NULL)
     s->record.last_response_id =
         CAI_SESSION_IMPL(runtime->session)->previous_response_id;
-  s->next_line_start = 1;
-  cai_runtime_timestamp(&s->record.timestamp_ns, &s->record.utc_offset_seconds);
 }
 
 static int cai_runtime_execution_emit_locked(cai_runtime_execution_stream *s,

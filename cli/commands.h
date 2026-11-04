@@ -14,4 +14,6 @@ const char *cai_cli_command_at(size_t index);
 const char *cai_cli_command_name(const char *line, size_t *length);
 cli_command_boundary cai_cli_command_delivery(const char *line);
 int cai_cli_command_is_theme(const char *line);
+/* Presentation-only actions are delivered to the originating frontend. */
+int cai_cli_command_frontend(const char *line);
 #endif

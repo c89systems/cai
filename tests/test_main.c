@@ -54763,6 +54763,7 @@ static const test_entry test_entries[] = {
     {"agent_runtime_capacity_websocket", test_agent_runtime_capacity_websocket},
     {"agent_runtime_goal_restart", test_agent_runtime_goal_restart},
     {"agent_runtime_execution", test_agent_runtime_execution},
+    {"runtime_operator_execution", test_runtime_operator_execution},
     {"execution_record", test_execution_record},
     {"execution_compaction", test_execution_compaction},
     {"execution_poll_review", test_execution_poll_review},

@@ -2912,6 +2912,142 @@ static int cai_runtime_append_journal_event_locked(
 }
 
 #include "cai_runtime_execution.inc"
+
+struct cai_agent_execution {
+  cai_runtime_execution_stream stream;
+  char *labels[7];
+  int failed, finished;
+};
+int cai_agent_runtime_execution_open(cai_agent_runtime *runtime,
+                                     const cai_execution_record *metadata,
+                                     cai_agent_execution **out,
+                                     cai_error *error) {
+  cai_agent_execution *writer;
+  const char *labels[4];
+  size_t i, n;
+  int rc = cai_runtime_owner(runtime, error);
+  if (out != NULL)
+    *out = NULL;
+  if (rc != CAI_OK)
+    return rc;
+  if (out == NULL || metadata == NULL || metadata->kind == NULL ||
+      metadata->kind[0] == '\0' || !runtime->record_transcript)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "execution metadata and enabled history required");
+  labels[0] = metadata->kind;
+  labels[1] = metadata->tool_name;
+  labels[2] = metadata->call_id;
+  labels[3] = metadata->field;
+  writer = cai_alloc(NULL, sizeof(*writer));
+  if (writer == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate execution writer");
+  memset(writer, 0, sizeof(*writer));
+  for (i = 0U; i < 4U; ++i) {
+    if (labels[i] == NULL)
+      continue;
+    for (n = 0U; n <= 1024U && labels[i][n] != '\0'; ++n) {
+    }
+    if (n > 1024U) {
+      cai_agent_execution_close(writer);
+      return cai_set_error(error, CAI_ERR_LIMIT,
+                           "execution metadata label exceeds 1024 bytes");
+    }
+    writer->labels[i] = cai_strdup(NULL, labels[i]);
+    if (writer->labels[i] == NULL) {
+      cai_agent_execution_close(writer);
+      return cai_set_error(error, CAI_ERR_NOMEM, "copy execution metadata");
+    }
+  }
+  pthread_mutex_lock(&runtime->lock);
+  cai_runtime_execution_identity(&writer->stream, runtime, writer->labels[0],
+                                 writer->labels[1], writer->labels[2],
+                                 writer->labels[3]);
+  /* Host output may arrive during inference. Session response pointers are
+   * worker-owned; use the published projection. Model setters advertise their
+   * mutation interval under this lock, as get_settings does. */
+  writer->stream.record.model =
+      runtime->settings_applying || runtime->model_switching
+          ? runtime->settings_view_effective.model
+          : CAI_AGENT_IMPL(runtime->agent)->model;
+  writer->stream.record.base_url = CAI_CLIENT_IMPL(runtime->client)->base_url;
+  writer->stream.record.last_response_id = runtime->response_id_projection;
+  /* A host document can span a model change or provider response commit.
+   * Snapshot mutable runtime strings while they are protected. */
+  for (i = 4U; i < 7U; ++i) {
+    const char *value = i == 4U   ? writer->stream.record.model
+                        : i == 5U ? writer->stream.record.base_url
+                                  : writer->stream.record.last_response_id;
+    if (value != NULL) {
+      writer->labels[i] = cai_strdup(NULL, value);
+      if (writer->labels[i] == NULL) {
+        rc = CAI_ERR_NOMEM;
+        break;
+      }
+    }
+  }
+  pthread_mutex_unlock(&runtime->lock);
+  if (rc != CAI_OK) {
+    cai_agent_execution_close(writer);
+    return cai_set_error(error, rc, "copy execution runtime identity");
+  }
+  writer->stream.record.model = writer->labels[4];
+  writer->stream.record.base_url = writer->labels[5];
+  writer->stream.record.last_response_id = writer->labels[6];
+  writer->stream.record.offset = metadata->offset;
+  writer->stream.record.code = metadata->code;
+  writer->stream.record.http_status = metadata->http_status;
+  writer->stream.next_line_start = metadata->line_start != 0;
+  *out = writer;
+  return CAI_OK;
+}
+static int cai_execution_writer_check(cai_agent_execution *writer,
+                                      cai_error *error) {
+  if (writer == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID, "execution writer required");
+  if (writer->failed)
+    return cai_set_error(error, writer->failed, "execution writer has failed");
+  if (writer->finished)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "execution writer is already finished");
+  return cai_runtime_owner(writer->stream.runtime, error);
+}
+int cai_agent_execution_write(cai_agent_execution *writer, const void *bytes,
+                              size_t length, cai_error *error) {
+  int rc = cai_execution_writer_check(writer, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (length != 0U && bytes == NULL)
+    rc = cai_set_error(error, CAI_ERR_INVALID, "execution bytes required");
+  else if (length >
+           ULLONG_MAX - writer->stream.record.offset - writer->stream.length)
+    rc = cai_set_error(error, CAI_ERR_LIMIT,
+                       "execution bytes or offset are out of range");
+  else
+    rc = cai_runtime_execution_write(&writer->stream, bytes, length, error);
+  if (rc != CAI_OK)
+    writer->failed = rc;
+  return rc;
+}
+int cai_agent_execution_finish(cai_agent_execution *writer, cai_error *error) {
+  int rc = cai_execution_writer_check(writer, error);
+  if (rc != CAI_OK)
+    return rc;
+  rc = cai_runtime_execution_emit(&writer->stream, writer->stream.length, 1,
+                                  error);
+  if (rc == CAI_OK)
+    writer->finished = 1;
+  else
+    writer->failed = rc;
+  return rc;
+}
+void cai_agent_execution_close(cai_agent_execution *writer) {
+  size_t i;
+  if (writer == NULL)
+    return;
+  for (i = 0U; i < 7U; ++i)
+    cai_free_mem(NULL, writer->labels[i]);
+  cai_free_mem(NULL, writer);
+}
 #include "cai_runtime_input_queue.inc"
 
 static void cai_runtime_mark_commit_event_locked(cai_agent_runtime *runtime,

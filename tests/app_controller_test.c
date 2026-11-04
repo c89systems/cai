@@ -312,12 +312,11 @@ static void input_reconnect(host *h) {
   cai_input_observation_close(value);
   input_offer(h, 4U, "/status", CAI_INPUT_STEERING);
   value = input_wait(h, CAI_INPUT_OBSERVATION_RESULT, 4U);
-  assert(value->result.outcome == CAI_INPUT_REJECTED &&
-         strstr(value->result.reason, "presentation") != NULL);
+  assert(value->result.outcome == CAI_INPUT_ACCEPTED);
   cai_input_observation_close(value);
   input_offer(h, 5U, "!printf command", CAI_INPUT_QUEUED);
   value = input_wait(h, CAI_INPUT_OBSERVATION_RESULT, 5U);
-  assert(value->result.outcome == CAI_INPUT_REJECTED);
+  assert(value->result.outcome == CAI_INPUT_ACCEPTED);
   cai_input_observation_close(value);
 }
 static void independent_controllers(int argc, char **argv) {
@@ -802,7 +801,17 @@ static void server_fence(host *h, cai_workspace_client *a,
   cai_input_observation_close(event);
   assert(cai_workspace_client_takeover(b, 10U, cb.generation, NULL) == CAI_OK);
   socket_control(b, cb.attachment, cb.generation + 1U);
-  event = input_wait(h, CAI_INPUT_OBSERVATION_CHANGE, 0U);
+  /* Readiness observations can follow their request receipt. Select the
+   * takeover's edit release instead of assuming it is the next change. */
+  for (;;) {
+    event = input_wait(h, CAI_INPUT_OBSERVATION_CHANGE, 0U);
+    if (event->change.type == CAI_INPUT_UPSERT &&
+        event->change.entry.id == request.item_id &&
+        event->change.request_id == 0U && event->last_request == 2U &&
+        !event->change.entry.edit_held)
+      break;
+    cai_input_observation_close(event);
+  }
   assert(event->change.type == CAI_INPUT_UPSERT &&
          !event->change.entry.edit_held &&
          event->change.entry.edit_token == 0U && event->change.entry.held &&
@@ -827,6 +836,12 @@ typedef struct typed_view {
   size_t roles, snapshots, results, disconnected;
   size_t statuses;
   size_t execution_chunks;
+  size_t command_inputs, command_completed, command_failed, command_frontend;
+  size_t command_handoffs, shell_ended, review_ended, review_finished;
+  size_t streaming_seen;
+  size_t command_length;
+  char command_call[256], frontend_text[256];
+  char *command_text;
   size_t replay_begins, replay_ends, transcript_ends, transcript_failures,
       assistant_seen;
   uint64_t transcript_sequence, transcript_offset;
@@ -860,9 +875,17 @@ static int typed_transcript(void *context, const cai_transcript_event *event,
     assert(event->sequence == v->transcript_sequence &&
            event->offset == v->transcript_offset);
     ++v->transcript_ends;
+    if (strcmp(v->transcript_type, "user_shell_unshared") == 0 ||
+        strcmp(v->transcript_type, "user_shell_completed") == 0)
+      ++v->shell_ended;
+    if (strcmp(v->transcript_type, "review_markdown_end") == 0)
+      ++v->review_ended;
     if (strcmp(v->transcript_type, "assistant_text_delta") == 0 &&
         strstr(v->transcript_text, "Background work finished") != NULL)
       ++v->assistant_seen;
+    if (strcmp(v->transcript_type, "assistant_text_delta") == 0 &&
+        strstr(v->transcript_text, "STREAM in flight") != NULL)
+      ++v->streaming_seen;
   } else if (event->kind == CAI_TRANSCRIPT_REPLAY_END)
     ++v->replay_ends;
   else {
@@ -919,6 +942,53 @@ static int typed_execution(void *context, const cai_app_execution_event *event,
   assert(cai_app_client_get_state(v->client, &state, NULL) == CAI_OK &&
          state.transcript.position < event->boundary->position);
   ++v->execution_chunks;
+  if (strcmp(event->record->kind, "command.input") == 0) {
+    if (v->command_text == NULL) {
+      v->command_text = malloc(16384U);
+      assert(v->command_text != NULL);
+    }
+    ++v->command_inputs;
+    snprintf(v->command_call, sizeof(v->command_call), "%s",
+             event->record->call_id);
+    v->command_length = 0U;
+    v->command_text[0] = '\0';
+  } else if (strcmp(event->record->kind, "command.markdown") == 0) {
+    size_t n = strlen(event->record->data);
+    /* A range subscription can begin after the correlated command input. */
+    if (strcmp(v->command_call, event->record->call_id) != 0) {
+      snprintf(v->command_call, sizeof(v->command_call), "%s",
+               event->record->call_id);
+      v->command_length = 0U;
+    }
+    if (v->command_text == NULL) {
+      v->command_text = malloc(16384U);
+      assert(v->command_text != NULL);
+    }
+    assert(n < 16384U - v->command_length);
+    memcpy(v->command_text + v->command_length, event->record->data, n + 1U);
+    v->command_length += n;
+  } else if (strcmp(event->record->kind, "command.completed") == 0) {
+    ++v->command_completed;
+    snprintf(v->command_call, sizeof(v->command_call), "%s",
+             event->record->call_id);
+  } else if (strcmp(event->record->kind, "command.failed") == 0) {
+    assert(event->record->code != CAI_OK);
+    if (event->record->field != NULL &&
+        strcmp(event->record->field, "message") == 0 && event->record->final) {
+      assert(event->record->data[0] != '\0');
+      ++v->command_failed;
+    }
+  } else if (strcmp(event->record->kind, "command.frontend") == 0) {
+    ++v->command_frontend;
+    snprintf(v->frontend_text, sizeof(v->frontend_text), "%s",
+             event->record->data);
+  } else if (strcmp(event->record->kind, "command.handoff") == 0)
+    ++v->command_handoffs;
+  if (strcmp(event->record->kind, "review_markdown_end") == 0)
+    ++v->review_ended;
+  if (strcmp(event->record->kind, "application.markdown") == 0 &&
+      strstr(event->record->data, "Review finished") != NULL)
+    ++v->review_finished;
   return CAI_OK;
 }
 static void typed_wait(typed_view *v, const size_t *counter, size_t expected) {
@@ -936,6 +1006,15 @@ static void typed_wait(typed_view *v, const size_t *counter, size_t expected) {
     cai_error_cleanup(&error);
     if (*counter >= expected)
       break;
+    if (monotonic_ms() >= until)
+      fprintf(stderr,
+              "typed wait: expected %lu got %lu; commands=%lu/%lu/%lu, "
+              "shell=%lu review=%lu; last=%s\n",
+              (unsigned long)expected, (unsigned long)*counter,
+              (unsigned long)v->command_inputs,
+              (unsigned long)v->command_completed,
+              (unsigned long)v->command_failed, (unsigned long)v->shell_ended,
+              (unsigned long)v->review_ended, v->command_call);
     assert(monotonic_ms() < until);
     assert(cai_app_client_prepare(v->client, &fd, &deadline, NULL) == CAI_OK &&
            fd.fd >= 0 && poll(&fd, 1U, 1000) >= 0);
@@ -1079,6 +1158,146 @@ static void typed_server(int argc, char **argv) {
   cai_app_close(h.app);
   pthread_mutex_destroy(&h.lock);
 }
+
+static void typed_offer(typed_view *v, unsigned long long id,
+                        const char *text) {
+  cai_input_scope scope;
+  cai_input_request r;
+  size_t results = v->results;
+  memset(&r, 0, sizeof(r));
+  scope.conversation = v->state.conversation;
+  scope.generation = v->state.transport.generation;
+  r.operation = CAI_INPUT_OFFER;
+  r.request_id = id;
+  r.intent = CAI_INPUT_STEERING;
+  r.text = text;
+  assert(cai_app_client_request(v->client, &scope, &r, NULL) == CAI_OK);
+  typed_wait(v, &v->results, results + 1U);
+  assert(v->result.outcome == CAI_INPUT_ACCEPTED);
+}
+static void typed_command(typed_view *v, unsigned long long id,
+                          const char *text, int success) {
+  size_t completed = v->command_completed, failed = v->command_failed;
+  typed_offer(v, id, text);
+  if (success)
+    typed_wait(v, &v->command_completed, completed + 1U);
+  else
+    typed_wait(v, &v->command_failed, failed + 1U);
+}
+
+static void server_commands(int argc, char **argv) {
+  host h;
+  typed_view *a = calloc(1U, sizeof(*a)), *b = calloc(1U, sizeof(*b));
+  unsigned int opens;
+  size_t i, failures;
+  int code;
+  static const struct {
+    const char *command, *reply;
+  } queries[] = {
+      {"/status", "Session ID"},   {"/log", ".log"},
+      {"/tools", "read_file"},     {"/skills", "Skills"},
+      {"/goal", "goal"},           {"/history 17", "17 entries"},
+      {"/retention 0", "forever"}, {"/foreground", "Foreground commands"},
+      {"/background", "10000 ms"}, {"/shell-context off", "stay out of model"}};
+  assert(a != NULL && b != NULL);
+  open_host(&h, "server_commands");
+  assert(cai_app_start_server(h.app, NULL, argc - 1,
+                              (const char *const *)(argv + 1), NULL,
+                              NULL) == CAI_OK);
+  wait_ready(&h);
+  opens = cai_test_storage_open_count();
+  typed_open(a, 0U, NULL);
+  typed_open(b, 0U, NULL);
+  assert(cai_app_client_subscribe(a->client, 1U, a->state.conversation,
+                                  a->state.session, NULL, 0U, 0U,
+                                  NULL) == CAI_OK);
+  typed_wait(a, &a->replay_ends, 1U);
+  typed_offer(a, 1U, "Exercise command boundaries");
+  typed_wait(a, &a->streaming_seen, 1U);
+  typed_command(a, 2U, "/status", 1); /* A feed query runs during streaming. */
+  {
+    size_t completed = a->command_completed;
+    FILE *release;
+    typed_offer(a, 3U, "/reasoning low");
+    typed_command(a, 4U, "/log", 1);
+    assert(a->command_completed == completed + 1U);
+    release = fopen(getenv("CAI_TEST_SERVER_RELEASE"), "w");
+    assert(release != NULL && fclose(release) == 0);
+    typed_wait(a, &a->command_completed, completed + 2U);
+    typed_wait(a, &a->assistant_seen, 1U);
+  }
+  for (i = 0U; i < sizeof(queries) / sizeof(queries[0]); ++i) {
+    typed_command(a, i + 10U, queries[i].command, 1);
+    if (strstr(a->command_text, queries[i].reply) == NULL)
+      fprintf(stderr, "command %s missing %s in: %s\n", queries[i].command,
+              queries[i].reply, a->command_text);
+    assert(strstr(a->command_text, queries[i].reply) != NULL);
+  }
+  typed_command(a, 20U, "/unknown-command", 0);
+  typed_command(a, 21U, "/history -2", 0);
+  typed_command(a, 22U, "/status",
+                1); /* Ordinary failures do not stop owner. */
+  typed_request(b, 1U, CAI_INPUT_OFFER, "/quit", b->state.transport.generation);
+  assert(b->result.outcome == CAI_INPUT_REJECTED);
+  typed_command(a, 23U, "/t gruvbox", 1);
+  assert(a->command_frontend == 1U &&
+         strcmp(a->frontend_text, "/t gruvbox") == 0);
+  typed_command(a, 24U, "/quit", 1);
+  assert(a->command_frontend == 2U && strcmp(a->frontend_text, "/quit") == 0);
+  typed_command(a, 25U, "/log", 1); /* Quit is local, owner remains alive. */
+  typed_command(a, 26U, "!printf 'SOCKET SHELL\\n'", 1);
+  typed_wait(a, &a->shell_ended, 1U);
+  typed_command(a, 27U, "/review custom Inspect the fixture", 1);
+  wait_count(&h, 2, 0);
+  typed_wait(a, &a->review_ended, 1U);
+  typed_wait(a, &a->review_finished, 1U);
+  typed_command(a, 28U, "/status", 1);
+  failures = a->transcript_failures;
+  /* A conversation handoff closes the old reader. Its producer identity may
+   * not be silently reused for the next conversation. */
+  {
+    cai_input_scope scope;
+    cai_input_request r;
+    scope.conversation = a->state.conversation;
+    scope.generation = a->state.transport.generation;
+    memset(&r, 0, sizeof(r));
+    r.request_id = 29U;
+    r.operation = CAI_INPUT_OFFER;
+    r.text = "/new";
+    assert(cai_app_client_request(a->client, &scope, &r, NULL) == CAI_OK);
+    typed_wait(a, &a->transcript_failures, failures + 1U);
+    assert(!a->state.ready);
+  }
+  {
+    size_t snapshots = a->snapshots, completed = a->command_completed;
+    size_t ends = a->replay_ends;
+    assert(cai_app_client_bind(a->client, 2U, 0U, 0U, NULL, NULL) == CAI_OK);
+    typed_wait(a, &a->snapshots, snapshots + 1U);
+    a->transcript_sequence = 0U;
+    assert(cai_app_client_subscribe(a->client, 2U, a->state.conversation,
+                                    a->state.session, NULL, 0U, 0U,
+                                    NULL) == CAI_OK);
+    typed_wait(a, &a->replay_ends, ends + 1U);
+    assert(a->command_completed == completed + 1U &&
+           strstr(a->command_text, "New session") != NULL &&
+           strstr(a->command_call, ":29:") != NULL);
+    typed_command(a, 1U, "/status",
+                  1); /* New producer restarts its request IDs. */
+  }
+  idle_cpu(&h);
+  cai_app_client_close(b->client);
+  assert(cai_app_client_detach(a->client, NULL) == CAI_OK);
+  typed_wait(a, &a->disconnected, 1U);
+  assert(cai_app_join(h.app, &code, NULL) == CAI_OK && code == 0);
+  assert(cai_test_storage_open_count() == opens);
+  cai_app_client_close(a->client);
+  cai_app_close(h.app);
+  pthread_mutex_destroy(&h.lock);
+  free(a->command_text);
+  free(b->command_text);
+  free(a);
+  free(b);
+}
 static void workspace_server(int argc, char **argv, const char *mode) {
   cai_attachment_config lifetime;
   cai_workspace_client_config client_config;
@@ -1092,6 +1311,10 @@ static void workspace_server(int argc, char **argv, const char *mode) {
                          strcmp(mode, "server_config_persist") == 0;
   if (strcmp(mode, "server_typed") == 0) {
     typed_server(argc, argv);
+    return;
+  }
+  if (strcmp(mode, "server_commands") == 0) {
+    server_commands(argc, argv);
     return;
   }
   open_host(&h, mode);

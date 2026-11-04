@@ -5,6 +5,7 @@
 #include "commands.h"
 #include "completion.h"
 #include "config.h"
+#include "documents.h"
 #include "identity.h"
 #include "input_adapter.h"
 #include "literal.h"
@@ -133,6 +134,7 @@ typedef struct cli_state {
   int has_message_watch;
   sl_t *sl;
   cai_cli_presenter ui;
+  cai_cli_documents documents;
   cai_input_controller *input_controller;
   int input_idle;
   cai_cli_input_adapter *input_adapter;
@@ -233,13 +235,15 @@ static int cli_advance_automation(cli_state *state, cai_error *error);
 static int cli_messages_process(cli_state *state, int at_boundary,
                                 cai_error *error);
 static int cli_dispatch_command(cli_state *state, const char *line,
-                                cai_error *error, int *handled);
+                                const cai_input_claim *claim, cai_error *error,
+                                int *handled);
 static int cli_submit_automation(cli_state *state, const char *instruction,
                                  cai_error *error);
 static int cli_continue_goal(cli_state *state, cai_error *error);
 static int cli_host_process(cli_state *state, cai_error *error);
 static int cli_pump(cli_state *state, long timeout, cai_error *error);
 static int cli_sync_queue(cli_state *state, int at_boundary, cai_error *error);
+static int cli_review_wakeup(sl_t *, const sl_watch_event_t *, void *);
 static int cli_sync_status(cli_state *state, cai_error *error);
 static int cli_settings_notice(cli_state *state, cai_error *error);
 static int cli_review_event(void *context, const cai_agent_runtime_event *event,
@@ -387,10 +391,14 @@ static int cli_geometry(cli_state *state) {
 }
 
 static int cli_finish_response(cli_state *state) {
+  if (state->controller)
+    return cai_cli_documents_finish(&state->documents);
   return cai_cli_presenter_finish_response(cli_presenter(state));
 }
 
 static int cli_finish_reasoning(cli_state *state) {
+  if (state->controller)
+    return 0;
   return cai_cli_presenter_finish_reasoning(cli_presenter(state));
 }
 
@@ -399,6 +407,8 @@ static int cli_reasoning_body(void *context, const char *data, size_t length) {
 }
 
 static int cli_text(cli_state *state, const char *data, size_t length) {
+  if (state->controller)
+    return cai_cli_documents_write(&state->documents, data, length);
   return cai_cli_presenter_text(cli_presenter(state), data, length);
 }
 
@@ -415,11 +425,9 @@ static int cli_tool_markdown(void *context, const char *text, size_t length) {
 }
 
 static int cli_markdown(cli_state *state, const char *text) {
-  if (state->controller)
-    return 0; /* Typed controls have their own structured acknowledgement. */
   if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0)
     return -1;
-  if (state->batch) {
+  if (state->batch && !state->controller) {
     cli_diagnostic(state, PSLOG_LEVEL_INFO, text);
     return 0;
   }
@@ -437,8 +445,10 @@ static void cli_theme_for_scope(cli_state *state, const cai_cli_theme *base,
 static int cli_set_theme_scope(cli_state *state, int scope, cai_error *error) {
   cai_cli_theme previous = state->ui.render_theme;
   int previous_scope = state->ui.theme_scope;
-  int rc =
-      cai_cli_presenter_set_theme_scope(cli_presenter(state), scope, error);
+  int rc;
+  if (state->controller)
+    return CAI_OK;
+  rc = cai_cli_presenter_set_theme_scope(cli_presenter(state), scope, error);
   if (rc == CAI_OK && (previous_scope != state->ui.theme_scope ||
                        previous.ascii != state->ui.render_theme.ascii ||
                        previous.markdown != state->ui.render_theme.markdown)) {
@@ -512,6 +522,8 @@ static int cli_review_boundary(cli_state *state, int start, cai_error *error) {
  * is a second admission boundary. The command marker acknowledges submission,
  * while failures have their own diagnostic marker. */
 static int cli_input(cli_state *state, const char *text, int command) {
+  if (state->controller)
+    return 0; /* Accepted input is journaled by the command adapter. */
   return cai_cli_presenter_input(cli_presenter(state), text, command);
 }
 
@@ -542,6 +554,8 @@ static int cli_shell_output(void *context, const char *bytes, size_t length,
       cai_agent_runtime_user_shell_write(state->runtime, bytes, length, error);
   if (rc != CAI_OK)
     return rc;
+  if (state->controller)
+    return CAI_OK; /* Raw shell bytes already have their own history kind. */
   if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0)
     return cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "cannot finish output before shell text");
@@ -572,8 +586,10 @@ static int cli_shell_pump(cli_state *state, cai_error *error) {
     state->shell_watched[0] = 0;
   }
   if (state->shell.exited && state->shell.eof) {
-    rc = cai_cli_shell_plain(&state->shell, NULL, 0U, 1, cli_shell_literal,
-                             state, error);
+    rc = state->controller
+             ? CAI_OK
+             : cai_cli_shell_plain(&state->shell, NULL, 0U, 1,
+                                   cli_shell_literal, state, error);
     if (rc == CAI_OK)
       rc = cai_agent_runtime_user_shell_finish(
           state->runtime, state->shell.exit_code,
@@ -653,6 +669,8 @@ static int cli_shell_start(cli_state *state, const char *command,
   fds[0] = state->shell.output_fd;
   fds[1] = state->shell.exit_fd;
   fds[2] = state->shell.timer_fd;
+  if (state->controller)
+    return CAI_OK;
   for (i = 0U; i < 3U; i++) {
     if (sl_watch_add(
             state->sl, fds[i], SL_WATCH_READ | SL_WATCH_ERROR | SL_WATCH_HANGUP,
@@ -891,9 +909,6 @@ static int cli_prompt_ready(cli_state *state, const char *text,
                             int *ready, cai_error *error) {
   int rc;
   *ready = 0;
-  if (state->controller && (text[0] == '/' || text[0] == '!'))
-    return CAI_OK; /* Preserve accepted actions until a frontend can present
-                      them. */
   if (cli_command_at_feed_boundary(text)) {
     if (strcmp(text, "/tools") == 0 && state->mcp_initialized &&
         !cai_cli_mcp_ready(&state->mcp))
@@ -980,9 +995,7 @@ static int cli_prompt_classify(void *context, const char *text,
   sl_prompt_queue_mode_t mode = policy->intent == CAI_INPUT_STEERING
                                     ? SL_PROMPT_QUEUE_MODE_STEER
                                     : SL_PROMPT_QUEUE_MODE_QUEUED;
-  if (state->controller && (text[0] == '/' || text[0] == '!'))
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "frontend command presentation is not connected");
+  (void)error;
   mode = cli_prompt_mode(state, text, mode);
   policy->intent = mode == SL_PROMPT_QUEUE_MODE_STEER ? CAI_INPUT_STEERING
                                                       : CAI_INPUT_QUEUED;
@@ -1357,8 +1370,7 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
            event->type == CAI_AGENT_EVENT_RUN_FAILED ||
            event->type == CAI_AGENT_EVENT_RUN_CANCELLED)
     state->compaction_active = 0;
-  if (event->parent_tool_call_id == NULL && !state->batch &&
-      !state->controller) {
+  if (event->parent_tool_call_id == NULL && !state->batch) {
     int notified = cli_settings_notice(state, error);
     if (notified != CAI_OK)
       return notified;
@@ -1428,8 +1440,15 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
        (event->type == CAI_AGENT_EVENT_RUN_FAILED ||
         event->type == CAI_AGENT_EVENT_RUN_CANCELLED)))
     state->foreground_subagent = 0;
-  if (state->controller)
+  if (state->controller) {
+    if (event->type == CAI_AGENT_EVENT_REVIEW_HANDED_OFF &&
+        state->review_block) {
+      int finished = cli_review_boundary(state, 0, error);
+      if (finished != CAI_OK)
+        return finished;
+    }
     return cli_event_lifecycle(state, event, error);
+  }
   if (event->parent_tool_call_id != NULL &&
       strcmp(event->parent_tool_call_id, "/review") == 0) {
     if (event->type == CAI_AGENT_EVENT_RUN_CANCELLED)
@@ -1903,15 +1922,16 @@ static int cli_messages_process(cli_state *state, int at_boundary,
     rc = cai_cli_messages_consumed(state->messages, claim.entry.id, error);
     if (rc == CAI_OK && claim.entry.action) {
       int handled;
-      rc = cli_dispatch_command(state, claim.text, error, &handled);
+      rc = cli_dispatch_command(state, claim.text, &claim, error, &handled);
     } else if (rc == CAI_OK &&
                (!state->was_busy || entry.intent == CAI_INPUT_QUEUED))
       state->awaiting_turn = 1;
     cai_input_claim_cleanup(&claim);
     if (rc != CAI_OK) {
       cli_print_error(state, "input", error);
-      if (state->ui.sink_failed || rc == CAI_ERR_NOMEM ||
-          state->runtime == NULL || state->exit_requested)
+      if (state->ui.sink_failed || state->documents.error.code != CAI_OK ||
+          rc == CAI_ERR_NOMEM || state->runtime == NULL ||
+          state->exit_requested)
         return rc;
       cai_error_cleanup(error);
       rc = CAI_OK;
@@ -2537,6 +2557,8 @@ static int cli_prompt_configure(cli_state *state, cai_error *error) {
       (unsigned int)limit, error);
   if (rc != CAI_OK)
     return rc;
+  if (state->controller)
+    return CAI_OK;
   if (rc == CAI_OK &&
       (sl_history_close(state->sl) != SL_OK ||
        sl_history_set_max_len(state->sl, 0) != SL_OK ||
@@ -2553,7 +2575,7 @@ static int cli_prompt_configure(cli_state *state, cai_error *error) {
 static int cli_replay_begin(void *context, const char *id, cai_error *error) {
   cli_state *state = context;
   int rc = cli_session_log(state, id, error);
-  if (rc == CAI_OK && cli_sandbox_notice(state) != 0)
+  if (rc == CAI_OK && !state->controller && cli_sandbox_notice(state) != 0)
     rc =
         cai_cli_error(error, CAI_ERR_TRANSPORT, "render startup policy notice");
   return rc;
@@ -2786,6 +2808,8 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     return error->code;
   cai_cli_pouch_begin_use(&state->pouch);
   rc = cai_agent_runtime_open(state->client, &config, &state->runtime, error);
+  if (rc == CAI_OK && state->controller)
+    rc = cai_cli_documents_bind(&state->documents, state->runtime, error);
   if (rc == CAI_OK && !state->options.review) {
     cai_cli_mcp_start(&state->mcp);
     if (!cai_cli_mcp_ready(&state->mcp))
@@ -2951,7 +2975,9 @@ static int cli_prepare_clipboard(cli_state *state, cai_error *error) {
 }
 
 static int cli_close_runtime(cli_state *state, cai_error *error) {
-  int rc;
+  int rc, output = CAI_OK;
+  if (state->controller)
+    output = cai_cli_documents_bind(&state->documents, NULL, error);
   cai_app_bridge_bind_input(state->bridge, NULL);
   rc = cai_cli_workspace_host_input(state->workspace_host, NULL, NULL, error);
   if (rc != CAI_OK)
@@ -3012,7 +3038,7 @@ static int cli_close_runtime(cli_state *state, cai_error *error) {
   cai_cli_pouch_end_use(&state->pouch);
   state->goal_starts_pending = 0U;
   cai_cli_reasoning_reset(&state->reasoning);
-  return rc;
+  return output != CAI_OK ? output : rc;
 }
 
 static int cli_list_write(void *context, const void *bytes, size_t count,
@@ -3622,7 +3648,7 @@ static int cli_host_process(cli_state *state, cai_error *error) {
 /* Level-triggered runtime, input, store and socket readiness share one owner
  * loop. Idle servers wait indefinitely except for an actual host deadline. */
 static int cli_pump(cli_state *state, long timeout, cai_error *error) {
-  struct pollfd descriptors[6U + CAI_CLI_WORKSPACE_HOST_FDS];
+  struct pollfd descriptors[10U + CAI_CLI_WORKSPACE_HOST_FDS];
   size_t server_count = 0U;
   int fd, rc, stopping;
   rc = cai_cli_pouch_ownership_check(&state->pouch, error);
@@ -3647,16 +3673,29 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
     descriptors[5].fd = state->controller && state->quota_refresh.started
                             ? state->quota_refresh.fd
                             : -1;
+    descriptors[6].fd = -1;
+    if (state->controller && state->review_runtime != NULL) {
+      rc = cai_agent_runtime_wakeup_fd(state->review_runtime,
+                                       &descriptors[6].fd, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
+    descriptors[7].fd =
+        state->controller && !state->shell.eof ? state->shell.output_fd : -1;
+    descriptors[8].fd =
+        state->controller && !state->shell.exited ? state->shell.exit_fd : -1;
+    descriptors[9].fd = state->controller ? state->shell.timer_fd : -1;
     descriptors[0].events = descriptors[1].events = descriptors[2].events =
         descriptors[3].events = descriptors[4].events = descriptors[5].events =
-            POLLIN;
-    rc = cai_cli_workspace_host_prepare(state->workspace_host, descriptors + 6U,
-                                        CAI_CLI_WORKSPACE_HOST_FDS,
-                                        &server_count, &timeout, error);
+            descriptors[6].events = descriptors[7].events =
+                descriptors[8].events = descriptors[9].events = POLLIN;
+    rc = cai_cli_workspace_host_prepare(
+        state->workspace_host, descriptors + 10U, CAI_CLI_WORKSPACE_HOST_FDS,
+        &server_count, &timeout, error);
     if (rc != CAI_OK)
       return rc;
     do {
-      rc = poll(descriptors, 6U + server_count, (int)timeout);
+      rc = poll(descriptors, 10U + server_count, (int)timeout);
     } while (rc < 0 && errno == EINTR);
     if (rc < 0)
       return cai_cli_error(error, CAI_ERR_TRANSPORT, "wait for app events");
@@ -3677,6 +3716,11 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
            : cai_agent_runtime_pump(state->runtime, timeout, error);
   if (rc == CAI_OK)
     rc = cli_host_process(state, error);
+  if (rc == CAI_OK && state->controller && state->review_runtime != NULL &&
+      cli_review_wakeup(NULL, NULL, state) != SL_OK)
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "pump isolated reviewer");
+  if (rc == CAI_OK && state->controller && state->shell.pid > 0)
+    rc = cli_shell_pump(state, error);
   if (rc == CAI_OK && !state->interactive)
     rc = cli_messages_process(state, 0, error);
   if (rc == CAI_OK && state->controller &&
@@ -4292,7 +4336,8 @@ static int cli_review_wakeup(sl_t *sl, const sl_watch_event_t *event,
     if (rc == CAI_OK) {
       state->last_review_metrics = metrics;
       state->has_review_metrics = 1;
-      (void)sl_watch_remove(state->sl, state->review_watch_id);
+      if (state->has_review_watch)
+        (void)sl_watch_remove(state->sl, state->review_watch_id);
       state->has_review_watch = 0;
       cai_agent_runtime_close(state->review_runtime);
       state->review_runtime = NULL;
@@ -4401,13 +4446,13 @@ static int cli_review_command(cli_state *state, const char *arguments,
     return rc;
   }
   rc = cai_agent_runtime_wakeup_fd(state->review_runtime, &fd, error);
-  if (rc == CAI_OK &&
+  if (rc == CAI_OK && !state->controller &&
       sl_watch_add(state->sl, fd,
                    SL_WATCH_READ | SL_WATCH_HANGUP | SL_WATCH_ERROR,
                    cli_review_wakeup, state, &state->review_watch_id) != SL_OK)
     rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "watch isolated reviewer");
   if (rc == CAI_OK) {
-    state->has_review_watch = 1;
+    state->has_review_watch = !state->controller;
     state->show_welcome = 0;
     cai_cli_reasoning_reset(&state->reasoning);
   } else {
@@ -5239,7 +5284,8 @@ static int cli_handle_command(cli_state *state, const char *line,
 }
 
 static int cli_dispatch_command(cli_state *state, const char *line,
-                                cai_error *error, int *handled) {
+                                const cai_input_claim *claim, cai_error *error,
+                                int *handled) {
   int rc, saved_command_output = state->ui.command_output;
   int saved_presentation_event = state->ui.presentation_event;
   char *normalized = NULL;
@@ -5266,6 +5312,20 @@ static int cli_dispatch_command(cli_state *state, const char *line,
     }
     normalized[name] = '\0';
     command = normalized;
+  }
+  if (state->controller) {
+    *handled = 1;
+    rc = cai_cli_documents_begin(&state->documents, claim, error);
+    if (rc == CAI_OK)
+      rc = cli_command_input(state, line) == 0 ? CAI_OK : CAI_ERR_TRANSPORT;
+    if (rc == CAI_OK)
+      rc = cai_cli_command_frontend(command)
+               ? cai_cli_documents_delegate(&state->documents, line, error)
+               : cli_handle_command(state, command, error, handled);
+    if (state->documents.active)
+      rc = cai_cli_documents_complete(&state->documents, rc, error);
+    free(normalized);
+    return rc;
   }
   if (line[0] == '/') {
     state->ui.command_output = 1;
@@ -6593,6 +6653,7 @@ cleanup:
   cai_cli_pouch_close(&state->messaging_pouch);
   if (state->sl != NULL)
     (void)cai_cli_log_notices(state->log, cli_notice, state);
+  cai_cli_documents_close(&state->documents);
   cai_cli_presenter_close(cli_presenter(state));
   if (state->sl != NULL) {
     (void)sl_output_stream_end(state->sl);
