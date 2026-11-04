@@ -1462,7 +1462,8 @@ void *cai_tool_registry_context_internal(cai_tool_registry *registry,
                                                             : NULL;
 }
 
-/* Quiescent insertion of a newly registered native tool before plugin slots. */
+/** Quiescent insertion of a newly registered native tool before plugin slots.
+ */
 void cai_tool_registry_promote_last_internal(cai_tool_registry *registry,
                                              size_t index) {
   cai_tool_registry_impl *impl = cai_tool_registry_impl_from_public(registry);
@@ -1860,7 +1861,7 @@ static lonejson_status cai_tool_custom_string_begin(void *user,
   return cai_tool_argument_scalar_event(user, error);
 }
 
-/* MCP's input is an object even when the local callback is native freeform.
+/** MCP's input is an object even when the local callback is native freeform.
  * Decoding uses the existing explicit spooled callback boundary. */
 int cai_tool_registry_run_mcp(cai_tool_registry *registry, const char *name,
                               lonejson_spooled *arguments, cai_sink *output,
@@ -2074,7 +2075,8 @@ void cai_tool_registry_defer_internal(cai_tool_registry *registry, size_t index,
   if (impl != NULL && index < impl->count)
     impl->entries[index].deferred = deferred;
 }
-/* Description ownership transfers only on success. No allocation at publish. */
+/** Description ownership transfers only on success. No allocation at publish.
+ */
 int cai_tool_registry_description_internal(cai_tool_registry *registry,
                                            size_t index, char *description) {
   cai_tool_registry_impl *impl = cai_tool_registry_impl_from_public(registry);

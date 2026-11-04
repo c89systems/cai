@@ -64,6 +64,7 @@ void cai_execution_record_cleanup(cai_execution_record *record) {
     memset(record, 0, sizeof(*record));
   }
 }
+/** UTF-8 validation state carried across decoded JSON string fragments. */
 typedef struct execution_utf8 {
   unsigned long codepoint, minimum;
   unsigned int remaining;
@@ -141,6 +142,10 @@ typedef struct execution_validation {
 static const lonejson_field validation_fields[] = {
     LONEJSON_FIELD_JSON_VALUE_REQ(execution_validation, record, "record")};
 LONEJSON_MAP_DEFINE(validation_map, execution_validation, validation_fields);
+/** One unpublished execution-chunk candidate with bounded metadata/payload.
+ * JSON SAX callbacks update this state; finish transfers the owned record only
+ * after the caller authenticates its outer journal/transport boundary. Unknown
+ * values are validated and discarded rather than captured in a JSON tree. */
 struct cai_execution_decoder {
   lonejson_curl_parse validation;
   lonejson_value_visitor visitor;
@@ -155,6 +160,8 @@ struct cai_execution_decoder {
   int started, finished, failed;
   char message[192], detail[512];
 };
+/** Keep the first semantic error sticky across feed/finish until explicit
+ * reset. */
 static int decoder_failure(cai_execution_decoder *d, int code,
                            const char *message, const char *detail,
                            cai_error *error) {
@@ -612,7 +619,7 @@ int cai_execution_record_json(const cai_execution_record *record, char **out,
 static int execution_text(cai_sink *sink, const char *text, cai_error *error) {
   return cai_sink_write(sink, text, strlen(text), error);
 }
-/* Metadata may originate in provider IDs or imported records. Keep control
+/** Metadata may originate in provider IDs or imported records. Keep control
  * characters out of headings too, without altering the retained record. */
 static int execution_label(cai_sink *sink, const char *text, cai_error *error) {
   size_t i, begin = 0U;

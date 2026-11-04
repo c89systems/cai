@@ -7,6 +7,8 @@
 #include <string.h>
 #include <unistd.h>
 
+/** Owner-thread attachment transport with verified instance and role state.
+ * Owns its socket/codecs; never opens agent sessions or writable stores. */
 struct cai_workspace_client {
   cai_workspace_endpoint *endpoint;
   cai_wire_peer *wire;
@@ -22,12 +24,14 @@ struct cai_workspace_client {
   int expecting;
   cai_attachment_phase server_phase;
 };
+/** Require the opening thread for connection state and codec operations. */
 static int valid(cai_workspace_client *client, cai_error *error) {
   return client != NULL && pthread_equal(client->owner, pthread_self())
              ? CAI_OK
              : cai_set_error(error, CAI_ERR_INVALID,
                              "workspace client requires its owner thread");
 }
+/** Release socket/codecs after an active pump unwinds, retaining last state. */
 static void release_transport(cai_workspace_client *client) {
   if (client->pumping)
     return;
@@ -40,6 +44,8 @@ static void release_transport(cai_workspace_client *client) {
     close(client->fd);
   client->fd = -1;
 }
+/** Make connection failure terminal and discard its unaccepted transport data.
+ */
 static int failed(cai_workspace_client *client, int rc) {
   client->state.phase = CAI_WORKSPACE_FAILED;
   client->state.error_code = rc;

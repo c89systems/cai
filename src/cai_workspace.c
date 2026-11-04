@@ -14,6 +14,9 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+/** Canonical workspace identity and native endpoint ownership resources.
+ * The listener retains the OS lifetime lock and records socket inode identity
+ * so cleanup cannot remove a replacement owner's endpoint. */
 struct cai_workspace_endpoint {
   char *workspace;
   char id[33];
@@ -28,6 +31,8 @@ static int transport(cai_error *error, const char *message) {
   return cai_set_error_detail(error, CAI_ERR_TRANSPORT, message,
                               strerror(errno));
 }
+/** Reject sockets not privately owned by this effective user, including
+ * symlinks and other filesystem object types. */
 static int private_socket(const char *path, struct stat *status,
                           cai_error *error) {
   if (lstat(path, status) != 0)

@@ -1,4 +1,4 @@
-/* Included after the journal append primitive. All persistence uses the same
+/** Included after the journal append primitive. All persistence uses the same
  * runtime sequence and store as conversation events. No logger is involved. */
 typedef struct cai_runtime_execution_stream {
   cai_agent_runtime *runtime;
@@ -10,6 +10,8 @@ typedef struct cai_runtime_execution_stream {
   int journal_only;
 } cai_runtime_execution_stream;
 
+/** Initialize immutable attribution and observation time without reading
+ * worker-owned model/session pointers. Does not copy borrowed label strings. */
 static void cai_runtime_execution_identity(cai_runtime_execution_stream *s,
                                            cai_agent_runtime *runtime,
                                            const char *kind, const char *tool,
@@ -29,7 +31,7 @@ static void cai_runtime_execution_identity(cai_runtime_execution_stream *s,
   cai_runtime_timestamp(&s->record.timestamp_ns, &s->record.utc_offset_seconds);
 }
 
-/* Worker-generated records can use the worker's current request identity. */
+/** Worker-generated records can use the worker's current request identity. */
 static void cai_runtime_execution_init(cai_runtime_execution_stream *s,
                                        cai_agent_runtime *runtime,
                                        const char *kind, const char *tool,
@@ -43,6 +45,10 @@ static void cai_runtime_execution_init(cai_runtime_execution_stream *s,
         CAI_SESSION_IMPL(runtime->session)->previous_response_id;
 }
 
+/** Persist one bounded field chunk through the runtime's ordered journal slot.
+ * The caller holds runtime->lock. Live notifications cannot block the owner;
+ * the durable journal remains authoritative when its observation queue is full.
+ */
 static int cai_runtime_execution_emit_locked(cai_runtime_execution_stream *s,
                                              size_t count, int final,
                                              cai_error *error) {
@@ -89,6 +95,7 @@ static int cai_runtime_execution_emit_locked(cai_runtime_execution_stream *s,
   return rc;
 }
 
+/** Acquire the runtime lock around an execution-chunk append. */
 static int cai_runtime_execution_emit(cai_runtime_execution_stream *s,
                                       size_t count, int final,
                                       cai_error *error) {
@@ -99,6 +106,8 @@ static int cai_runtime_execution_emit(cai_runtime_execution_stream *s,
   return rc;
 }
 
+/** Find a complete-character prefix, carrying a split UTF-8 suffix to the
+ * next record instead of emitting a partial character at the chunk boundary. */
 static size_t cai_runtime_execution_utf8_prefix(const char *data, size_t n) {
   size_t start = n;
   unsigned char c;
@@ -112,6 +121,8 @@ static size_t cai_runtime_execution_utf8_prefix(const char *data, size_t n) {
   return start + need > n ? start : n;
 }
 
+/** Forward a logical field through bounded UTF-8 journal chunks.
+ * Only the unfinished chunk is retained; embedded NUL is a protocol error. */
 static int cai_runtime_execution_write(void *context, const void *bytes,
                                        size_t count, cai_error *error) {
   cai_runtime_execution_stream *s = context;
@@ -144,7 +155,7 @@ static int cai_runtime_execution_write(void *context, const void *bytes,
   return CAI_OK;
 }
 
-/* Errors may alias the callback's error output. Use an independent error so a
+/** Errors may alias the callback's error output. Use an independent error so a
  * persistence failure cannot free strings while they are being recorded. */
 static int
 cai_runtime_execution_error_locked(cai_agent_runtime *runtime, const char *kind,
@@ -368,7 +379,7 @@ static int cai_runtime_execution_parent(cai_agent_runtime *child,
                        "retain execution parent identity");
 }
 
-/* Copy the child's durable journal, rather than whichever live observations
+/** Copy the child's durable journal, rather than whichever live observations
  * a host happens to pump. Parent sequence numbers order delivery; the bounded
  * envelope retains the child sequence and delegation identity. Each forwarder
  * retains only a bounded source chunk; no additional worker or whole journal
@@ -414,7 +425,7 @@ cai_runtime_mirror_journal_locked(cai_agent_runtime *child,
   return rc;
 }
 
-/* A delivered prompt has the same full-string presentation contract as a
+/** A delivered prompt has the same full-string presentation contract as a
  * normal user prompt. Preserve that projection at its actual seam, including
  * poll-only/manual reviews. Attributed source queue/receipt events above
  * remain the complete inspection record; this projection is never model input.
@@ -435,7 +446,7 @@ static int cai_runtime_child_input_projection_locked(cai_agent_runtime *child,
   return rc;
 }
 
-/* Validation already owns a bounded complete report. Persist its readable
+/** Validation already owns a bounded complete report. Persist its readable
  * projection in bounded UTF-8 chunks, so parent replay does not depend on
  * reconstructing a child runtime or accepting raw JSON as findings. */
 static int cai_runtime_review_markdown_locked(cai_agent_runtime *runtime,
@@ -464,7 +475,7 @@ static int cai_runtime_review_markdown_locked(cai_agent_runtime *runtime,
   return rc;
 }
 
-/* Standalone reviews are pumped by the UI, rather than the parent worker. */
+/** Standalone reviews are pumped by the UI, rather than the parent worker. */
 static int cai_runtime_manual_review_event(void *context,
                                            const cai_agent_runtime_event *event,
                                            cai_error *error) {

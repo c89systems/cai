@@ -1,4 +1,4 @@
-/* Durable state edits. History is an escaped stream of canonical history
+/** Durable state edits. History is an escaped stream of canonical history
  * records, never a reconstructed array or a serialized copy of old context.
  * Collection entry atomicity publishes an edit together with its metadata. */
 static const lonejson_field cai_journal_usage_fields[] = {
@@ -503,8 +503,9 @@ static lonejson_status cai_journal_reject_snapshot(void *context,
   return LONEJSON_STATUS_CALLBACK_FAILED;
 }
 
-/* Validate retained provider arrays without constructing a combined JSON value.
- * Length framing alone cannot detect a corrupt/imported provider item. */
+/** Validate retained provider arrays without constructing a combined JSON
+ * value. Length framing alone cannot detect a corrupt/imported provider item.
+ */
 static int cai_journal_validate_context(cai_session *session,
                                         cai_error *error) {
   cai_spooled_record_reader records;

@@ -104,7 +104,7 @@ display_result_read(void *context, unsigned char *bytes, size_t capacity) {
   result.eof = reader->offset == reader->event->data_length;
   return result;
 }
-/* MCP tool failure is independent of successful HTTP/JSON-RPC transport.
+/** MCP tool failure is independent of successful HTTP/JSON-RPC transport.
  * Select only the top-level flag, skipping content without copying it. */
 static int display_mcp_failed(const cai_agent_runtime_event *event) {
   display_mcp_result doc;
@@ -169,7 +169,7 @@ static int display_text(cai_tool_display *d, const char *s, cai_error *error) {
   int rc = display_flush_utf8(d, error);
   return rc == CAI_OK ? display_write(d, s, strlen(s), error) : rc;
 }
-/* Decode across payload chunks. Tool bytes must never become terminal controls
+/** Decode across payload chunks. Tool bytes must never become terminal controls
  * or malformed UTF-8, including when a command ends in a partial code point. */
 static int display_safe(cai_tool_display *d, const char *s, size_t n,
                         cai_error *error) {
@@ -225,7 +225,7 @@ static int display_safe(cai_tool_display *d, const char *s, size_t n,
   }
   return display_write(d, s + start, n - start, error);
 }
-/* Keep a split code point for the next bounded line chunk, so an inserted SGR
+/** Keep a split code point for the next bounded line chunk, so an inserted SGR
  * reset never interrupts a valid UTF-8 sequence. */
 static size_t patch_flush_length(const char *s, size_t n) {
   size_t start = n - 1U, expected;
@@ -377,7 +377,7 @@ static void display_remove(cai_tool_display *d, cai_display_call *c) {
       return;
     }
 }
-/* Width-aware output retains at most one small byte chunk. In particular a
+/** Width-aware output retains at most one small byte chunk. In particular a
  * long logical line never becomes a retained, reflowable whole value. */
 static int patch_output(cai_tool_display *d, cai_display_call *c, const char *s,
                         size_t n, cai_error *error) {
@@ -768,7 +768,7 @@ static int patch_feed(cai_tool_display *d, cai_display_call *c,
   }
   return CAI_OK;
 }
-/* Restore only this command's SGR attributes; always reset them before
+/** Restore only this command's SGR attributes; always reset them before
  * returning to the host, so assistant text and interleaved calls cannot inherit
  * them. */
 static int command_styled(cai_tool_display *d, cai_display_call *c,
@@ -836,7 +836,7 @@ static int command_output(cai_tool_display *d, cai_display_call *c,
   return command_styled(d, c, s, n, error);
 }
 
-/* Canonical attribute slots bound style state even for an endless stream of
+/** Canonical attribute slots bound style state even for an endless stream of
  * SGR changes without resets. Unknown SGR attributes are ignored. */
 static void command_sgr(cai_display_call *c) {
   size_t starts[32], ends[32], count = 0U, i = 0U, j, end;

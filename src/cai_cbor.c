@@ -3,17 +3,23 @@
 #include <float.h>
 #include <string.h>
 
+/** One open CBOR container/string: remaining length and UTF-8 continuation
+ * state survive input fragments without retaining the container's contents. */
 typedef struct cbor_frame {
   uint64_t remaining;
   uint32_t scalar, minimum;
   cai_cbor_type type;
   unsigned int utf8, indefinite, odd;
 } cbor_frame;
+/** Fixed-depth grammar stack shared by encoder and decoder validation.
+ * A failed or finished codec cannot silently restart on the next fragment. */
 typedef struct cbor_state {
   cbor_frame frames[CAI_CBOR_MAX_DEPTH];
   size_t depth;
   int complete, failed, busy, finished;
 } cbor_state;
+/** Incremental CBOR reader. Retains only a partial scalar header and grammar
+ * state; string/byte payloads are borrowed during token callbacks. */
 struct cai_cbor_decoder {
   cbor_state state;
   cai_cbor_token_fn callback;
@@ -21,6 +27,7 @@ struct cai_cbor_decoder {
   unsigned char header[9];
   size_t have, need;
 };
+/** Validating CBOR writer borrowing its destination sink until close. */
 struct cai_cbor_encoder {
   cbor_state state;
   cai_sink *sink;
@@ -63,6 +70,7 @@ static int fail(cbor_state *state, cai_error *error, int code,
   state->failed = code;
   return cai_set_error(error, code, message);
 }
+/** Guard against callback reentry and use after terminal failure/finish. */
 static int enter(cbor_state *state, cai_error *error) {
   if (state->failed)
     return cai_set_error(error, state->failed, "CBOR codec has failed");
@@ -72,6 +80,7 @@ static int enter(cbor_state *state, cai_error *error) {
   state->busy = 1;
   return CAI_OK;
 }
+/** End one operation and preserve callback failures as sticky codec errors. */
 static int leave(cbor_state *state, int rc, cai_error *error) {
   state->busy = 0;
   if (rc != CAI_OK) {

@@ -1,4 +1,4 @@
-/* The public push parser decodes the Chat function wrapper's input string as
+/** The public push parser decodes the Chat function wrapper's input string as
  * fragments arrive. Only a bounded decoded chunk is exposed per callback;
  * completing the whole JSON document is not a prerequisite for a delta. */
 typedef struct cai_chat_custom_delta_doc {

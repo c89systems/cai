@@ -439,7 +439,7 @@ int cai_chrome_open_lazy(const cai_chrome_config *config, cai_chrome **out,
   *out = c;
   return CAI_OK;
 }
-/* Shared with the chrome tool for lifecycle requests. */
+/** Shared with the chrome tool for lifecycle requests. */
 typedef struct chrome_turn {
   const char *session;
   const char *turn;

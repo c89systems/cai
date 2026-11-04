@@ -4,7 +4,7 @@ typedef struct dtg_zone {
   long seconds;
   const char *name;
 } dtg_zone;
-/* HM Nautical Almanac Office, Standard Time Zones, November 2021,
+/** HM Nautical Almanac Office, Standard Time Zones, November 2021,
  * https://aa.usno.navy.mil/downloads/TimeZoneMap_2021.pdf */
 static const dtg_zone zones[] = {
     {-43200L, "Y"}, {-39600L, "X"},  {-36000L, "W"}, {-34200L, "V*"},

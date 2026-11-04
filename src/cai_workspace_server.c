@@ -8,9 +8,12 @@
 #include <unistd.h>
 
 #define ROLE_NOTICES 16U
+/** Queued authority transition, retaining the request that caused it. */
 typedef struct role_notice {
   uint64_t generation, controller, request;
 } role_notice;
+/** One attachment's codecs, greeting deadline and bounded role notices.
+ * A failed/probing peer does not acquire application controller authority. */
 typedef struct server_peer {
   struct cai_workspace_server *server;
   cai_wire_peer *wire;
@@ -21,6 +24,9 @@ typedef struct server_peer {
   size_t notice_head, notice_count;
   int greeted, detach, failed, writing, probe;
 } server_peer;
+/** Owner-thread workspace listener and attachment authority.
+ * Owns endpoint/peer lifetimes; callbacks borrow messages and must not reenter
+ * its pump. Application runtimes/stores belong to the embedding host. */
 struct cai_workspace_server {
   cai_workspace_server_config config;
   cai_workspace_endpoint *endpoint;
@@ -31,12 +37,14 @@ struct cai_workspace_server {
   uint64_t now;
   int pumping;
 };
+/** Enforce the server's opening-thread ownership before touching peer state. */
 static int valid(cai_workspace_server *server, cai_error *error) {
   return server != NULL && pthread_equal(server->owner, pthread_self())
              ? CAI_OK
              : cai_set_error(error, CAI_ERR_INVALID,
                              "workspace server requires its owner thread");
 }
+/** Notify the application with borrowed peer/message/error metadata. */
 static int notify(server_peer *peer, cai_workspace_server_event_type type,
                   const cai_protocol_event *message, const cai_error *cause,
                   cai_error *error) {

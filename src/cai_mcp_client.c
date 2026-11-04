@@ -10896,7 +10896,7 @@ static int cai_mcp_append_json_string_literal(cai_buffer_builder *builder,
   return cai_buffer_append(builder, "\"", 1U, error);
 }
 
-/* Pull-based upload: the only retained framing bytes are the bounded header,
+/** Pull-based upload: the only retained framing bytes are the bounded header,
  * JSON-RPC prefix, and suffix. The payload stays in the caller's input spool.
  */
 static int cai_mcp_raw_utf8_check(cai_mcp_raw_request *request,

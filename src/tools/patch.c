@@ -627,7 +627,7 @@ static int cai_patch_file_matches(int parent_fd, const char *name,
              : 0;
 }
 
-/* Publication rollback needs only to prove that the destination is still the
+/** Publication rollback needs only to prove that the destination is still the
  * inode CAI installed. Link counts and timestamps may legitimately change when
  * a concurrent process observes the temporary publication name. */
 static int cai_patch_file_identity_matches(int parent_fd, const char *name,
@@ -642,7 +642,7 @@ static int cai_patch_file_identity_matches(int parent_fd, const char *name,
              : 0;
 }
 
-/* rename changes ctime even when it moves the exact same inode. Exchange
+/** rename changes ctime even when it moves the exact same inode. Exchange
  * publication therefore compares all stable file-version fields after the
  * move, while cai_patch_verify_file() performs the full pre-exchange check. */
 static int cai_patch_relocated_stat_matches(const struct stat *actual,
@@ -680,7 +680,7 @@ static int cai_patch_relocated_file_matches(int parent_fd, const char *name,
          cai_patch_relocated_stat_matches(&actual, expected);
 }
 
-/* Replacing an existing pathname safely needs an atomic exchange rather than
+/** Replacing an existing pathname safely needs an atomic exchange rather than
  * a stat-then-rename sequence. The latter can overwrite a new inode installed
  * between verification and publication. Platforms without an exchange
  * primitive reject existing-file updates rather than silently weakening that
@@ -813,7 +813,7 @@ static int cai_patch_read_file(int parent_fd, const char *name, size_t maximum,
   return CAI_OK;
 }
 
-/* Keep an opened parent directory from preflight through publication. Every
+/** Keep an opened parent directory from preflight through publication. Every
  * component is opened from the pinned workspace descriptor, so an attacker
  * cannot redirect a later write by replacing an ancestor with a symlink. */
 static int cai_patch_open_parent(const cai_patch_context *ctx, const char *path,
@@ -1015,7 +1015,7 @@ static int cai_patch_spooled_reader_append(cai_patch_spooled_reader *reader,
   return CAI_OK;
 }
 
-/* Returns 1 with one complete line, 0 at EOF, or -CAI_ERR_* on failure. */
+/** Returns 1 with one complete line, 0 at EOF, or -CAI_ERR_* on failure. */
 static int cai_patch_spooled_reader_next(cai_patch_spooled_reader *reader,
                                          char **out, cai_error *error) {
   lonejson_read_result chunk;
@@ -1527,7 +1527,7 @@ static int cai_patch_parse_spooled(const cai_patch_context *ctx,
   return rc;
 }
 
-/* Diagnostics are bounded and literal: file content and paths must not inject
+/** Diagnostics are bounded and literal: file content and paths must not inject
  * terminal controls into an error message. Diagnostic candidates never
  * authorize a replacement; the ordered line matcher does that separately. */
 static void cai_patch_excerpt(char *out, size_t capacity, const char *text,
@@ -1663,7 +1663,7 @@ static int cai_patch_validate_destinations(const cai_patch_plan *plan,
   return CAI_OK;
 }
 
-/* A delete followed by an add is a replacement, even when other file
+/** A delete followed by an add is a replacement, even when other file
  * sections separate them. Keep one update so publication and rollback retain
  * the original file's identity checks, permissions and contents. */
 static int cai_patch_coalesce_replacements(const cai_patch_context *ctx,

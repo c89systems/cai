@@ -15,11 +15,15 @@
 #include <unistd.h>
 
 #define REGISTRY_SCHEMA "cai.workspace.registry"
+/** Owned discovery record/name reservation, guarded by native lifetime locks.
+ * published identifies the exact file this instance may remove on close. */
 struct cai_workspace_publication {
   int directory, name_lock;
   char file[44];
   struct stat published;
 };
+/** Incremental directory reader retaining one bounded discovery record.
+ * Returned record strings borrow this object until the next read/close. */
 struct cai_workspace_registry {
   DIR *directory;
   cai_workspace_record record;

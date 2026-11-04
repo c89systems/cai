@@ -5,6 +5,9 @@
 #include <pthread.h>
 #include <string.h>
 
+/** Incremental selector resolution owned by its opening thread.
+ * Retains one candidate/probe at a time and verifies identity before returning
+ * a match. Discovery itself acquires no attachment or conversation lease. */
 struct cai_workspace_discovery {
   cai_workspace_discovery_config config;
   cai_workspace_discovery_state state;
@@ -24,6 +27,8 @@ static int valid(cai_workspace_discovery *d, cai_error *error) {
              : cai_set_error(error, CAI_ERR_INVALID,
                              "workspace discovery requires its owner thread");
 }
+/** Make discovery failure terminal and close the outstanding candidate probe.
+ */
 static int failed(cai_workspace_discovery *d, int rc, cai_error *error) {
   d->state.phase = CAI_WORKSPACE_DISCOVERY_FAILED;
   d->state.error_code = rc;
@@ -42,6 +47,8 @@ static int notify(cai_workspace_discovery *d,
   return d->config.event ? d->config.event(d->config.context, &event, error)
                          : CAI_OK;
 }
+/** Distinguish explicit paths from workspace names/IDs without filesystem I/O.
+ */
 static int explicit_path(const char *selector) {
   return selector[0] == '/' || strchr(selector, '/') != NULL ||
          strcmp(selector, ".") == 0 || strcmp(selector, "..") == 0;

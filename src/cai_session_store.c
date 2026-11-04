@@ -202,7 +202,7 @@ static int cai_store_make_directory(const char *path, cai_error *error) {
   return CAI_OK;
 }
 
-/*
+/**
  * Persist commit recency in the commit itself.  A journal's mtime
  * cannot represent this: a later event append intentionally advances it
  * without creating resumable state.
@@ -543,7 +543,7 @@ static int cai_store_write_all(int fd, const void *data, size_t length,
   return CAI_OK;
 }
 
-/* Find the last complete top-level JSON object before before_end. Commits
+/** Find the last complete top-level JSON object before before_end. Commits
  * contain arbitrary JSON state and may therefore span several physical lines;
  * line-oriented recovery would mistake a state newline for a record boundary.
  */
@@ -652,7 +652,7 @@ static int cai_local_find_last_record_before(int fd, long before_end,
 typedef int (*cai_local_record_fn)(void *context, int fd, long record_start,
                                    long record_end, cai_error *error);
 
-/* Visit complete top-level JSON objects in journal order. Commit state is
+/** Visit complete top-level JSON objects in journal order. Commit state is
  * arbitrary JSON and can span physical lines, so only object framing—not a
  * line prefix—can distinguish one journal record from its embedded state. */
 static int cai_local_visit_complete_records(int fd,
@@ -1369,7 +1369,7 @@ cai_local_commit_record_bounds(int fd, long record_start, long record_end,
   return CAI_OK;
 }
 
-/*
+/**
  * Find the newest complete commit record in one journal.  Journal events
  * are deliberately allowed to precede the first commit: such a journal
  * records durable intent, but cannot itself resume an agent session.

@@ -2,7 +2,7 @@
 #define CAI_UTF8_H
 #include <stddef.h>
 
-/* Repair a bounded, already-buffered text chunk in place for JSON strings.
+/** Repair a bounded, already-buffered text chunk in place for JSON strings.
  * Preserve valid UTF-8 exactly; invalid and incomplete bytes become '?'.
  * This is private shared byte handling, with no allocation or I/O. */
 static void cai_utf8_repair_text(char *text, size_t length) {

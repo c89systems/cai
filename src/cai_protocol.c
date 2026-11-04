@@ -2,7 +2,10 @@
 #include <cai/protocol.h>
 #include <string.h>
 
+/** Envelope parsing phases. Payload nesting is tracked, never collected. */
 enum decode_stage { IDLE = 0, ROOT, KEY, VALUE, PAYLOAD, ROOT_END, RECORD_END };
+/** One strict workspace-envelope decoder over framed CBOR tokens.
+ * Header storage is fixed; the application consumes borrowed payload tokens. */
 struct cai_protocol_decoder {
   cai_protocol_event_fn callback;
   void *context;
@@ -23,6 +26,7 @@ static int bad(cai_error *error) {
   return cai_set_error(error, CAI_ERR_PROTOCOL,
                        "invalid workspace protocol envelope");
 }
+/** Validate envelope field order and forward payload tokens without a DOM. */
 static int decode_token(cai_protocol_decoder *decoder,
                         const cai_cbor_token *token, cai_error *error) {
   int rc;

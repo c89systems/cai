@@ -914,7 +914,7 @@ static int cai_model_catalog_merge_fallback(cai_client *client,
   return CAI_OK;
 }
 
-/* The provider response is HTTP-bounded and buffered. Visit it directly:
+/** The provider response is HTTP-bounded and buffered. Visit it directly:
  * unmapped prompt/template values are validated and discarded chunk by chunk,
  * instead of going through the mapped parser's fixed token scratch buffer. */
 typedef struct cai_codex_catalog_reader {

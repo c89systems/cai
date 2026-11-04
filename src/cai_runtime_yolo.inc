@@ -1,4 +1,4 @@
-/* Change only built-in confinement contexts. Never recreate the session,
+/** Change only built-in confinement contexts. Never recreate the session,
  * custom tools, MCP registrations, goal state or the managed terminal slot. */
 static int cai_runtime_yolo_ready_locked(cai_agent_runtime *runtime) {
   return !runtime->stopping && !runtime->turn_timing_active &&

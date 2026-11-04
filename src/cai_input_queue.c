@@ -8,6 +8,9 @@
 
 #define INPUT_RESULTS 16U
 #define INPUT_DETACHED_CLIENTS 16U
+/** One queue-owned accepted input revision and its earlier journal provenance.
+ * Claim transfers text separately; editable work is not duplicated elsewhere.
+ */
 typedef struct input_node {
   struct input_node *next;
   cai_input_entry value;
@@ -16,6 +19,8 @@ typedef struct input_node {
   unsigned long long *input_events;
   size_t input_event_count, input_event_capacity;
 } input_node;
+/** Durable producer identity with a bounded receipt window for request retry.
+ */
 struct cai_input_queue_client {
   struct cai_input_queue_client *next;
   cai_input_queue *queue;
@@ -24,6 +29,9 @@ struct cai_input_queue_client {
   size_t next_result;
   int attached;
 };
+/** Owner-thread authority for accepted work, editing and delivery policy.
+ * Persistence uncertainty blocks unsafe retries; subscriptions observe this
+ * state rather than creating a second executable frontend queue. */
 struct cai_input_queue {
   cai_input_queue_config config;
   pthread_t owner;
@@ -37,6 +45,8 @@ struct cai_input_queue {
   int stopped, auto_approval, uncertain, notifying, closed;
 };
 
+/** Reject closed, reentrant or non-owner mutations before queue state changes.
+ */
 static int queue_valid(const cai_input_queue *queue, cai_error *error) {
   if (queue == NULL || queue->closed || queue->notifying ||
       !pthread_equal(queue->owner, pthread_self()))
@@ -49,6 +59,8 @@ static void node_free(input_node *node) {
   cai_free_mem(NULL, node->input_events);
   cai_free_mem(NULL, node);
 }
+/** Drop a lifetime reference; release owned entries/receipts at the last one.
+ */
 static void queue_release(cai_input_queue *queue) {
   input_node *node;
   cai_input_queue_client *client;

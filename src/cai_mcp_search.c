@@ -29,7 +29,7 @@ static void document_clear(search_document *doc) {
   cai_free_mem(NULL, doc->description);
   memset(doc, 0, sizeof(*doc));
 }
-/* Split punctuation/underscores and camelCase as well as natural-language
+/** Split punctuation/underscores and camelCase as well as natural-language
  * words. The same normalization is used for both documents and queries. */
 static int tokenize(search_document *doc, const char *text, cai_error *error) {
   const unsigned char *p = (const unsigned char *)text, *start;

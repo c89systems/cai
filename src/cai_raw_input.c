@@ -2,7 +2,7 @@
 #include <cai/mcp.h>
 #include <string.h>
 
-/* Raw-input hints are small control fields. Surrounding provider metadata can
+/** Raw-input hints are small control fields. Surrounding provider metadata can
  * include long instructions and must not be parsed as part of that hint. */
 typedef struct cai_raw_input_doc {
   char *field;

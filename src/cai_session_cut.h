@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #define CAI_CUT_MAX_RANGES 64U
+/** Prefix metadata locating retained context; history bytes are discarded. */
 typedef struct cai_cut_edit_header {
   lonejson_uint64 revision, base_bytes, end_bytes;
   lonejson_json_value history;
@@ -18,6 +19,7 @@ static const lonejson_field cai_cut_edit_fields[] = {
     LONEJSON_FIELD_U64(cai_cut_edit_header, end_bytes, "end_bytes"),
     LONEJSON_FIELD_JSON_VALUE(cai_cut_edit_header, history, "history_append")};
 LONEJSON_MAP_DEFINE(cai_cut_edit_map, cai_cut_edit_header, cai_cut_edit_fields);
+/** Bounded envelope fields retained from each record during cut planning. */
 typedef struct cai_cut_header {
   char record_type[24];
   lonejson_uint64 sequence;
@@ -31,9 +33,12 @@ static const lonejson_field cai_cut_fields[] = {
     LONEJSON_FIELD_OBJECT(cai_cut_header, state, "state", &cai_cut_edit_map),
     LONEJSON_FIELD_JSON_VALUE(cai_cut_header, data, "data")};
 LONEJSON_MAP_DEFINE(cai_cut_map, cai_cut_header, cai_cut_fields);
+/** Store-position deletion interval: after is exclusive, through inclusive. */
 typedef struct cai_cut_range {
   unsigned long long after, through;
 } cai_cut_range;
+/** Atomic-cut candidate with an owned parser and fixed range sets.
+ * Authenticate each stored entry before advancing the plan. */
 typedef struct cai_cut_plan {
   const cai_agent_session_trim_request *request;
   unsigned long long anchor, revision, bytes, last_position, last_sequence;
@@ -46,6 +51,7 @@ typedef struct cai_cut_plan {
   cai_cut_header record;
   int initialized;
 } cai_cut_plan;
+/** Open a parser retaining bounded headers and discarding record bodies. */
 static lonejson *cai_cut_json(lonejson_error *error) {
   lonejson_config config = lonejson_default_config();
   /* Preserve installed discard sinks. Streamed bodies need no materialized
@@ -55,6 +61,7 @@ static lonejson *cai_cut_json(lonejson_error *error) {
   config.json_value_max_string_bytes = 0U;
   return lonejson_new(&config, error);
 }
+/** Consume payload bytes without retaining context or event text. */
 static lonejson_status cai_cut_discard(void *context, const void *bytes,
                                        size_t length, lonejson_error *error) {
   (void)context;
@@ -63,6 +70,7 @@ static lonejson_status cai_cut_discard(void *context, const void *bytes,
   (void)error;
   return LONEJSON_STATUS_OK;
 }
+/** Release the current record while preserving accumulated deletion ranges. */
 static void cai_cut_record_close(cai_cut_plan *p) {
   if (p->initialized) {
     lonejson_curl_parse_cleanup(&p->parser);
@@ -70,6 +78,8 @@ static void cai_cut_record_close(cai_cut_plan *p) {
     p->initialized = 0;
   }
 }
+/** Feed JSON fragments; cai_cut_end authenticates the enclosing stored entry.
+ */
 static int cai_cut_feed(cai_cut_plan *p, const void *bytes, size_t length,
                         cai_error *error) {
   const unsigned char *input = bytes;
@@ -101,6 +111,7 @@ static int cai_cut_feed(cai_cut_plan *p, const void *bytes, size_t length,
   }
   return CAI_OK;
 }
+/** Add a selected position, merging adjacency within the atomic range cap. */
 static int cai_cut_add(cai_cut_range *ranges, size_t *count,
                        unsigned long long position, cai_error *error) {
   if (*count != 0U && ranges[*count - 1U].through == position - 1U) {
@@ -114,6 +125,8 @@ static int cai_cut_add(cai_cut_range *ranges, size_t *count,
   (*count)++;
   return CAI_OK;
 }
+/** Accept an authenticated ordered entry, validate its prefix and select cuts.
+ */
 static int cai_cut_end(cai_cut_plan *p, unsigned long long position,
                        cai_error *error) {
   size_t i;
@@ -161,10 +174,13 @@ static int cai_cut_end(cai_cut_plan *p, unsigned long long position,
   cai_cut_record_close(p);
   return rc;
 }
+/** Sort deletion intervals by their exclusive lower store position. */
 static int cai_cut_compare(const void *a, const void *b) {
   const cai_cut_range *left = a, *right = b;
   return left->after < right->after ? -1 : left->after != right->after;
 }
+/** Merge selected event/commit ranges and the discarded suffix into one plan.
+ */
 static int cai_cut_finish(cai_cut_plan *p, cai_error *error) {
   size_t i, count = 0U;
   if (p->last_revision == 0U || p->bytes > (size_t)-1)
@@ -190,6 +206,7 @@ static int cai_cut_finish(cai_cut_plan *p, cai_error *error) {
              ? CAI_OK
              : CAI_CUT_FAIL(error, "history cut exceeds atomic range limit");
 }
+/** Test whether a store position is included in the prepared deletion plan. */
 static int cai_cut_removed(const cai_cut_plan *p, unsigned long long position) {
   size_t i;
   for (i = 0U; i < p->count; i++)

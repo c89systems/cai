@@ -53,7 +53,7 @@ static const lonejson_field manifest_fields[] = {
                                 "allowed_origins", LONEJSON_OVERFLOW_FAIL)};
 LONEJSON_MAP_DEFINE(manifest_map, chrome_manifest, manifest_fields);
 
-/* Walk from / with openat: refuse symlink components and create only missing
+/** Walk from / with openat: refuse symlink components and create only missing
  * directories. Existing browser configuration need not have private mode. */
 static int open_parent(const char *path, int create, char *leaf, size_t size,
                        cai_error *error) {

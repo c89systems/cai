@@ -649,7 +649,7 @@ cai_chat_write_input_parts(lonejson_writer *writer,
                                       : status;
 }
 
-/* Tool messages only support text. Attach images after the entire tool-result
+/** Tool messages only support text. Attach images after the entire tool-result
  * group, so no user message separates a call from its pending results. */
 static lonejson_status
 cai_chat_write_tool_images(lonejson_writer *writer,
@@ -1406,7 +1406,7 @@ static int cai_chat_emit_spool(cai_sink *sink, const lonejson_spooled *spool,
   return CAI_OK;
 }
 
-/* Only buffered calls set this limit. Reject payload growth before retention;
+/** Only buffered calls set this limit. Reject payload growth before retention;
  * the final JSON sink also counts escaping and response-envelope bytes. */
 static int cai_chat_capture_reserve(cai_chat_stream_state *state,
                                     size_t count) {
@@ -1497,7 +1497,7 @@ static int cai_chat_emit_text(cai_chat_stream_state *state,
   return cai_chat_emit_spool(sink, text, state->error);
 }
 
-/* Berget may send reasoning_content, a tagged <think> section in content,
+/** Berget may send reasoning_content, a tagged <think> section in content,
  * or plain final content. Detect the opening tag with a bounded prefix so
  * plain answers can stream immediately without retaining the whole reply. */
 static int cai_chat_emit_glm_content(cai_chat_stream_state *state,

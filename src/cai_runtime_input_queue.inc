@@ -1,4 +1,4 @@
-/* Included after journal primitives. Pending edits live in the conversation
+/** Included after journal primitives. Pending edits live in the conversation
  * journal; claimed model work uses an idempotent delivery receipt. A child
  * collection cannot be committed atomically with its parent's collection. */
 static int cai_runtime_enqueue_input_origin(cai_agent_runtime *, const char *,
@@ -238,7 +238,7 @@ static int cai_runtime_input_checkpoint_chunk(void *context, const void *bytes,
   return rc;
 }
 
-/* These receipts remain for the lifetime of the destination conversation.
+/** These receipts remain for the lifetime of the destination conversation.
  * They prevent a lost parent acknowledgement from duplicating child input. */
 static int cai_runtime_origin_seen_locked(cai_agent_runtime *runtime,
                                           const char *session,
@@ -494,7 +494,7 @@ next_delivery:
   return CAI_OK;
 }
 
-/* Model history is mutated only by its execution owner. UI admission can
+/** Model history is mutated only by its execution owner. UI admission can
  * attach parent provenance while that owner is running a synchronous child. */
 static int cai_runtime_queue_own_history(cai_agent_runtime *runtime,
                                          cai_error *error) {

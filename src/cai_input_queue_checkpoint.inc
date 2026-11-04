@@ -1,4 +1,4 @@
-/* A cut-local recovery baseline, not an ordinary journal record or a copy of
+/** A cut-local recovery baseline, not an ordinary journal record or a copy of
  * model context. Both directions retain only one serialized item at a time. */
 typedef struct input_checkpoint_item {
   cai_input_entry entry;

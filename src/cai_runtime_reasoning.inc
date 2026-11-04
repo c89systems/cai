@@ -1,4 +1,4 @@
-/* Model-controlled reasoning is confined to the runtime's normal durable
+/** Model-controlled reasoning is confined to the runtime's normal durable
  * settings boundary. No provider request, retry or synthetic prompt occurs
  * inside the tool. Configuration changes are owner-thread operations. */
 typedef struct cai_reasoning_args {
@@ -28,7 +28,7 @@ static int cai_reasoning_rank(const char *effort) {
   return -1;
 }
 
-/* Offline lookup only. A missing list is unknown; [] advertises no choices.
+/** Offline lookup only. A missing list is unknown; [] advertises no choices.
  * Neither authorizes an automatic effort change. Do not guess provider support.
  */
 static int cai_runtime_reasoning_supported(cai_agent_runtime *runtime,
@@ -91,7 +91,7 @@ cai_runtime_reasoning_receipt_locked(cai_agent_runtime *runtime, int mode,
   return rc;
 }
 
-/* Caller holds runtime->lock, serializing warning identity and configuration.
+/** Caller holds runtime->lock, serializing warning identity and configuration.
  */
 static void cai_runtime_reasoning_warn(cai_agent_runtime *runtime,
                                        const char *model, const char *effort,

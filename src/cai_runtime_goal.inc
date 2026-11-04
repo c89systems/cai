@@ -1,4 +1,4 @@
-/* Private goal prompt and empty-continuation policy. Called by the worker. */
+/** Private goal prompt and empty-continuation policy. Called by the worker. */
 static const unsigned char cai_goal_continuation_template[] = {
 #include "cai_goal_continuation.inc"
 };
@@ -64,7 +64,7 @@ static int cai_runtime_goal_prompt(cai_agent_runtime *runtime, char **out,
   return rc;
 }
 
-/* Unicode White_Space, as used by Codex's trim(). Keep decoder state across
+/** Unicode White_Space, as used by Codex's trim(). Keep decoder state across
  * chunks so a split UTF-8 whitespace character does not look like activity. */
 static int cai_runtime_goal_space(unsigned int cp) {
   return cp == 0x20U || (cp >= 9U && cp <= 13U) || cp == 0x85U || cp == 0xa0U ||

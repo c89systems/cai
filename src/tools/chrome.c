@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-/* One deliberately small function schema works with Responses and Chat
+/** One deliberately small function schema works with Responses and Chat
  * Completions. CDP parameters remain arbitrary validated JSON objects. */
 static const char chrome_schema[] =
     "{\"type\":\"object\",\"properties\":{"
@@ -177,7 +177,7 @@ static void forget_tab(cai_chrome *c, int64_t id) {
     link = &tab->next;
   }
 }
-/* Ownership is turn-scoped even for kept tabs. Prepare before executing the
+/** Ownership is turn-scoped even for kept tabs. Prepare before executing the
  * requested action; never retry a CDP command that has already been sent. */
 static int prepare_tab(cai_chrome *c, int64_t id, int claimed,
                        cai_error *error) {

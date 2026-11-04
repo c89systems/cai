@@ -1,4 +1,4 @@
-/* Removal uses a separate socket, so an occupied browser connection cannot
+/** Removal uses a separate socket, so an occupied browser connection cannot
  * prevent shutdown. The host matches its startup executable before stopping. */
 static int chrome_stop_one(const char *path, const char *executable,
                            int *stopped, int *unavailable, cai_error *error) {

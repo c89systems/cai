@@ -1,7 +1,7 @@
 #ifndef CAI_MODEL_CONTEXTS_H
 #define CAI_MODEL_CONTEXTS_H
 
-/* Model-card token limits used only when an endpoint catalog omits context.
+/** Model-card token limits used only when an endpoint catalog omits context.
  * Keep this table limited to published model limits; the live provider API
  * owns model availability, capabilities, lifecycle, and prices. Serving limits
  * may be lower, so provider-supplied values always take precedence.

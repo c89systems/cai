@@ -46,14 +46,14 @@ extern char *realpath(const char *path, char *resolved_path);
 #define CAI_TERMINAL_STDIN_WRITE_TIMEOUT_MS 1000L
 #define CAI_TERMINAL_CLOSE_FD_FALLBACK_LIMIT 1048576
 
-/*
+/**
  * The terminal is an explicit host-side capability, but it must not inherit
  * the complete client environment unless YOLO is explicitly selected. Preserve
  * HOME, XDG_* and PATH exactly; restricted mode supplies terminal defaults and
  * excludes other host variables. Snapshot before fork, never fabricate a home.
  */
 static char cai_terminal_shell_flag[] = "-c";
-/* Managed commands never select an interactive pager, including in YOLO. */
+/** Managed commands never select an interactive pager, including in YOLO. */
 static const char *const cai_terminal_environment_defaults[] = {
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     "LANG=C.UTF-8",
@@ -134,7 +134,7 @@ static int cai_terminal_linux_fd_name(const char *name, size_t length,
   return 1;
 }
 
-/* Some supported Linux kernels predate close_range(). Enumerating procfs with
+/** Some supported Linux kernels predate close_range(). Enumerating procfs with
  * raw syscalls remains safe after fork and closes precisely the descriptor
  * snapshot inherited by the child, without a costly RLIMIT_NOFILE sweep. */
 static int cai_terminal_linux_close_inherited_fds_proc(void) {
@@ -200,7 +200,7 @@ static int cai_terminal_linux_close_inherited_fds_proc(void) {
 }
 #endif
 
-/* The terminal child runs model-requested code. Do not leak host sockets,
+/** The terminal child runs model-requested code. Do not leak host sockets,
  * files, pipes, or credentials through descriptors intentionally kept
  * inheritable by the embedding process. This executes only after fork, so it
  * uses direct descriptor syscalls only. */
@@ -1067,7 +1067,7 @@ static int cai_terminal_wait(cai_terminal_manager *manager, long wait_ms,
   return CAI_OK;
 }
 
-/* Teardown waits ignore the caller's cancellation flag while reaping. */
+/** Teardown waits ignore the caller's cancellation flag while reaping. */
 static int cai_terminal_wait_for_completion(cai_terminal_manager *manager,
                                             long wait_ms) {
   struct timespec deadline;
@@ -1438,7 +1438,7 @@ static int cai_terminal_emit(cai_terminal_manager *manager, int type,
   return manager->event_callback(manager->event_context, &event, error);
 }
 
-/* User-visible progress is independent of model delivery. The model keeps its
+/** User-visible progress is independent of model delivery. The model keeps its
  * result until the wait ends; the UI receives bounded chunks while it waits. */
 static int cai_terminal_progress(cai_terminal_manager *manager,
                                  cai_error *error) {

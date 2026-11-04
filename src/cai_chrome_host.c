@@ -134,7 +134,7 @@ static int flush_queue(host_queue *q, int fd, int socket_fd, cai_error *error) {
     queue_clear(q);
   return CAI_OK;
 }
-/* Incremental framing keeps heartbeat handling live during fragmented input.
+/** Incremental framing keeps heartbeat handling live during fragmented input.
  * Exactly one bounded frame is materialized for JSON dispatch. */
 static int read_frame(host_frame *f, int fd, size_t limit, int *ready,
                       cai_error *error) {

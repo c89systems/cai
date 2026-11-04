@@ -1,4 +1,4 @@
-/* Codex-compatible line matching. Plan against the original source once;
+/** Codex-compatible line matching. Plan against the original source once;
  * preserve context bytes and publish only after the whole plan validates. */
 typedef struct cai_patch_line {
   const char *text;
@@ -49,7 +49,8 @@ static int cai_patch_split_lines(const char *text, size_t length,
   return CAI_OK;
 }
 
-/* Invalid UTF-8 remains literal and cannot normalize into ASCII punctuation. */
+/** Invalid UTF-8 remains literal and cannot normalize into ASCII punctuation.
+ */
 static unsigned long cai_patch_codepoint(const char **cursor, const char *end) {
   const unsigned char *p = (const unsigned char *)*cursor;
   unsigned long value;
@@ -139,7 +140,7 @@ static int cai_patch_line_equal(cai_patch_line a, cai_patch_line b, int pass) {
   return x == xe && y == ye;
 }
 
-/* Search all exact candidates before relaxing whitespace, just like Codex.
+/** Search all exact candidates before relaxing whitespace, just like Codex.
  * Repeated context selects the first occurrence at/after the source cursor. */
 static int cai_patch_seek(const cai_patch_line *lines, size_t count,
                           const cai_patch_line *pattern, size_t length,

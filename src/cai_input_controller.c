@@ -12,18 +12,23 @@
 #define CONNECTIONS 16U
 #define OBSERVATIONS 256U
 #define OBSERVATION_BYTES (16U * 1024U * 1024U)
+/** Owned observation queued for one connection, charged to its byte budget. */
 typedef struct input_message {
   struct input_message *next;
   cai_input_observation value;
   size_t bytes;
   int reservation;
 } input_message;
+/** Copied asynchronous request retaining its original conversation/generation.
+ */
 typedef struct input_submission {
   struct input_submission *next;
   cai_input_scope scope;
   cai_input_request value;
   char *text;
 } input_submission;
+/** Frontend mailbox and incremental queue-snapshot cursor.
+ * Requests cross to the controller owner; this handle never owns a runtime. */
 struct cai_input_connection {
   struct cai_input_connection *next;
   cai_input_controller *controller;
@@ -40,6 +45,9 @@ struct cai_input_connection {
   int fd, wake_fd, detached, synchronized, needs_snapshot, snapshot_started,
       binding_failed;
 };
+/** Bridges thread-safe frontend admission to one owner-thread active queue.
+ * The lock protects mailboxes/lifetimes, not concurrent mutation of the queue.
+ */
 struct cai_input_controller {
   cai_input_controller_config config;
   pthread_mutex_t lock;
@@ -136,7 +144,7 @@ static void producer_metadata(cai_input_connection *connection,
         cai_input_queue_client_last_request(connection->client);
   }
 }
-/* Caller holds the controller lock. No fallback to a new logical producer. */
+/** Caller holds the controller lock. No fallback to a new logical producer. */
 static void binding_failed(cai_input_connection *connection, int code,
                            const char *reason) {
   input_message *message;

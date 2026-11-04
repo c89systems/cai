@@ -94,7 +94,7 @@ static const char *const cai_stream_json_event_names[] = {
     "response.custom_tool_call_input.delta",
     "response.output_item.done"};
 
-/* Bound diagnostics independently of the event's other fields. The map reader
+/** Bound diagnostics independently of the event's other fields. The map reader
  * consumes the existing event spool directly; no full JSON copy is made. */
 typedef struct cai_stream_error_detail_doc {
   char message[1024];
@@ -1819,7 +1819,7 @@ static int cai_sse_provider_error(cai_sse_state *state,
   return rc;
 }
 
-/* Preserve the parser/provider/callback diagnostic when curl aborts its write
+/** Preserve the parser/provider/callback diagnostic when curl aborts its write
  * callback. A transport wrapper must not replace it with a generic message. */
 static int cai_sse_failure(cai_sse_state *state, const char *request_id) {
   cai_error *error = state->error;

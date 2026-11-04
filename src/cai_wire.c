@@ -2,6 +2,8 @@
 #include <cai/wire.h>
 #include <string.h>
 
+/** Four-byte length framing over the incremental CBOR decoder.
+ * A record is accepted only after its declared bytes and CBOR value end. */
 struct cai_wire_decoder {
   cai_wire_event_fn callback;
   void *context;
@@ -10,12 +12,15 @@ struct cai_wire_decoder {
   unsigned int have;
   int failed, busy, finished;
 };
+/** Framed CBOR output borrowing sink and tracking the declared byte budget.
+ * counter observes bytes written; it is not a sizing/materialization pass. */
 struct cai_wire_encoder {
   cai_sink *sink, *counter;
   cai_cbor_encoder *cbor;
   uint32_t remaining;
   int failed, busy, active;
 };
+/** Deliver a borrowed framing/token observation to the decoder consumer. */
 static int event(cai_wire_decoder *decoder, cai_wire_event_type type,
                  const cai_cbor_token *token, cai_error *error) {
   cai_wire_event value;

@@ -135,7 +135,7 @@ void cai_log_http_response_limit(const cai_client_impl *client,
              (unsigned int)limit);
 }
 
-/* Log diagnostics, never the request, transcript, or raw SSE payload. */
+/** Log diagnostics, never the request, transcript, or raw SSE payload. */
 void cai_log_chat_result(const cai_client_impl *client, const char *model,
                          int rc, long http_status, const char *request_id,
                          const cai_error *error) {
@@ -230,7 +230,7 @@ void cai_log_chat_retry(const cai_client_impl *client, unsigned int attempt,
                attempt, (int)status, delay_ms);
 }
 
-/* Construct fields locally: libcai borrows the receiver and requires only
+/** Construct fields locally: libcai borrows the receiver and requires only
  * pslog headers, never a linked libpslog implementation. */
 static pslog_field cai_log_string(const char *key, const char *value) {
   pslog_field field;

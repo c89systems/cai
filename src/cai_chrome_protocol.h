@@ -7,7 +7,7 @@
 #define CAI_CHROME_REQUEST_LIMIT (1024U * 1024U)
 #define CAI_CHROME_RESPONSE_LIMIT (16U * 1024U * 1024U)
 #define CAI_CHROME_CLEANUP_TIMEOUT_MS 5000L
-/* A mapped, bounded JSON-RPC frame. The values preserve JSON null/results. */
+/** A mapped, bounded JSON-RPC frame. The values preserve JSON null/results. */
 typedef struct cai_chrome_rpc_error {
   int has_code;
   int64_t code;
@@ -29,6 +29,8 @@ typedef struct cai_chrome_rpc_error {
    NULL,                                                                       \
    0U,                                                                         \
    LONEJSON_SPOOL_CLASS_DEFAULT}
+/** Parsed RPC envelope with independent member-presence flags.
+ * A missing result differs from an explicit JSON null result. */
 typedef struct cai_chrome_rpc {
   int has_id, has_params, has_result, has_error;
   const char *jsonrpc;
@@ -38,33 +40,46 @@ typedef struct cai_chrome_rpc {
   lonejson_json_value result;
   cai_chrome_rpc_error error;
 } cai_chrome_rpc;
+/** Decoder map for complete extension RPC envelopes. */
 extern const lonejson_map cai_chrome_rpc_map;
+/** Encoder map for outbound RPC method/parameter requests. */
 extern const lonejson_map cai_chrome_request_map;
+/** Encoder map for successful RPC replies. */
 extern const lonejson_map cai_chrome_success_map;
+/** Encoder map for failed RPC replies. */
 extern const lonejson_map cai_chrome_failure_map;
-/* reply_method is the outstanding request method, or NULL for a request or
+/** reply_method is the outstanding request method, or NULL for a request or
  * unsolicited frame. Extension void successes may omit the result member. */
 int cai_chrome_parse(const char *json, const char *reply_method,
                      cai_chrome_rpc *rpc, cai_error *error);
+/** Serialize a mapped RPC frame into a caller-owned JSON string. */
 char *cai_chrome_serialize(const lonejson_map *map, const void *doc,
                            cai_error *error);
+/** Materialize one stored JSON value into a caller-owned string. */
 char *cai_chrome_value(const lonejson_json_value *value, cai_error *error);
+/** Set a protocol JSON value from explicitly supplied complete JSON text. */
 int cai_chrome_value_buffer(lonejson_json_value *value, const char *json,
                             cai_error *error);
+/** Read the monotonic clock used for Chrome operation deadlines. */
 long long cai_chrome_now_ms(void);
+/** Create/validate a private native-host socket/control directory. */
 int cai_chrome_private_directory(const char *path, cai_error *error);
+/** Connect to a native-host Unix socket, returning an owned descriptor. */
 int cai_chrome_connect_socket(const char *path, int *out, cai_error *error);
-/* Private shutdown endpoint; never forwarded to the extension. */
+/** Private shutdown endpoint; never forwarded to the extension. */
 typedef struct cai_chrome_stop_request {
   const char *executable;
 } cai_chrome_stop_request;
 extern const lonejson_map cai_chrome_stop_map;
-/* Tool state lives in the connection, borrowed by a registry. */
+/** Tool state lives in the connection, borrowed by a registry. */
 typedef struct cai_chrome_tool_tab {
   struct cai_chrome_tool_tab *next;
   int64_t id;
 } cai_chrome_tool_tab;
+/** Release locally tracked tab claims without freeing the connection. */
 void cai_chrome_clear_tool_tabs(cai_chrome *chrome);
+/** Connection-owned Chrome transport, lazy discovery and tab-claim state.
+ * Keeping a browser tab does not retain its old agent turn's local claim. */
 struct cai_chrome {
   int fd;
   long timeout_ms;

@@ -10,11 +10,14 @@
 
 #define BLOCK_SIZE 4096U
 #define IO_BUDGET (64U * 1024U)
+/** One bounded outbound transport block; the peer owns this linked queue. */
 typedef struct wire_block {
   struct wire_block *next;
   size_t begin, end;
   unsigned char bytes[BLOCK_SIZE];
 } wire_block;
+/** Nonblocking socket transport owning codecs and bounded queued output.
+ * No worker or complete application-message buffer is created. */
 struct cai_wire_peer {
   cai_wire_decoder *decoder;
   cai_wire_encoder *encoder;
@@ -41,6 +44,8 @@ static int peer_transport(cai_wire_peer *peer, cai_error *error,
   return cai_set_error_detail(error, CAI_ERR_TRANSPORT, message,
                               strerror(errno));
 }
+/** Copy an encoded fragment into remaining transport credit.
+ * Backlog exhaustion fails this peer rather than blocking its producer. */
 static int enqueue(void *context, const void *bytes, size_t count,
                    cai_error *error) {
   cai_wire_peer *peer = context;

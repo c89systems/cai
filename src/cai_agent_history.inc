@@ -1,4 +1,4 @@
-/* Private whole-entry history operations. History remains a sequence of
+/** Private whole-entry history operations. History remains a sequence of
  * length-prefixed, single-item JSON arrays; copying a prefix uses bounded
  * chunks and preserves provider items, including opaque reasoning. */
 static void cai_history_summary(char *out, size_t capacity, const char *text) {

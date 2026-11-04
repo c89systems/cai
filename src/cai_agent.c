@@ -469,7 +469,7 @@ cai_compaction_payload_chunk(void *context, const lonejson_value_path *path,
   }
   return LONEJSON_STATUS_OK;
 }
-/* Inspect opaque content incrementally, without materializing or rewriting it.
+/** Inspect opaque content incrementally, without materializing or rewriting it.
  * Codex's typed Compaction item requires encrypted_content to be a string. */
 static int cai_compaction_payload_valid(cai_session *session,
                                         const lonejson_spooled *item,
@@ -3870,7 +3870,7 @@ static int cai_session_prepare_history_params(
   return rc;
 }
 
-/*
+/**
  * Rebuild a client-history continuation without committing its typed input.
  * This preserves tool-specific typed deliveries (for example, view_image's
  * data URL) for this request only.  Callers commit the corresponding safe
@@ -4141,7 +4141,7 @@ static int cai_session_history_record_identity(
   return CAI_OK;
 }
 
-/* A durable boundary commits safe tool output before a continuation is sent.
+/** A durable boundary commits safe tool output before a continuation is sent.
  * Rebuild the request from that durable history, replacing each matching safe
  * output with its request-only typed counterpart (such as view_image's data
  * URL). This keeps one output per call in the provider input. */
@@ -4444,7 +4444,7 @@ static int cai_session_goal_budget_limited(const cai_session *session) {
          strcmp(CAI_SESSION_IMPL(session)->goal_status, "budget_limited") == 0;
 }
 
-/*
+/**
  * Make locally executed tool outputs part of client-side history before a
  * continuation request begins.  This is deliberately separate from response
  * recording: a tool may have changed the workspace even if the next model
@@ -4473,7 +4473,7 @@ static int cai_session_commit_pending_history(cai_session *session,
   return rc;
 }
 
-/*
+/**
  * Smith commits must be able to survive after accepting a user turn but
  * before sending its first request.  Session inputs normally remain pending
  * until a response succeeds, so fold them into the local history explicitly
@@ -4518,7 +4518,7 @@ int cai_session_commit_pending_inputs(cai_session *session, cai_error *error) {
   return rc;
 }
 
-/*
+/**
  * Persist a safe snapshot of pending inputs without consuming them. Server
  * continuity must keep callback steering available until its continuation
  * request succeeds, while the durable tool-round hook must be able to
@@ -4845,7 +4845,7 @@ static int cai_chat_summary_delta(void *context, const char *item_id,
   return CAI_OK;
 }
 
-/* Chat Completions has no compaction item. Summarize bounded consecutive
+/** Chat Completions has no compaction item. Summarize bounded consecutive
  * fragments of the recorded history, carrying the previous summary forward.
  * A failure leaves the original history intact; reported usage is still charged
  * to the session and client, including unsuccessful chunks. */
@@ -4969,7 +4969,7 @@ static int cai_chat_summarize_fragment(cai_session *session,
   return rc;
 }
 
-/* Keep complete recent turns under an 8k-token approximate budget, starting
+/** Keep complete recent turns under an 8k-token approximate budget, starting
  * at a user message so tool calls and their results stay together. Older
  * records feed the summary in their original order. */
 static int cai_chat_split_history(cai_session *session, lonejson_spooled *head,
@@ -5797,7 +5797,7 @@ static void cai_capture_cleanup(cai_tool_output_capture *capture) {
   capture->output.cleanup(&capture->output);
 }
 
-/* Keep durable history on the tool's safe JSON result, not a typed payload
+/** Keep durable history on the tool's safe JSON result, not a typed payload
  * (such as a data-URL image) needed only by the in-flight continuation. */
 static int cai_session_capture_tool_history_output(
     cai_session *session, cai_response_create_params *history_params,
@@ -6052,7 +6052,7 @@ static int cai_session_clear_tool_choice_for_tool_continuation(
   return params->set_tool_choice(params, NULL, error);
 }
 
-/* A durable tool callback can change the agent's settings (and compact its
+/** A durable tool callback can change the agent's settings (and compact its
  * history). The already-built continuation must use those settings too. */
 static int
 cai_session_refresh_request_settings(cai_session *session,
@@ -6395,7 +6395,7 @@ int cai_session_run_auto_output(cai_session *session,
   return rc;
 }
 
-/* Account for a cutoff response and preserve any partial answer before its
+/** Account for a cutoff response and preserve any partial answer before its
  * caller asks for continuation. Reasoning-only and incomplete-call responses
  * still consume tokens. Incomplete calls are never committed or executed here.
  * Keep the original provider limit diagnostic unless recording fails. */
@@ -6432,7 +6432,7 @@ static int cai_session_retain_partial_stream(
   return rc;
 }
 
-/* Retry only the provider request. Tool execution and its durable outputs are
+/** Retry only the provider request. Tool execution and its durable outputs are
  * outside this loop. Discard incomplete attempt captures before resampling. */
 static int cai_session_stream_request(
     cai_session *session, cai_response_create_params *params,
@@ -6682,7 +6682,7 @@ static int cai_session_stream_auto_mode(cai_session *session,
                                         const cai_stream_sinks *sinks,
                                         int diagnostic, cai_error *error);
 
-/* Same session and tool loop, restricted to source inspection. */
+/** Same session and tool loop, restricted to source inspection. */
 int cai_session_stream_policy_diagnostic(cai_session *session,
                                          const cai_run_options *options,
                                          const cai_stream_sinks *sinks,
@@ -7848,7 +7848,7 @@ int cai_session_export_state_source(cai_session *session, cai_source **out,
   return rc;
 }
 
-/* Mapped arrays are owned by lonejson, including its allocation headers.
+/** Mapped arrays are owned by lonejson, including its allocation headers.
  * Session indexes use plain private allocations, so copy the flat records
  * before the mapped document is cleaned up. */
 static int cai_history_metadata_copy(const lonejson_object_array *source,

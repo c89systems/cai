@@ -4,7 +4,9 @@
 #include <limits.h>
 #include <stddef.h>
 
-/* strtoull() is not declared by every supported SDK in strict C89 mode. */
+/** Parse unsigned decimal digits without locale or C99 strtoull dependencies.
+ * On success returns zero and writes the first unconsumed byte and value.
+ * Invalid input or overflow returns -1 without publishing a partial result. */
 static int cai_parse_unsigned_decimal(const char *value, const char **end_out,
                                       unsigned long long *result_out) {
   const unsigned char *cursor;

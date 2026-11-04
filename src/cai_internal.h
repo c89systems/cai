@@ -34,6 +34,9 @@ void cai_runtime_test_set_capacity_wait_fn(int (*fn)(struct cai_agent_runtime *,
                                                      long, cai_error *));
 #endif
 
+/** Private state behind cai_client::impl. Owns copied connection settings,
+ * provider authentication, catalog caches and cumulative usage. Agents borrow
+ * their client; close sessions/agents before closing the client. */
 typedef struct cai_client_impl {
   cai_environment *environment;
   cai_allocator allocator;
@@ -71,26 +74,39 @@ typedef struct cai_client_impl {
   long chat_retry_max_delay_ms;
 } cai_client_impl;
 
+/** Install fallback model metadata from JSON without a provider lookup. */
 int cai_model_catalog_load_fallback(cai_client *client, const char *json,
                                     cai_error *error);
+/** Decode a provider catalog response into the client's cached metadata. */
 int cai_model_catalog_import_provider_response(cai_client *client,
                                                const char *json,
                                                cai_error *error);
+/** Test whether the client currently has provider-supplied catalog entries. */
 int cai_client_has_live_model_catalog(const cai_client *client);
+/** Borrow cached model metadata; this accessor does not refresh the catalog. */
 const cai_model_catalog_entry *
 cai_client_cached_model_metadata(const cai_client *client, const char *model);
+/** Report whether cached metadata supplies enough pricing for a USD estimate.
+ */
 int cai_client_model_can_estimate_usd(const cai_client *client,
                                       const char *model);
+/** Estimate API-equivalent cost from usage and cached model pricing. */
 void cai_client_model_estimate_usage(const cai_client *client,
                                      const char *model,
                                      const cai_token_usage *usage, double *usd,
                                      double *eur);
+/** Resolve a model's effective context window from available metadata. */
 long long cai_client_model_context_window(const cai_client *client,
                                           const char *model);
 
+/** Incremental Responses request producer retained until HTTP upload closes. */
 typedef struct cai_response_request_upload cai_response_request_upload;
+/** Incremental Chat request producer; close joins its producer work. */
 typedef struct cai_chat_upload cai_chat_upload;
 
+/** Agent-owned policy, tools and request defaults; borrows its cai_client.
+ * A runtime serializes settings/tool replacement at request boundaries rather
+ * than mutating these fields while its inference worker is using them. */
 typedef struct cai_agent_impl {
   cai_client *client;
   char *model;
@@ -136,6 +152,8 @@ typedef struct cai_agent_impl {
   cai_session *default_session;
 } cai_agent_impl;
 
+/** One session-owned pending input. Text/file values may be explicitly
+ * spooled; the has_* flags select which representation owns the content. */
 typedef struct cai_session_text_input {
   int kind;
   char *role;
@@ -151,6 +169,8 @@ typedef struct cai_session_text_input {
   int has_file_data;
 } cai_session_input;
 
+/** Logical history entry locating model items and the journal events it owns.
+ * The bounded summary is a UI label, not a retained copy of model output. */
 typedef struct cai_history_block {
   long long first_item;
   long long event_start;
@@ -159,16 +179,22 @@ typedef struct cai_history_block {
   char summary[1024];
 } cai_history_block;
 
+/** Inclusive journal sequence range excluded by the retained history view. */
 typedef struct cai_history_hidden_range {
   long long first;
   long long last;
 } cai_history_hidden_range;
 
+/** Associates an input/history entry with an earlier event for atomic trim. */
 typedef struct cai_history_owned_event {
   long long entry;
   long long sequence;
 } cai_history_owned_event;
 
+/** Conversation state behind cai_session::impl, borrowing its agent.
+ * Owns model context, pending inputs, usage/goals and incremental journal
+ * bookkeeping. Runtime workers operate on it; owner-thread observers use
+ * published runtime snapshots rather than reading mutable session pointers. */
 typedef struct cai_session_impl {
   cai_agent *agent;
   char *previous_response_id;
@@ -252,32 +278,50 @@ typedef struct cai_session_impl {
   void *retry_request_context;
 } cai_session_impl;
 
+/** Begin a logical history entry and capture its input/event provenance. */
 int cai_session_history_begin(cai_session *session, int kind,
                               unsigned long long event_start,
                               unsigned long long input_sequence,
                               const char *summary, cai_error *error);
+/** Ensure history bookkeeping is available before a history operation. */
 int cai_session_history_prepare(cai_session *session, cai_error *error);
+/** Reconcile logical entries after replacing model context by compaction. */
 void cai_session_history_compacted(cai_session *session);
+/** Test a journal sequence against this session's retained visibility ranges.
+ */
 int cai_session_history_visible(const cai_session *session,
                                 unsigned long long sequence);
+/** Visit logical history labels, bounded by limit, without returning bodies. */
 int cai_session_history_visit(cai_session *session, size_t limit,
                               cai_agent_history_entry_fn visit, void *context,
                               cai_error *error);
+/** Prepare removal of newest logical entries through a journal boundary.
+ * Store-level atomic cuts persist the corresponding event/commit removal. */
 int cai_session_history_trim(cai_session *session, size_t count,
                              unsigned long long through, cai_error *error);
+/** Add bytes to the bounded summary label for the current logical entry. */
 void cai_session_history_summary_delta(cai_session *session, const char *bytes,
                                        size_t length, int first);
+/** Attach an earlier queue/edit event to the current history entry's trim set.
+ */
 int cai_session_history_own_event(cai_session *session,
                                   unsigned long long sequence,
                                   cai_error *error);
+/** Open a source for the next incremental model-context commit.
+ * The caller closes the source and accepts bookkeeping only after persistence.
+ */
 int cai_session_journal_source(cai_session *session, cai_source **out,
                                cai_error *error);
+/** Open an initialization source for export/recovery, not ordinary appends. */
 int cai_session_journal_seed_source(cai_session *session, cai_source **out,
                                     cai_error *error);
+/** Open a replacement commit relative to the retained prefix after a trim. */
 int cai_session_journal_trim_source(cai_session *session,
                                     unsigned long long base_revision,
                                     size_t base_bytes, cai_source **out,
                                     cai_error *error);
+/** Advance prepared journal bookkeeping after the store accepted its source.
+ * Failure to persist must leave the prepared commit unaccepted. */
 int cai_session_journal_accept(cai_session *session, cai_error *error);
 
 #define CAI_CLIENT_IMPL(client) ((cai_client_impl *)((client)->impl))
@@ -289,72 +333,111 @@ int cai_session_journal_accept(cai_session *session, cai_error *error);
 #define CAI_SESSION_CLIENT_IMPL(session)                                       \
   (CAI_CLIENT_IMPL(CAI_SESSION_CLIENT(session)))
 
+/** Allocate with the selected allocator, or malloc when allocator is NULL.
+ * Zero-sized requests allocate at least one byte; NULL signals failure. */
 void *cai_alloc(const cai_allocator *allocator, size_t size);
+/** Resize storage using its original allocator; preserves the usual realloc
+ * ownership rule on failure. Zero-sized requests retain one byte. */
 void *cai_realloc_mem(const cai_allocator *allocator, void *ptr, size_t size);
+/** Release storage through the allocator that created it; NULL is a no-op. */
 void cai_free_mem(const cai_allocator *allocator, void *ptr);
 /** Release producer-owned mapped tool results (not lonejson parse storage). */
 void cai_tool_result_cleanup_plain(const lonejson_map *map, void *value);
+/** Copy a NUL-terminated string with the selected allocator; NULL stays NULL.
+ */
 char *cai_strdup(const cai_allocator *allocator, const char *value);
+/** Copy exactly length bytes and append NUL; the caller owns the result. */
 char *cai_strndup(const cai_allocator *allocator, const char *value,
                   size_t length);
 
+/** Replace an optional owned error and return code for direct propagation. */
 int cai_set_error(cai_error *error, int code, const char *message);
+/** Replace an optional error with copied message/detail and return code. */
 int cai_set_error_detail(cai_error *error, int code, const char *message,
                          const char *detail);
+/** Retain HTTP/provider diagnostics in an optional error; return code. */
 int cai_set_error_http(cai_error *error, int code, long http_status,
                        const char *message, const char *detail,
                        const char *server_code, const char *request_id);
+/** Reject invalid accounting limits before installing a usage policy. */
 int cai_usage_limits_validate(const cai_usage_limits *limits, cai_error *error);
 
+/** Compute accumulated active goal time at now, excluding paused intervals. */
 long long cai_session_goal_elapsed_seconds(const cai_session *session,
                                            long long now);
+/** Start an active timing interval without discarding previously accrued time.
+ */
 void cai_session_goal_start_elapsed(cai_session *session, long long now);
+/** Accrue the current active interval and clear its running timestamp. */
 void cai_session_goal_stop_elapsed(cai_session *session, long long now);
+/** Reconcile billed session consumption with the goal's token budget. */
 int cai_session_account_goal_usage(cai_session *session, int *limited,
                                    cai_error *error);
 
+/** Copy the effective explicit/environment API key into allocator-owned output.
+ */
 int cai_resolve_api_key(const cai_allocator *allocator,
                         const char *explicit_key, const char *env_name,
                         const cai_environment *environment, char **out,
                         cai_error *error);
+/** Refresh configured ChatGPT credentials before issuing an authenticated call.
+ */
 int cai_client_refresh_chatgpt_auth(cai_client *client, cai_error *error);
+/** Apply authentication recovery for an HTTP response when appropriate. */
 int cai_client_refresh_chatgpt_auth_after_http(cai_client *client,
                                                long http_status,
                                                cai_error *error);
 
+/** Log connection configuration through pslog; never writes execution history.
+ */
 void cai_log_client_opened(const cai_client_impl *client);
+/** Log skill-discovery diagnostics without inserting them into model context.
+ */
 void cai_log_skill_warning(const cai_client_impl *client, const char *message);
+/** Explain the provider-specific server-continuity policy in runtime logs. */
 void cai_log_openrouter_server_continuity(const cai_client_impl *client);
+/** Log request metadata, not a copy of the request body. */
 void cai_log_http_request_start(const cai_client_impl *client,
                                 const char *method, const char *path,
                                 int stream, size_t request_bytes);
+/** Log completed transport status, response size and correlation identity. */
 void cai_log_http_request_done(const cai_client_impl *client,
                                const char *method, const char *path,
                                long http_status, size_t response_bytes,
                                const char *request_id);
+/** Record a transport failure separately from provider/model failures. */
 void cai_log_http_transport_error(const cai_client_impl *client,
                                   const char *method, const char *path,
                                   const char *detail);
+/** Log a provider error received inside an otherwise established stream. */
 void cai_log_provider_stream_error(const cai_client_impl *client,
                                    const char *method, const cai_error *error);
+/** Log the configured response cap that stopped body collection. */
 void cai_log_http_response_limit(const cai_client_impl *client,
                                  const char *method, const char *path,
                                  size_t limit);
+/** Log a Chat request's final outcome and provider correlation fields. */
 void cai_log_chat_result(const cai_client_impl *client, const char *model,
                          int rc, long http_status, const char *request_id,
                          const cai_error *error);
+/** Log the retry attempt and selected transport backoff. */
 void cai_log_chat_retry(const cai_client_impl *client, unsigned int attempt,
                         long status, long delay_ms);
+/** Log request latency and reported token accounting for a Chat attempt. */
 void cai_log_chat_metrics(const cai_client *client, const char *model,
                           const char *request_id, unsigned int attempt,
                           double elapsed_ms, double first_token_ms,
                           int has_usage, const cai_token_usage *usage);
+/** Log summary-request lifecycle independently of UI compaction presentation.
+ */
 void cai_log_chat_compaction(const cai_client_impl *client, const char *model,
                              int started, size_t history_bytes, int rc,
                              const cai_error *error);
+/** Log catalog loading outcome and entry count for the selected source. */
 void cai_log_model_catalog(const cai_client_impl *client, const char *source,
                            size_t count, int rc, const cai_error *error);
 
+/** Owned request content part; explicit spool flags select large text/files. */
 struct cai_content_part {
   char *type;
   char *text;
@@ -369,6 +452,8 @@ struct cai_content_part {
   char *detail;
 };
 
+/** Owned request item representing a message or a function/custom-tool reply.
+ */
 struct cai_input_message {
   int kind;
   char *role;
@@ -385,6 +470,7 @@ enum {
   CAI_INPUT_CUSTOM_TOOL_CALL_OUTPUT = 2
 };
 
+/** Owned provider tool definition, including JSON or custom grammar format. */
 struct cai_function_tool {
   char *name;
   char *description;
@@ -398,6 +484,9 @@ struct cai_function_tool {
   int is_custom;
 };
 
+/** JSON/text writer that either grows an owned buffer or forwards to a sink.
+ * The buffer path materializes its value; supplying sink selects forwarding.
+ * allocator must remain valid until any allocated buffer is released. */
 typedef struct cai_buffer_builder {
   char *data;
   size_t length;
@@ -408,52 +497,75 @@ typedef struct cai_buffer_builder {
   lonejson_error *sink_error;
 } cai_buffer_builder;
 
+/** Append a C string to the configured buffer/sink destination. */
 int cai_buffer_append_cstr(cai_buffer_builder *builder, const char *text,
                            cai_error *error);
+/** Retain transient tool content needed by the next request before compaction.
+ */
 void cai_response_create_params_retain_request_only_tool_outputs(
     cai_response_create_params *params);
+/** Append exactly length bytes; sink failures propagate without retry. */
 int cai_buffer_append(cai_buffer_builder *builder, const char *text,
                       size_t length, cai_error *error);
+/** JSON-escape a string into the destination, including its quotation marks. */
 int cai_buffer_append_json_string(cai_buffer_builder *builder,
                                   const char *value, cai_error *error);
+/** Serialize input messages into an explicitly spooled JSON array. */
 int cai_input_messages_spool_json_array(const lonejson_object_array *messages,
                                         lonejson_spooled *out, size_t *out_len,
                                         cai_error *error);
+/** Materialize request JSON in an owned string; this is not a streaming API. */
 int cai_response_create_params_serialize_json(
     const cai_response_create_params *params, char **out_json, size_t *out_len,
     cai_error *error);
+/** Serialize request JSON into explicit spool storage and report its size. */
 int cai_response_create_params_spool_json(
     const cai_response_create_params *params, int stream, lonejson_spooled *out,
     size_t *out_len, cai_error *error);
+/** Create an independently owned copy of request parameters and content. */
 int cai_response_create_params_clone(const cai_response_create_params *params,
                                      cai_response_create_params **out,
                                      cai_error *error);
+/** Produce request JSON through the caller's sink instead of collecting it.
+ * out_len reports emitted bytes; the sink/context are borrowed for this call.
+ */
 int cai_response_create_params_write_json_sink(
     const cai_response_create_params *params, int stream, lonejson_sink_fn sink,
     void *sink_user, lonejson_error *sink_error, size_t *out_len,
     cai_error *error);
+/** Open the incremental Responses upload producer with explicit wire defaults.
+ * Close it after curl stops reading, including failed/cancelled requests. */
 int cai_response_request_upload_open(
     const cai_response_create_params *params, int stream, int default_has_store,
     int default_store, int omit_max_output_tokens, const char *event_type,
     cai_response_request_upload **out, cai_error *error);
+/** curl read callback for a live Responses upload; userdata is its owner. */
 size_t cai_response_request_upload_read(char *ptr, size_t size, size_t nmemb,
                                         void *userdata);
+/** Return the upload's declared size, including the unknown-length sentinel. */
 curl_off_t
 cai_response_request_upload_size(const cai_response_request_upload *upload);
+/** Release upload state after its consumer has stopped reading. */
 void cai_response_request_upload_close(cai_response_request_upload *upload);
+/** Open the Chat request serializer consumed by curl through a bounded pipe. */
 int cai_chat_upload_open(const cai_response_create_params *params,
                          cai_chat_upload **out, cai_error *error);
+/** curl read callback consuming the Chat serializer's pipe. */
 size_t cai_chat_upload_read(char *ptr, size_t size, size_t nmemb,
                             void *userdata);
+/** Report the Chat upload size or its unknown-length sentinel. */
 curl_off_t cai_chat_upload_size(const cai_chat_upload *upload);
-/* Join the producer and distinguish a closed consumer pipe from bad input. */
+/** Join the producer and distinguish a closed consumer pipe from bad input. */
 int cai_chat_upload_close(cai_chat_upload *upload, int *out_pipe_closed,
                           cai_error *error);
+/** Stream Chat output to supplied sinks and return response identity/usage.
+ * Reported usage remains meaningful for a truncated response failure. */
 int cai_chat_stream_response(cai_client *client,
                              const cai_response_create_params *params,
                              const cai_stream_sinks *sinks,
                              char **out_response_id, cai_token_usage *out_usage,
                              cai_error *error);
+/** Run a non-streaming Chat request and construct an owned cai_response. */
 int cai_chat_create_response(cai_client *client,
                              const cai_response_create_params *params,
                              cai_response **out, cai_error *error);
@@ -471,111 +583,159 @@ void cai_agent_runtime_test_set_export_cleanup_hook(
 size_t cai_terminal_test_output_limit(long long value, int present,
                                       size_t maximum);
 #endif
+/** Replace structured input with an explicitly supplied JSON representation. */
 int cai_response_create_params_set_raw_input_json(
     cai_response_create_params *params, const char *raw_input_json,
     cai_error *error);
+/** Move an explicit raw-input spool into params and clear the supplied handle.
+ */
 int cai_response_create_params_set_raw_input_spooled(
     cai_response_create_params *params, lonejson_spooled *raw_input_json,
     cai_error *error);
+/** Release currently configured input representations before replacement. */
 void cai_response_create_params_clear_input(cai_response_create_params *params);
+/** Release currently configured input representations before replacement. */
 void cai_response_create_params_clear_input(cai_response_create_params *params);
+/** Add a function reply using explicitly spooled output content. */
 int cai_response_create_params_add_function_call_output_spooled(
     cai_response_create_params *params, const char *call_id,
     lonejson_spooled *output, cai_error *error);
+/** Add a custom-tool reply using explicitly spooled output content. */
 int cai_response_create_params_add_custom_tool_call_output_spooled(
     cai_response_create_params *params, const char *call_id,
     lonejson_spooled *output, cai_error *error);
+/** Materialize the effective request input array in a caller-owned string. */
 int cai_response_params_input_items_json(
     const cai_response_create_params *params, char **out_json,
     cai_error *error);
+/** Write the effective request input array into explicit spool storage. */
 int cai_response_params_input_items_spool(
     const cai_response_create_params *params, lonejson_spooled *out,
     size_t *out_len, cai_error *error);
+/** Serialize response items to explicit spool storage for retained context. */
 int cai_response_output_items_spool(const cai_response *response,
                                     lonejson_spooled *out, size_t *out_len,
                                     cai_error *error);
+/** Parse a complete response document into an owned default-allocator object.
+ */
 int cai_response_parse_json(const char *json, cai_response **out,
                             cai_error *error);
+/** Parse a complete response document using the supplied allocator. */
 int cai_response_parse_json_with_allocator(const cai_allocator *allocator,
                                            const char *json, cai_response **out,
                                            cai_error *error);
+/** Materialize response items as an owned JSON array. */
 int cai_response_output_items_json(const cai_response *response,
                                    char **out_json, cai_error *error);
+/** Build a text-output object from a parsed response. */
 int cai_output_from_response(cai_response *response, cai_output **out,
                              cai_error *error);
+/** Parse an owned item-list response for the conversation/input-items API. */
 int cai_input_item_list_parse_json(const char *json, cai_input_item_list **out,
                                    cai_error *error);
+/** Parse one owned conversation item from a complete JSON document. */
 int cai_conversation_item_parse_json(const char *json,
                                      cai_conversation_item **out,
                                      cai_error *error);
+/** Move an explicit spool into a readable source, clearing the supplied handle.
+ * Source construction/close then owns cleanup of the transferred spool. */
 int cai_source_from_spooled(lonejson_spooled *spool, cai_source **out,
                             cai_error *error);
+/** Allocate the effective URL from an endpoint base and relative API path. */
 int cai_build_url(const cai_allocator *allocator, const char *base_url,
                   const char *path, char **out, cai_error *error);
+/** Append pagination query values to an owned API path, replacing its storage.
+ */
 int cai_append_list_query_params(const cai_allocator *allocator, char **path,
                                  const cai_list_params *params,
                                  cai_error *error);
+/** Copy a header into a curl list; the request owner later frees that list. */
 int cai_append_header(struct curl_slist **headers, const char *header,
                       cai_error *error);
+/** Add bearer authentication selected from the client's current credentials. */
 int cai_append_bearer_header(cai_client *client, struct curl_slist **headers,
                              cai_error *error);
+/** Add a checked header value after its fixed prefix. */
 int cai_append_prefixed_header(cai_client *client, struct curl_slist **headers,
                                const char *prefix, const char *value,
                                cai_error *error);
+/** Add client authentication and configured organization/project headers. */
 int cai_append_client_headers(cai_client *client, struct curl_slist **headers,
                               cai_error *error);
+/** curl header callback capturing provider request correlation identity. */
 size_t cai_http_request_id_header_write(char *ptr, size_t size, size_t nmemb,
                                         void *userdata);
+/** Execute JSON HTTP and collect its bounded response body and diagnostics. */
 int cai_http_json_request(cai_client *client, const char *method,
                           const char *path, const char *request_json,
                           char **out_json, long *out_http_status,
                           char **out_request_id, cai_error *error);
+/** Decode quota/credit values without performing an authenticated request. */
 int cai_chatgpt_quota_parse_json(const char *json, cai_chatgpt_quota *out,
                                  cai_error *error);
+/** Upload explicitly spooled JSON; collect the bounded HTTP response body. */
 int cai_http_json_request_spooled(cai_client *client, const char *method,
                                   const char *path,
                                   const lonejson_spooled *request_json,
                                   size_t request_json_len, char **out_json,
                                   long *out_http_status, char **out_request_id,
                                   cai_error *error);
+/** Upload Responses parameters through the request producer and collect JSON.
+ */
 int cai_http_response_params_request(cai_client *client, const char *path,
                                      const cai_response_create_params *params,
                                      int stream, char **out_json,
                                      long *out_http_status,
                                      char **out_request_id, cai_error *error);
+/** Completion callback at the response source's finished request boundary.
+ * Identity/usage are borrowed for the callback, not retained model context. */
 typedef int (*cai_stream_complete_fn)(void *context, const char *response_id,
                                       const cai_token_usage *usage);
+/** Open a pull text source with completion accounting for its request. */
 int cai_client_open_response_text_source_with_complete(
     cai_client *client, const cai_response_create_params *params,
     cai_stream_complete_fn on_complete, void *complete_context,
     cai_source **out, cai_error *error);
+/** Open a pull text source that takes ownership of its request parameters. */
 int cai_client_open_response_text_source_take_params(
     cai_client *client, cai_response_create_params *params,
     cai_stream_complete_fn on_complete, void *complete_context,
     cai_source **out, cai_error *error);
+/** Forward response text to one sink and return final identity/usage. */
 int cai_client_stream_response_text_with_id(
     cai_client *client, const cai_response_create_params *params,
     cai_sink *sink, char **out_response_id, cai_token_usage *out_usage,
     cai_error *error);
+/** Stream public response channels while retaining completion identity/usage.
+ */
 int cai_client_stream_response_with_id(cai_client *client,
                                        const cai_response_create_params *params,
                                        const cai_stream_sinks *sinks,
                                        char **out_response_id,
                                        cai_token_usage *out_usage,
                                        cai_error *error);
+/** Internal response dispatch used by the agent, including provider selection.
+ */
 int cai_client_stream_response_internal_with_id(
     cai_client *client, const cai_response_create_params *params,
     const cai_stream_sinks *sinks, char **out_response_id,
     cai_token_usage *out_usage, cai_error *error);
 /** Worker-local cancellation for a runtime-owned streaming request. */
 typedef int (*cai_stream_cancel_check_fn)(void *context);
+/** Borrowed worker-local cancellation hook installed for one request scope. */
 typedef struct cai_stream_cancel_scope {
   cai_stream_cancel_check_fn check;
   void *context;
 } cai_stream_cancel_scope;
+/** Install the calling worker's borrowed scope; restore it before scope exit.
+ */
 int cai_stream_set_thread_cancel_scope(cai_stream_cancel_scope *scope);
+/** Borrow the current thread's installed request cancellation scope. */
 cai_stream_cancel_scope *cai_stream_get_thread_cancel_scope(void);
+/** Consult the current worker's cancellation hook without changing its owner.
+ */
 int cai_stream_thread_cancel_requested(void);
+/** Discard the client's retained Responses WebSocket connection and headers. */
 void cai_client_close_responses_websocket(cai_client_impl *impl);
 #ifdef CAI_TESTING
 int cai_client_stream_response_websocket_test(
@@ -585,8 +745,10 @@ int cai_client_stream_response_websocket_test(
 int cai_mcp_test_authenticated_url_status(const char *url, const char *field,
                                           char *detail, size_t detail_len);
 #endif
+/** Exercise the SSE decoder with arbitrary bytes for parser fuzzing. */
 int cai_stream_fuzz_sse(const unsigned char *data, size_t size);
-/* Mutate only while the registry is quiescent. */
+/** Owned MCP registration policy copied for deferred registry refresh.
+ * Mutate only while the registry is quiescent. */
 typedef struct cai_mcp_registration_snapshot {
   cai_mcp_tool_registration_config config;
   cai_mcp_raw_input_override *overrides;
@@ -594,110 +756,147 @@ typedef struct cai_mcp_registration_snapshot {
   char *name_prefix;
   size_t count;
 } cai_mcp_registration_snapshot;
+/** Release copied registration overrides, mappings and prefix. */
 void cai_mcp_registration_snapshot_cleanup(
     cai_mcp_registration_snapshot *snapshot);
+/** Capture registration settings independently of the caller's storage. */
 int cai_mcp_registration_snapshot_copy(
     cai_mcp_client *client, const cai_mcp_tool_registration_config *config,
     cai_mcp_registration_snapshot *snapshot, cai_error *error);
+/** Inspect whether a registered tool is hidden until on-demand discovery. */
 int cai_tool_registry_deferred_internal(const cai_tool_registry *registry,
                                         size_t index);
+/** Set a tool's deferred-discovery state at a quiescent registry boundary. */
 void cai_tool_registry_defer_internal(cai_tool_registry *registry, size_t index,
                                       int deferred);
+/** Transfer an indexed tool's replacement description on success.
+ * Failure leaves the caller owning description; publication allocates nothing.
+ */
 int cai_tool_registry_description_internal(cai_tool_registry *registry,
                                            size_t index, char *description);
+/** Remove a named tool and release its owned registration context. */
 int cai_tool_registry_remove_internal(cai_tool_registry *registry,
                                       const char *name, cai_error *error);
+/** Replace a contiguous tool range during catalog/plugin reconciliation. */
 int cai_tool_registry_replace_range_internal(cai_tool_registry *registry,
                                              size_t prefix, size_t removed,
                                              cai_tool_registry *replacement,
                                              cai_error *error);
+/** Move the last registered tool to the requested stable ordering position. */
 void cai_tool_registry_promote_last_internal(cai_tool_registry *registry,
                                              size_t index);
-/* Quiescent registry operations. Exchange preserves tool order and ownership.
+/** Quiescent registry operation. Exchange preserves tool order and ownership.
  */
 int cai_tool_registry_exchange_internal(cai_tool_registry *registry,
                                         cai_tool_registry *replacement,
                                         cai_error *error);
+/** Borrow a tool context only when its cleanup identity matches the caller's.
+ */
 void *cai_tool_registry_context_internal(cai_tool_registry *registry,
                                          const char *name,
                                          void (*cleanup)(void *));
+/** Test whether the registered managed terminal still owns an active command.
+ */
 int cai_terminal_tools_busy_internal(cai_tool_registry *registry);
+/** Apply the registered terminal's yield policy without starting a process. */
 int cai_terminal_tools_set_yield_internal(cai_tool_registry *registry,
                                           long milliseconds, cai_error *error);
+/** Identify the native view_image implementation by its registered context. */
 int cai_view_image_builtin_internal(cai_tool_registry *registry);
+/** Update native terminal restrictions at a permitted execution boundary. */
 int cai_terminal_tools_yolo_internal(cai_tool_registry *registry,
                                      const char *workspace, int enabled,
                                      cai_error *error);
+/** Register mapped tool parameters/results with an owned cleanup context. */
 int cai_tool_registry_register_lonejson_owned(
     cai_tool_registry *registry, const char *name, const char *description,
     const lonejson_map *params_map, const lonejson_map *result_map,
     cai_tool_fn callback, void *context, void (*context_cleanup)(void *context),
     cai_error *error);
+/** Compact retained context using provider-appropriate requests and sinks. */
 int cai_session_compact_with_sinks(cai_session *session,
                                    const cai_stream_sinks *sinks,
                                    cai_error *error);
+/** Register mapped execution with an explicit advertised JSON schema. */
 int cai_tool_registry_register_lonejson_schema_owned(
     cai_tool_registry *registry, const char *name, const char *description,
     const char *schema_json, int strict, const lonejson_map *params_map,
     const lonejson_map *result_map, cai_tool_fn callback, void *context,
     void (*context_cleanup)(void *context), cai_error *error);
+/** Notify a tool context only after its mapped result was serialized
+ * successfully. */
 typedef void (*cai_tool_result_commit_fn)(void *context, const void *result);
+/** Install a result-commit hook on a named mapped tool. */
 int cai_tool_registry_set_result_commit(cai_tool_registry *registry,
                                         const char *name,
                                         cai_tool_result_commit_fn callback,
                                         cai_error *error);
-/* Argument-free readers may ignore the supplied payload entirely. The
+/** Argument-free readers may ignore the supplied payload entirely. The
  * advertised schema and validation of all other tools remain unchanged. */
 int cai_tool_registry_ignore_arguments(cai_tool_registry *registry,
                                        const char *name, cai_error *error);
+/** Register an agent's mapped tool with a caller-supplied schema. */
 int cai_agent_register_lonejson_tool_schema_internal(
     cai_agent *agent, const char *name, const char *description,
     const char *schema_json, int strict, const lonejson_map *params_map,
     const lonejson_map *result_map, cai_tool_fn callback, void *context,
     cai_error *error);
+/** Register raw JSON execution with explicit spool input and owned context. */
 int cai_tool_registry_register_raw_spooled_owned(
     cai_tool_registry *registry, const char *name, const char *description,
     const char *schema_json, int strict, cai_tool_raw_spooled_fn callback,
     void *context, void (*context_cleanup)(void *context), cai_error *error);
+/** Register custom-format text execution and its context cleanup. */
 int cai_tool_registry_register_custom_owned(
     cai_tool_registry *registry, const char *name, const char *description,
     const cai_custom_tool_format *format, cai_tool_custom_fn callback,
     void *context, void (*context_cleanup)(void *context), cai_error *error);
+/** Register custom-format execution with explicitly spooled input. */
 int cai_tool_registry_register_custom_spooled_owned(
     cai_tool_registry *registry, const char *name, const char *description,
     const cai_custom_tool_format *format, cai_tool_custom_spooled_fn callback,
     void *context, void (*context_cleanup)(void *context), cai_error *error);
-/* Worker-thread access to a native custom tool's last-call presentation data.
+/** Worker-thread access to a native custom tool's last-call presentation data.
  * The callback identity prevents interpreting an external tool's context. */
 void *cai_tool_registry_custom_context(cai_tool_registry *registry,
                                        const char *name,
                                        cai_tool_custom_spooled_fn callback);
+/** Borrow mapped-tool state only when the callback identity matches. */
 void *cai_tool_registry_lonejson_context(cai_tool_registry *registry,
                                          const char *name,
                                          cai_tool_fn callback);
+/** Stream confirmed old/new patch coordinates from the native patch context. */
 int cai_patch_tool_write_locations(cai_tool_registry *registry,
                                    const char *name, cai_sink *sink,
                                    cai_error *error);
+/** Stream the native patch's confirmed preview, using its last-call state. */
 int cai_patch_tool_write_preview(cai_tool_registry *registry,
                                  const cai_tool_event *event, cai_sink *sink,
                                  cai_error *error);
+/** Owned skill discovery metadata retained independently of rendered help. */
 typedef struct cai_skill_catalog cai_skill_catalog;
+/** Build owned model-specific instructions and report their mutable prefix. */
 int cai_smith_prepare_model_instructions(cai_agent *agent, const char *model,
                                          const char *identity, char **out,
                                          size_t *prefix_length,
                                          cai_error *error);
+/** Discover skills and prepare an owned catalog/prompt from explicit roots. */
 int cai_skills_prepare(const cai_skill_config *config,
                        const char *agent_config_directory,
                        cai_skill_catalog **out_catalog, char **out_prompt,
                        cai_error *error);
+/** Release skill metadata and captured instruction storage. */
 void cai_skills_catalog_cleanup(cai_skill_catalog *catalog);
+/** Test whether discovery found any available skills. */
 int cai_skills_catalog_has_entries(const cai_skill_catalog *catalog);
+/** Visit borrowed skill metadata through the agent's installed catalog. */
 int cai_agent_visit_skills_internal(cai_agent *agent, cai_skill_visitor visitor,
                                     void *context, cai_error *error);
+/** Transfer a prepared skill catalog into the agent's skill-tool context. */
 int cai_agent_register_skill_tool_owned(cai_agent *agent,
                                         cai_skill_catalog *catalog,
                                         cai_error *error);
-/*
+/**
  * A local tool may replace its ordinary JSON function-call output with typed
  * response content.  This is intentionally internal until the public tool
  * result ABI grows a stable typed-output representation.
@@ -707,64 +906,89 @@ typedef int (*cai_tool_result_delivery_fn)(void *context, const char *call_id,
                                            const lonejson_spooled *output_json,
                                            int *out_delivered,
                                            cai_error *error);
+/** Install typed-output delivery for a named tool. */
 int cai_tool_registry_set_result_delivery(cai_tool_registry *registry,
                                           const char *name,
                                           cai_tool_result_delivery_fn callback,
                                           cai_error *error);
+/** Try typed delivery; out_delivered distinguishes it from ordinary JSON
+ * output. */
 int cai_tool_registry_deliver_result(cai_tool_registry *registry,
                                      const char *name, const char *call_id,
                                      cai_response_create_params *params,
                                      const lonejson_spooled *output_json,
                                      int *out_delivered, cai_error *error);
+/** Execute a named tool from explicit spool input into the caller's sink. */
 int cai_tool_registry_run_spooled(cai_tool_registry *registry, const char *name,
                                   lonejson_spooled *arguments_json,
                                   cai_sink *output, cai_error *error);
+/** Count currently registered tool definitions. */
 size_t cai_tool_registry_count(const cai_tool_registry *registry);
+/** Add one named registered definition to a request's advertised tool list. */
 int cai_tool_registry_add_named_params(const cai_tool_registry *registry,
                                        const char *name,
                                        cai_response_create_params *params,
                                        cai_error *error);
+/** Remove registrations after count, including their owned contexts. */
 void cai_tool_registry_truncate(cai_tool_registry *registry, size_t count);
+/** Borrow an indexed registration's name until the registry changes. */
 const char *cai_tool_registry_name_at(const cai_tool_registry *registry,
                                       size_t index);
+/** Borrow an indexed registration's description until the registry changes. */
 const char *cai_tool_registry_description_at(const cai_tool_registry *registry,
                                              size_t index);
+/** Borrow an indexed registration's advertised schema until replacement. */
 const char *cai_tool_registry_schema_at(const cai_tool_registry *registry,
                                         size_t index);
+/** Borrow the indexed tool's optional raw-input mapping until replacement. */
 const cai_tool_raw_input *
 cai_tool_registry_raw_input_at(const cai_tool_registry *registry, size_t index);
+/** Validate a custom tool's text/grammar declaration before registration. */
 int cai_custom_tool_format_validate(const cai_custom_tool_format *format,
                                     cai_error *error);
+/** Deep-copy a raw-input mapping with the selected allocator. */
 int cai_raw_input_copy(const cai_allocator *allocator, cai_tool_raw_input *out,
                        const cai_tool_raw_input *mapping, cai_error *error);
+/** Release mapping fields with the same allocator used for their copy. */
 void cai_raw_input_cleanup(const cai_allocator *allocator,
                            cai_tool_raw_input *mapping);
+/** Validate raw-input metadata against its advertised schema. */
 int cai_raw_input_validate(const char *schema_json,
                            const cai_tool_raw_input *mapping, cai_error *error);
+/** Decode MCP raw-input metadata into allocator-owned mapping fields. */
 int cai_raw_input_parse_meta(const lonejson_json_value *meta,
                              const cai_allocator *allocator,
                              cai_tool_raw_input *out, cai_error *error);
+/** Write a raw-input mapping into an existing lonejson output stream. */
 lonejson_status cai_raw_input_write_meta(lonejson_writer *writer,
                                          const cai_tool_raw_input *mapping,
                                          lonejson_error *error);
+/** Run an MCP tool with explicit spool input and forward its output to sink. */
 int cai_tool_registry_run_mcp(cai_tool_registry *registry, const char *name,
                               lonejson_spooled *arguments, cai_sink *output,
                               cai_error *error);
+/** Decode an OpenAI-compatible error body into owned provider diagnostics. */
 int cai_set_openai_error(cai_error *error, long http_status, const char *body,
                          const char *request_id);
+/** Apply configured certificate verification and CA trust paths to a curl
+ * handle. */
 void cai_configure_curl_tls(CURL *curl, int insecure_skip_verify,
                             const char *ca_bundle_path, const char *ca_path);
+/** Parse a conversation object into caller-owned storage. */
 int cai_conversation_parse_json(const char *json, cai_conversation **out,
                                 cai_error *error);
+/** Commit staged session inputs into retained model history before persistence.
+ */
 int cai_session_commit_pending_inputs(cai_session *session, cai_error *error);
+/** Emit applicable policy diagnostics through the run's configured sinks. */
 int cai_session_stream_policy_diagnostic(cai_session *session,
                                          const cai_run_options *options,
                                          const cai_stream_sinks *sinks,
                                          cai_error *error);
-/* Insert steering into the active model cycle without creating a user turn. */
+/** Insert steering into the active model cycle without creating a user turn. */
 int cai_session_add_steering_text(cai_session *session, const char *text,
                                   cai_error *error);
-/* Add CAI-generated trusted context without creating a user turn. */
+/** Add CAI-generated trusted context without creating a user turn. */
 int cai_session_add_internal_context_text(cai_session *session,
                                           const char *text, cai_error *error);
 

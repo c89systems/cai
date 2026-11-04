@@ -1,4 +1,4 @@
-/* Catalog mutation stays on the runtime worker at request boundaries. Network
+/** Catalog mutation stays on the runtime worker at request boundaries. Network
  * discovery does not hold the publication lock or block the frontend owner. */
 typedef struct cai_runtime_search_arguments {
   char *query;
@@ -159,7 +159,7 @@ static int cai_runtime_register_mcp_search(cai_agent_runtime *runtime,
       ",\"required\":[\"query\"],\"additionalProperties\":false}",
       0, cai_runtime_search_tools, runtime, error);
 }
-/* Build a replacement index before publishing either schemas or metadata. */
+/** Build a replacement index before publishing either schemas or metadata. */
 static int cai_runtime_build_mcp_search(cai_agent_runtime *runtime,
                                         cai_tool_registry *tools, size_t base,
                                         const size_t *ends, int preserve,

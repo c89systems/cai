@@ -4,7 +4,7 @@
 #include <limits.h>
 #include <string.h>
 
-/* Enum widths are not a wire contract. Use explicit JSON integer storage. */
+/** Enum widths are not a wire contract. Use explicit JSON integer storage. */
 typedef struct queue_document {
   cai_input_record value;
   lonejson_int64 type, operation, intent, policy_intent, outcome, code,

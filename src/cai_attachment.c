@@ -3,6 +3,9 @@
 #include <pthread.h>
 #include <string.h>
 
+/** Owner-thread role/lifetime state for one workspace's attachments.
+ * Authority generations reject stale controls; this is separate from the
+ * storage collection lease that owns the writable conversation. */
 struct cai_attachment_controller {
   pthread_t owner;
   cai_attachment_state state;
@@ -23,6 +26,8 @@ static int find(const cai_attachment_controller *controller, uint64_t id) {
         return (int)i;
   return -1;
 }
+/** Enter terminal shutdown once, clearing controller authority and deadlines.
+ */
 static void stop(cai_attachment_controller *controller,
                  cai_attachment_stop_reason reason) {
   if (controller->state.phase != CAI_ATTACHMENT_STOPPING) {
@@ -32,6 +37,7 @@ static void stop(cai_attachment_controller *controller,
     controller->state.deadline_ms = 0U;
   }
 }
+/** Advance monotonic lifetime time and apply an expired attachment deadline. */
 static int advance(cai_attachment_controller *controller, uint64_t now,
                    cai_error *error) {
   if (now < controller->now)

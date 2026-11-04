@@ -155,6 +155,8 @@ typedef struct cai_runtime_subagent_profile {
   void *prepare_context;
 } cai_runtime_subagent_profile;
 
+/** Owned observation queued by workers for owner-thread callback delivery.
+ * Event string pointers borrow this node only while the callback is running. */
 typedef struct cai_runtime_event_node {
   cai_agent_runtime_event event;
   char *data;
@@ -170,6 +172,7 @@ typedef struct cai_runtime_event_node {
   struct cai_runtime_event_node *next;
 } cai_runtime_event_node;
 
+/** Owned settings snapshot used for staged updates and safe owner getters. */
 typedef struct cai_runtime_settings_owned {
   unsigned int present;
   cai_allocator *allocator;
@@ -258,7 +261,7 @@ static const lonejson_field cai_runtime_review_finding_fields[] = {
 LONEJSON_MAP_DEFINE(cai_runtime_review_finding_map, cai_runtime_review_finding,
                     cai_runtime_review_finding_fields);
 
-/* lonejson has no public required-object-array helper. Keep this one literal
+/** lonejson has no public required-object-array helper. Keep this one literal
  * field local so an absent "findings" key cannot be treated as an empty list.
  */
 static const lonejson_field cai_runtime_review_report_fields[] = {
@@ -346,7 +349,7 @@ typedef struct cai_runtime_subagent_result {
 #define CAI_RUNTIME_SUBAGENT_STRING_SLOTS                                      \
   (CAI_RUNTIME_SUBAGENT_PARAMETER_MAX + 4U)
 
-/* A generated profile tool has a bounded, runtime-built lonejson map.  The
+/** A generated profile tool has a bounded, runtime-built lonejson map.  The
  * profile itself owns all JSON-key strings; this record owns only values
  * allocated while parsing one tool invocation. */
 typedef struct cai_runtime_profile_subagent_args {
@@ -454,7 +457,7 @@ typedef enum cai_runtime_input_kind {
   CAI_RUNTIME_INPUT_GOAL = 4
 } cai_runtime_input_kind;
 
-/* Claimed work is execution state, never another editable frontend queue. */
+/** Claimed work is execution state, never another editable frontend queue. */
 typedef struct cai_runtime_input_dispatch {
   struct cai_runtime_input_dispatch *next;
   char *text, *target;
@@ -553,7 +556,7 @@ typedef struct cai_runtime_spooled_record_reader {
   int eof;
 } cai_runtime_spooled_record_reader;
 
-/* Bounded parser/reader scratch belongs to the export operation, not its
+/** Bounded parser/reader scratch belongs to the export operation, not its
  * caller's worker stack. Reuse it for metadata and history rendering. */
 typedef struct cai_runtime_export_workspace {
   cai_runtime_exporter exporter;
@@ -568,6 +571,10 @@ typedef struct cai_runtime_history_record_reader {
   cai_error *error;
 } cai_runtime_history_record_reader;
 
+/** Runtime orchestration boundary between its owner and inference/tool worker.
+ * The owner admits controls and pumps observations; the worker mutates model
+ * context. lock/condition coordinate request seams, journal ordering, child
+ * lifetimes and cancellation. UI/network attachments do not own this object. */
 struct cai_agent_runtime {
   cai_todo *todo;
   pthread_t owner_thread;
@@ -979,6 +986,8 @@ static void cai_runtime_wakeup_drain_locked(cai_agent_runtime *runtime) {
   }
 }
 
+/** Enforce owner-only APIs; thread-safe controls use their separate admission
+ * functions rather than bypassing this check. */
 static int cai_runtime_owner(const cai_agent_runtime *runtime,
                              cai_error *error) {
   if (runtime == NULL) {
@@ -1003,7 +1012,7 @@ static int cai_runtime_cancel_requested(void *context) {
   return requested;
 }
 
-/* Capabilities call the same policy-aware implementations as model tools.
+/** Capabilities call the same policy-aware implementations as model tools.
  * Do not allow recursive plugin/management calls through this bridge. */
 static int cai_runtime_plugin_tool(void *context, const char *name,
                                    const char *arguments, cai_sink *output,
@@ -1137,7 +1146,7 @@ static void cai_runtime_event_node_free(cai_runtime_event_node *node) {
   cai_free_mem(NULL, node);
 }
 
-/* Runtime logs intentionally describe lifecycle state, not user input, tool
+/** Runtime logs intentionally describe lifecycle state, not user input, tool
  * arguments, streamed output, or delegated instructions. Hosts receive those
  * values through the event callback when they choose to render them. */
 static void cai_runtime_log_opened(const cai_agent_runtime *runtime) {
@@ -1475,7 +1484,7 @@ cai_runtime_append_reserved_event_node_locked(cai_agent_runtime *runtime,
   cai_runtime_append_event_node_locked(runtime, node);
 }
 
-/* A child runtime is owned and pumped by the parent worker. This callback
+/** A child runtime is owned and pumped by the parent worker. This callback
  * never calls the host: it copies the child observation into the parent's
  * owner-thread queue, retaining both child and originating parent identities.
  */
@@ -1723,7 +1732,7 @@ static int cai_runtime_enqueue_failure_locked(cai_agent_runtime *runtime,
   return rc;
 }
 
-/* Owner-thread control operations cannot wait for callback delivery: that
+/** Owner-thread control operations cannot wait for callback delivery: that
  * same owner is the only consumer that can create event-queue capacity. */
 static int cai_runtime_enqueue_nonblocking_locked(
     cai_agent_runtime *runtime, int type, const char *data, size_t data_length,
@@ -1936,7 +1945,7 @@ static int cai_runtime_subagent_name_valid(const char *name) {
   return 1;
 }
 
-/* Parameter names become JSON object keys and {{name}} template placeholders.
+/** Parameter names become JSON object keys and {{name}} template placeholders.
  * Keep that smaller grammar independent from profile names, which may retain
  * hyphens for backwards-compatible profile labels. */
 static int cai_runtime_subagent_parameter_name_valid(const char *name) {
@@ -2261,7 +2270,7 @@ static void cai_runtime_clear_smith_profile(cai_agent_runtime *runtime) {
   runtime->smith_image_directory = NULL;
 }
 
-/* MCP clients themselves remain host-owned, but the array and registration
+/** MCP clients themselves remain host-owned, but the array and registration
  * policy are runtime configuration.  Deferred subagents must never retain a
  * caller's stack- or language-owned configuration container. */
 static void cai_runtime_clear_mcp_config(cai_agent_runtime *runtime) {
@@ -2913,6 +2922,9 @@ static int cai_runtime_append_journal_event_locked(
 
 #include "cai_runtime_execution.inc"
 
+/** Host-side execution-history field writer borrowing a runtime until close.
+ * Owns copied metadata and one pending payload chunk; failures are sticky so
+ * an uncertain append cannot be duplicated by retrying the same stream. */
 struct cai_agent_execution {
   cai_runtime_execution_stream stream;
   char *labels[7];
@@ -3458,7 +3470,7 @@ static int cai_runtime_commit(cai_agent_runtime *runtime, int emit_event,
   return cai_runtime_commit_reserved(runtime, emit_event, NULL, error);
 }
 
-/* The worker (or open before spawning it) owns history. These are context
+/** The worker (or open before spawning it) owns history. These are context
  * records, never work items: no sampling, steering event or goal-turn
  * accounting. */
 static int cai_runtime_deliver_shell_context(cai_agent_runtime *runtime,
@@ -3543,7 +3555,7 @@ static int cai_runtime_goal_paused(const cai_agent_runtime *runtime) {
          strcmp(session->goal_status, "paused") == 0;
 }
 
-/* The host create operation mirrors Codex's insert-only create_goal tool.
+/** The host create operation mirrors Codex's insert-only create_goal tool.
  * Explicit host updates use set_goal_objective instead, and CAI's clear_goal
  * extension starts a genuinely fresh goal. */
 static int cai_runtime_goal_create_allowed(const char *status, int has_goal) {
@@ -3586,7 +3598,7 @@ static int cai_runtime_goal_replace_status(cai_session *session,
   return CAI_OK;
 }
 
-/* A session/client usage cap is independent from a goal token budget.  Keep
+/** A session/client usage cap is independent from a goal token budget.  Keep
  * the normal CAI_ERR_LIMIT result visible to the host, but record the goal's
  * recoverable terminal state before that result is reported. */
 static int cai_runtime_record_usage_limited_goal(cai_agent_runtime *runtime,
@@ -3638,7 +3650,7 @@ static unsigned long long cai_runtime_elapsed_ms(struct timespec start,
   return seconds * 1000ULL + (unsigned long long)(nanoseconds / 1000000L);
 }
 
-/* Both helpers run while runtime->lock is held. */
+/** Both helpers run while runtime->lock is held. */
 static void cai_runtime_turn_start_locked(cai_agent_runtime *runtime) {
   if (clock_gettime(CLOCK_MONOTONIC, &runtime->turn_started_monotonic) == 0) {
     runtime->turn_timing_active = 1;
@@ -3662,7 +3674,7 @@ static void cai_runtime_turn_finish_locked(cai_agent_runtime *runtime) {
   runtime->turn_timing_active = 0;
 }
 
-/* Called only by the worker, or during open before the worker starts.  The
+/** Called only by the worker, or during open before the worker starts.  The
  * runtime lock publishes a fully copied projection for owner-thread polling;
  * owner-thread getters never read the concurrently mutable session object. */
 static int cai_runtime_refresh_goal_projection(cai_agent_runtime *runtime,
@@ -4292,7 +4304,7 @@ static int cai_runtime_output_text_delta(void *context, const char *item_id,
   return rc;
 }
 
-/* Stream summaries through the same owner-thread event queue as visible
+/** Stream summaries through the same owner-thread event queue as visible
  * response text.  The provider chooses the summary content; CAI never exposes
  * hidden reasoning or attempts to synthesize a substitute. */
 static const char *cai_runtime_reasoning_summary_start(void *context) {
@@ -4521,7 +4533,7 @@ static int cai_runtime_compact(cai_agent_runtime *runtime,
   return rc;
 }
 
-/* Run at every boundary that can issue a model request. Compaction usage is
+/** Run at every boundary that can issue a model request. Compaction usage is
  * billed against the replaced history, so only a separately measured retained
  * context can trigger another automatic compaction. */
 static int cai_runtime_compact_before_request(cai_agent_runtime *runtime,
@@ -4868,7 +4880,7 @@ static int cai_runtime_patch_write(void *context, const void *bytes,
   }
   return rc;
 }
-/* Both providers hand native custom tools decoded raw input here. The Chat
+/** Both providers hand native custom tools decoded raw input here. The Chat
  * Completions adapter owns its JSON envelope, just as for tool execution. */
 static int cai_runtime_emit_patch(cai_agent_runtime *runtime,
                                   const cai_tool_event *event,
@@ -5247,7 +5259,7 @@ static int cai_runtime_commit_durable_tool_round(void *context,
   return rc;
 }
 
-/* A response that finishes without another tool call still needs a durable
+/** A response that finishes without another tool call still needs a durable
  * steering boundary. Tool rounds leave this commit to their safe tool-output
  * history path so the tool output remains ordered before steering. */
 static int
@@ -5736,7 +5748,7 @@ static int cai_runtime_replay_journal_event(
   return CAI_OK;
 }
 
-/* A crashed model request cannot resume in place. Restored steering therefore
+/** A crashed model request cannot resume in place. Restored steering therefore
  * becomes the next durable user work before any restored normal turn, while
  * preserving its FIFO order and its separate capacity accounting. */
 static void cai_runtime_promote_resumed_steering(cai_agent_runtime *runtime) {
@@ -7867,7 +7879,7 @@ static int cai_runtime_model_switch_requires_compaction(
   return 0;
 }
 
-/* A fresh runtime must record the provider metadata that governed the history
+/** A fresh runtime must record the provider metadata that governed the history
  * it is about to create.  A failed discovery is deliberately non-fatal: as in
  * Codex, absent metadata is not evidence of incompatibility. */
 static int cai_runtime_capture_active_model_metadata(cai_agent_runtime *runtime,
@@ -8833,7 +8845,7 @@ int cai_agent_runtime_open(cai_client *client,
   return CAI_OK;
 }
 
-/* A previous outcome is not an in-flight turn. All input paths share this
+/** A previous outcome is not an in-flight turn. All input paths share this
  * predicate; goal continuation must not strand cancelled/failed runtimes. */
 static int cai_runtime_accepts_turn(cai_agent_run_state state) {
   return state == CAI_AGENT_IDLE || state == CAI_AGENT_COMPLETED ||
@@ -10053,7 +10065,7 @@ static int cai_runtime_git_executable(char output[PATH_MAX], cai_error *error) {
                        "git executable was not found on PATH for review");
 }
 
-/* Git's repository-selection variables override a process's current working
+/** Git's repository-selection variables override a process's current working
  * directory. Build the child environment before fork so the child can go
  * straight from async-signal-safe setup to execve(). */
 static int cai_runtime_git_environment(char ***out, cai_error *error) {
@@ -11389,7 +11401,7 @@ static int cai_runtime_subagent_handoff(cai_agent_runtime *parent,
       parent, profile_name, child_session_id, handover, error);
 }
 
-/* A subagent handoff marker is published with the outer tool round, after its
+/** A subagent handoff marker is published with the outer tool round, after its
  * function-call output has entered parent history. */
 static int cai_runtime_wait_for_handoff_retry(cai_agent_runtime *parent,
                                               cai_error *error) {
@@ -12137,7 +12149,7 @@ static lonejson_status cai_runtime_lonejson_sink_write(void *user,
   return LONEJSON_STATUS_OK;
 }
 
-/* Tool-result strings use cai_tool_result_strdup rather than lonejson's parse
+/** Tool-result strings use cai_tool_result_strdup rather than lonejson's parse
  * allocator, so clean this local raw-tool result with CAI ownership rules. */
 static void
 cai_runtime_subagent_result_cleanup(cai_runtime_subagent_result *result) {
