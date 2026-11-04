@@ -674,6 +674,9 @@ Zulu time; `--no-utc` restores local display. Batch stdout stays unchanged.
 Replay uses original event times; entries without recorded times stay unstamped.
 Submitted prompts are rendered through libmdf's blockquote and escaped text
 tokens; Softline receives the rendered bytes and owns the editor and queue.
+The selected replacement is libmdf's forthcoming `write_literal` method for
+user prompts; thinking blockquotes keep normal Markdown interpretation. Word
+decisions may span input chunks, and transport boundaries never force output.
 Prompt stamps beside `>` still need presentation support in that libmdf feed
 path. Presentation text never enters drafts, prompt history, or model context.
 The sticky status DTG currently shares Softline's status-message style;

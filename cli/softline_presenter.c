@@ -497,10 +497,11 @@ static int cai_cli_presenter_prompt_token(cai_cli_presenter *state,
       state->prompt_renderer->write_token(state->prompt_renderer, &token));
 }
 
-/* The current native terminal path supplies a complete accepted prompt. Use
- * libmdf for its feed presentation. Remote prompt DATA must wait for libmdf's
- * bounded literal-word support: TEXT currently retains a whole unbroken word.
- * Do not adapt that limitation by accumulating a remote prompt here. */
+/* The native path supplies a complete accepted prompt. User prompts have
+ * literal semantics; reasoning uses ordinary Markdown. Replace this escaped
+ * TEXT path with write_literal when that public libmdf method is released.
+ * Word-based emission is intentional: socket spans must not force wrapping
+ * decisions or quote boundaries, or accumulate into a whole prompt here. */
 static int cai_cli_presenter_prompt_render(cai_cli_presenter *state,
                                            const char *text) {
   int rc;

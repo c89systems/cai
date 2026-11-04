@@ -151,12 +151,20 @@ blockquote and escaped text tokens to render it. Libmdf owns quote layout,
 wrapping, margins and theme colors. Softline receives rendered bytes and owns
 the editor and queue.
 
-Incremental remote prompt rendering still needs bounded literal-word support
-in libmdf. A public-API probe against 0.21.0 fed a 262,144-byte unbroken word in
-256-byte TEXT tokens: no body bytes reached the sink until BLOCKQUOTE_END.
-That buffering is a libmdf dependency issue. The frontend must not gather a
-complete remote prompt or recreate the formatter to conceal it. No Softline
-quote API is required, and no incremental remote prompt adapter is enabled.
+The selected remote prompt path is libmdf's forthcoming `write_literal` method
+inside its blockquote context. User prompts remain literal; thinking uses the
+normal Markdown feed. CAI must not escape input before `write_literal`, invent
+delimiters at transport boundaries, or request emission before libmdf has made
+its word/wrapping decision. Source newlines and the actual prompt end provide
+the semantic boundaries. Socket fragments retain the same renderer state.
+
+The accepted upstream contract caps word RAM at 4 KiB by default (configurable
+through 64 KiB), with optional temporary-file spooling up to 1 MiB and prefix
+truncation at the storage cap. This word decision storage is explicitly
+accepted; it is not a reason to collect complete remote prompts in CAI. The
+earlier partial-word emission request is withdrawn. These public methods are
+not yet in CAI's pinned libmdf 0.21.0; the remote adapter cutover remains pending
+their release. No Softline quote API is required.
 
 ## Confirmed product decisions
 
@@ -175,7 +183,8 @@ quote API is required, and no incremental remote prompt adapter is enabled.
 - True streaming is a requirement, including codec input/output, transport,
   replay and export. Do not hide full-value buffering or temporary-file staging
   behind a streaming API. Bounded chunks and bounded individual input commands
-  are permitted.
+  are permitted. The explicitly accepted libmdf word-decision storage policy
+  above applies to rendering, not to collecting transport messages.
 - liblockdc 0.27.0 does not provide true streaming collection push. Do not
   implement a CAI buffering workaround for that limitation. Keep that dependency
   boundary explicit and adopt the upstream streaming push API when available.

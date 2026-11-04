@@ -552,6 +552,11 @@ use libmdf blockquote and escaped text tokens. Independently styled timestamps
 beside `>` remain pending presentation support in that feed path; they do not
 require a Softline quote API. Softline receives rendered bytes and retains
 editor and queue ownership.
+The planned literal-method cutover replaces escaped prompt text with libmdf's
+`write_literal` once released. It does not change thinking blockquotes, which
+use normal Markdown. Word-based emission and the agreed bounded word
+RAM/spooling policy belong to libmdf; no fragment boundary closes a quote or
+inserts synthetic whitespace.
 The completed status message includes its DTG but shares Softline's status
 style until an independently styled status metadata slot is available.
 
