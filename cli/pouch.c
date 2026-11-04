@@ -2188,6 +2188,39 @@ int cai_cli_pouch_replay(cai_cli_pouch *pouch, const char *scope,
                      context, 0, error);
 }
 
+int cai_cli_pouch_transcript_open(cai_cli_pouch *pouch, const char *scope,
+                                  const char *id,
+                                  cai_cli_pouch_transcript **out,
+                                  cai_error *error) {
+  cai_cli_session session;
+  cai_cli_pouch_transcript *reader;
+  int rc;
+  if (out != NULL)
+    *out = NULL;
+  if (pouch == NULL || scope == NULL || id == NULL || out == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "transcript context and identity required");
+  rc = cai_cli_pouch_session(pouch, id, &session, error);
+  if (rc == CAI_OK && strcmp(session.workspace, scope) != 0)
+    rc = cai_cli_error(error, CAI_ERR_INVALID,
+                       "transcript belongs to another workspace");
+  if (rc == CAI_OK && strcmp(session.history_backend, "collections") != 0)
+    rc = cai_cli_error(error, CAI_ERR_INVALID,
+                       "transcript requires collection history");
+  if (rc != CAI_OK)
+    return rc;
+  reader = calloc(1U, sizeof(*reader));
+  if (reader == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate transcript context");
+  rc = open_history_collection(pouch, id, "events", 0, 0, &reader->collection,
+                               error);
+  if (rc != CAI_OK) {
+    lc_collection_close(reader->collection);
+    free(reader);
+  } else
+    *out = reader;
+  return rc;
+}
 #include "pouch_delete.inc"
 
 static int auth_load(void *context, const char *key, cai_source **out,

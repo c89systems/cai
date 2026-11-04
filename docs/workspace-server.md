@@ -79,6 +79,14 @@ without a worker or idle polling. Failed initial binding and interrupted
 baselines do not change the last validated session identity. Socket command,
 status and transcript presentation remain to be connected to the frontend.
 
+The storage-to-consumer transcript reader now streams decoded event chunks and
+discards commit state without materializing records. It retains a public
+collection receiver, uses native bounds/cursors/cancellation, and commits an
+event only at the SDK's authenticated entry boundary. Native verification
+confirms a paused consumer does not block appends or reopen the SDK client.
+The context reader worker, append notifications, socket subscription and
+frontend delivery still need to bind this reader to the transport.
+
 ## Confirmed product decisions
 
 - One server process owns each canonical workspace directory. A

@@ -60,6 +60,32 @@ using those transient hints and checks exact sequence/visibility bounds before
 rendering. It never applies a stale captured upper bound to unbounded exports
 or newer events. These hints add no persisted index, collection or snapshot.
 
+The attachable-frontend path now has an incremental transcript reader in
+`cli/transcript.c` and `cli/pouch_transcript.c`. It opens one public collection
+receiver for its context, reusing the existing SDK client without writable
+ownership, model restoration or per-entry workers. Each read uses native
+position bounds, captured EOD, cursors and cooperative cancellation.
+Query selectors are deliberately unavailable on this path; it avoids the
+additional decode/filter pass and uses native position windows instead.
+
+This reader discards commit bodies incrementally and delivers decoded event
+data through borrowed BEGIN/DATA/END callbacks. It does not build complete
+event strings, JSON documents or staging files. Canonical headers precede data;
+event type names are bounded to 128 bytes. BEGIN/DATA remain provisional until
+the SDK entry boundary validates the append identity, position, sequence and
+complete JSON. Only then is END delivered. Missing boundaries, malformed data,
+consumer failures and cancellation never commit a partial event or trigger an
+automatic retry. A caller abandons the candidate and resumes from its last
+accepted native cursor. A receiver stays bound to its collection incarnation.
+
+Focused tests stream 8 MiB records while allocations above 64 KiB fail. Native
+Pouch tests also pause a consumer while another thread appends through the same
+SDK client: the append completes, the paused read keeps its captured EOD, and
+the next cursor window delivers the new event once. This storage-to-consumer
+reader is preparation for socket transcript delivery; the current synchronous
+recovery/replay callbacks still use their existing complete-event interface.
+Socket subscription and terminal presentation cutover remain pending.
+
 Internal review/subagent scopes have no workspace-latest index. Their journals
 and session metadata remain available by ID and in the parent's replay timeline;
 workspace auto-resume is only for ordinary conversation scopes. Child commit,

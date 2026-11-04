@@ -3,6 +3,7 @@
 
 #include "options.h"
 #include "pouch_stream.h"
+#include "transcript.h"
 #include <cai/agent_runtime.h>
 #include <cai/blob_store.h>
 #include <cai/session_store.h>
@@ -134,6 +135,27 @@ int cai_cli_pouch_replay(cai_cli_pouch *pouch, const char *scope,
                          int (*select_event)(void *, unsigned long long),
                          cai_agent_session_event_fn visit, void *context,
                          cai_error *error);
+typedef struct cai_cli_pouch_transcript {
+  lc_collection *collection;
+  int reading;
+} cai_cli_pouch_transcript;
+/* One public collection receiver through a transcript context's lifetime.
+ * Reuses pouch's existing SDK client; never acquires a write lease or restores
+ * model context. Serialize calls, and close before closing the parent pouch. */
+int cai_cli_pouch_transcript_open(cai_cli_pouch *, const char *scope,
+                                  const char *id,
+                                  cai_cli_pouch_transcript **out, cai_error *);
+/* Synchronous true streaming; schedule on the context reader, not a UI/owner
+ * thread. Native bounds/cursors/cancellation apply. Query selectors and
+ * on_metadata callbacks are unavailable: no LQL decode/filter pass is used.
+ * out follows the SDK's init/cleanup contract, including progress on errors.
+ * BEGIN/DATA remain provisional on failure/cancellation; caller abandons the
+ * candidate and resumes only from an accepted record cursor. No auto retry. */
+int cai_cli_pouch_transcript_read(cai_cli_pouch_transcript *,
+                                  const lc_collection_read_opts *,
+                                  lc_collection_read_res *out,
+                                  cai_cli_transcript_fn, void *, cai_error *);
+void cai_cli_pouch_transcript_close(cai_cli_pouch_transcript *);
 int cai_cli_pouch_seed_auth(cai_cli_pouch *pouch, const char *path,
                             cai_error *error);
 int cai_cli_pouch_list(cai_cli_pouch *pouch, const char *scope,
