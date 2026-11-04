@@ -140,7 +140,7 @@ int cai_workspace_endpoint_open(const char *runtime_directory,
                          "a shorter runtime directory");
     n = snprintf(endpoint->lock_path, sizeof(endpoint->lock_path),
                  "%s/ws-%s.lock", runtime, endpoint->id);
-    if (n < 0 || (size_t)n >= sizeof(endpoint->lock_path))
+    if (rc == CAI_OK && (n < 0 || (size_t)n >= sizeof(endpoint->lock_path)))
       rc = cai_set_error(error, CAI_ERR_INVALID,
                          "Workspace lock path exceeds Unix socket limit");
   }

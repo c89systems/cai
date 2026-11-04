@@ -50,6 +50,10 @@ if(CAI_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_controller_test.sh"
     "$<TARGET_FILE:cai_app_controller_test>")
   set_tests_properties(cai_app_controller PROPERTIES LABELS "cli;local;offline" TIMEOUT 20)
+  add_test(NAME cai_app_workspace_server COMMAND bash
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_workspace_server_test.sh"
+    "$<TARGET_FILE:cai_app_controller_test>")
+  set_tests_properties(cai_app_workspace_server PROPERTIES LABELS "cli;local;offline" TIMEOUT 20)
   add_executable(cai_app_mcp_environment_test tests/mcp_environment_test.c)
   target_link_libraries(cai_app_mcp_environment_test PRIVATE cai_cli_support cai_app_static)
   target_link_options(cai_app_mcp_environment_test PRIVATE "-Wl,--wrap=cai_mcp_streamable_http_client_open")

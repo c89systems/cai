@@ -1,6 +1,7 @@
 #ifndef CAI_APP_H
 #define CAI_APP_H
 
+#include <cai/attachment.h>
 #include <cai/config.h>
 #include <cai/input_controller.h>
 #include <cai/tools/todo.h>
@@ -48,6 +49,10 @@ typedef enum cai_app_outcome {
 typedef struct cai_app_status {
   int running;
   int runtime_ready;
+  /** Socket owner state, present only for start_server. The final snapshot
+   * retains STOPPING and its reason after the endpoint has closed. */
+  int has_server;
+  cai_attachment_state server;
   cai_app_outcome outcome;
   int exit_code;
   cai_agent_run_state state;
@@ -278,6 +283,20 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
  * another run/start. Serialize start/join/run/close on a given receiver. */
 int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
                   const char *const *argv, cai_error *error);
+/** Start the same terminal-free owner with a workspace socket listener.
+ * Uses the canonical selected workspace and effective paths.runtime_dir.
+ * lifetime is copied; NULL uses persist=false and the normal first-attach
+ * grace period. Last detach stops a nonpersistent backend, including active
+ * work. A persistent owner runs until explicit shutdown or native STOP.
+ * No fork, signal handler, terminal, or second runtime/store is created.
+ * Socket identity/role and lifetime are available now; application wire
+ * actions/replay are not yet bound. Use native control/input for those.
+ * Start success is asynchronous; observe status for readiness or failure.
+ */
+int cai_app_start_server(cai_app *self, const cai_config_context *context,
+                         int argc, const char *const *argv,
+                         const cai_attachment_config *lifetime,
+                         cai_error *error);
 /** Wait for a started controller, returning its CLI-style exit code. Does not
  * request STOP. Never call from its callbacks. Query status for error detail.
  * Once joined, the receiver may be started again. */

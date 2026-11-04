@@ -31,6 +31,8 @@ typedef struct app_impl {
   char **arguments;
   char *directory;
   cai_config_context startup;
+  cai_attachment_config lifetime;
+  int server;
 } app_impl;
 typedef struct process_state {
   char **environment;
@@ -183,14 +185,16 @@ static void controller_arguments_close(app_impl *app) {
 }
 static void *controller_run(void *context) {
   app_impl *app = context;
-  app->controller_code =
-      cai_cli_app_controller_run(app->argument_count + 1, app->arguments,
-                                 &app->config, app->bridge, &app->startup);
+  app->controller_code = cai_cli_app_controller_run(
+      app->argument_count + 1, app->arguments, &app->config, app->bridge,
+      &app->startup, app->server ? &app->lifetime : NULL);
   cai_app_bridge_end(app->bridge, app->controller_code, NULL);
   return NULL;
 }
-int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
-                  const char *const *argv, cai_error *error) {
+static int controller_start(cai_app *self, const cai_config_context *context,
+                            int argc, const char *const *argv,
+                            const cai_attachment_config *server,
+                            cai_error *error) {
   app_impl *app;
   int i, rc;
   if (self == NULL || argc < 0 || argc == INT_MAX ||
@@ -203,6 +207,9 @@ int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
   if (app->running)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "application is already running");
+  app->server = server != NULL;
+  if (server != NULL)
+    app->lifetime = *server;
   app->argument_count = argc;
   app->directory = context != NULL && context->directory != NULL
                        ? strdup(context->directory)
@@ -244,6 +251,19 @@ int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
   if (rc != CAI_OK)
     controller_arguments_close(app);
   return rc;
+}
+int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
+                  const char *const *argv, cai_error *error) {
+  return controller_start(self, context, argc, argv, NULL, error);
+}
+int cai_app_start_server(cai_app *self, const cai_config_context *context,
+                         int argc, const char *const *argv,
+                         const cai_attachment_config *lifetime,
+                         cai_error *error) {
+  cai_attachment_config defaults;
+  cai_attachment_config_init(&defaults);
+  return controller_start(self, context, argc, argv,
+                          lifetime != NULL ? lifetime : &defaults, error);
 }
 int cai_app_join(cai_app *self, int *exit_code, cai_error *error) {
   app_impl *app;

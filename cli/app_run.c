@@ -30,6 +30,7 @@
 #include "theme.h"
 #include "todo.h"
 #include "tool_result.h"
+#include "workspace_host.h"
 #include <cai/chrome.h>
 #include <cai/plugins.h>
 #ifdef CAI_APP_LUA_TOOLS
@@ -44,6 +45,7 @@
 #include <cai/execution.h>
 #include <cai/quota.h>
 #include <cai/session_store.h>
+#include <cai/workspace_server.h>
 #include <libmdf/mdf.h>
 #include <softline/softline.h>
 
@@ -86,6 +88,7 @@ typedef struct cli_state {
   char capacity_retry_message[192];
   const cai_app_config *application;
   cai_app_bridge *bridge;
+  cai_cli_workspace_host *workspace_host;
   int controller;
   sl_watch_id_t host_watch;
   int has_host_watch;
@@ -3354,6 +3357,8 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
            : CAI_ERR_TRANSPORT;
   if (rc == CAI_OK)
     rc = cli_set_theme_scope(state, 0, error);
+  if (rc == CAI_OK)
+    rc = cai_cli_workspace_host_ready(state->workspace_host, error);
   if (rc == CAI_OK) {
     cai_app_bridge_bind_input(state->bridge, state->input_admin != NULL
                                                  ? state->input_controller
@@ -3914,6 +3919,27 @@ static int cli_goal_command(cli_state *state, const char *arg,
   return cli_advance_automation(state, error);
 }
 
+static int cli_stop(cli_state *state, cai_error *error) {
+  int rc = CAI_OK;
+  state->host_stopped = state->exit_requested = 1;
+  state->automation_done = 1;
+  /* Cancel before acknowledgement. Closing joins workers without draining
+   * events that could otherwise start another accepted queued turn. */
+  if (state->runtime != NULL) {
+    rc = cai_agent_runtime_cancel_turn(state->runtime, error);
+    if (rc == CAI_ERR_INVALID) {
+      cai_error_cleanup(error);
+      cai_error_init(error);
+      rc = CAI_OK;
+    }
+  }
+  cai_cli_messages_cancel_send(state->messages);
+  if (state->review_runtime != NULL)
+    (void)cai_agent_runtime_cancel_turn(state->review_runtime, NULL);
+  if (state->sl != NULL)
+    (void)sl_cancel(state->sl);
+  return rc;
+}
 static int cli_host_process(cli_state *state, cai_error *error) {
   cai_app_command *command;
   size_t count;
@@ -3927,24 +3953,7 @@ static int cli_host_process(cli_state *state, cai_error *error) {
     if (state->exit_requested) {
       rc = cai_cli_error(&applied, CAI_ERR_INVALID, "application is stopping");
     } else if (command->type == CAI_APP_STOP) {
-      state->host_stopped = state->exit_requested = 1;
-      state->automation_done = 1;
-      /* Signal active work before acknowledging STOP. An already idle turn
-       * needs no cancellation. Close joins workers without draining events,
-       * which could otherwise start an already queued next turn. */
-      if (state->runtime != NULL) {
-        rc = cai_agent_runtime_cancel_turn(state->runtime, &applied);
-        if (rc == CAI_ERR_INVALID) {
-          cai_error_cleanup(&applied);
-          cai_error_init(&applied);
-          rc = CAI_OK;
-        }
-      }
-      cai_cli_messages_cancel_send(state->messages);
-      if (state->review_runtime != NULL)
-        (void)cai_agent_runtime_cancel_turn(state->review_runtime, NULL);
-      if (state->sl != NULL)
-        (void)sl_cancel(state->sl);
+      rc = cli_stop(state, &applied);
     } else if (state->controller && cai_app_bridge_stopping(state->bridge)) {
       rc =
           cai_cli_error(&applied, CAI_ERR_CANCELLED, "application is stopping");
@@ -4027,11 +4036,12 @@ static int cli_host_process(cli_state *state, cai_error *error) {
   return cai_app_bridge_publish(state->bridge, state->runtime, error);
 }
 
-/* Both descriptors are level-triggered. Batch runs wake immediately for host
- * commands instead of waiting for the runtime's timed condition variable. */
+/* Level-triggered runtime, input, store and socket readiness share one owner
+ * loop. Idle servers wait indefinitely except for an actual host deadline. */
 static int cli_pump(cli_state *state, long timeout, cai_error *error) {
-  struct pollfd descriptors[5];
-  int fd, rc;
+  struct pollfd descriptors[5U + CAI_WORKSPACE_SERVER_FDS];
+  size_t server_count = 0U;
+  int fd, rc, stopping;
   rc = cai_cli_pouch_ownership_check(&state->pouch, error);
   if (rc != CAI_OK) {
     (void)cai_agent_runtime_cancel_turn(state->runtime, NULL);
@@ -4053,13 +4063,23 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
                             : -1;
     descriptors[0].events = descriptors[1].events = descriptors[2].events =
         descriptors[3].events = descriptors[4].events = POLLIN;
+    rc = cai_cli_workspace_host_prepare(state->workspace_host, descriptors + 5U,
+                                        CAI_WORKSPACE_SERVER_FDS, &server_count,
+                                        &timeout, error);
+    if (rc != CAI_OK)
+      return rc;
     do {
-      rc = poll(descriptors, 5U, (int)timeout);
+      rc = poll(descriptors, 5U + server_count, (int)timeout);
     } while (rc < 0 && errno == EINTR);
     if (rc < 0)
       return cai_cli_error(error, CAI_ERR_TRANSPORT, "wait for app events");
     timeout = 0L;
   }
+  rc = cai_cli_workspace_host_pump(state->workspace_host, &stopping, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (stopping)
+    return cli_stop(state, error);
   rc = cai_cli_pouch_ownership_check(&state->pouch, error);
   if (rc != CAI_OK) {
     (void)cai_agent_runtime_cancel_turn(state->runtime, NULL);
@@ -6055,7 +6075,8 @@ static int cli_temp_stop(void *context) {
 static int cli_app_run_state(cli_state *state, int argc, char **argv,
                              const cai_app_config *application,
                              cai_app_bridge *bridge,
-                             const cai_config_context *startup) {
+                             const cai_config_context *startup,
+                             const cai_attachment_config *server) {
   cai_client_config client_config;
   cai_chatgpt_auth_config auth_config;
   cai_cli_pouch *auth_store = NULL;
@@ -6218,6 +6239,16 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     cli_diagnostic(state, PSLOG_LEVEL_ERROR, "cannot resolve workspace");
     result = 2;
     goto cleanup;
+  }
+  if (server != NULL) {
+    rc = cai_cli_workspace_host_open(
+        state->options.runtime_dir, state->workspace, server,
+        application != NULL ? &application->input : NULL, state->bridge,
+        &state->workspace_host, &error);
+    if (rc != CAI_OK) {
+      cli_print_error(state, "open workspace server", &error);
+      goto cleanup;
+    }
   }
   {
     const char **paths[4];
@@ -6459,6 +6490,12 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     goto cleanup;
   }
   if (!state->batch) {
+    cai_input_controller_config admission;
+    memset(&admission, 0, sizeof(admission));
+    if (state->workspace_host != NULL)
+      cai_cli_workspace_host_admission(state->workspace_host, &admission);
+    else if (application != NULL)
+      admission = application->input;
     if (state->interactive && application != NULL &&
         application->banner != NULL && application->banner[0] != '\0' &&
         (fputs(application->banner, stdout) == EOF || fflush(stdout) != 0)) {
@@ -6466,9 +6503,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       goto cleanup;
     }
     sl_config_init(&prompt_config);
-    rc = cai_input_controller_open(application != NULL ? &application->input
-                                                       : NULL,
-                                   &state->input_controller, &error);
+    rc =
+        cai_input_controller_open(&admission, &state->input_controller, &error);
     if (rc == CAI_OK && state->interactive)
       rc = cai_cli_input_adapter_open(state->input_controller,
                                       &state->input_adapter, &error);
@@ -6858,6 +6894,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   }
   result = 0;
 cleanup:
+  cai_cli_workspace_host_stop(state->workspace_host);
   if (error.code == CAI_ERR_CANCELLED && cai_app_bridge_stopping(bridge)) {
     cai_error_cleanup(&error);
     cai_error_init(&error);
@@ -7017,6 +7054,7 @@ cleanup:
   free(metadata_json);
   cai_config_close(state->configuration);
   cai_environment_close(state->environment);
+  cai_cli_workspace_host_close(state->workspace_host);
   cai_error_cleanup(&error);
   if (cai_cli_log_release(state->log) != 0)
     result = 1;
@@ -7030,7 +7068,8 @@ cleanup:
 static int cli_app_receive(int argc, char **argv,
                            const cai_app_config *application,
                            cai_app_bridge *bridge,
-                           const cai_config_context *startup) {
+                           const cai_config_context *startup,
+                           const cai_attachment_config *server) {
   cli_state *state = calloc(1U, sizeof(*state));
   int code;
   if (state == NULL) {
@@ -7041,19 +7080,21 @@ static int cli_app_receive(int argc, char **argv,
       fputs("cannot allocate application state\n", stderr);
     return 1;
   }
-  code = cli_app_run_state(state, argc, argv, application, bridge, startup);
+  code = cli_app_run_state(state, argc, argv, application, bridge, startup,
+                           server);
   free(state);
   return code;
 }
 int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
                     cai_app_bridge *bridge) {
-  return cli_app_receive(argc, argv, application, bridge, NULL);
+  return cli_app_receive(argc, argv, application, bridge, NULL, NULL);
 }
 int cai_cli_app_controller_run(int argc, char **argv,
                                const cai_app_config *application,
                                cai_app_bridge *bridge,
-                               const cai_config_context *startup) {
-  return cli_app_receive(argc, argv, application, bridge, startup);
+                               const cai_config_context *startup,
+                               const cai_attachment_config *server) {
+  return cli_app_receive(argc, argv, application, bridge, startup, server);
 }
 
 int cai_cli_app_main(int argc, char **argv, const cai_app_config *application) {

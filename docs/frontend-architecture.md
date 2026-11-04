@@ -24,7 +24,10 @@ startup and runtime code is shared with the synchronous receiver; the latter's
 terminal loop has not yet been replaced by a client composition. Socket
 application binding, remote command presentation, Softline client lifecycle
 and asynchronous Lua observations remain part of the cutover, not completed
-features. See the current public `app.h` contracts and workspace specification.
+features. `cai_app_start_server` now binds socket ownership, handshake, roles and
+last-client/persistent lifetime to that same owner; application socket actions
+and replay/live output remain pending. See the current public `app.h` contracts
+and workspace specification.
 
 Cutover decisions confirmed on 2026-11-03: implement the in-process controller
 and Softline adapter first, without a listener, background-server executable,

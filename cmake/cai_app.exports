@@ -13,6 +13,7 @@ cai_app_option_count
 cai_app_resume_input
 cai_app_run
 cai_app_start
+cai_app_start_server
 cai_app_status_cleanup
 cai_app_status_fd
 cai_app_status_init

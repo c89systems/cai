@@ -237,8 +237,10 @@ static void unsafe_paths(void) {
 static void invalid_directories(void) {
   fixture *state = calloc(1U, sizeof(*state));
   cai_workspace_endpoint *endpoint = NULL, *invalid = NULL;
+  cai_error error;
   char long_path[4096], name[81];
   int file;
+  cai_error_init(&error);
   assert(state != NULL);
   setup(state);
   assert(cai_workspace_endpoint_open(state->runtime, state->workspace,
@@ -249,7 +251,10 @@ static void invalid_directories(void) {
   path(long_path, sizeof(long_path), state->root, name);
   assert(mkdir(long_path, 0700) == 0);
   assert(cai_workspace_endpoint_open(long_path, state->workspace, &invalid,
-                                     NULL) == CAI_ERR_INVALID);
+                                     &error) == CAI_ERR_INVALID);
+  assert(error.message != NULL &&
+         strstr(error.message, "shorter runtime directory") != NULL);
+  cai_error_cleanup(&error);
   assert(invalid == NULL && rmdir(long_path) == 0);
   assert(cai_workspace_endpoint_open(state->alias, state->workspace, &invalid,
                                      NULL) == CAI_ERR_INVALID);

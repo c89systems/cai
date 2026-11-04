@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
 #include <cai/app.h>
+#include <cai/workspace_client.h>
 #include <libmdf/mdf.h>
 #include <locale.h>
 #include <poll.h>
@@ -168,6 +169,17 @@ static void pause_tick(void) {
   struct timespec delay = {0, 1000000L};
   nanosleep(&delay, NULL);
 }
+static void idle_cpu(host *h) {
+  clockid_t clock;
+  struct timespec before_cpu, after_cpu, idle = {0, 250000000L};
+  assert(pthread_getcpuclockid(h->owner, &clock) == 0);
+  assert(clock_gettime(clock, &before_cpu) == 0);
+  nanosleep(&idle, NULL);
+  assert(clock_gettime(clock, &after_cpu) == 0);
+  assert((after_cpu.tv_sec - before_cpu.tv_sec) * 1000000000LL +
+             after_cpu.tv_nsec - before_cpu.tv_nsec <
+         50000000LL);
+}
 static void wait_ready(host *h) {
   cai_app_status s;
   struct pollfd fd;
@@ -223,8 +235,12 @@ static void open_host(host *h, const char *mode) {
   config.control_context = h;
   config.register_agent_tools = register_tools;
   config.register_agent_tools_context = h;
-  config.input.authorize = authorize;
-  config.input.authorize_context = h;
+  if (strncmp(mode, "server_", 7U) == 0)
+    config.runtime_directory = getenv("CAI_TEST_SERVER_RUNTIME");
+  if (strncmp(mode, "server_", 7U) != 0) {
+    config.input.authorize = authorize;
+    config.input.authorize_context = h;
+  }
   assert(cai_app_open(&config, &h->app, NULL) == CAI_OK);
 }
 static cai_input_observation *input_wait(host *h,
@@ -364,6 +380,225 @@ static void independent_controllers(int argc, char **argv) {
   pthread_mutex_destroy(&a.lock);
   pthread_mutex_destroy(&b.lock);
 }
+static uint64_t monotonic_ms(void) {
+  struct timespec now;
+  assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+  return (uint64_t)now.tv_sec * 1000U + (uint64_t)now.tv_nsec / 1000000U;
+}
+static void socket_wait(cai_workspace_client *client,
+                        cai_workspace_client_phase phase) {
+  cai_workspace_client_state state;
+  uint64_t deadline, until = monotonic_ms() + 10000U;
+  struct pollfd fd;
+  do {
+    assert(cai_workspace_client_pump(client, monotonic_ms(), NULL) == CAI_OK);
+    assert(cai_workspace_client_get_state(client, &state, NULL) == CAI_OK);
+    if (state.phase == phase)
+      return;
+    assert(monotonic_ms() < until);
+    assert(cai_workspace_client_prepare(client, &fd, &deadline, NULL) ==
+           CAI_OK);
+    assert(fd.fd >= 0 && poll(&fd, 1U, 1000) >= 0);
+  } while (1);
+}
+static void server_state(host *h, size_t count, uint64_t controller) {
+  cai_app_status status;
+  struct pollfd fd;
+  uint64_t until = monotonic_ms() + 10000U;
+  cai_app_status_init(&status);
+  fd.fd = cai_app_status_fd(h->app);
+  fd.events = POLLIN;
+  for (;;) {
+    assert(cai_app_observe_status(h->app, &status, NULL) == CAI_OK &&
+           status.running && status.has_server);
+    if (status.server.count == count &&
+        (controller == ~(uint64_t)0 ||
+         status.server.controller == controller)) {
+      assert(status.server.phase == CAI_ATTACHMENT_READY);
+      break;
+    }
+    assert(monotonic_ms() < until && poll(&fd, 1U, 1000) >= 0);
+  }
+  cai_app_status_cleanup(&status);
+}
+static void socket_control(cai_workspace_client *client, int own) {
+  cai_workspace_client_state state;
+  struct pollfd fd;
+  uint64_t deadline, until = monotonic_ms() + 10000U;
+  for (;;) {
+    assert(cai_workspace_client_pump(client, monotonic_ms(), NULL) == CAI_OK);
+    assert(cai_workspace_client_get_state(client, &state, NULL) == CAI_OK);
+    if (state.controller == (own ? state.attachment : 0U))
+      break;
+    assert(monotonic_ms() < until);
+    assert(cai_workspace_client_prepare(client, &fd, &deadline, NULL) ==
+               CAI_OK &&
+           fd.fd >= 0 && poll(&fd, 1U, 1000) >= 0);
+  }
+}
+static void server_input(host *h, cai_workspace_client *a,
+                         cai_workspace_client *b) {
+  cai_input_request request;
+  cai_input_scope scope;
+  cai_workspace_client_state state;
+  cai_input_observation *value;
+  int i;
+  for (i = 0; i < 2; ++i) {
+    assert(cai_workspace_client_get_state(i == 0 ? b : a, &state, NULL) ==
+           CAI_OK);
+    assert(cai_app_connect_input(h->app, state.attachment, &h->input, NULL) ==
+           CAI_OK);
+    value = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT, 0U);
+    scope.conversation = value->conversation;
+    scope.generation = state.generation;
+    cai_input_observation_close(value);
+    memset(&request, 0, sizeof(request));
+    request.request_id = 1U;
+    request.operation = CAI_INPUT_OFFER;
+    request.text = i == 0 ? "OBSERVER MUST NEVER RUN" : "CONTROLLING INPUT";
+    assert(cai_input_connection_request(h->input, &scope, &request, NULL) ==
+           CAI_OK);
+    value = input_wait(h, CAI_INPUT_OBSERVATION_RESULT, 1U);
+    assert(value->result.outcome ==
+           (i == 0 ? CAI_INPUT_REJECTED : CAI_INPUT_ACCEPTED));
+    cai_input_observation_close(value);
+    cai_input_connection_close(h->input);
+    h->input = NULL;
+  }
+  wait_count(h, 1, 0);
+}
+static void workspace_server(int argc, char **argv, const char *mode) {
+  cai_attachment_config lifetime;
+  cai_workspace_client_config client_config;
+  cai_workspace_client *a = NULL, *b = NULL;
+  cai_workspace_client_state connection;
+  cai_app_status status;
+  host h;
+  int code, persistent = strcmp(mode, "server_persist") == 0;
+  open_host(&h, mode);
+  cai_app_status_init(&status);
+  cai_attachment_config_init(&lifetime);
+  lifetime.persist = persistent;
+  if (strcmp(mode, "server_grace") == 0)
+    lifetime.first_attachment_timeout_ms = 50U;
+  assert(cai_app_start_server(
+             h.app, NULL, argc - 1, (const char *const *)(argv + 1),
+             strcmp(mode, "server_lifetime") == 0 ? NULL : &lifetime,
+             NULL) == CAI_OK);
+  if (strcmp(mode, "server_grace") != 0) {
+    wait_ready(&h);
+    assert(cai_app_get_status(h.app, &status, NULL) == CAI_OK &&
+           status.has_server && status.server.phase == CAI_ATTACHMENT_READY &&
+           status.server.persist == persistent);
+    cai_workspace_client_config_init(&client_config);
+    client_config.runtime_directory = getenv("CAI_TEST_SERVER_RUNTIME");
+    client_config.workspace = getenv("CAI_TEST_CONTROLLER_WORK");
+    assert(cai_workspace_client_open(&client_config, monotonic_ms(), &a,
+                                     NULL) == CAI_OK);
+    socket_wait(a, CAI_WORKSPACE_CONNECTED);
+    assert(cai_workspace_client_get_state(a, &connection, NULL) == CAI_OK &&
+           connection.persist == persistent &&
+           connection.controller == connection.attachment);
+    assert(cai_workspace_client_open(&client_config, monotonic_ms(), &b,
+                                     NULL) == CAI_OK);
+    socket_wait(b, CAI_WORKSPACE_CONNECTED);
+    assert(cai_workspace_client_get_state(b, &connection, NULL) == CAI_OK &&
+           connection.controller != connection.attachment);
+    server_state(&h, 2U, ~(uint64_t)0);
+    if (strcmp(mode, "server_input") == 0)
+      server_input(&h, a, b);
+    if (strcmp(mode, "server_busy") == 0) {
+      host other;
+      unsigned int before = cai_test_storage_open_count();
+      open_host(&other, mode);
+      assert(cai_app_start_server(other.app, NULL, argc - 1,
+                                  (const char *const *)(argv + 1), NULL,
+                                  NULL) == CAI_OK);
+      assert(cai_app_join(other.app, &code, NULL) == CAI_OK && code == 1);
+      assert(cai_app_get_status(other.app, &status, NULL) == CAI_OK &&
+             status.outcome == CAI_APP_FAILED &&
+             status.error.code == CAI_ERR_LIMIT &&
+             cai_test_storage_open_count() == before);
+      cai_app_close(other.app);
+      pthread_mutex_destroy(&other.lock);
+    }
+    if (strcmp(mode, "server_active") == 0) {
+      int started = 0;
+      size_t ticks;
+      control(&h, CAI_APP_QUEUE_PROMPT, "WORK CANCELLED ON LAST DETACH");
+      for (ticks = 0U; ticks < 10000U; ++ticks) {
+        pthread_mutex_lock(&h.lock);
+        started = h.starts != 0;
+        pthread_mutex_unlock(&h.lock);
+        if (started)
+          break;
+        pause_tick();
+      }
+      assert(started);
+    }
+    if (strcmp(mode, "server_abrupt") == 0) {
+      cai_workspace_client_close(a);
+      a = NULL;
+    } else {
+      assert(cai_workspace_client_detach(a, NULL) == CAI_OK);
+      socket_wait(a, CAI_WORKSPACE_DISCONNECTED);
+    }
+    /* An observer keeps a nonpersistent owner alive without taking control. */
+    server_state(&h, 1U, 0U);
+    socket_control(b, 0);
+    assert(cai_workspace_client_get_state(b, &connection, NULL) == CAI_OK);
+    assert(cai_workspace_client_takeover(b, 1U, connection.generation, NULL) ==
+           CAI_OK);
+    socket_control(b, 1);
+    server_state(&h, 1U, connection.attachment);
+    if (strcmp(mode, "server_abrupt") == 0) {
+      cai_workspace_client_close(b);
+      b = NULL;
+    } else {
+      assert(cai_workspace_client_detach(b, NULL) == CAI_OK);
+      socket_wait(b, CAI_WORKSPACE_DISCONNECTED);
+    }
+    if (persistent) {
+      server_state(&h, 0U, 0U);
+      idle_cpu(&h);
+      control(&h, CAI_APP_QUEUE_PROMPT, "WORK WITHOUT AN ATTACHMENT");
+      wait_count(&h, 1, 0);
+      cai_workspace_client_close(a);
+      a = NULL;
+      assert(cai_workspace_client_open(&client_config, monotonic_ms(), &a,
+                                       NULL) == CAI_OK);
+      socket_wait(a, CAI_WORKSPACE_CONNECTED);
+      assert(cai_workspace_client_get_state(a, &connection, NULL) == CAI_OK);
+      assert(cai_workspace_client_shutdown(a, 1U, connection.generation,
+                                           NULL) == CAI_OK);
+      socket_wait(a, CAI_WORKSPACE_DISCONNECTED);
+    }
+  }
+  assert(cai_app_join(h.app, &code, NULL) == CAI_OK && code == 0);
+  assert(
+      cai_app_get_status(h.app, &status, NULL) == CAI_OK && !status.running &&
+      status.has_server && status.outcome == CAI_APP_STOPPED &&
+      status.server.phase == CAI_ATTACHMENT_STOPPING &&
+      status.server.stop_reason == (persistent ? CAI_ATTACHMENT_STOP_REQUESTED
+                                    : strcmp(mode, "server_grace") == 0
+                                        ? CAI_ATTACHMENT_STARTUP_ABANDONED
+                                        : CAI_ATTACHMENT_LAST_DETACHED));
+  if (persistent)
+    assert(h.completed == 1 && h.starts == 1);
+  cai_workspace_client_close(a);
+  cai_workspace_client_close(b);
+  /* Reuse the endpoint only after the runtime/store owner has been joined. */
+  h.mode = "startup_stop";
+  h.has_owner = h.acks = h.starts = 0;
+  assert(cai_app_start_server(h.app, NULL, argc - 1,
+                              (const char *const *)(argv + 1), NULL,
+                              NULL) == CAI_OK);
+  assert(cai_app_join(h.app, &code, NULL) == CAI_OK && code == 0 &&
+         h.acks == 1);
+  cai_app_close(h.app);
+  cai_app_status_cleanup(&status);
+  pthread_mutex_destroy(&h.lock);
+}
 int main(int argc, char **argv) {
   host h;
   cai_app_status status;
@@ -376,8 +611,11 @@ int main(int argc, char **argv) {
          getenv("CAI_CONTROLLER_PRIVATE") == NULL);
   assert(getcwd(cwd, sizeof(cwd)) != NULL);
   assert(sigaction(SIGINT, NULL, &before) == 0);
-  if (strcmp(mode, "contexts") == 0) {
-    independent_controllers(argc, argv);
+  if (strcmp(mode, "contexts") == 0 || strncmp(mode, "server_", 7U) == 0) {
+    if (strcmp(mode, "contexts") == 0)
+      independent_controllers(argc, argv);
+    else
+      workspace_server(argc, argv, mode);
     assert(getcwd(current, sizeof(current)) != NULL &&
            strcmp(current, cwd) == 0);
     assert(strcmp(locale, setlocale(LC_CTYPE, NULL)) == 0);
@@ -412,15 +650,7 @@ int main(int argc, char **argv) {
       assert(cai_app_get_status(h.app, &status, NULL) == CAI_OK &&
              status.running);
       if (strcmp(mode, "run") == 0) {
-        clockid_t clock;
-        struct timespec before_cpu, after_cpu, idle = {0, 250000000L};
-        assert(pthread_getcpuclockid(h.owner, &clock) == 0);
-        assert(clock_gettime(clock, &before_cpu) == 0);
-        nanosleep(&idle, NULL);
-        assert(clock_gettime(clock, &after_cpu) == 0);
-        assert((after_cpu.tv_sec - before_cpu.tv_sec) * 1000000000LL +
-                   after_cpu.tv_nsec - before_cpu.tv_nsec <
-               50000000LL);
+        idle_cpu(&h);
         control(&h, CAI_APP_QUEUE_PROMPT, "CONTROLLER NEXT PROMPT");
         wait_count(&h, 2, 0);
         control(&h, CAI_APP_QUEUE_PROMPT, "/status");

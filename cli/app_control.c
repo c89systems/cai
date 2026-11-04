@@ -289,6 +289,23 @@ void cai_app_bridge_bind_input(cai_app_bridge *b, cai_input_controller *input) {
   }
   pthread_mutex_unlock(&b->lock);
 }
+void cai_app_bridge_server(cai_app_bridge *b,
+                           const cai_attachment_state *server) {
+  if (b == NULL || server == NULL)
+    return;
+  pthread_mutex_lock(&b->lock);
+  if (!b->status.has_server || b->status.server.phase != server->phase ||
+      b->status.server.stop_reason != server->stop_reason ||
+      b->status.server.count != server->count ||
+      b->status.server.controller != server->controller ||
+      b->status.server.generation != server->generation ||
+      b->status.server.deadline_ms != server->deadline_ms) {
+    b->status.has_server = 1;
+    b->status.server = *server;
+    status_wake(b);
+  }
+  pthread_mutex_unlock(&b->lock);
+}
 int cai_app_bridge_input(cai_app_bridge *b, uint64_t attachment,
                          unsigned long long conversation,
                          unsigned long long producer,
@@ -348,6 +365,8 @@ int cai_app_bridge_publish(cai_app_bridge *b, cai_agent_runtime *runtime,
   if (runtime != NULL) {
     copy.running = b->status.running;
     copy.runtime_ready = 1;
+    copy.has_server = b->status.has_server;
+    copy.server = b->status.server;
     copy.outcome = b->status.outcome;
     copy.control_id = b->status.control_id;
     copy.control_status = b->status.control_status;

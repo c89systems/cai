@@ -42,7 +42,7 @@ objects and does not install process environment, cwd, locale or signals.
 Startup captures explicit directory/environment contexts; native runtime/replay
 observers receive borrowed events on the owner. A coalescing status descriptor
 reports readiness, controls and shutdown without idle polling. This is the
-backend ownership entry point, not yet a socket application server. The
+backend ownership entry point; starting a controller alone opens no socket. The
 synchronous terminal receiver remains to be composed over it. In-process
 frontends can now use `cai_app_connect_input`/`cai_app_resume_input` to attach to
 the active queue without opening a runtime or store. Their owned observations
@@ -52,6 +52,18 @@ original authority generation; trusted native `control()` is a separate host
 surface. Remote command presentation, socket application binding and Lua
 asynchronous observations remain pending. The terminal-free owner rejects new
 slash/! input explicitly and leaves restored frontend actions queued.
+
+`cai_app_start_server` now adds the workspace socket host to that same owner.
+It opens endpoint ownership before stores, publishes READY only after runtime
+restoration, and combines socket interests/deadlines with runtime/input/store
+wakeups. Default lifetime is nonpersistent: graceful or abrupt loss of the last
+attachment cancels active work, closes stores and releases the endpoint. An
+observer still counts as attached; it must explicitly take over vacant control.
+Persistent owners continue work with no clients and accept later attachments.
+Status snapshots retain the server phase, role, generation and shutdown reason.
+This lifecycle binding is exercised against real Unix clients. Application
+socket requests and replay/live output remain unbound and fail explicitly;
+the headless/autostart executable and terminal client cutover are still pending.
 
 ## Confirmed product decisions
 
