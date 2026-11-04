@@ -141,6 +141,11 @@ that reader to real sockets: one retained replay worker per conversation,
 native bounded windows, direct committed live notifications, explicit cursors,
 history-change invalidation and bounded independent subscribers. The public
 application client delivers borrowed chunks without collecting complete events.
+Its optional typed execution callback now decodes execution/subagent entries
+through the core incremental decoder, retaining only metadata and one defined
+4 KiB output chunk. Authenticated END and both consumers' acceptance precede
+cursor advancement. Explicit replacement cannot acknowledge the old stream on
+the new cursor or invalidate a record borrowed by its callback.
 Default tail/visibility selection and the terminal presentation adapter remain
 pending. Foreground headless startup uses the native controller; automatic
 terminal discovery/attachment remains pending.

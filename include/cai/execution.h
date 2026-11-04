@@ -61,6 +61,27 @@ void cai_execution_record_init(cai_execution_record *record);
 int cai_execution_record_parse(const char *json, cai_execution_record *record,
                                cai_error *error);
 void cai_execution_record_cleanup(cai_execution_record *record);
+typedef struct cai_execution_decoder cai_execution_decoder;
+/** Incremental decoder for one bounded execution chunk. Retains its decoded
+ * metadata and at most CAI_EXECUTION_CHUNK_BYTES of data, never the encoded
+ * JSON, a DOM, or the complete logical tool result. All operations belong to
+ * one owner thread. No worker, source, sink or temporary file is created. */
+int cai_execution_decoder_open(cai_execution_decoder **out, cai_error *error);
+/** Feed original JSON bytes, including fragments splitting escapes or UTF-8.
+ * Total encoded size is capped at CAI_EXECUTION_RECORD_MAX_BYTES. No record
+ * is published here, even if the JSON object has already closed. */
+int cai_execution_decoder_feed(cai_execution_decoder *, const void *bytes,
+                               size_t length, cai_error *error);
+/** Call only at the authenticated enclosing record boundary. Atomically
+ * replace an initialized owned record on success; leave it unchanged on
+ * failure. A completed or failed decoder needs reset before another record. */
+int cai_execution_decoder_finish(cai_execution_decoder *,
+                                 cai_execution_record *out, cai_error *error);
+/** Discard a partial/failed/completed candidate without publishing it. Reuse
+ * the same handle for the next chunk. Does not change previously returned
+ * owned records. */
+int cai_execution_decoder_reset(cai_execution_decoder *, cai_error *error);
+void cai_execution_decoder_close(cai_execution_decoder *);
 /** Render a decoded record as Markdown. compact shows lifecycle summaries and
  * failures; zero renders all payload chunks, including arguments and output.
  * Feed ordered records to the same sink to join chunks without added breaks.

@@ -251,6 +251,11 @@ cai_environment_open
 cai_environment_retain
 cai_error_cleanup
 cai_error_init
+cai_execution_decoder_close
+cai_execution_decoder_feed
+cai_execution_decoder_finish
+cai_execution_decoder_open
+cai_execution_decoder_reset
 cai_execution_record_cleanup
 cai_execution_record_init
 cai_execution_record_parse

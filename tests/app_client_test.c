@@ -27,6 +27,10 @@ typedef struct fixture {
   int cancel;
   size_t subscriptions, spans, record_ends;
   size_t statuses;
+  size_t executions;
+  size_t execution_warnings;
+  int reject_execution, replace_execution, live_execution, child_execution;
+  int replace_transcript;
   cai_transcript_kind reject_kind;
   int reject_transcript;
 } fixture;
@@ -82,6 +86,9 @@ static int transcript_observed(void *context, const cai_transcript_event *event,
     assert(s.transcript.position < event->position &&
            s.transcript.sequence < event->sequence);
     ++f->record_ends;
+    if (f->replace_transcript)
+      assert(cai_app_client_subscribe(f->client, 2U, 11U, "session", NULL, 0U,
+                                      0U, NULL) == CAI_OK);
   }
   return CAI_OK;
 }
@@ -130,6 +137,37 @@ static int observed(void *context, const cai_app_client_event *event,
   }
   return CAI_OK;
 }
+static int execution_observed(void *context, const cai_app_execution_event *e,
+                              cai_error *error) {
+  fixture *f = context;
+  cai_app_client_state s;
+  (void)error;
+  assert(e->boundary != NULL && e->boundary->kind == CAI_TRANSCRIPT_EVENT_END);
+  assert(cai_app_client_get_state(f->client, &s, NULL) == CAI_OK &&
+         s.transcript.position < e->boundary->position);
+  if (e->code != CAI_OK) {
+    assert(e->record == NULL && e->reason != NULL && e->reason[0] != '\0');
+    ++f->execution_warnings;
+    return f->reject_execution ? CAI_ERR_CANCELLED : CAI_OK;
+  }
+  assert(e->record != NULL && e->reason == NULL);
+  assert(strcmp(e->record->kind, "tool.output") == 0 &&
+         strcmp(e->record->call_id, "call") == 0 &&
+         strcmp(e->record->data, "first\nλ") == 0);
+  assert(e->replay == !f->live_execution && e->subagent == f->child_execution);
+  assert(cai_app_client_get_state(f->client, &s, NULL) == CAI_OK &&
+         s.transcript.position < e->boundary->position);
+  assert(cai_app_client_pump(f->client, 1U, NULL) == CAI_ERR_INVALID);
+  assert(cai_app_client_detach(f->client, NULL) == CAI_ERR_INVALID);
+  cai_app_client_close(f->client);
+  ++f->executions;
+  if (f->replace_execution)
+    assert(cai_app_client_subscribe(f->client, 2U, 11U, "session", NULL, 0U, 0U,
+                                    NULL) == CAI_OK);
+  /* Replacement must not free the borrowed metadata before callback return. */
+  assert(strcmp(e->record->call_id, "call") == 0);
+  return f->reject_execution ? CAI_ERR_CANCELLED : CAI_OK;
+}
 static void open_fixture(fixture *f, const char *runtime,
                          const char *workspace) {
   cai_workspace_server_config server;
@@ -153,6 +191,8 @@ static void open_fixture(fixture *f, const char *runtime,
   client.context = f;
   client.transcript = transcript_observed;
   client.transcript_context = f;
+  client.execution = execution_observed;
+  client.execution_context = f;
   assert(cai_app_client_open(&client, 0U, &f->client, NULL) == CAI_OK);
 }
 static int exchange(fixture *f) {
@@ -682,6 +722,156 @@ static void rejection_and_eof(const char *runtime, const char *workspace) {
   close_fixture(f);
   free(f);
 }
+static void execution_tests(const char *runtime, const char *workspace) {
+  static const char json[] =
+      "{\"kind\":\"tool.output\",\"session_id\":\"child\",\"timestamp_ns\":1,"
+      "\"offset\":0,\"final\":true,\"line_start\":true,\"call_id\":\"call\","
+      "\"subagent\":\"review\",\"parent_session_id\":\"parent\","
+      "\"parent_call_id\":\"parent-call\",\"source_sequence\":99,"
+      "\"data\":\"first\\nλ\"}";
+  static const char missing_identity[] =
+      "{\"kind\":\"tool.output\",\"session_id\":\"child\",\"timestamp_ns\":1,"
+      "\"offset\":0,\"final\":true,\"line_start\":true,\"call_id\":\"call\","
+      "\"data\":\"first\\nλ\"}";
+  fixture *f = calloc(1U, sizeof(*f));
+  cai_cli_transcript_message m;
+  size_t scenario, offset, length;
+  const char *text;
+  assert(f != NULL);
+  for (scenario = 0U; scenario < 13U; ++scenario) {
+    text = scenario == 11U   ? missing_identity
+           : scenario == 12U ? "{garbage"
+                             : json;
+    length = strlen(text);
+    open_fixture(f, runtime, workspace);
+    subscribe(f);
+    transcript_message(&m, CAI_PROTOCOL_REPLAY_BEGIN);
+    transcript_send(f, &m);
+    assert(exchange(f) == CAI_OK);
+    if (scenario == 9U) {
+      transcript_message(&m, CAI_PROTOCOL_REPLAY_END);
+      transcript_send(f, &m);
+      assert(exchange(f) == CAI_OK);
+      f->live_execution = 1;
+    }
+    f->child_execution = scenario == 1U || scenario == 11U;
+    transcript_message(&m, CAI_PROTOCOL_STREAM_BEGIN);
+    m.event.type = f->child_execution ? "subagent" : "execution";
+    if (scenario == 8U)
+      m.event.has_data = 0;
+    transcript_send(f, &m);
+    if (scenario == 8U) {
+      assert(exchange(f) == CAI_OK && f->execution_warnings == 0U);
+      transcript_message(&m, CAI_PROTOCOL_STREAM_END);
+      transcript_send(f, &m);
+      assert(exchange(f) == CAI_OK && f->execution_warnings == 1U &&
+             f->executions == 0U && state(f).transcript.position == 9U &&
+             state(f).transcript.active);
+      close_fixture(f);
+      continue;
+    }
+    assert(exchange(f) == CAI_OK && f->executions == 0U);
+    for (offset = 0U; offset < length; ++offset) {
+      if ((scenario == 4U || scenario == 5U || scenario == 7U) &&
+          offset == length / 2U)
+        break;
+      transcript_message(&m, CAI_PROTOCOL_STREAM_CHUNK);
+      m.event.offset = offset;
+      m.event.data = text + offset;
+      m.event.length = 1U;
+      transcript_send(f, &m);
+      assert(exchange(f) == CAI_OK && f->executions == 0U &&
+             f->execution_warnings == 0U);
+    }
+    if (scenario == 4U) {
+      cai_workspace_server_close(f->server);
+      f->server = NULL;
+      assert(cai_app_client_pump(f->client, 2U, NULL) == CAI_OK);
+      assert(f->executions == 0U && state(f).transcript.position == 0U);
+    } else if (scenario == 5U || scenario == 6U || scenario == 10U) {
+      f->replace_execution = scenario == 6U;
+      f->replace_transcript = scenario == 10U;
+      if (scenario == 5U)
+        assert(cai_app_client_subscribe(f->client, 2U, 11U, "session", NULL, 0U,
+                                        0U, NULL) == CAI_OK);
+      else {
+        transcript_message(&m, CAI_PROTOCOL_STREAM_END);
+        m.event.offset = offset;
+        transcript_send(f, &m);
+      }
+      assert(exchange(f) == CAI_OK);
+      assert(state(f).transcript.subscribing &&
+             state(f).transcript.position == 0U &&
+             f->executions == (scenario == 5U ? 0U : 1U));
+      transcript_message(&m, CAI_PROTOCOL_REPLAY_BEGIN);
+      m.header.request = m.header.stream = 2U;
+      transcript_send(f, &m);
+      assert(exchange(f) == CAI_OK && state(f).transcript.active &&
+             !state(f).transcript.subscribing);
+      f->replace_execution = 0;
+      f->replace_transcript = 0;
+      transcript_message(&m, CAI_PROTOCOL_STREAM_BEGIN);
+      m.header.request = m.header.stream = 2U;
+      m.event.type = "execution";
+      transcript_send(f, &m);
+      transcript_message(&m, CAI_PROTOCOL_STREAM_CHUNK);
+      m.header.request = m.header.stream = 2U;
+      m.event.data = text;
+      m.event.length = length;
+      transcript_send(f, &m);
+      transcript_message(&m, CAI_PROTOCOL_STREAM_END);
+      m.header.request = m.header.stream = 2U;
+      m.event.offset = length;
+      transcript_send(f, &m);
+      assert(exchange(f) == CAI_OK && state(f).transcript.position == 9U &&
+             f->executions == (scenario == 5U ? 1U : 2U));
+    } else {
+      f->reject_execution = scenario == 2U || scenario == 12U;
+      f->reject_transcript = scenario == 3U;
+      f->reject_kind = CAI_TRANSCRIPT_EVENT_END;
+      transcript_message(&m, CAI_PROTOCOL_STREAM_END);
+      if (scenario == 9U)
+        m.event.position = 11U;
+      m.event.offset = offset;
+      transcript_send(f, &m);
+      if (scenario == 2U || scenario == 3U)
+        assert(exchange(f) == CAI_ERR_CANCELLED && f->executions == 1U &&
+               state(f).transcript.position == 0U);
+      else if (scenario == 12U)
+        assert(exchange(f) == CAI_ERR_CANCELLED && f->executions == 0U &&
+               f->execution_warnings == 1U &&
+               state(f).transcript.position == 0U);
+      else if (scenario == 7U || scenario == 11U)
+        assert(exchange(f) == CAI_OK && f->executions == 0U &&
+               f->execution_warnings == 1U && state(f).transcript.active &&
+               state(f).transcript.position == 9U);
+      else
+        assert(exchange(f) == CAI_OK && f->executions == 1U &&
+               state(f).transcript.position == (scenario == 9U ? 11U : 9U));
+      if (scenario == 7U || scenario == 11U) {
+        transcript_message(&m, CAI_PROTOCOL_STREAM_BEGIN);
+        m.header.sequence = 9U;
+        m.event.type = f->child_execution ? "subagent" : "execution";
+        transcript_send(f, &m);
+        transcript_message(&m, CAI_PROTOCOL_STREAM_CHUNK);
+        m.header.sequence = 9U;
+        m.event.data = json;
+        m.event.length = strlen(json);
+        transcript_send(f, &m);
+        transcript_message(&m, CAI_PROTOCOL_STREAM_END);
+        m.header.sequence = 9U;
+        m.event.position = 10U;
+        m.event.offset = strlen(json);
+        transcript_send(f, &m);
+        assert(exchange(f) == CAI_OK && f->executions == 1U &&
+               f->execution_warnings == 1U &&
+               state(f).transcript.position == 10U);
+      }
+    }
+    close_fixture(f);
+  }
+  free(f);
+}
 static void status_tests(const char *runtime, const char *workspace) {
   fixture f;
   cai_cli_input_wire_output output;
@@ -765,6 +955,7 @@ static void *run(void *context) {
   rejection_and_eof(runtime, workspace);
   transcript_tests(runtime, workspace);
   status_tests(runtime, workspace);
+  execution_tests(runtime, workspace);
   directory = opendir(runtime);
   assert(directory != NULL);
   while ((entry = readdir(directory)) != NULL)

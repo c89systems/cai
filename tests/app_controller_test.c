@@ -826,6 +826,7 @@ typedef struct typed_view {
   cai_input_result result;
   size_t roles, snapshots, results, disconnected;
   size_t statuses;
+  size_t execution_chunks;
   size_t replay_begins, replay_ends, transcript_ends, transcript_failures,
       assistant_seen;
   uint64_t transcript_sequence, transcript_offset;
@@ -907,6 +908,19 @@ static int typed_event(void *context, const cai_app_client_event *event,
   }
   return CAI_OK;
 }
+static int typed_execution(void *context, const cai_app_execution_event *event,
+                           cai_error *error) {
+  typed_view *v = context;
+  cai_app_client_state state;
+  (void)error;
+  assert(event->record != NULL && event->record->kind != NULL &&
+         event->record->session_id != NULL && event->boundary != NULL &&
+         event->boundary->kind == CAI_TRANSCRIPT_EVENT_END);
+  assert(cai_app_client_get_state(v->client, &state, NULL) == CAI_OK &&
+         state.transcript.position < event->boundary->position);
+  ++v->execution_chunks;
+  return CAI_OK;
+}
 static void typed_wait(typed_view *v, const size_t *counter, size_t expected) {
   uint64_t deadline, until = monotonic_ms() + 10000U;
   struct pollfd fd;
@@ -939,6 +953,8 @@ static void typed_open(typed_view *v, unsigned long long producer,
   config.context = v;
   config.transcript = typed_transcript;
   config.transcript_context = v;
+  config.execution = typed_execution;
+  config.execution_context = v;
   assert(cai_app_client_open(&config, monotonic_ms(), &v->client, NULL) ==
          CAI_OK);
   typed_wait(v, &v->roles, 1U);
@@ -1031,7 +1047,8 @@ static void typed_server(int argc, char **argv) {
   assert(a.result.outcome == CAI_INPUT_ACCEPTED);
   wait_count(&h, 1, 0);
   typed_wait(&a, &a.assistant_seen, 1U);
-  assert(a.transcript_failures == 0U && a.transcript_ends != 0U);
+  assert(a.transcript_failures == 0U && a.transcript_ends != 0U &&
+         a.execution_chunks != 0U);
   cursor = a.state.transcript;
   assert(cai_app_client_subscribe(a.client, 2U, a.state.conversation,
                                   "not-the-active-session", NULL, 0U, 0U,

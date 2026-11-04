@@ -1,5 +1,6 @@
 #include "cai_execution.h"
 #include "cai_internal.h"
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -36,6 +37,12 @@ static const lonejson_field execution_fields[] = {
     LONEJSON_FIELD_STRING_FIXED_REQ(cai_execution_record, data, "data",
                                     LONEJSON_OVERFLOW_FAIL)};
 LONEJSON_MAP_DEFINE(execution_map, cai_execution_record, execution_fields);
+typedef char
+    execution_schema_mask_fits[sizeof(execution_fields) /
+                                           sizeof(execution_fields[0]) <=
+                                       sizeof(unsigned long) * CHAR_BIT
+                                   ? 1
+                                   : -1];
 
 void cai_execution_record_init(cai_execution_record *record) {
   if (record != NULL)
@@ -43,7 +50,17 @@ void cai_execution_record_init(cai_execution_record *record) {
 }
 void cai_execution_record_cleanup(cai_execution_record *record) {
   if (record != NULL) {
-    CAI_LJ->cleanup(CAI_LJ, &execution_map, record);
+    size_t i;
+    for (i = 0U; i < execution_map.field_count; ++i)
+      if (execution_fields[i].kind == LONEJSON_FIELD_KIND_STRING &&
+          execution_fields[i].storage == LONEJSON_STORAGE_DYNAMIC) {
+        void *owned;
+        memcpy(&owned,
+               (const unsigned char *)record +
+                   execution_fields[i].struct_offset,
+               sizeof(owned));
+        cai_free_mem(NULL, owned);
+      }
     memset(record, 0, sizeof(*record));
   }
 }
@@ -118,10 +135,417 @@ static lonejson_status execution_validate_json(const char *json, size_t length,
   return CAI_LJ->visit_value_buffer(CAI_LJ, json, length, &visitor, &text,
                                     error);
 }
+typedef struct execution_validation {
+  lonejson_json_value record;
+} execution_validation;
+static const lonejson_field validation_fields[] = {
+    LONEJSON_FIELD_JSON_VALUE_REQ(execution_validation, record, "record")};
+LONEJSON_MAP_DEFINE(validation_map, execution_validation, validation_fields);
+struct cai_execution_decoder {
+  lonejson_curl_parse validation;
+  lonejson_value_visitor visitor;
+  execution_validation value;
+  execution_utf8 utf8;
+  cai_execution_record record;
+  size_t received;
+  size_t depth, key_length, string_length, string_capacity, number_length;
+  unsigned long seen;
+  int field, string_field, number_field, root_done;
+  char key[64], number[32];
+  int started, finished, failed;
+  char message[192], detail[512];
+};
+static int decoder_failure(cai_execution_decoder *d, int code,
+                           const char *message, const char *detail,
+                           cai_error *error) {
+  if (d->failed == CAI_OK) {
+    d->failed = code;
+    snprintf(d->message, sizeof(d->message), "%s", message);
+    snprintf(d->detail, sizeof(d->detail), "%s", detail != NULL ? detail : "");
+  }
+  return cai_set_error_detail(error, d->failed, d->message, d->detail);
+}
+static int decoder_check(cai_execution_decoder *d, cai_error *error) {
+  if (d == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID, "execution decoder required");
+  if (d->failed != CAI_OK)
+    return cai_set_error_detail(error, d->failed, d->message, d->detail);
+  if (d->finished)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "reset the completed execution decoder first");
+  return CAI_OK;
+}
+static int decoder_parse_failure(cai_execution_decoder *d, cai_error *error) {
+  int allocation =
+      d->validation.error.code == LONEJSON_STATUS_ALLOCATION_FAILED;
+  return decoder_failure(d, allocation ? CAI_ERR_NOMEM : CAI_ERR_PROTOCOL,
+                         allocation ? "allocate execution parser state"
+                                    : "invalid execution JSON text",
+                         d->validation.error.message, error);
+}
+static lonejson_status decoder_invalid(cai_execution_decoder *d,
+                                       const char *message) {
+  (void)decoder_failure(d, CAI_ERR_PROTOCOL, "invalid execution record",
+                        message, NULL);
+  return LONEJSON_STATUS_INVALID_JSON;
+}
+static void *decoder_field(cai_execution_decoder *d, int index) {
+  return (unsigned char *)&d->record + execution_fields[index].struct_offset;
+}
+static void decoder_seen(cai_execution_decoder *d) {
+  if (d->field >= 0)
+    d->seen |= 1UL << (unsigned int)d->field;
+  d->field = -1;
+}
+static lonejson_status decoder_object_begin(void *context,
+                                            lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  (void)error;
+  if ((d->depth == 0U && d->root_done) || (d->depth == 1U && d->field >= 0))
+    return decoder_invalid(d, "object does not match execution field");
+  ++d->depth;
+  return LONEJSON_STATUS_OK;
+}
+static lonejson_status decoder_array_begin(void *context,
+                                           lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  (void)error;
+  if (d->depth == 0U || (d->depth == 1U && d->field >= 0))
+    return decoder_invalid(d, "array does not match execution field");
+  ++d->depth;
+  return LONEJSON_STATUS_OK;
+}
+static lonejson_status decoder_container_end(void *context,
+                                             lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  size_t i;
+  (void)error;
+  if (d->depth == 0U)
+    return decoder_invalid(d, "unbalanced execution object");
+  if (--d->depth == 0U) {
+    for (i = 0U; i < execution_map.field_count; ++i)
+      if ((execution_fields[i].flags & LONEJSON_FIELD_REQUIRED) != 0U &&
+          (d->seen & (1UL << i)) == 0U)
+        return decoder_invalid(d, "missing required execution field");
+    d->root_done = 1;
+  }
+  d->field = -1;
+  return LONEJSON_STATUS_OK;
+}
+static lonejson_status decoder_key_begin(void *context, lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  d->field = -1;
+  d->key_length = 0U;
+  return execution_text_begin(&d->utf8, error);
+}
+static lonejson_status decoder_key_chunk(void *context, const char *bytes,
+                                         size_t length, lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  if (execution_text_chunk(&d->utf8, bytes, length, error) !=
+      LONEJSON_STATUS_OK)
+    return decoder_invalid(d,
+                           "invalid UTF-8 or embedded NUL in execution text");
+  if (d->depth == 1U) {
+    size_t available = sizeof(d->key) - 1U - d->key_length;
+    size_t n = length < available ? length : available;
+    memcpy(d->key + d->key_length, bytes, n);
+    d->key_length += n;
+    /* A saturated prefix cannot match any schema key (all are shorter). */
+  }
+  return LONEJSON_STATUS_OK;
+}
+static lonejson_status decoder_key_end(void *context, lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  size_t i;
+  if (execution_text_end(&d->utf8, error) != LONEJSON_STATUS_OK)
+    return decoder_invalid(d,
+                           "invalid UTF-8 or embedded NUL in execution text");
+  d->key[d->key_length] = '\0';
+  if (d->depth == 1U)
+    for (i = 0U; i < execution_map.field_count; ++i)
+      if (strcmp(d->key, execution_fields[i].json_key) == 0) {
+        if ((d->seen & (1UL << i)) != 0U)
+          return decoder_invalid(d, "duplicate execution field");
+        d->field = (int)i;
+        break;
+      }
+  return LONEJSON_STATUS_OK;
+}
+static lonejson_status decoder_string_begin(void *context,
+                                            lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  if (d->depth == 0U || (d->field >= 0 && execution_fields[d->field].kind !=
+                                              LONEJSON_FIELD_KIND_STRING))
+    return decoder_invalid(d, "string does not match execution field");
+  d->string_field = d->depth == 1U ? d->field : -1;
+  d->string_length = d->string_capacity = 0U;
+  return execution_text_begin(&d->utf8, error);
+}
+static lonejson_status decoder_string_chunk(void *context, const char *bytes,
+                                            size_t length,
+                                            lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  char *text;
+  size_t needed, capacity;
+  const lonejson_field *field;
+  if (execution_text_chunk(&d->utf8, bytes, length, error) !=
+      LONEJSON_STATUS_OK)
+    return decoder_invalid(d,
+                           "invalid UTF-8 or embedded NUL in execution text");
+  if (d->string_field < 0)
+    return LONEJSON_STATUS_OK;
+  field = &execution_fields[d->string_field];
+  needed = d->string_length + length + 1U;
+  if (field->storage == LONEJSON_STORAGE_FIXED) {
+    if (needed > field->fixed_capacity)
+      return decoder_invalid(d, "execution data exceeds its decoded chunk cap");
+    text = decoder_field(d, d->string_field);
+  } else {
+    memcpy(&text, decoder_field(d, d->string_field), sizeof(text));
+    if (needed > d->string_capacity) {
+      char *grown;
+      capacity = d->string_capacity != 0U ? d->string_capacity : 32U;
+      while (capacity < needed)
+        capacity *= 2U;
+      grown = cai_realloc_mem(NULL, text, capacity);
+      if (grown == NULL) {
+        (void)decoder_failure(d, CAI_ERR_NOMEM, "allocate execution metadata",
+                              NULL, NULL);
+        return LONEJSON_STATUS_ALLOCATION_FAILED;
+      }
+      text = grown;
+      d->string_capacity = capacity;
+      memcpy(decoder_field(d, d->string_field), &text, sizeof(text));
+    }
+  }
+  if (length != 0U)
+    memcpy(text + d->string_length, bytes, length);
+  d->string_length += length;
+  text[d->string_length] = '\0';
+  return LONEJSON_STATUS_OK;
+}
+static lonejson_status decoder_string_end(void *context,
+                                          lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  if (execution_text_end(&d->utf8, error) != LONEJSON_STATUS_OK)
+    return decoder_invalid(d,
+                           "invalid UTF-8 or embedded NUL in execution text");
+  if (d->string_field >= 0 && d->string_length == 0U &&
+      decoder_string_chunk(d, "", 0U, error) != LONEJSON_STATUS_OK)
+    return LONEJSON_STATUS_ALLOCATION_FAILED;
+  decoder_seen(d);
+  return LONEJSON_STATUS_OK;
+}
+static lonejson_status decoder_boolean(void *context, int value,
+                                       lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  (void)error;
+  if (d->depth == 0U || (d->field >= 0 && execution_fields[d->field].kind !=
+                                              LONEJSON_FIELD_KIND_BOOL))
+    return decoder_invalid(d, "boolean does not match execution field");
+  if (d->field >= 0)
+    memcpy(decoder_field(d, d->field), &value, sizeof(value));
+  decoder_seen(d);
+  return LONEJSON_STATUS_OK;
+}
+static lonejson_status decoder_null(void *context, lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  (void)error;
+  if (d->depth == 0U ||
+      (d->field >= 0 &&
+       (execution_fields[d->field].kind != LONEJSON_FIELD_KIND_STRING ||
+        execution_fields[d->field].storage != LONEJSON_STORAGE_DYNAMIC ||
+        (execution_fields[d->field].flags & LONEJSON_FIELD_REQUIRED) != 0U)))
+    return decoder_invalid(d, "null does not match execution field");
+  decoder_seen(d);
+  return LONEJSON_STATUS_OK;
+}
+static lonejson_status decoder_number_begin(void *context,
+                                            lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  (void)error;
+  if (d->depth == 0U ||
+      (d->field >= 0 &&
+       execution_fields[d->field].kind != LONEJSON_FIELD_KIND_U64 &&
+       execution_fields[d->field].kind != LONEJSON_FIELD_KIND_I64))
+    return decoder_invalid(d, "number does not match execution field");
+  d->number_field = d->field;
+  d->number_length = 0U;
+  return LONEJSON_STATUS_OK;
+}
+static lonejson_status decoder_number_chunk(void *context, const char *bytes,
+                                            size_t length,
+                                            lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  (void)error;
+  if (d->number_field < 0)
+    return LONEJSON_STATUS_OK;
+  if (length > sizeof(d->number) - d->number_length)
+    return decoder_invalid(d, "execution integer is too long");
+  memcpy(d->number + d->number_length, bytes, length);
+  d->number_length += length;
+  return LONEJSON_STATUS_OK;
+}
+static lonejson_status decoder_number_end(void *context,
+                                          lonejson_error *error) {
+  cai_execution_decoder *d = context;
+  unsigned long long value = 0U, limit;
+  size_t i;
+  int negative;
+  (void)error;
+  if (d->number_field < 0)
+    return LONEJSON_STATUS_OK;
+  negative = d->number_length != 0U && d->number[0] == '-';
+  limit = execution_fields[d->number_field].kind == LONEJSON_FIELD_KIND_U64
+              ? ULLONG_MAX
+              : (unsigned long long)LLONG_MAX + (unsigned int)negative;
+  if (negative &&
+      execution_fields[d->number_field].kind == LONEJSON_FIELD_KIND_U64)
+    return decoder_invalid(d, "negative execution counter");
+  for (i = negative ? 1U : 0U; i < d->number_length; ++i) {
+    unsigned int digit = (unsigned int)(unsigned char)d->number[i] - '0';
+    if (digit > 9U || value > (limit - digit) / 10U)
+      return decoder_invalid(d, "invalid or overflowing execution integer");
+    value = value * 10U + digit;
+  }
+  if (execution_fields[d->number_field].kind == LONEJSON_FIELD_KIND_U64)
+    memcpy(decoder_field(d, d->number_field), &value, sizeof(value));
+  else {
+    long long number = negative ? (value == (unsigned long long)LLONG_MAX + 1U
+                                       ? LLONG_MIN
+                                       : -(long long)value)
+                                : (long long)value;
+    memcpy(decoder_field(d, d->number_field), &number, sizeof(number));
+  }
+  decoder_seen(d);
+  return LONEJSON_STATUS_OK;
+}
+static int decoder_start(cai_execution_decoder *d, cai_error *error) {
+  lonejson_error detail;
+  lonejson_status rc;
+  char prefix[] = "{\"record\":";
+  d->started = 1;
+  d->field = d->string_field = d->number_field = -1;
+  d->visitor = lonejson_default_value_visitor();
+  d->visitor.object_begin = decoder_object_begin;
+  d->visitor.array_begin = decoder_array_begin;
+  d->visitor.object_end = d->visitor.array_end = decoder_container_end;
+  d->visitor.object_key_begin = decoder_key_begin;
+  d->visitor.object_key_chunk = decoder_key_chunk;
+  d->visitor.object_key_end = decoder_key_end;
+  d->visitor.string_begin = decoder_string_begin;
+  d->visitor.string_chunk = decoder_string_chunk;
+  d->visitor.string_end = decoder_string_end;
+  d->visitor.boolean_value = decoder_boolean;
+  d->visitor.null_value = decoder_null;
+  d->visitor.number_begin = decoder_number_begin;
+  d->visitor.number_chunk = decoder_number_chunk;
+  d->visitor.number_end = decoder_number_end;
+  lonejson_json_value_init(CAI_LJ_PRESERVE, &d->value.record);
+  rc = lonejson_json_value_set_parse_visitor(&d->value.record, &d->visitor, d,
+                                             &detail);
+  if (rc == LONEJSON_STATUS_OK)
+    rc = lonejson_curl_parse_init(&d->validation, CAI_LJ_PRESERVE,
+                                  &validation_map, &d->value);
+  if (rc != LONEJSON_STATUS_OK)
+    return decoder_failure(d, CAI_ERR_NOMEM, "initialize execution decoder",
+                           NULL, error);
+  /* The public push parser accepts mapped roots. This constant wrapper routes
+   * the original JSON into its noncapturing SAX validator; no JSON bytes are
+   * retained or reserialized. The SAX visitor uses execution_fields directly
+   * to fill the bounded decoded record, validating text in that same pass. */
+  if (lonejson_curl_write_callback(prefix, 1U, sizeof(prefix) - 1U,
+                                   &d->validation) != sizeof(prefix) - 1U)
+    return decoder_parse_failure(d, error);
+  return CAI_OK;
+}
+int cai_execution_decoder_open(cai_execution_decoder **out, cai_error *error) {
+  cai_execution_decoder *d;
+  if (out == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "execution decoder output required");
+  *out = NULL;
+  d = cai_alloc(NULL, sizeof(*d));
+  if (d == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate execution decoder");
+  memset(d, 0, sizeof(*d));
+  *out = d;
+  return CAI_OK;
+}
+int cai_execution_decoder_feed(cai_execution_decoder *d, const void *bytes,
+                               size_t length, cai_error *error) {
+  const unsigned char *at = bytes;
+  char chunk[2048];
+  int rc = decoder_check(d, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (length != 0U && bytes == NULL)
+    return decoder_failure(d, CAI_ERR_INVALID, "execution bytes required", NULL,
+                           error);
+  if (length > CAI_EXECUTION_RECORD_MAX_BYTES - d->received)
+    return decoder_failure(d, CAI_ERR_LIMIT, "execution record exceeds 64 KiB",
+                           NULL, error);
+  if (length == 0U)
+    return CAI_OK;
+  if (!d->started && (rc = decoder_start(d, error)) != CAI_OK)
+    return rc;
+  d->received += length;
+  while (length != 0U) {
+    size_t n = length < sizeof(chunk) ? length : sizeof(chunk);
+    memcpy(chunk, at, n);
+    if (lonejson_curl_write_callback(chunk, 1U, n, &d->validation) != n)
+      return decoder_parse_failure(d, error);
+    at += n;
+    length -= n;
+  }
+  return CAI_OK;
+}
+int cai_execution_decoder_finish(cai_execution_decoder *d,
+                                 cai_execution_record *out, cai_error *error) {
+  char suffix[] = "}";
+  int rc = decoder_check(d, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (out == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "initialized execution record output required");
+  if (!d->started && (rc = decoder_start(d, error)) != CAI_OK)
+    return rc;
+  if (lonejson_curl_write_callback(suffix, 1U, 1U, &d->validation) != 1U ||
+      lonejson_curl_parse_finish(&d->validation) != LONEJSON_STATUS_OK)
+    return decoder_parse_failure(d, error);
+  if (!d->root_done || d->record.kind == NULL || d->record.kind[0] == '\0' ||
+      d->record.session_id == NULL || d->record.session_id[0] == '\0')
+    return decoder_failure(d, CAI_ERR_PROTOCOL,
+                           "execution record has no kind or session", NULL,
+                           error);
+  lonejson_curl_parse_cleanup(&d->validation);
+  cai_execution_record_cleanup(out);
+  *out = d->record;
+  cai_execution_record_init(&d->record);
+  d->finished = 1;
+  return CAI_OK;
+}
+int cai_execution_decoder_reset(cai_execution_decoder *d, cai_error *error) {
+  if (d == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID, "execution decoder required");
+  lonejson_curl_parse_cleanup(&d->validation);
+  if (d->started)
+    lonejson_json_value_cleanup(&d->value.record);
+  cai_execution_record_cleanup(&d->record);
+  memset(d, 0, sizeof(*d));
+  return CAI_OK;
+}
+void cai_execution_decoder_close(cai_execution_decoder *d) {
+  if (d != NULL) {
+    (void)cai_execution_decoder_reset(d, NULL);
+    cai_free_mem(NULL, d);
+  }
+}
 int cai_execution_record_parse(const char *json, cai_execution_record *record,
                                cai_error *error) {
-  lonejson_error local;
-  cai_execution_record parsed;
+  cai_execution_decoder *decoder = NULL;
+  int rc;
   size_t length;
   if (json == NULL || record == NULL)
     return cai_set_error(error, CAI_ERR_INVALID,
@@ -133,28 +557,13 @@ int cai_execution_record_parse(const char *json, cai_execution_record *record,
   if (length > CAI_EXECUTION_RECORD_MAX_BYTES)
     return cai_set_error(error, CAI_ERR_LIMIT,
                          "execution record exceeds 64 KiB");
-  if (execution_validate_json(json, length, &local) != LONEJSON_STATUS_OK)
-    return cai_set_error_detail(
-        error, CAI_ERR_PROTOCOL,
-        "execution record must contain valid JSON text without NUL bytes",
-        local.message[0] != '\0'
-            ? local.message
-            : "invalid UTF-8 or embedded NUL in execution text");
-  cai_execution_record_init(&parsed);
-  if (CAI_LJ->parse_cstr(CAI_LJ, &execution_map, &parsed, json, &local) !=
-      LONEJSON_STATUS_OK) {
-    cai_execution_record_cleanup(&parsed);
-    return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
-                                "invalid execution record", local.message);
-  }
-  if (parsed.kind[0] == '\0' || parsed.session_id[0] == '\0') {
-    cai_execution_record_cleanup(&parsed);
-    return cai_set_error(error, CAI_ERR_PROTOCOL,
-                         "execution record has no kind or session");
-  }
-  cai_execution_record_cleanup(record);
-  *record = parsed;
-  return CAI_OK;
+  rc = cai_execution_decoder_open(&decoder, error);
+  if (rc == CAI_OK)
+    rc = cai_execution_decoder_feed(decoder, json, length, error);
+  if (rc == CAI_OK)
+    rc = cai_execution_decoder_finish(decoder, record, error);
+  cai_execution_decoder_close(decoder);
+  return rc;
 }
 typedef struct execution_json_buffer {
   cai_buffer_builder buffer;

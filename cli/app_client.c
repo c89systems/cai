@@ -5,6 +5,7 @@
 #include "transcript_wire.h"
 #include <cai/app_client.h>
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,6 +15,11 @@ struct cai_app_client {
   cai_cli_transcript_decoder *transcript_decoder;
   cai_cli_status_decoder *status_decoder;
   cai_app_view view;
+  cai_execution_decoder *execution_decoder;
+  cai_execution_record execution_record;
+  int event_execution, execution_callback;
+  int execution_error;
+  char execution_reason[192];
   uint64_t now;
   cai_app_client_config config;
   cai_app_client_state state;
@@ -31,6 +37,30 @@ struct cai_app_client {
 };
 static int receive_transcript(cai_app_client *, const cai_protocol_event *,
                               cai_error *);
+static void discard_execution(cai_app_client *c) {
+  c->event_execution = 0;
+  if (c->execution_callback)
+    return; /* subscribe() may replace this stream inside its borrowed callback.
+             */
+  c->execution_error = 0;
+  c->execution_reason[0] = '\0';
+  if (c->execution_decoder != NULL)
+    (void)cai_execution_decoder_reset(c->execution_decoder, NULL);
+  cai_execution_record_cleanup(&c->execution_record);
+}
+static int execution_content_error(cai_app_client *c, int rc,
+                                   cai_error *error) {
+  if (rc != CAI_ERR_PROTOCOL && rc != CAI_ERR_LIMIT)
+    return rc;
+  c->execution_error = rc;
+  snprintf(c->execution_reason, sizeof(c->execution_reason), "%s",
+           error != NULL && error->detail != NULL ? error->detail
+           : error != NULL && error->message != NULL
+               ? error->message
+               : "Malformed historical execution content");
+  cai_error_cleanup(error);
+  return CAI_OK;
+}
 static int valid(cai_app_client *client, cai_error *error) {
   return client != NULL && pthread_equal(client->owner, pthread_self())
              ? CAI_OK
@@ -335,6 +365,7 @@ int cai_app_client_pump(cai_app_client *client, uint64_t now,
     client->view.stale = 1;
     cai_cli_status_decoder_close(client->status_decoder);
     client->status_decoder = NULL;
+    discard_execution(client);
     if (rc == CAI_OK && before != client->state.transport.phase)
       rc = notify(client, CAI_APP_CLIENT_CONNECTION, 0U, NULL, error);
   }
@@ -419,6 +450,20 @@ static int receive_transcript(cai_app_client *c,
     c->event_sequence = e->sequence;
     c->event_offset = 0U;
     c->event_has_data = e->has_data;
+    discard_execution(c);
+    if (c->config.execution != NULL && (strcmp(e->type, "execution") == 0 ||
+                                        strcmp(e->type, "subagent") == 0)) {
+      c->event_execution = strcmp(e->type, "subagent") == 0 ? 2 : 1;
+      if (!e->has_data) {
+        c->execution_error = CAI_ERR_PROTOCOL;
+        strcpy(c->execution_reason,
+               "execution transcript entry has no JSON data");
+      } else if (c->execution_decoder == NULL) {
+        rc = cai_execution_decoder_open(&c->execution_decoder, error);
+        if (rc != CAI_OK)
+          return rc;
+      }
+    }
     break;
   case CAI_TRANSCRIPT_DATA:
     if (!s->active || !c->event_open || !c->event_has_data ||
@@ -426,6 +471,12 @@ static int receive_transcript(cai_app_client *c,
         e->sequence != c->event_sequence || e->offset != c->event_offset ||
         e->length == 0U || e->length > UINT64_MAX - c->event_offset)
       return cai_cli_error(error, CAI_ERR_PROTOCOL, reason);
+    if (c->event_execution && !c->execution_error) {
+      rc = cai_execution_decoder_feed(c->execution_decoder, e->data, e->length,
+                                      error);
+      if (rc != CAI_OK && execution_content_error(c, rc, error) != CAI_OK)
+        return rc;
+    }
     c->event_offset += e->length;
     break;
   case CAI_TRANSCRIPT_EVENT_END:
@@ -435,6 +486,35 @@ static int receive_transcript(cai_app_client *c,
         (s->replaying ? e->position > s->watermark
                       : e->position <= s->watermark))
       return cai_cli_error(error, CAI_ERR_PROTOCOL, reason);
+    if (c->event_execution) {
+      cai_app_execution_event execution;
+      const cai_execution_record *r = &c->execution_record;
+      if (!c->execution_error) {
+        rc = cai_execution_decoder_finish(c->execution_decoder,
+                                          &c->execution_record, error);
+        if (rc != CAI_OK && execution_content_error(c, rc, error) != CAI_OK)
+          return rc;
+      }
+      if (!c->execution_error && c->event_execution == 2 &&
+          (r->subagent == NULL || r->parent_session_id == NULL ||
+           r->parent_call_id == NULL || r->source_sequence == 0U)) {
+        c->execution_error = CAI_ERR_PROTOCOL;
+        strcpy(c->execution_reason,
+               "subagent execution has no source identity");
+      }
+      execution.boundary = e;
+      execution.record = c->execution_error ? NULL : r;
+      execution.code = c->execution_error;
+      execution.reason = c->execution_error ? c->execution_reason : NULL;
+      execution.replay = s->replaying;
+      execution.subagent = c->event_execution == 2;
+      c->execution_callback = 1;
+      rc = c->config.execution(c->config.execution_context, &execution, error);
+      c->execution_callback = 0;
+      cai_execution_record_cleanup(&c->execution_record);
+      if (rc != CAI_OK)
+        return rc;
+    }
     break;
   case CAI_TRANSCRIPT_REPLAY_END:
     if (!s->active || !s->replaying || c->event_open ||
@@ -444,11 +524,14 @@ static int receive_transcript(cai_app_client *c,
     break;
   case CAI_TRANSCRIPT_ERROR:
     s->active = s->replaying = s->subscribing = c->event_open = 0;
+    discard_execution(c);
     break;
   }
   rc = c->config.transcript != NULL
            ? c->config.transcript(c->config.transcript_context, e, error)
            : CAI_OK;
+  if (c->wanted_stream != e->stream)
+    return rc; /* A callback explicitly replaced this subscription. */
   if (rc == CAI_OK && e->kind == CAI_TRANSCRIPT_EVENT_END) {
     s->sequence = e->sequence;
     s->position = e->position;
@@ -509,6 +592,7 @@ int cai_app_client_subscribe(cai_app_client *c, uint64_t request,
     c->state.transcript.subscribing = 1;
     c->state.transcript.active = 0;
     c->state.transcript.replaying = c->event_open = 0;
+    discard_execution(c);
   }
   return rc;
 }
@@ -620,5 +704,7 @@ void cai_app_client_close(cai_app_client *client) {
   cai_cli_transcript_decoder_close(client->transcript_decoder);
   cai_cli_status_decoder_close(client->status_decoder);
   cai_cli_status_cleanup(&client->view);
+  cai_execution_record_cleanup(&client->execution_record);
+  cai_execution_decoder_close(client->execution_decoder);
   free(client);
 }

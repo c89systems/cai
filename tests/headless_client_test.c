@@ -26,6 +26,7 @@ typedef struct view {
   uint64_t until;
   size_t matched;
   size_t statuses;
+  size_t execution_chunks;
   int reading, found, done, finished, accepted, closing;
 } view;
 static uint64_t now_ms(void) {
@@ -86,6 +87,18 @@ static int transcript(void *context, const cai_transcript_event *e,
     else
       v->finished = 1;
   } /* Only authenticated completed entries satisfy the probe. */
+  return CAI_OK;
+}
+static int execution(void *context, const cai_app_execution_event *e,
+                     cai_error *error) {
+  view *v = context;
+  cai_app_client_state state;
+  (void)error;
+  assert(e->record != NULL && e->record->kind != NULL &&
+         e->record->session_id != NULL && e->boundary != NULL);
+  assert(cai_app_client_get_state(v->client, &state, NULL) == CAI_OK &&
+         state.transcript.position < e->boundary->position);
+  ++v->execution_chunks;
   return CAI_OK;
 }
 static void step(view *v) {
@@ -215,6 +228,8 @@ int main(int argc, char **argv) {
   config.context = v;
   config.transcript = transcript;
   config.transcript_context = v;
+  config.execution = execution;
+  config.execution_context = v;
   v->until = now_ms() + 10000U;
   assert(cai_app_client_open(&config, now_ms(), &v->client, &v->error) ==
          CAI_OK);
@@ -252,6 +267,7 @@ int main(int argc, char **argv) {
              CAI_OK);
       while (!v->done || !v->finished || !v->accepted)
         step(v);
+      assert(v->execution_chunks != 0U);
     }
     v->closing = 1;
     if (!abrupt)

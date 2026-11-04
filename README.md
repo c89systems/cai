@@ -1176,8 +1176,10 @@ ordinary application warnings remain in the pslog file.
 
 Core SDK hosts enable this together with `record_transcript` and can inspect
 live `CAI_AGENT_EVENT_EXECUTION_RECORD` events or replay events of type
-`execution` or `subagent`. `<cai/execution.h>` provides decoding, cleanup and Markdown
-rendering. `libcai_app` enables recording by default. Lua exposes the same
+`execution` or `subagent`. `<cai/execution.h>` provides incremental chunk decoding,
+cleanup and Markdown rendering. Socket clients can receive typed execution
+chunks at authenticated transcript boundaries without collecting encoded JSON.
+`libcai_app` enables recording by default. Lua exposes the same
 event constant and `cai.execution_record(json)` decoder.
 Lua `on_replay` receives `subagent` envelopes through the same callback; decode
 `event.data` with `cai.execution_record` to inspect child identity and content.

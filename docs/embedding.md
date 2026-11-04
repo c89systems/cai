@@ -807,6 +807,29 @@ C hosts include `<cai/execution.h>`, initialize a `cai_execution_record`, call
 bounded payload chunks without inserting breaks inside a field. Rendering
 escapes terminal controls while leaving the stored payload unchanged.
 
+For fragmented input, use `cai_execution_decoder_open` / `feed` / `finish`.
+Feed original bytes directly; call `finish` only at the enclosing authenticated
+record boundary, then inspect/clean up the initialized owned output record.
+`reset` abandons a candidate and reuses the handle. Failure leaves the previous
+output unchanged and requires reset. The decoder retains bounded metadata and
+one decoded 4 KiB execution chunk, without gathering encoded JSON or a complete
+logical tool result. Its SAX binding uses the same field schema as the writer,
+validates UTF-8/NUL and integer limits, and skips unknown values without storing
+them. The one-shot parse helper uses this same decoder.
+
+Socket hosts can set `cai_app_client_config.execution` to receive a borrowed
+`cai_app_execution_event` at authenticated transcript END. It includes the
+decoded chunk, source attribution and replay/subagent flags. It runs before
+the raw END callback; both consumers must accept before the cursor advances.
+Malformed execution content produces a typed historical warning (NULL record,
+nonzero code and a bounded reason). Accepting it advances past that record;
+later valid chunks remain usable. Framing errors, local allocation failures or
+a rejecting consumer terminate only that attachment.
+Disconnect/replacement discards a partial candidate. A callback may request
+another subscription: its borrowed record stays valid until return, and the
+old END cannot advance the replacement subscription's cursor. No storage
+client, worker or tool execution is created in this projection.
+
 `cai_agent_runtime_export_execution_markdown(runtime, sink, error)` streams the
 stored timeline at an idle boundary; Lua exposes
 `runtime:export_execution_markdown(sink)`. The application combines this with

@@ -5,6 +5,7 @@
 #ifndef CAI_APP_CLIENT_H
 #define CAI_APP_CLIENT_H
 #include <cai/app_view.h>
+#include <cai/execution.h>
 #include <cai/input_controller.h>
 #include <cai/transcript.h>
 #include <cai/workspace_client.h>
@@ -45,6 +46,20 @@ typedef struct cai_app_client_event {
   /** Borrowed completed view for STATUS, otherwise NULL. */
   const cai_app_view *status;
 } cai_app_client_event;
+typedef struct cai_app_execution_event {
+  /** Authenticated EVENT_END envelope, borrowed for this callback. */
+  const cai_transcript_event *boundary;
+  /** One decoded execution chunk, including its original source attribution.
+   * Borrowed only for this callback; do not clean up or retain its pointers. */
+  const cai_execution_record *record;
+  /** Semantic historical warning: nonzero code, borrowed bounded reason and
+   * NULL record. Accept to display the warning and advance past bad content;
+   * raw transcript data remains available unchanged. Transport errors and
+   * local allocation failures still terminate the attachment. */
+  int code;
+  const char *reason;
+  int replay, subagent;
+} cai_app_execution_event;
 typedef struct cai_app_client_config {
   const char *runtime_directory;
   const char *workspace;
@@ -63,6 +78,15 @@ typedef struct cai_app_client_config {
    * reentry rules as event above. Transport loss aborts a partial event. */
   int (*transcript)(void *, const cai_transcript_event *, cai_error *);
   void *transcript_context;
+  /** Optional typed projection of execution/subagent transcript entries. Uses
+   * the core incremental decoder: one bounded decoded chunk, no encoded JSON
+   * accumulator, SDK client, worker or complete logical tool result. Called
+   * at authenticated END before the raw END callback and cursor advancement.
+   * Both consumers must accept END. Callback failure terminates this
+   * attachment. Same owner/reentry rules as event; context is borrowed through
+   * close. */
+  int (*execution)(void *, const cai_app_execution_event *, cai_error *);
+  void *execution_context;
 } cai_app_client_config;
 void cai_app_client_config_init(cai_app_client_config *);
 /** Explicit connect only: never forks, opens stores or submits input. All

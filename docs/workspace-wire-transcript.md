@@ -87,8 +87,22 @@ thread and may query state/send requests, but cannot reenter pump/detach/close.
 Transport loss abandons an incomplete record. Reconnect requires a new verified
 connection and an explicit subscription to the saved collection/cursor.
 
+The optional typed `execution` callback decodes `execution` and `subagent`
+entries incrementally using the core `cai_execution_decoder`. It retains only
+bounded metadata and the defined 4 KiB decoded execution chunk. No encoded JSON,
+DOM or complete logical result is collected. Source identity is mandatory for
+forwarded subagent entries. Delivery occurs at authenticated EVENT_END, before
+the raw END callback and cursor acknowledgement; refusal by either consumer
+prevents cursor advancement and fails that attachment. Malformed execution
+content is a typed historical warning with a NULL record, code and bounded
+reason; accepting it advances past that record and preserves its raw data.
+Local allocation failures and malformed transport remain terminal.
+Partial/replaced streams
+produce no typed chunk. Subscription replacement inside either callback cannot
+overwrite the new stream's cursor, or shorten a borrowed callback lifetime.
+
 This delivery provides explicit native position cursors. Default last-ten-turn
-selection, final visibility filtering, typed status/command presentation and
+selection, final visibility filtering, command presentation and
 the terminal adapter remain subsequent parts of the cutover. Do not treat the
 current raw subscription as the final user-facing replay policy.
 
