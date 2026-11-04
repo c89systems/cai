@@ -116,8 +116,8 @@ static void token(test_client *client, cai_cbor_type type, uint64_t argument,
   value.length = length;
   assert(cai_wire_peer_write(client->wire, &value, NULL) == CAI_OK);
 }
-static void greeting(test_client *client, const char *workspace,
-                     const char *schema) {
+static void greeting_kind(test_client *client, const char *workspace,
+                          const char *schema, cai_protocol_kind kind) {
   cai_protocol_header header;
   size_t n = strlen(workspace), s = strlen(schema);
   uint32_t length = 1U + (uint32_t)n +
@@ -126,7 +126,7 @@ static void greeting(test_client *client, const char *workspace,
                                 : 3U) +
                     (uint32_t)s + (s < 24U ? 1U : 2U);
   memset(&header, 0, sizeof(header));
-  header.kind = CAI_PROTOCOL_HELLO;
+  header.kind = kind;
   assert(cai_protocol_peer_begin(client->wire, &header, length, NULL) ==
          CAI_OK);
   token(client, CAI_CBOR_ARRAY, 2U, NULL, 0U);
@@ -138,6 +138,10 @@ static void greeting(test_client *client, const char *workspace,
   token(client, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U);
   token(client, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U);
   assert(cai_protocol_peer_end(client->wire, NULL) == CAI_OK);
+}
+static void greeting(test_client *client, const char *workspace,
+                     const char *schema) {
+  greeting_kind(client, workspace, schema, CAI_PROTOCOL_HELLO);
 }
 static void connect_client(cai_workspace_endpoint *endpoint,
                            test_client *client) {
@@ -280,15 +284,32 @@ static void failures(const char *runtime, const char *workspace) {
   assert(cai_workspace_endpoint_open(runtime, workspace, &endpoint, NULL) ==
          CAI_OK);
   /* Invalid identity/schema never gains an attachment or changes lifetime. */
-  for (i = 0U; i < 2U; ++i) {
+  for (i = 0U; i < 4U; ++i) {
     connect_client(endpoint, &clients[0]);
-    greeting(&clients[0], i == 0U ? "/wrong" : workspace,
-             i == 0U ? CAI_WORKSPACE_SCHEMA : "wrong");
+    greeting_kind(&clients[0], i % 2U == 0U ? "/wrong" : workspace,
+                  i % 2U == 0U ? CAI_WORKSPACE_SCHEMA : "wrong",
+                  i < 2U ? CAI_PROTOCOL_HELLO : CAI_PROTOCOL_PROBE);
     assert(cai_wire_peer_flush(clients[0].wire, 0U, NULL) == CAI_OK);
     exchange(&state, NULL, 1U);
     close_client(&clients[0]);
   }
-  assert(state.errors == 2U && state.attached == 0U);
+  assert(state.errors == 4U && state.attached == 0U);
+  /* Discovery is one-shot. Pipelined controls or another greeting never gain
+   * authority, trigger application callbacks, or change server lifetime. */
+  for (i = 0U; i < 2U; ++i) {
+    connect_client(endpoint, &clients[0]);
+    greeting_kind(&clients[0], workspace, CAI_WORKSPACE_SCHEMA,
+                  CAI_PROTOCOL_PROBE);
+    if (i == 0U)
+      command(&clients[0], CAI_PROTOCOL_REQUEST, 0U);
+    else
+      greeting_kind(&clients[0], workspace, CAI_WORKSPACE_SCHEMA,
+                    CAI_PROTOCOL_PROBE);
+    assert(cai_wire_peer_flush(clients[0].wire, 0U, NULL) == CAI_OK);
+    exchange(&state, NULL, 1U);
+    close_client(&clients[0]);
+  }
+  assert(state.errors == 6U && state.attached == 0U && state.completed == 0U);
   /* Full pre-handshake slots must not spin on the readable listener. */
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
     connect_client(endpoint, &clients[i]);
@@ -299,7 +320,7 @@ static void failures(const char *runtime, const char *workspace) {
                                       &deadline, NULL) == CAI_OK);
   assert(count == CAI_ATTACHMENT_LIMIT && deadline == 10002U);
   exchange(&state, NULL, 10002U);
-  assert(state.errors == 2U + CAI_ATTACHMENT_LIMIT);
+  assert(state.errors == 6U + CAI_ATTACHMENT_LIMIT);
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i)
     close_client(&clients[i]);
   assert(snapshot(&state).phase == CAI_ATTACHMENT_READY);

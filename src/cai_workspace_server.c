@@ -19,7 +19,7 @@ typedef struct server_peer {
   size_t part, offset;
   role_notice notices[ROLE_NOTICES];
   size_t notice_head, notice_count;
-  int greeted, detach, failed, writing;
+  int greeted, detach, failed, writing, probe;
 } server_peer;
 struct cai_workspace_server {
   cai_workspace_server_config config;
@@ -99,6 +99,43 @@ static int write_bytes(server_peer *peer, const void *data, size_t count,
   if (rc == CAI_OK)
     rc = write_token(peer, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U, error);
   return rc;
+}
+static int identity(server_peer *peer, cai_error *error) {
+  cai_workspace_server *server = peer->server;
+  cai_attachment_state state;
+  cai_protocol_header header;
+  const char *directory = cai_workspace_server_directory(server);
+  size_t length = strlen(directory), schema = strlen(CAI_WORKSPACE_SCHEMA);
+  int rc =
+      cai_attachment_controller_get_state(server->attachments, &state, error);
+  memset(&header, 0, sizeof(header));
+  header.kind = CAI_PROTOCOL_IDENTITY;
+  if (rc == CAI_OK)
+    rc =
+        cai_protocol_peer_begin(peer->wire, &header,
+                                3U + string_size(length) + string_size(schema) +
+                                    string_size(sizeof(server->instance)),
+                                error);
+  if (rc == CAI_OK)
+    rc = write_token(peer, CAI_CBOR_ARRAY, 5U, NULL, 0U, error);
+  if (rc == CAI_OK)
+    rc = write_bytes(peer, directory, length, error);
+  if (rc == CAI_OK)
+    rc = write_token(peer, CAI_CBOR_TEXT, schema, NULL, 0U, error);
+  if (rc == CAI_OK)
+    rc = write_token(peer, CAI_CBOR_DATA, 0U, CAI_WORKSPACE_SCHEMA, schema,
+                     error);
+  if (rc == CAI_OK)
+    rc = write_token(peer, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U, error);
+  if (rc == CAI_OK)
+    rc = write_bytes(peer, server->instance, sizeof(server->instance), error);
+  if (rc == CAI_OK)
+    rc = write_token(peer, CAI_CBOR_BOOL, state.persist != 0, NULL, 0U, error);
+  if (rc == CAI_OK)
+    rc = write_token(peer, CAI_CBOR_UINT, state.phase, NULL, 0U, error);
+  if (rc == CAI_OK)
+    rc = write_token(peer, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, error);
+  return rc == CAI_OK ? cai_protocol_peer_end(peer->wire, error) : rc;
 }
 static int welcome(server_peer *peer, cai_error *error) {
   cai_workspace_server *server = peer->server;
@@ -213,17 +250,21 @@ static int greeting(server_peer *peer, const cai_protocol_event *event,
   size_t length;
   if (event->type == CAI_PROTOCOL_HEADER) {
     const cai_protocol_header *h = event->header;
-    if (peer->greeted || h->kind != CAI_PROTOCOL_HELLO || h->request != 0U ||
-        h->conversation != 0U || h->generation != 0U || h->sequence != 0U ||
-        h->stream != 0U || h->attachment != 0U)
+    if (peer->greeted ||
+        (h->kind != CAI_PROTOCOL_HELLO && h->kind != CAI_PROTOCOL_PROBE) ||
+        h->request != 0U || h->conversation != 0U || h->generation != 0U ||
+        h->sequence != 0U || h->stream != 0U || h->attachment != 0U)
       goto invalid;
     peer->part = peer->offset = 0U;
+    peer->probe = h->kind == CAI_PROTOCOL_PROBE;
     return CAI_OK;
   }
   if (event->type == CAI_PROTOCOL_COMPLETE) {
     if (peer->part != 6U)
       goto invalid;
     peer->greeted = 1;
+    if (peer->probe)
+      return identity(peer, error);
     peer->deadline = 0U;
     return CAI_OK;
   }
@@ -487,7 +528,8 @@ int cai_workspace_server_pump(cai_workspace_server *server, uint64_t now,
     (void)cai_attachment_controller_get_state(server->attachments, &state,
                                               NULL);
     if (rc == CAI_OK && !eof && !peer->detach && peer->greeted &&
-        peer->attachment == 0U && state.phase == CAI_ATTACHMENT_READY) {
+        !peer->probe && peer->attachment == 0U &&
+        state.phase == CAI_ATTACHMENT_READY) {
       rc = cai_attachment_controller_attach(server->attachments, now,
                                             &peer->attachment, &local);
       if (rc == CAI_OK) {
@@ -499,6 +541,9 @@ int cai_workspace_server_pump(cai_workspace_server *server, uint64_t now,
     }
     if (rc == CAI_OK && !eof && !peer->detach)
       rc = cai_wire_peer_flush(peer->wire, 0U, &local);
+    if (rc == CAI_OK && peer->probe && peer->greeted &&
+        cai_wire_peer_pending(peer->wire) == 0U)
+      peer->detach = 1;
     if (rc != CAI_OK && local.code == CAI_OK)
       cai_set_error(&local, rc, "workspace subscriber processing failed");
     if (rc != CAI_OK && !peer->failed)

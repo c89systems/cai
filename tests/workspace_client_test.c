@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 typedef struct observer {
-  size_t welcomes, roles, headers, complete, bytes;
+  size_t welcomes, roles, identities, headers, complete, bytes;
   int reject, fail_output;
   cai_workspace_client *client;
   uint64_t requests[16];
@@ -22,11 +22,16 @@ typedef struct admissions {
   cai_workspace_server *server;
   size_t completed, applied;
   uint64_t generation;
+  size_t attached, detached;
 } admissions;
 static int admitted(void *context, const cai_workspace_server_event *event,
                     cai_error *error) {
   admissions *state = context;
   (void)error;
+  if (event->type == CAI_WORKSPACE_ATTACHED)
+    ++state->attached;
+  if (event->type == CAI_WORKSPACE_DETACHED)
+    ++state->detached;
   if (event->type == CAI_WORKSPACE_MESSAGE &&
       event->message->type == CAI_PROTOCOL_COMPLETE) {
     assert(event->attachment == event->message->header->attachment);
@@ -53,7 +58,8 @@ static int observed(void *context, const cai_protocol_event *event,
     return CAI_OK; /* A nested output failure is still terminal to pump. */
   }
   if (event->header->kind == CAI_PROTOCOL_WELCOME ||
-      event->header->kind == CAI_PROTOCOL_ROLE)
+      event->header->kind == CAI_PROTOCOL_ROLE ||
+      event->header->kind == CAI_PROTOCOL_IDENTITY)
     assert(event->type == CAI_PROTOCOL_COMPLETE);
   if (event->type == CAI_PROTOCOL_HEADER)
     ++out->headers;
@@ -63,6 +69,8 @@ static int observed(void *context, const cai_protocol_event *event,
   if (event->type == CAI_PROTOCOL_COMPLETE) {
     if (event->header->kind == CAI_PROTOCOL_WELCOME)
       ++out->welcomes;
+    else if (event->header->kind == CAI_PROTOCOL_IDENTITY)
+      ++out->identities;
     else if (event->header->kind == CAI_PROTOCOL_ROLE) {
       ++out->roles;
       if (event->header->request != 0U) {
@@ -74,9 +82,10 @@ static int observed(void *context, const cai_protocol_event *event,
   }
   return CAI_OK;
 }
-static cai_workspace_client *open_client(const char *runtime,
-                                         const char *workspace,
-                                         uint64_t timeout, observer *out) {
+static cai_workspace_client *open_client_mode(const char *runtime,
+                                              const char *workspace,
+                                              uint64_t timeout, observer *out,
+                                              int probe) {
   cai_workspace_client_config config;
   cai_workspace_client *client = NULL;
   cai_workspace_client_config_init(&config);
@@ -85,9 +94,15 @@ static cai_workspace_client *open_client(const char *runtime,
   config.handshake_timeout_ms = timeout;
   config.event = observed;
   config.context = out;
+  config.probe = probe;
   assert(cai_workspace_client_open(&config, 0U, &client, NULL) == CAI_OK);
   out->client = client;
   return client;
+}
+static cai_workspace_client *open_client(const char *runtime,
+                                         const char *workspace,
+                                         uint64_t timeout, observer *out) {
+  return open_client_mode(runtime, workspace, timeout, out, 0);
 }
 static cai_workspace_client_state snapshot(cai_workspace_client *client) {
   cai_workspace_client_state state;
@@ -122,6 +137,115 @@ static void request(cai_workspace_client *client, uint64_t generation,
   value.type = CAI_CBOR_NULL;
   assert(cai_workspace_client_write(client, &value, NULL) == CAI_OK);
   assert(cai_workspace_client_end(client, NULL) == CAI_OK);
+}
+static void probe(cai_workspace_server *server, const char *root, uint64_t now,
+                  cai_attachment_phase phase, int persist) {
+  observer out;
+  cai_workspace_client *client;
+  cai_workspace_client_state state;
+  cai_attachment_state before, after;
+  struct pollfd interest;
+  uint64_t deadline;
+  memset(&out, 0, sizeof(out));
+  assert(cai_workspace_server_get_state(server, &before, NULL) == CAI_OK);
+  client = open_client_mode(root, root, 1000000U, &out, 1);
+  exchange(server, client, NULL, now);
+  state = snapshot(client);
+  assert(state.phase == CAI_WORKSPACE_IDENTIFIED && state.has_identity);
+  assert(!state.has_welcome && !state.attachment && !state.generation &&
+         !state.controller && !state.error_code);
+  assert(state.persist == persist && state.server_phase == phase);
+  assert(memcmp(state.instance, cai_workspace_server_instance(server),
+                sizeof(state.instance)) == 0);
+  assert(out.identities == 1U && !out.welcomes && !out.roles && !out.headers &&
+         !out.bytes && !out.complete);
+  assert(cai_workspace_server_get_state(server, &after, NULL) == CAI_OK);
+  assert(after.phase == before.phase && after.count == before.count &&
+         after.generation == before.generation &&
+         after.controller == before.controller &&
+         after.deadline_ms == before.deadline_ms &&
+         after.stop_reason == before.stop_reason);
+  assert(cai_workspace_client_prepare(client, &interest, &deadline, NULL) ==
+         CAI_OK);
+  assert(interest.fd == -1 && !interest.events && !deadline);
+  request(client, 0U, 0, CAI_ERR_INVALID);
+  assert(cai_workspace_client_takeover(client, 1U, 0U, NULL) ==
+         CAI_ERR_INVALID);
+  assert(cai_workspace_client_shutdown(client, 1U, 0U, NULL) ==
+         CAI_ERR_INVALID);
+  assert(cai_workspace_client_pump(client, now + 1U, NULL) == CAI_OK);
+  assert(cai_workspace_client_detach(client, NULL) == CAI_OK);
+  assert(snapshot(client).phase == CAI_WORKSPACE_IDENTIFIED);
+  cai_workspace_client_close(client);
+}
+static void discovery(const char *root, int persist) {
+  cai_workspace_server_config config;
+  cai_workspace_server *server;
+  cai_workspace_client *a, *b;
+  cai_attachment_state state;
+  admissions admission;
+  observer oa, ob;
+  memset(&admission, 0, sizeof(admission));
+  memset(&oa, 0, sizeof(oa));
+  memset(&ob, 0, sizeof(ob));
+  cai_workspace_server_config_init(&config);
+  config.runtime_directory = config.workspace = root;
+  config.lifetime.persist = persist;
+  config.lifetime.first_attachment_timeout_ms = 50U;
+  config.event = admitted;
+  config.context = &admission;
+  assert(cai_workspace_server_open(&config, &server, NULL) == CAI_OK);
+  admission.server = server;
+  probe(server, root, 0U, CAI_ATTACHMENT_STARTING, persist);
+  assert(cai_workspace_server_ready(server, 2U, NULL) == CAI_OK);
+  probe(server, root, 3U, CAI_ATTACHMENT_READY, persist);
+  assert(!admission.attached && !admission.detached && !admission.completed);
+  a = open_client(root, root, 0U, &oa);
+  b = open_client(root, root, 0U, &ob);
+  exchange(server, a, b, 4U);
+  assert(admission.attached == 2U);
+  probe(server, root, 5U, CAI_ATTACHMENT_READY, persist);
+  assert(cai_workspace_server_authorize(server, snapshot(a).attachment,
+                                        snapshot(a).generation,
+                                        NULL) == CAI_OK);
+  assert(cai_workspace_server_authorize(server, snapshot(b).attachment,
+                                        snapshot(b).generation,
+                                        NULL) != CAI_OK);
+  assert(admission.attached == 2U && !admission.detached);
+  cai_workspace_client_close(a);
+  cai_workspace_client_close(b);
+  assert(cai_workspace_server_pump(server, 6U, NULL) == CAI_OK);
+  assert(cai_workspace_server_get_state(server, &state, NULL) == CAI_OK);
+  assert(!state.count && admission.detached == 2U);
+  assert(state.phase ==
+         (persist ? CAI_ATTACHMENT_READY : CAI_ATTACHMENT_STOPPING));
+  cai_workspace_server_close(server);
+
+  /* Probing READY must not consume or renew the first-attachment grace. */
+  assert(cai_workspace_server_open(&config, &server, NULL) == CAI_OK);
+  admission.server = server;
+  assert(cai_workspace_server_ready(server, 0U, NULL) == CAI_OK);
+  probe(server, root, 49U, CAI_ATTACHMENT_READY, persist);
+  assert(cai_workspace_server_pump(server, 50U, NULL) == CAI_OK);
+  assert(cai_workspace_server_get_state(server, &state, NULL) == CAI_OK);
+  assert(state.phase ==
+         (persist ? CAI_ATTACHMENT_READY : CAI_ATTACHMENT_STOPPING));
+  assert(persist || state.stop_reason == CAI_ATTACHMENT_STARTUP_ABANDONED);
+  cai_workspace_server_close(server);
+
+  /* A connection accepted before STOPPING may still identify the owner;
+   * stopping servers accept no new connections. No attach is admitted. */
+  assert(cai_workspace_server_open(&config, &server, NULL) == CAI_OK);
+  admission.server = server;
+  memset(&oa, 0, sizeof(oa));
+  a = open_client_mode(root, root, 0U, &oa, 1);
+  assert(cai_workspace_server_pump(server, 0U, NULL) == CAI_OK);
+  assert(cai_workspace_server_stop(server, NULL) == CAI_OK);
+  exchange(server, a, NULL, 0U);
+  assert(snapshot(a).phase == CAI_WORKSPACE_IDENTIFIED &&
+         snapshot(a).server_phase == CAI_ATTACHMENT_STOPPING);
+  cai_workspace_client_close(a);
+  cai_workspace_server_close(server);
 }
 static void integration(const char *runtime, const char *workspace,
                         int persist) {
@@ -406,6 +530,108 @@ static void ws(cai_wire_peer *peer, const char *value, size_t length) {
   wt(peer, CAI_CBOR_DATA, 0U, value, length);
   wt(peer, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U);
 }
+static void send_identity(cai_wire_peer *peer, const char *workspace,
+                          int defect, cai_attachment_phase phase) {
+  cai_protocol_header h;
+  const char *schema = defect == 2 ? "bad.workspace" : CAI_WORKSPACE_SCHEMA;
+  static const char instance[] = "0123456789abcdef";
+  size_t n = strlen(workspace), s = strlen(schema), m = defect == 3 ? 15U : 16U;
+  memset(&h, 0, sizeof(h));
+  h.kind = defect == 8 ? CAI_PROTOCOL_WELCOME : CAI_PROTOCOL_IDENTITY;
+  h.attachment = defect == 5;
+  h.generation = defect == 6;
+  h.request = defect == 7;
+  assert(n < 256U && s < 24U);
+  assert(cai_protocol_peer_begin(peer, &h,
+                                 (uint32_t)(n + s + m + (n < 24U ? 6U : 7U)),
+                                 NULL) == CAI_OK);
+  wt(peer, CAI_CBOR_ARRAY, defect == 14 ? 4U : 5U, NULL, 0U);
+  if (defect == 1) {
+    wt(peer, CAI_CBOR_BYTES, n, NULL, 0U);
+    wt(peer, CAI_CBOR_DATA, 0U, "!", 1U);
+    wt(peer, CAI_CBOR_DATA, 0U, workspace + 1, n - 1U);
+    wt(peer, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U);
+  } else
+    ws(peer, workspace, n);
+  wt(peer, CAI_CBOR_TEXT, s, NULL, 0U);
+  wt(peer, CAI_CBOR_DATA, 0U, schema, s);
+  wt(peer, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U);
+  ws(peer, instance, m);
+  wt(peer, defect == 9 ? CAI_CBOR_UINT : CAI_CBOR_BOOL, 1U, NULL, 0U);
+  if (defect == 14)
+    return; /* Invalid arity is rejected at the first token. */
+  wt(peer, CAI_CBOR_UINT, defect == 4 ? 3U : (uint64_t)phase, NULL, 0U);
+  wt(peer, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U);
+  assert(cai_protocol_peer_end(peer, NULL) == CAI_OK);
+}
+static void discovery_replies(const char *root) {
+  int defect;
+  for (defect = 0; defect < 18; ++defect) {
+    cai_workspace_endpoint *endpoint;
+    cai_workspace_client *client;
+    cai_wire_peer *peer;
+    observer out;
+    int fd = -1, rc = CAI_OK;
+    size_t pending;
+    memset(&out, 0, sizeof(out));
+    assert(cai_workspace_endpoint_open(root, root, &endpoint, NULL) == CAI_OK);
+    assert(cai_workspace_endpoint_listen(endpoint, NULL) == CAI_OK);
+    client = open_client_mode(root, root, 50U, &out, 1);
+    assert(cai_workspace_client_pump(client, 0U, NULL) == CAI_OK);
+    assert(cai_workspace_endpoint_accept(endpoint, &fd, NULL) == CAI_OK &&
+           fd >= 0);
+    assert(cai_wire_peer_open(fd, 0U, ignore, NULL, &peer, NULL) == CAI_OK);
+    if (defect == 16) {
+      assert(shutdown(fd, SHUT_WR) == 0);
+      assert(cai_workspace_client_pump(client, 1U, NULL) == CAI_ERR_TRANSPORT);
+    } else if (defect == 17) {
+      assert(cai_workspace_client_pump(client, 49U, NULL) == CAI_OK);
+      assert(cai_workspace_client_pump(client, 50U, NULL) == CAI_ERR_LIMIT);
+    } else {
+      cai_attachment_phase phase = defect == 15
+                                       ? CAI_ATTACHMENT_STOPPING
+                                       : (cai_attachment_phase)(defect % 3);
+      out.reject = defect == 12;
+      send_identity(peer, root, defect, phase);
+      if (defect == 10)
+        send_identity(peer, root, 0, CAI_ATTACHMENT_READY);
+      if (defect == 10) {
+        assert(cai_wire_peer_flush(peer, 0U, NULL) == CAI_OK);
+        assert(cai_workspace_client_pump(client, 0U, NULL) == CAI_ERR_PROTOCOL);
+        assert(out.identities == 1U &&
+               snapshot(client).phase == CAI_WORKSPACE_FAILED);
+      } else if (defect == 11) {
+        assert(cai_wire_peer_flush(peer, 17U, NULL) == CAI_OK);
+        assert(cai_workspace_client_pump(client, 0U, NULL) == CAI_OK);
+        assert(shutdown(fd, SHUT_WR) == 0);
+        assert(cai_workspace_client_pump(client, 1U, NULL) == CAI_ERR_PROTOCOL);
+      } else {
+        do {
+          assert(cai_wire_peer_flush(peer, 1U, NULL) == CAI_OK);
+          pending = cai_wire_peer_pending(peer);
+          rc = cai_workspace_client_pump(client, 0U, NULL);
+          if (rc != CAI_OK)
+            break;
+          if (pending)
+            assert(!out.identities && !snapshot(client).has_identity);
+        } while (pending);
+        if (defect == 0 || defect == 13 || defect == 15) {
+          assert(rc == CAI_OK && out.identities == 1U);
+          assert(snapshot(client).phase == CAI_WORKSPACE_IDENTIFIED);
+          assert(snapshot(client).server_phase == phase);
+        } else {
+          assert(rc == (defect == 12 ? CAI_ERR_CANCELLED : CAI_ERR_PROTOCOL));
+          assert(snapshot(client).phase == CAI_WORKSPACE_FAILED);
+          assert(!out.identities &&
+                 snapshot(client).has_identity == (defect == 12));
+        }
+      }
+    }
+    cai_workspace_client_close(client);
+    cai_wire_peer_close(peer);
+    cai_workspace_endpoint_close(endpoint);
+  }
+}
 static void send_welcome(cai_wire_peer *peer, const char *workspace,
                          int defect) {
   cai_protocol_header h;
@@ -619,6 +845,9 @@ static void *run(void *unused) {
   assert(mkdtemp(root) != NULL);
   integration(root, root, 0);
   integration(root, root, 1);
+  discovery(root, 0);
+  discovery(root, 1);
+  discovery_replies(root);
   stale_control(root, root);
   control_backpressure(root, root);
   adversarial(root, root);

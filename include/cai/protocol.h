@@ -34,7 +34,9 @@ typedef enum cai_protocol_kind {
   CAI_PROTOCOL_SHUTDOWN,
   CAI_PROTOCOL_SUBSCRIBE,
   CAI_PROTOCOL_UNSUBSCRIBE,
-  CAI_PROTOCOL_SUBSCRIPTION_ERROR
+  CAI_PROTOCOL_SUBSCRIPTION_ERROR,
+  CAI_PROTOCOL_PROBE,
+  CAI_PROTOCOL_IDENTITY
 } cai_protocol_kind;
 /** Each record is a definite eight-pair map, with ascending integer keys:
  * 0 kind, 1 request, 2 conversation, 3 generation, 4 sequence, 5 stream,

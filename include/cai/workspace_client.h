@@ -3,6 +3,7 @@
  */
 #ifndef CAI_WORKSPACE_CLIENT_H
 #define CAI_WORKSPACE_CLIENT_H
+#include <cai/attachment.h>
 #include <cai/protocol.h>
 #include <poll.h>
 #ifdef __cplusplus
@@ -16,13 +17,19 @@ typedef enum cai_workspace_client_phase {
   CAI_WORKSPACE_CONNECTED,
   CAI_WORKSPACE_DETACHING,
   CAI_WORKSPACE_DISCONNECTED,
-  CAI_WORKSPACE_FAILED
+  CAI_WORKSPACE_FAILED,
+  /** Successful terminal identity-only query, with no attachment. */
+  CAI_WORKSPACE_IDENTIFIED
 } cai_workspace_client_phase;
 typedef struct cai_workspace_client_state {
   cai_workspace_client_phase phase;
   uint64_t attachment, generation, controller, deadline_ms;
   unsigned char instance[CAI_WORKSPACE_INSTANCE_BYTES];
   int has_welcome, persist, error_code;
+  /** Set only after a validated identity-only reply; attachment, generation
+   * and controller remain zero. Snapshot, not a subscription to readiness. */
+  int has_identity;
+  cai_attachment_phase server_phase;
 } cai_workspace_client_state;
 typedef struct cai_workspace_client_config {
   const char *runtime_directory;
@@ -31,8 +38,15 @@ typedef struct cai_workspace_client_config {
    * remains responsive. Otherwise bounds connect/WELCOME/initial ROLE. */
   uint64_t handshake_timeout_ms;
   size_t backlog_limit;
+  /** False by default. Query canonical identity, instance, persistence and
+   * startup phase without attaching, taking control or extending lifetime.
+   * Completes during STARTING too; IDENTIFIED is terminal and closes transport.
+   * No runtime/storage is opened. Controls and requests remain inadmissible.
+   * Set handshake_timeout_ms to bound an unavailable/unresponsive owner. */
+  int probe;
   /** Borrowed callback/context until close. WELCOME and ROLE are forwarded only
-   * as COMPLETE after their entire identity/schema is validated. Other records
+   * as COMPLETE after their entire identity/schema is validated. Identity-only
+   * replies follow this same rule. Other records
    * arrive as provisional HEADER/PAYLOAD then validated COMPLETE, without a
    * payload accumulator. Callbacks may enqueue output, but must not reenter
    * pump, detach or close. Callback failures are terminal. */

@@ -31,7 +31,10 @@ and isolates disconnected/slow subscribers. It has no worker or renderer.
 The matching socket client (`workspace_client.h`) verifies the complete welcome,
 tracks instance/role/generation, streams provisional payloads and performs
 explicit takeover, shutdown and detach without owning stores or starting a
-process. Controller/frontend composition, automatic startup and the attach
+process. Its identity-only probe verifies an owner during STARTING or READY
+without acquiring an attachment or changing authority/lifetime; the real
+headless executable is covered by that probe too. Registry/selector discovery,
+controller/frontend composition, automatic startup and the attach
 CLI remain pending. Explicit foreground headless startup is implemented below.
 
 The application receiver now also provides `cai_app_start`/`cai_app_join`: an
@@ -347,6 +350,26 @@ READY. Incomplete greetings expire after ten seconds. All connection slots,
 including unfinished greetings, count toward the bounded transport capacity.
 When full, the listener is excluded from readiness interests to avoid spinning
 on connections the host cannot accept yet.
+
+Discovery uses `PROBE`, with the same canonical-workspace/schema payload and
+zero metadata as `HELLO`. It never becomes an attachment. A validated probe
+receives one `IDENTITY` record with zero metadata and a definite five-item
+array: canonical workspace bytes, schema text, 16-byte server-instance bytes,
+persistence boolean and startup phase (`0` STARTING, `1` READY, `2` STOPPING).
+The server closes that connection after draining its bounded reply. Probes
+consume transport slots and retain the greeting deadline while draining, but
+never acquire authority, advance generations or change attachment counts,
+first-attachment grace or last-client shutdown. They cannot carry controls or
+application requests. Already accepted probes may report STOPPING; a stopping
+server accepts no new connections.
+
+Native callers set `cai_workspace_client_config.probe` and use the ordinary
+prepare/pump loop with an explicit handshake timeout. Only validated COMPLETE
+publishes `has_identity`, `server_phase`, instance and persistence. Successful
+completion becomes terminal `CAI_WORKSPACE_IDENTIFIED`, with no descriptor or
+deadline; no runtime, storage or worker is opened. Readiness is a snapshot,
+not a subscription. A later attach revalidates the owner through its ordinary
+greeting, and must not treat registry hints or a past probe as authority.
 
 `WELCOME` assigns the server-owned attachment/generation metadata. Its definite
 three-item array contains the canonical workspace bytes, a random 16-byte

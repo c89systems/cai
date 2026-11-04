@@ -37,6 +37,8 @@ inspect() { "$client" "$runtime_root" "$work" inspect; }
 # structured logging; no banner, editor, tool receipt or Markdown reaches stdout.
 plan '{"plan":[{"tool":"exec_command","arguments":{"cmd":"kill -s TERM $$; exit 0","tty":false}},"HEADLESS_ANSWER"]}'
 start_server -x -N --terminal --yolo
+"$client" "$runtime_root" "$work" probe
+[[ $(requests) == 0 ]]
 id=$(inspect)
 [[ -n "$id" && $(requests) == 0 ]]
 "$client" "$runtime_root" "$work" abrupt >"$root/client"
@@ -70,6 +72,7 @@ stop_server
 # client departure never stops -x; only explicit shutdown/signals do.
 for signal in TERM INT HUP QUIT; do
   start_server --headless
+  "$client" "$runtime_root" "$work" probe
   [[ $(inspect) == "$id" && $(requests) == 2 ]]
   kill -s "$signal" "$server_pid"
   stop_server

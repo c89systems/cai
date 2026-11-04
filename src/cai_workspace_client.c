@@ -18,6 +18,7 @@ struct cai_workspace_client {
   unsigned char instance[CAI_WORKSPACE_INSTANCE_BYTES];
   size_t part, offset;
   int fd, pumping, writing, persistence;
+  cai_attachment_phase server_phase;
 };
 static int valid(cai_workspace_client *client, cai_error *error) {
   return client != NULL && pthread_equal(client->owner, pthread_self())
@@ -53,6 +54,93 @@ static int emit(cai_workspace_client *client, const cai_protocol_event *event,
 static int invalid(cai_error *error) {
   return cai_set_error(error, CAI_ERR_PROTOCOL,
                        "workspace server identity, role or message is invalid");
+}
+static int identity(cai_workspace_client *client,
+                    const cai_protocol_event *event, cai_error *error) {
+  const cai_protocol_header *h = event->header;
+  const cai_cbor_token *value = event->token;
+  const char *expected = client->part == 3U || client->part == 4U
+                             ? CAI_WORKSPACE_SCHEMA
+                             : cai_workspace_client_directory(client);
+  size_t length = client->part == 5U || client->part == 6U
+                      ? sizeof(client->instance)
+                      : strlen(expected);
+  cai_cbor_type type =
+      client->part == 3U || client->part == 4U ? CAI_CBOR_TEXT : CAI_CBOR_BYTES;
+  if (event->type == CAI_PROTOCOL_HEADER) {
+    if (client->state.has_identity || h->kind != CAI_PROTOCOL_IDENTITY ||
+        h->request != 0U || h->conversation != 0U || h->generation != 0U ||
+        h->sequence != 0U || h->stream != 0U || h->attachment != 0U)
+      return invalid(error);
+    client->part = client->offset = 0U;
+    return CAI_OK;
+  }
+  if (event->type == CAI_PROTOCOL_COMPLETE) {
+    if (client->part != 10U)
+      return invalid(error);
+    memcpy(client->state.instance, client->instance, sizeof(client->instance));
+    client->state.persist = client->persistence;
+    client->state.server_phase = client->server_phase;
+    client->state.has_identity = 1;
+    client->state.phase = CAI_WORKSPACE_IDENTIFIED;
+    client->state.deadline_ms = 0U;
+    return emit(client, event, error);
+  }
+  if (value->indefinite)
+    return invalid(error);
+  switch (client->part) {
+  case 0:
+    if (value->type != CAI_CBOR_ARRAY || value->argument != 5U)
+      return invalid(error);
+    ++client->part;
+    break;
+  case 1:
+  case 3:
+  case 5:
+    if (value->type != type || value->argument != length)
+      return invalid(error);
+    client->offset = 0U;
+    ++client->part;
+    break;
+  case 2:
+  case 4:
+  case 6:
+    if (value->type == CAI_CBOR_DATA) {
+      if (value->length > length - client->offset)
+        return invalid(error);
+      if (client->part == 6U)
+        memcpy(client->instance + client->offset, value->data, value->length);
+      else if (memcmp(value->data, expected + client->offset, value->length))
+        return invalid(error);
+      client->offset += value->length;
+    } else if (value->type == CAI_CBOR_END && value->argument == type &&
+               client->offset == length)
+      ++client->part;
+    else
+      return invalid(error);
+    break;
+  case 7:
+    if (value->type != CAI_CBOR_BOOL)
+      return invalid(error);
+    client->persistence = value->argument != 0U;
+    ++client->part;
+    break;
+  case 8:
+    if (value->type != CAI_CBOR_UINT ||
+        value->argument > CAI_ATTACHMENT_STOPPING)
+      return invalid(error);
+    client->server_phase = (cai_attachment_phase)value->argument;
+    ++client->part;
+    break;
+  case 9:
+    if (value->type != CAI_CBOR_END || value->argument != CAI_CBOR_ARRAY)
+      return invalid(error);
+    ++client->part;
+    break;
+  default:
+    return invalid(error);
+  }
+  return CAI_OK;
 }
 static int welcome(cai_workspace_client *client,
                    const cai_protocol_event *event, cai_error *error) {
@@ -137,6 +225,8 @@ static int receive(void *context, const cai_protocol_event *event,
   const cai_protocol_header *h = event->header;
   if (client->state.phase == CAI_WORKSPACE_FAILED)
     return client->state.error_code;
+  if (client->config.probe)
+    return identity(client, event, error);
   if (!client->state.has_welcome)
     return welcome(client, event, error);
   if (h->attachment != client->state.attachment ||
@@ -145,7 +235,8 @@ static int receive(void *context, const cai_protocol_event *event,
       h->kind == CAI_PROTOCOL_REQUEST || h->kind == CAI_PROTOCOL_SYNCHRONIZE ||
       h->kind == CAI_PROTOCOL_DETACH || h->kind == CAI_PROTOCOL_TAKEOVER ||
       h->kind == CAI_PROTOCOL_SHUTDOWN || h->kind == CAI_PROTOCOL_SUBSCRIBE ||
-      h->kind == CAI_PROTOCOL_UNSUBSCRIBE)
+      h->kind == CAI_PROTOCOL_UNSUBSCRIBE || h->kind == CAI_PROTOCOL_PROBE ||
+      h->kind == CAI_PROTOCOL_IDENTITY)
     return invalid(error);
   if (h->kind == CAI_PROTOCOL_ROLE) {
     if (h->conversation != 0U || h->sequence != 0U || h->stream != 0U)
@@ -212,7 +303,7 @@ static int connected(cai_workspace_client *client, cai_error *error) {
   client->fd = -1;
   client->state.phase = CAI_WORKSPACE_GREETING;
   memset(&header, 0, sizeof(header));
-  header.kind = CAI_PROTOCOL_HELLO;
+  header.kind = client->config.probe ? CAI_PROTOCOL_PROBE : CAI_PROTOCOL_HELLO;
   rc = cai_protocol_peer_begin(client->wire, &header,
                                1U + size_of_string(strlen(directory)) +
                                    size_of_string(strlen(CAI_WORKSPACE_SCHEMA)),
@@ -287,6 +378,7 @@ int cai_workspace_client_prepare(cai_workspace_client *client,
     fd->events = POLLOUT;
   } else if (client->wire != NULL &&
              client->state.phase != CAI_WORKSPACE_FAILED &&
+             client->state.phase != CAI_WORKSPACE_IDENTIFIED &&
              client->state.phase != CAI_WORKSPACE_DISCONNECTED) {
     fd->fd = cai_wire_peer_fd(client->wire);
     fd->events = POLLIN;
@@ -307,7 +399,8 @@ int cai_workspace_client_pump(cai_workspace_client *client, uint64_t now,
   if (client->state.phase == CAI_WORKSPACE_FAILED)
     return cai_set_error(error, client->state.error_code,
                          "workspace client has failed");
-  if (client->state.phase == CAI_WORKSPACE_DISCONNECTED)
+  if (client->state.phase == CAI_WORKSPACE_DISCONNECTED ||
+      client->state.phase == CAI_WORKSPACE_IDENTIFIED)
     return CAI_OK;
   if (client->state.deadline_ms != 0U && now >= client->state.deadline_ms) {
     rc = cai_set_error(error, CAI_ERR_LIMIT, "workspace greeting timed out");
@@ -341,6 +434,10 @@ int cai_workspace_client_pump(cai_workspace_client *client, uint64_t now,
     if (error != NULL && error->code == CAI_OK)
       cai_set_error(error, rc, "workspace client callback or transport failed");
     return failed(client, rc);
+  }
+  if (client->state.phase == CAI_WORKSPACE_IDENTIFIED) {
+    release_transport(client);
+    return CAI_OK;
   }
   if (eof && client->role_generation == 0U)
     return failed(client,
@@ -462,6 +559,7 @@ int cai_workspace_client_detach(cai_workspace_client *client,
     return cai_set_error(error, CAI_ERR_INVALID,
                          "detach cannot reenter client callbacks");
   if (client->state.phase == CAI_WORKSPACE_DETACHING ||
+      client->state.phase == CAI_WORKSPACE_IDENTIFIED ||
       client->state.phase == CAI_WORKSPACE_DISCONNECTED)
     return CAI_OK;
   if (client->state.phase == CAI_WORKSPACE_FAILED)

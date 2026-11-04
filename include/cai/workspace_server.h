@@ -48,7 +48,8 @@ typedef struct cai_workspace_server_config {
 void cai_workspace_server_config_init(cai_workspace_server_config *config);
 /** Canonicalize identity, take endpoint ownership and listen. No agent or
  * storage is opened. All calls require the opening thread. A host restores
- * its runtime asynchronously before publishing ready. */
+ * its runtime asynchronously before publishing ready. Identity-only PROBE
+ * requests may complete during startup without admitting an attachment. */
 int cai_workspace_server_open(const cai_workspace_server_config *config,
                               cai_workspace_server **out, cai_error *error);
 int cai_workspace_server_ready(cai_workspace_server *server, uint64_t now_ms,

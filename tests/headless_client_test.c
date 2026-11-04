@@ -93,11 +93,44 @@ static void step(view *v) {
   assert(rc == CAI_OK);
   assert(cai_app_client_get_state(v->client, &v->state, NULL) == CAI_OK);
 }
+static void identify(const char *runtime, const char *workspace) {
+  cai_workspace_client_config config;
+  cai_workspace_client_state state;
+  cai_workspace_client *client;
+  struct pollfd fd;
+  uint64_t deadline, now;
+  cai_workspace_client_config_init(&config);
+  config.runtime_directory = runtime;
+  config.workspace = workspace;
+  config.probe = 1;
+  config.handshake_timeout_ms = 10000U;
+  assert(cai_workspace_client_open(&config, now_ms(), &client, NULL) == CAI_OK);
+  do {
+    assert(cai_workspace_client_prepare(client, &fd, &deadline, NULL) ==
+           CAI_OK);
+    now = now_ms();
+    assert(fd.fd >= 0 && deadline > now);
+    assert(poll(&fd, 1U, (int)(deadline - now)) >= 0 || errno == EINTR);
+    assert(cai_workspace_client_pump(client, now_ms(), NULL) == CAI_OK);
+    assert(cai_workspace_client_get_state(client, &state, NULL) == CAI_OK);
+  } while (state.phase != CAI_WORKSPACE_IDENTIFIED);
+  assert(state.has_identity && !state.has_welcome && !state.attachment &&
+         !state.generation && !state.controller && state.persist &&
+         state.server_phase == CAI_ATTACHMENT_READY);
+  assert(cai_workspace_client_prepare(client, &fd, &deadline, NULL) == CAI_OK);
+  assert(fd.fd == -1 && !deadline);
+  cai_workspace_client_close(client);
+}
 int main(int argc, char **argv) {
   cai_app_client_config config;
   view *v = calloc(1U, sizeof(*v));
   int shutdown, work, abrupt;
   assert(argc == 4 && v != NULL);
+  if (strcmp(argv[3], "probe") == 0) {
+    identify(argv[1], argv[2]);
+    free(v);
+    return 0;
+  }
   shutdown = strcmp(argv[3], "shutdown") == 0;
   work = strcmp(argv[3], "work") == 0;
   abrupt = strcmp(argv[3], "abrupt") == 0;
