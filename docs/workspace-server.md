@@ -18,9 +18,11 @@ their retained receipts after disconnect or ordered journal recovery, without
 another producer reservation. Immutable environment views now scope client
 credentials and command/plugin tools; configuration accepts explicit directory/
 environment contexts and produces effective views without process mutation.
-The application controller/frontend cutover,
-connection handshake and headless/attach CLI are still pending; these core
-components alone do not enable those CLI modes.
+The owner-loop workspace host (`workspace_server.h`) now binds those components
+to actual Unix connections, validates greetings incrementally, publishes roles
+and isolates disconnected/slow subscribers. It has no worker or renderer.
+The application controller/frontend cutover, client adapter and headless/attach
+CLI are still pending; these core components alone do not enable those CLI modes.
 
 ## Confirmed product decisions
 
@@ -203,6 +205,41 @@ becoming new submissions. Frontends retain their own last-issued request ID
 and reconcile unknown work before making any replacement offer.
 
 ## CBOR and framing
+
+The workspace host accepts `HELLO` with zero metadata and a definite two-item
+payload array: canonical workspace as bytes, then the text schema identity
+`cai.workspace`. Both are compared as chunks arrive, without gathering the
+greeting. Only successful record completion validates it. A completed greeting
+may wait while the application is STARTING; it acquires no authority until
+READY. Incomplete greetings expire after ten seconds. All connection slots,
+including unfinished greetings, count toward the bounded transport capacity.
+When full, the listener is excluded from readiness interests to avoid spinning
+on connections the host cannot accept yet.
+
+`WELCOME` assigns the server-owned attachment/generation metadata. Its definite
+three-item array contains the canonical workspace bytes, a random 16-byte
+server-instance identity and the selected persistence boolean. A following
+`ROLE` record carries the controlling attachment ID as an unsigned payload;
+zero means vacant control. Clients verify the complete welcome identity before
+submitting requests. A new instance requires explicit reconciliation, rather
+than treating an old attachment/generation as valid after restart.
+
+Client `DETACH`, `TAKEOVER` and `SHUTDOWN` require null payloads and zero
+conversation/sequence/stream metadata. The actual connection identity must
+match the attachment header; the header can never impersonate another client.
+`TAKEOVER` explicitly changes control and broadcasts the new role/generation;
+`SHUTDOWN` additionally requires current controlling authority. These controls
+take effect only after validated record completion. `REQUEST` and
+`SYNCHRONIZE` payloads remain incremental application callbacks; applications
+must classify mutations, validate payloads and recheck authority at actual
+admission. A COMPLETE callback is still not a durable acceptance receipt.
+
+The owner uses the host's poll interests and absolute monotonic deadline,
+calling a bounded nonblocking pump after readiness or timer expiry. There are
+no per-connection workers or idle timers when no deadline exists. A subscriber
+that exceeds its bounded output backlog is disconnected, without blocking
+other attachments or cancelling accepted runtime work. The application must
+finish orderly worker/storage shutdown before closing endpoint ownership.
 
 Use the [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949.html) data model with
 a deliberately small profile: unsigned and
