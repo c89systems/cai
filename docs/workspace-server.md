@@ -92,6 +92,19 @@ application client delivers borrowed chunks without collecting complete events.
 Default tail/visibility selection and the terminal presentation adapter remain
 pending; this does not yet enable the headless/attach executable modes.
 
+The existing terminal path now shares a frontend-owned Softline/libmdf presenter
+for documents, tool styling, timestamps, prompt markers, geometry and theme
+switching. Its standalone link has no application or Pouch objects. The socket
+adapter will use this same presenter; it does not yet consume socket spans or
+replace the synchronous terminal lifecycle. Status/command dispatch, final
+replay selection and CLI process composition remain pending.
+
+Incremental remote prompt quoting also needs a Softline API addition: its
+0.16.0 native quote method accepts only a complete string. The local upstream
+handoff, `stash/softline-incremental-quoted-prompts.md` (outside source packages),
+specifies a bounded begin/write/end/abort contract. No whole-prompt buffer or
+replacement quote formatter has been introduced to conceal that dependency.
+
 ## Confirmed product decisions
 
 - One server process owns each canonical workspace directory. A

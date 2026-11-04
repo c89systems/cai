@@ -35,6 +35,15 @@ cursors without context restoration or a transcript mirror. Tail selection and
 terminal presentation remain pending. See the current public `app.h` contracts,
 [transcript binding](workspace-wire-transcript.md) and workspace specification.
 
+The terminal composition now uses `cli/softline_presenter.c` for its libmdf
+documents, tool styling, timestamps, literal command prompts, geometry, theme
+changes and renderer cleanup. That frontend-owned state has no runtime, store
+or application-controller access. The standalone presenter fixture compiles
+and links with core libcai, Softline and libmdf only, and exercises its resource
+lifetime on a default worker stack. Command admission, status projection and
+semantic event dispatch still belong to the remaining extraction; this is not
+yet a socket terminal frontend or a headless application package.
+
 Cutover decisions confirmed on 2026-11-03: implement the in-process controller
 and Softline adapter first, without a listener, background-server executable,
 HTTP framework or attach/reconnect CLI. Softline 0.16.0 now supplies the required

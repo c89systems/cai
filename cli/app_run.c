@@ -24,6 +24,7 @@
 #include "session_commands.h"
 #include "shell.h"
 #include "skills.h"
+#include "softline_presenter.h"
 #include "status.h"
 #include "stores.h"
 #include "temp.h"
@@ -97,9 +98,6 @@ typedef struct cli_state {
   cai_cli_options options;
   cai_cli_options normal_options;
   cai_cli_temp temporary;
-  cai_cli_theme theme;
-  cai_cli_theme render_theme;
-  int theme_scope; /* 0 parent, 1 ordinary child, 2 reviewer. */
   int review_block;
   char *normal_reasoning_override, *high_reasoning_override;
   cai_config *configuration;
@@ -134,6 +132,7 @@ typedef struct cli_state {
   sl_watch_id_t message_watch_id;
   int has_message_watch;
   sl_t *sl;
+  cai_cli_presenter ui;
   cai_input_controller *input_controller;
   int input_idle;
   cai_cli_input_adapter *input_adapter;
@@ -143,10 +142,6 @@ typedef struct cli_state {
   sl_watch_id_t input_watch;
   int has_input_watch;
   cai_cli_completions completions;
-  mdf *renderer;
-  mdf *notice_renderer;
-  cai_tool_display *tool_display;
-  cai_sink *tool_sink;
   cai_cli_log *log;
   cai_cli_response final_response;
   int batch;
@@ -166,15 +161,6 @@ typedef struct cli_state {
   int timer_fd;
   int timer_armed;
   int interactive;
-  int width;
-  unsigned short output_columns;
-  unsigned short output_rows;
-  int response_open;
-  int documents_rendered;
-  int reasoning_open;
-  int block_spacing_pending;
-  int feed_breaks;
-  int feed_ansi;
   int exit_requested;
   int was_busy;
   int awaiting_turn;
@@ -205,20 +191,7 @@ typedef struct cli_state {
   int has_quota_watch;
   cai_cli_status status;
   cai_cli_reasoning reasoning;
-  cai_cli_reasoning_quote reasoning_quote;
-  int row_line_start;
-  int row_ansi;
   int list_line_start;
-  int notice_open;
-  int notice_first_row;
-  int command_input;
-  int command_output;
-  int tool_result_body;
-  int sink_failed;
-  mdf_status renderer_error;
-  unsigned long long presentation_timestamp_ns;
-  int presentation_event;
-  char command_foreground[MDF_THEME_FOREGROUND_SIZE];
   cai_cli_shell shell;
   sl_watch_id_t shell_watches[3];
   int shell_watched[3];
@@ -229,6 +202,21 @@ typedef struct cli_state {
   char message_queue_override[129];
   char clipboard_directory[PATH_MAX];
 } cli_state;
+
+/* Composition-only binding. The presenter owns no runtime or store and can
+ * be constructed by a socket frontend using the same terminal preferences. */
+static cai_cli_presenter *cli_presenter(void *context) {
+  cli_state *state = context;
+  state->ui.sl = state->sl;
+  state->ui.interactive = state->interactive;
+  state->ui.batch = state->batch;
+  state->ui.utc = state->options.utc;
+  state->ui.tool_output = state->options.tool_output;
+  state->ui.theme_offsets[0] = state->options.theme_offset;
+  state->ui.theme_offsets[1] = state->options.subagent_theme_offset;
+  state->ui.theme_offsets[2] = state->options.review_theme_offset;
+  return &state->ui;
+}
 
 static pslog_logger *cli_logger(const cli_state *state) {
   return state->log != NULL ? state->log->logger : NULL;
@@ -372,450 +360,51 @@ static void cli_refresh_quota(cli_state *state, int force) {
   (void)cai_cli_quota_take(&state->quota_refresh, &state->quota);
 }
 
-/* Observe resize on the UI owner thread before entering a softline feed.
- * Include height-only changes and synchronous output after readline returns.
- * Ordinary fragments stay immediate; only changed geometry can need a CPR. */
-static int cli_reconcile_output(cli_state *state) {
-  struct winsize size;
-  if (state->batch || ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != 0 ||
-      size.ws_col == 0 || size.ws_row == 0 ||
-      (size.ws_col == state->output_columns &&
-       size.ws_row == state->output_rows))
-    return 0;
-  if (sl_output_stream_reconcile(state->sl) != SL_OK)
-    return -1;
-  state->output_columns = size.ws_col;
-  state->output_rows = size.ws_row;
-  return 0;
-}
+static int cli_render_width(void) { return cai_cli_presenter_render_width(); }
 
-static int cli_sink(void *context, const char *bytes, size_t count) {
-  cli_state *state;
-  size_t i;
-  state = (cli_state *)context;
-  if (count == 0U)
-    return 0;
-  if (state->batch) {
-    if (fwrite(bytes, 1U, count, stdout) == count)
-      return 0;
-    state->sink_failed = 1;
-    return -1;
-  }
-  if (cli_reconcile_output(state) != 0 ||
-      sl_output_stream_write(state->sl, bytes, count) != SL_OK) {
-    state->sink_failed = 1;
-    return -1;
-  }
-  for (i = 0U; i < count; i++) {
-    unsigned char ch = (unsigned char)bytes[i];
-    if (state->feed_ansi == 1) {
-      state->feed_ansi = ch == '[' ? 2 : 0;
-    } else if (state->feed_ansi == 2) {
-      if (ch >= 0x40U && ch <= 0x7eU)
-        state->feed_ansi = 0;
-    } else if (ch == 27U) {
-      state->feed_ansi = 1;
-    } else if (ch == '\n') {
-      if (state->feed_breaks < 2)
-        state->feed_breaks++;
-    } else if (ch != '\r') {
-      state->feed_breaks = 0;
-    }
-  }
-  return 0;
-}
-
-static int cli_render_width(void) {
-  return isatty(STDOUT_FILENO) ? mdf_terminal_width(STDOUT_FILENO, 80) : 80;
-}
-
-static int cli_tool_sink(void *context, const void *bytes, size_t count,
-                         cai_error *error) {
-  cli_state *state = context;
-  if (cli_sink(context, (const char *)bytes, count) == 0) {
-    if (count > 0U)
-      state->block_spacing_pending = 1;
-    return CAI_OK;
-  }
-  return cai_cli_error(error, CAI_ERR_TRANSPORT, "cannot write tool activity");
-}
-static int cli_tool_begin_block(void *context, cai_error *error) {
-  cli_state *state = context;
-  while (state->feed_breaks < 2) {
-    if (cli_sink(state, "\n", 1U) != 0)
-      return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                           "cannot separate tool activity");
-  }
-  return CAI_OK;
-}
-/* Event scope prevents old records without timestamps from acquiring the
- * replay clock. Outside an observation, commands/notices use their display
- * time. No timestamp text enters the model, editable draft, or prompt history.
- */
-static int cli_timestamp(cli_state *state, char *out, size_t capacity) {
-  time_t when;
-  time_t now = time(NULL);
-  unsigned long long seconds;
-  if (!state->interactive || state->batch || now == (time_t)-1)
-    return 0;
-  when = now;
-  if (state->presentation_event) {
-    if (state->presentation_timestamp_ns == 0U)
-      return 0;
-    seconds = state->presentation_timestamp_ns / 1000000000ULL;
-    when = (time_t)seconds;
-    if ((unsigned long long)when != seconds)
-      return 0;
-  }
-  return cai_dtg_format_time(when, now, state->options.utc, out, capacity) ==
-         CAI_DTG_OK;
-}
-static int cli_timestamp_write(cli_state *state, const char *stamp) {
-  int color = !state->theme.ascii && getenv("NO_COLOR") == NULL;
-  if (color && cli_sink(state, "\033[0;90m", 7U) != 0)
-    return -1;
-  if (cli_sink(state, stamp, strlen(stamp)) != 0)
-    return -1;
-  return color ? cli_sink(state, "\033[0m", 4U) : 0;
-}
-static int cli_timestamp_header(cli_state *state) {
-  char stamp[CAI_DTG_CAPACITY];
-  if (state->tool_result_body ||
-      (state->command_output && !state->presentation_event))
-    return 0;
-  if (!cli_timestamp(state, stamp, sizeof(stamp)))
-    return 0;
-  while (state->feed_breaks < 2)
-    if (cli_sink(state, "\n", 1U) != 0)
-      return -1;
-  if (cli_sink(state, "  ", 2U) != 0 ||
-      cli_timestamp_write(state, stamp) != 0 || cli_sink(state, "\n", 1U) != 0)
-    return -1;
-  state->block_spacing_pending = 0;
-  return 0;
-}
-/* Prefix visible renderer rows without retaining body text or inserting a
- * marker inside an ANSI sequence split across writes. Blank rows stay blank. */
-static int cli_notice_sink(void *context, const char *bytes, size_t count) {
-  cli_state *state = context;
-  size_t i;
-  size_t start = 0U;
-  for (i = 0U; i < count; i++) {
-    unsigned char ch = (unsigned char)bytes[i];
-    if (state->row_line_start && state->row_ansi == 0 && ch != 27U &&
-        ch != '\n' && ch != '\r') {
-      char styled_prefix[96];
-      const char *prefix =
-          state->notice_first_row ? (state->command_input ? "$ " : "* ") : "  ";
-      if (state->interactive && !state->theme.ascii &&
-          getenv("NO_COLOR") == NULL) {
-        if (state->command_input) {
-          snprintf(styled_prefix, sizeof(styled_prefix), "%s\033[0;1m%s",
-                   !state->notice_first_row ? "  " : "\033[0;92m$\033[0m ",
-                   state->command_foreground);
-          prefix = styled_prefix;
-        } else if (state->notice_first_row)
-          prefix = "\033[91m*\033[0m ";
-      }
-      if (cli_sink(state, bytes + start, i - start) != 0 ||
-          cli_sink(state, prefix, strlen(prefix)) != 0)
-        return -1;
-      if (state->notice_first_row) {
-        char stamp[CAI_DTG_CAPACITY];
-        if (cli_timestamp(state, stamp, sizeof(stamp))) {
-          if (cli_timestamp_write(state, stamp) != 0 ||
-              cli_sink(state, " ", 1U) != 0)
-            return -1;
-          if (state->command_input && state->interactive &&
-              !state->theme.ascii && getenv("NO_COLOR") == NULL &&
-              (cli_sink(state, "\033[0;1m", 6U) != 0 ||
-               cli_sink(state, state->command_foreground,
-                        strlen(state->command_foreground)) != 0))
-            return -1;
-        }
-      }
-      start = i;
-      state->row_line_start = 0;
-      state->notice_first_row = 0;
-    }
-    if (state->row_ansi == 1) {
-      state->row_ansi = ch == '[' ? 2 : ch == ']' ? 3 : 0;
-    } else if (state->row_ansi == 2) {
-      if (ch >= 0x40U && ch <= 0x7eU)
-        state->row_ansi = 0;
-    } else if (state->row_ansi == 3) {
-      if (ch == 7U)
-        state->row_ansi = 0;
-      else if (ch == 27U)
-        state->row_ansi = 4;
-    } else if (state->row_ansi == 4) {
-      state->row_ansi = ch == '\\' ? 0 : 3;
-    } else if (ch == 27U) {
-      state->row_ansi = 1;
-    } else if (ch == '\n') {
-      state->row_line_start = 1;
-    }
-  }
-  return cli_sink(state, bytes + start, count - start);
-}
-/* Keep a single libmdf binding: replacing a sink discards its document state.
- */
 static int cli_renderer_sink(void *context, const char *bytes, size_t count) {
-  cli_state *state = context;
-  if (count > 0U && state->block_spacing_pending) {
-    while (state->feed_breaks < 2)
-      if (cli_sink(state, "\n", 1U) != 0)
-        return -1;
-    state->block_spacing_pending = 0;
-  }
-  return state->notice_open ? cli_notice_sink(context, bytes, count)
-                            : cli_sink(context, bytes, count);
+  return cai_cli_presenter_renderer_sink(cli_presenter(context), bytes, count);
 }
 static int cli_renderer_create(cli_state *state, const cai_cli_theme *theme,
                                mdf **out, cai_error *error) {
-  mdf_options options;
-  mdf_sink sink;
-  mdf_status status;
-  int width = state->width;
-  mdf_options_init(&options);
-  cai_cli_theme_markdown(theme, &options);
-  options.output_fd = STDOUT_FILENO;
-  if (getenv("NO_COLOR") != NULL)
-    options.ansi_mode = MDF_ANSI_OFF;
-  options.width = width;
-  options.margin_left = state->interactive && width >= 5 ? 2 : 0;
-  options.boring = !state->interactive;
-  options.table_buffer_mode = MDF_TABLE_BUFFER_FULL;
-  status = mdf_create(MDF_FORMAT_ANSI, &options, out);
-  if (status != MDF_OK)
-    return cai_cli_error(
-        error, status == MDF_ERROR_NOMEM ? CAI_ERR_NOMEM : CAI_ERR_INVALID,
-        "create Markdown renderer");
-  sink.userdata = state;
-  sink.write = cli_renderer_sink;
-  if ((*out)->set_sink(*out, &sink) != MDF_OK) {
-    (*out)->destroy(*out);
-    *out = NULL;
-    return cai_cli_error(error, CAI_ERR_TRANSPORT, "connect Markdown renderer");
-  }
-  return CAI_OK;
-}
-
-static int cli_tool_display_create(cli_state *state, const cai_cli_theme *theme,
-                                   cai_tool_display **out, cai_error *error) {
-  cai_tool_display_config config;
-  int rc, width;
-  memset(&config, 0, sizeof(config));
-  config.sink = state->tool_sink;
-  config.mode = state->options.tool_output != NULL &&
-                        strcmp(state->options.tool_output, "full") == 0
-                    ? CAI_TOOL_OUTPUT_FULL
-                    : CAI_TOOL_OUTPUT_COMPACT;
-  config.color =
-      state->interactive && !theme->ascii && getenv("NO_COLOR") == NULL;
-  config.begin_block = cli_tool_begin_block;
-  config.begin_block_context = state;
-  config.timestamps = state->interactive;
-  config.utc = state->options.utc;
-  rc = cai_tool_display_new(&config, out, error);
-  if (rc == CAI_OK)
-    rc = cai_cli_theme_tools(theme, *out, error);
-  width = cli_render_width();
-  if (rc == CAI_OK)
-    rc = cai_tool_display_set_width(*out,
-                                    (size_t)(width < 32     ? 0
-                                             : width > 4096 ? 4096
-                                                            : width),
-                                    error);
-  if (rc != CAI_OK) {
-    cai_tool_display_close(*out);
-    *out = NULL;
-  }
-  return rc;
+  return cai_cli_presenter_renderer_create(cli_presenter(state), theme, out,
+                                           error);
 }
 
 static int cli_tool_display_init(cli_state *state, cai_error *error) {
-  cai_sink_callbacks callbacks;
-  int rc;
-  memset(&callbacks, 0, sizeof(callbacks));
-  callbacks.write = cli_tool_sink;
-  callbacks.context = state;
-  rc = cai_sink_from_callbacks(&callbacks, &state->tool_sink, error);
-  return rc == CAI_OK ? cli_tool_display_create(state, &state->render_theme,
-                                                &state->tool_display, error)
-                      : rc;
+  return cai_cli_presenter_tool_display_init(cli_presenter(state), error);
 }
 
 static int cli_geometry(cli_state *state) {
-  int width;
-  width = cli_render_width();
-  if (width == state->width) {
-    return 0;
-  }
-  /* Softline owns native terminal sizing; only libmdf needs the new width. */
-  if (state->renderer != NULL &&
-      state->renderer->set_geometry(state->renderer, width, width >= 5 ? 2 : 0,
-                                    0) != MDF_OK) {
-    return -1;
-  }
-  state->width = width;
-  return 0;
+  return cai_cli_presenter_geometry(cli_presenter(state));
 }
 
-static int cli_mdf_status(cli_state *state, mdf_status status) {
-  if (status == MDF_OK)
-    return 0;
-  state->renderer_error = status;
-  return -1;
-}
 static int cli_finish_response(cli_state *state) {
-  if (!state->response_open) {
-    return 0;
-  }
-  if (cli_mdf_status(state,
-                     state->renderer->finish_document(state->renderer)) != 0) {
-    return -1;
-  }
-  state->documents_rendered++;
-  state->response_open = 0;
-  state->block_spacing_pending = 1;
-  return 0;
+  return cai_cli_presenter_finish_response(cli_presenter(state));
 }
 
 static int cli_finish_reasoning(cli_state *state) {
-  if (!state->reasoning_open) {
-    return 0;
-  }
-  if (!state->reasoning_quote.line_start &&
-      state->renderer->feed(state->renderer, "\n", 1U) != MDF_OK)
-    return -1;
-  if (state->renderer->finish_document(state->renderer) != MDF_OK) {
-    return -1;
-  }
-  state->documents_rendered++;
-  state->reasoning_open = 0;
-  state->block_spacing_pending = 1;
-  return 0;
-}
-
-static int cli_reasoning_markdown(void *context, const char *data,
-                                  size_t length) {
-  cli_state *state = context;
-  return cli_mdf_status(state,
-                        state->renderer->feed(state->renderer, data, length));
+  return cai_cli_presenter_finish_reasoning(cli_presenter(state));
 }
 
 static int cli_reasoning_body(void *context, const char *data, size_t length) {
-  cli_state *state = context;
-  if (length == 0U)
-    return 0;
-  if (cli_finish_response(state) != 0 || cli_geometry(state) != 0)
-    return -1;
-  if (!state->reasoning_open) {
-    if (state->documents_rendered > 0 &&
-        state->renderer->begin_document(state->renderer) != MDF_OK)
-      return -1;
-    if (cli_timestamp_header(state) != 0)
-      return -1;
-    state->reasoning_open = 1;
-    cai_cli_reasoning_quote_init(&state->reasoning_quote);
-  }
-  return cai_cli_reasoning_quote_feed(&state->reasoning_quote, data, length,
-                                      cli_reasoning_markdown, state);
+  return cai_cli_presenter_reasoning_body(cli_presenter(context), data, length);
 }
 
 static int cli_text(cli_state *state, const char *data, size_t length) {
-  if (length == 0U)
-    return 0;
-  if (cli_finish_reasoning(state) != 0) {
-    return -1;
-  }
-  if (cli_geometry(state) != 0) {
-    return -1;
-  }
-  if (!state->response_open) {
-    if (state->documents_rendered > 0 &&
-        state->renderer->begin_document(state->renderer) != MDF_OK) {
-      return -1;
-    }
-    if (cli_timestamp_header(state) != 0)
-      return -1;
-    state->response_open = 1;
-  }
-  return cli_mdf_status(state,
-                        state->renderer->feed(state->renderer, data, length));
+  return cai_cli_presenter_text(cli_presenter(state), data, length);
 }
 
 static int cli_introduction(cli_state *state, const cai_app_config *config) {
-  mdf_options options;
-  mdf_sink sink;
-  mdf *renderer = NULL;
-  int rc = -1;
-  if (!state->interactive || config == NULL ||
-      config->introduction_markdown == NULL ||
-      config->introduction_markdown[0] == '\0')
-    return 0;
-  mdf_options_init(&options);
-  cai_cli_theme_markdown(&state->render_theme, &options);
-  options.output_fd = STDOUT_FILENO;
-  if (getenv("NO_COLOR") != NULL)
-    options.ansi_mode = MDF_ANSI_OFF;
-  options.width = cli_render_width();
-  options.margin_left = config->introduction_margin_left;
-  options.margin_right = config->introduction_margin_right;
-  if (mdf_create(MDF_FORMAT_ANSI, &options, &renderer) != MDF_OK)
-    return -1;
-  sink.userdata = state;
-  sink.write = cli_renderer_sink;
-  if (renderer->set_sink(renderer, &sink) == MDF_OK &&
-      renderer->feed(renderer, config->introduction_markdown,
-                     strlen(config->introduction_markdown)) == MDF_OK &&
-      renderer->finish_document(renderer) == MDF_OK)
-    rc = 0;
-  renderer->destroy(renderer);
-  /* Separate the completed introduction block from conversation or editor
-   * content, just as other feed blocks do. The raw banner is never changed. */
-  while (rc == 0 && state->feed_breaks < 2)
-    if (cli_sink(state, "\n", 1U) != 0)
-      rc = -1;
-  return rc;
+  return cai_cli_presenter_introduction(
+      cli_presenter(state),
+      config != NULL ? config->introduction_markdown : NULL,
+      config != NULL ? config->introduction_margin_left : 0,
+      config != NULL ? config->introduction_margin_right : 0);
 }
 
-/* Manual text tokens have their own renderer, separate from model Markdown. */
-static int cli_literal_prepare(cli_state *state) {
-  mdf_options options;
-  mdf_sink sink;
-  char stamp[CAI_DTG_CAPACITY];
-  int available = state->width - 2;
-  if (state->notice_renderer == NULL) {
-    mdf_options_init(&options);
-    options.width = state->width;
-    options.boring = 1;
-    options.ansi_mode = MDF_ANSI_OFF;
-    if (mdf_create(MDF_FORMAT_ANSI, &options, &state->notice_renderer) !=
-        MDF_OK)
-      return -1;
-    sink.userdata = state;
-    sink.write = cli_renderer_sink;
-    if (state->notice_renderer->set_sink(state->notice_renderer, &sink) !=
-        MDF_OK)
-      return -1;
-  }
-  if (cli_timestamp(state, stamp, sizeof(stamp)))
-    available -= (int)strlen(stamp) + 1;
-  return state->notice_renderer->set_geometry(state->notice_renderer,
-                                              available >= 3 ? available : 3, 0,
-                                              0) == MDF_OK
-             ? 0
-             : -1;
-}
 static int cli_tool_markdown(void *context, const char *text, size_t length) {
-  cli_state *state = context;
-  int saved = state->tool_result_body, rc;
-  state->tool_result_body = 1;
-  rc = cli_text(state, text, length);
-  state->tool_result_body = saved;
-  return rc;
+  return cai_cli_presenter_tool_markdown(cli_presenter(context), text, length);
 }
 
 static int cli_markdown(cli_state *state, const char *text) {
@@ -833,70 +422,35 @@ static int cli_markdown(cli_state *state, const char *text) {
              : -1;
 }
 
-static void cli_theme_for_scope(const cli_state *state,
-                                const cai_cli_theme *base, int scope,
-                                cai_cli_theme *out) {
-  cai_cli_theme parent;
-  cai_cli_theme_offset(base, state->options.theme_offset, &parent);
-  cai_cli_theme_offset(&parent,
-                       scope == 2   ? state->options.review_theme_offset
-                       : scope == 1 ? state->options.subagent_theme_offset
-                                    : 0LL,
-                       out);
+static void cli_theme_for_scope(cli_state *state, const cai_cli_theme *base,
+                                int scope, cai_cli_theme *out) {
+  cai_cli_presenter_theme_for_scope(cli_presenter(state), base, scope, out);
 }
 
 static int cli_set_theme_scope(cli_state *state, int scope, cai_error *error) {
-  cai_cli_theme selected;
-  mdf *renderer = NULL;
-  int changed, rc;
-  cli_theme_for_scope(state, &state->theme, scope, &selected);
-  changed =
-      selected.ascii != state->render_theme.ascii ||
-      (selected.markdown != state->render_theme.markdown &&
-       (selected.markdown == NULL || state->render_theme.markdown == NULL ||
-        strcmp(selected.markdown, state->render_theme.markdown) != 0));
-  if (!changed && state->theme_scope == scope)
-    return CAI_OK;
-  if (changed && state->renderer != NULL) {
-    rc = cli_renderer_create(state, &selected, &renderer, error);
-    if (rc != CAI_OK)
-      return rc;
-  }
-  if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0) {
-    if (renderer != NULL)
-      renderer->destroy(renderer);
-    return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                         "finish themed Markdown block");
-  }
-  if (changed && state->tool_display != NULL) {
-    rc = cai_cli_theme_tools(&selected, state->tool_display, error);
-    if (rc != CAI_OK) {
-      if (renderer != NULL)
-        renderer->destroy(renderer);
-      return rc;
+  cai_cli_theme previous = state->ui.render_theme;
+  int previous_scope = state->ui.theme_scope;
+  int rc =
+      cai_cli_presenter_set_theme_scope(cli_presenter(state), scope, error);
+  if (rc == CAI_OK && (previous_scope != state->ui.theme_scope ||
+                       previous.ascii != state->ui.render_theme.ascii ||
+                       previous.markdown != state->ui.render_theme.markdown)) {
+    cai_cli_reasoning_end(&state->reasoning);
+    if (state->log != NULL) {
+      pslog_field fields[2];
+      fields[0] = pslog_str("scope", scope == 2   ? "review"
+                                     : scope == 1 ? "subagent"
+                                                  : "parent");
+      fields[1] = pslog_str("theme", state->ui.render_theme.markdown != NULL
+                                         ? state->ui.render_theme.markdown
+                                         : "default");
+      cai_cli_log_message(cli_logger(state), PSLOG_LEVEL_DEBUG, "theme_scope",
+                          "runtime", "Markdown rendering context changed",
+                          strlen("Markdown rendering context changed"), fields,
+                          2U);
     }
   }
-  if (renderer != NULL) {
-    state->renderer->destroy(state->renderer);
-    state->renderer = renderer;
-    state->documents_rendered = 0;
-  }
-  state->render_theme = selected;
-  state->theme_scope = scope;
-  cai_cli_reasoning_end(&state->reasoning);
-  if (state->log != NULL) {
-    pslog_field fields[2];
-    fields[0] = pslog_str("scope", scope == 2   ? "review"
-                                   : scope == 1 ? "subagent"
-                                                : "parent");
-    fields[1] = pslog_str("theme", selected.markdown != NULL ? selected.markdown
-                                                             : "default");
-    cai_cli_log_message(cli_logger(state), PSLOG_LEVEL_DEBUG, "theme_scope",
-                        "runtime", "Markdown rendering context changed",
-                        strlen("Markdown rendering context changed"), fields,
-                        2U);
-  }
-  return CAI_OK;
+  return rc;
 }
 
 static int cli_event_theme_scope(const cai_agent_runtime_event *event) {
@@ -951,50 +505,11 @@ static int cli_review_boundary(cli_state *state, int start, cai_error *error) {
  * is a second admission boundary. The command marker acknowledges submission,
  * while failures have their own diagnostic marker. */
 static int cli_input(cli_state *state, const char *text, int command) {
-  int rc;
-  if (state->batch)
-    return 0;
-  if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0 ||
-      cli_reconcile_output(state) != 0) {
-    return -1;
-  }
-  if (!command) {
-    if (sl_output_stream_write_quoted_prompt(state->sl, text) != SL_OK)
-      return -1;
-    state->feed_breaks = 2;
-    return 0;
-  }
-  if (cli_geometry(state) != 0 || cli_literal_prepare(state) != 0)
-    return -1;
-  while (state->feed_breaks < 2)
-    if (cli_sink(state, "\n", 1U) != 0)
-      return -1;
-  if (mdf_theme_heading_foreground(state->render_theme.markdown, 2,
-                                   state->command_foreground,
-                                   sizeof(state->command_foreground)) != MDF_OK)
-    return -1;
-  state->notice_open = 1;
-  state->notice_first_row = 1;
-  state->command_input = 1;
-  state->row_line_start = 1;
-  state->row_ansi = 0;
-  rc = cai_cli_literal_render(state->notice_renderer, text);
-  state->notice_open = 0;
-  state->command_input = 0;
-  if (state->interactive && !state->theme.ascii && getenv("NO_COLOR") == NULL &&
-      cli_sink(state, "\033[0m", 4U) != 0)
-    rc = -1;
-  /* End the input line now. Separate a response only when it actually writes
-   * to the feed; no-output commands must not leave an empty response row. */
-  while (rc == 0 && state->feed_breaks < 1)
-    rc = cli_sink(state, "\n", 1U);
-  if (rc == 0)
-    state->block_spacing_pending = 1;
-  return rc;
+  return cai_cli_presenter_input(cli_presenter(state), text, command);
 }
 
 static int cli_prompt(cli_state *state, const char *text) {
-  return cli_input(state, text, 0);
+  return cai_cli_presenter_prompt(cli_presenter(state), text);
 }
 
 static int cli_command_input(cli_state *state, const char *text) {
@@ -1064,7 +579,7 @@ static int cli_shell_pump(cli_state *state, cai_error *error) {
     cli_shell_unwatch(state);
     cai_cli_shell_close(&state->shell);
     cai_cli_status_maybe_refresh_branch(&state->status, state->workspace);
-    state->block_spacing_pending = 1;
+    state->ui.block_spacing_pending = 1;
     if (cli_markdown(state, message) != 0)
       return cai_cli_error(error, CAI_ERR_TRANSPORT,
                            "cannot display shell completion");
@@ -1550,8 +1065,8 @@ static int cli_terminal_shell(cli_state *state, int share, cai_error *error) {
       shell, state->workspace, share ? cli_terminal_shell_output : NULL, state,
       state->bridge != NULL ? state->bridge->fd : -1, cli_terminal_shell_stop,
       &status, &shell_error);
-  state->feed_breaks = 0;
-  state->feed_ansi = 0;
+  state->ui.feed_breaks = 0;
+  state->ui.feed_ansi = 0;
   fields[1] =
       pslog_i64("exit_code", WIFEXITED(status) ? WEXITSTATUS(status) : -1);
   fields[2] = pslog_i64("signal", WIFSIGNALED(status) ? WTERMSIG(status) : 0);
@@ -2030,7 +1545,7 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
     {
       cai_cli_tool_result *result = NULL;
       int width = cli_render_width();
-      int rc = cai_tool_display_set_width(state->tool_display,
+      int rc = cai_tool_display_set_width(state->ui.tool_display,
                                           (size_t)(width < 32     ? 0
                                                    : width > 4096 ? 4096
                                                                   : width),
@@ -2038,10 +1553,10 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
       if (rc == CAI_OK)
         rc = cai_cli_tool_result_open(event, &result, error);
       if (rc == CAI_OK && result != NULL)
-        rc = cai_cli_tool_result_heading(result, state->tool_display, event,
+        rc = cai_cli_tool_result_heading(result, state->ui.tool_display, event,
                                          error);
       else if (rc == CAI_OK)
-        rc = cai_tool_display_event(state->tool_display, event, error);
+        rc = cai_tool_display_event(state->ui.tool_display, event, error);
       if (rc == CAI_OK && result != NULL)
         rc = cai_cli_tool_result_write(
             result,
@@ -2073,14 +1588,14 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
 static int cli_event(void *context, const cai_agent_runtime_event *event,
                      cai_error *error) {
   cli_state *state = context;
-  unsigned long long saved = state->presentation_timestamp_ns;
-  int active = state->presentation_event;
+  unsigned long long saved = state->ui.presentation_timestamp_ns;
+  int active = state->ui.presentation_event;
   int rc;
-  state->presentation_timestamp_ns = event->timestamp_ns;
-  state->presentation_event = 1;
+  state->ui.presentation_timestamp_ns = event->timestamp_ns;
+  state->ui.presentation_event = 1;
   rc = cli_event_body(context, event, error);
-  state->presentation_timestamp_ns = saved;
-  state->presentation_event = active;
+  state->ui.presentation_timestamp_ns = saved;
+  state->ui.presentation_event = active;
   return rc;
 }
 
@@ -2093,32 +1608,7 @@ static int cli_review_event(void *context, const cai_agent_runtime_event *event,
 }
 
 static int cli_notice(void *context, const char *text) {
-  cli_state *state = (cli_state *)context;
-  int rc;
-  if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0 ||
-      cli_geometry(state) != 0)
-    return -1;
-  /* Keep one blank row around each notice; the renderer supplies its newline.
-   */
-  while (state->feed_breaks < 2)
-    if (cli_sink(state, "\n", 1U) != 0)
-      return -1;
-  if (cli_literal_prepare(state) != 0)
-    return -1;
-  state->notice_open = 1;
-  state->notice_first_row = 1;
-  state->row_line_start = 1;
-  state->row_ansi = 0;
-  if (strncmp(text, "* ", 2U) == 0)
-    text += 2;
-  rc = cai_cli_literal_render(state->notice_renderer, text);
-  state->notice_open = 0;
-  if (rc != 0)
-    return -1;
-  while (state->feed_breaks < 2)
-    if (cli_sink(state, "\n", 1U) != 0)
-      return -1;
-  return 0;
+  return cai_cli_presenter_notice(cli_presenter(context), text);
 }
 
 static int cli_startup_notice(void *context, const char *text) {
@@ -2207,8 +1697,8 @@ static int cli_sync_status(cli_state *state, cai_error *error) {
       cli_refresh_quota(state, 0);
     }
   }
-  timer_active =
-      metrics.turn_active || cai_tool_display_needs_tick(state->tool_display);
+  timer_active = metrics.turn_active ||
+                 cai_tool_display_needs_tick(state->ui.tool_display);
   if (state->timer_fd >= 0 && state->timer_armed != timer_active) {
     memset(&timer_spec, 0, sizeof(timer_spec));
     if (timer_active) {
@@ -2283,9 +1773,9 @@ static int cli_timer_wakeup(sl_t *sl, const sl_watch_event_t *event,
     return SL_ERROR_IO;
   cai_error_init(&error);
   rc = cli_sync_status(state, &error);
-  if (rc == CAI_OK && !state->response_open && !state->reasoning_open &&
-      !state->notice_open)
-    rc = cai_tool_display_tick(state->tool_display, &error);
+  if (rc == CAI_OK && !state->ui.response_open && !state->ui.reasoning_open &&
+      !state->ui.notice_open)
+    rc = cai_tool_display_tick(state->ui.tool_display, &error);
   if (rc != CAI_OK)
     cli_print_error(state, "turn timer", &error);
   cai_error_cleanup(&error);
@@ -2351,8 +1841,8 @@ static int cli_messages_process(cli_state *state, int at_boundary,
     cai_input_claim_cleanup(&claim);
     if (rc != CAI_OK) {
       cli_print_error(state, "input", error);
-      if (state->sink_failed || rc == CAI_ERR_NOMEM || state->runtime == NULL ||
-          state->exit_requested)
+      if (state->ui.sink_failed || rc == CAI_ERR_NOMEM ||
+          state->runtime == NULL || state->exit_requested)
         return rc;
       cai_error_cleanup(error);
       rc = CAI_OK;
@@ -2515,7 +2005,7 @@ static int cli_replay_output_body(cli_state *state,
     cai_execution_record_init(&record);
     rc = cai_execution_record_parse(event->data, &record, error);
     if (rc == CAI_OK)
-      state->presentation_timestamp_ns = record.timestamp_ns;
+      state->ui.presentation_timestamp_ns = record.timestamp_ns;
     if (rc == CAI_OK && strcmp(event->type, "subagent") == 0 &&
         (record.subagent == NULL || record.parent_session_id == NULL ||
          record.parent_call_id == NULL || record.source_sequence == 0U))
@@ -2586,14 +2076,14 @@ static int cli_replay_output_body(cli_state *state,
     if (rc == CAI_OK) {
       int handled = 0;
       int width = cli_render_width();
-      rc = cai_tool_display_set_width(state->tool_display,
+      rc = cai_tool_display_set_width(state->ui.tool_display,
                                       (size_t)(width < 32     ? 0
                                                : width > 4096 ? 4096
                                                               : width),
                                       error);
       if (rc == CAI_OK)
         rc = cai_cli_replay_tools_render(
-            state->replay_tools, &record, state->tool_display,
+            state->replay_tools, &record, state->ui.tool_display,
             state->options.tool_output != NULL &&
                     strcmp(state->options.tool_output, "full") == 0
                 ? CAI_TOOL_OUTPUT_FULL
@@ -2686,7 +2176,7 @@ static int cli_replay_output_body(cli_state *state,
                  strcmp(event->type, "user_shell_unshared") == 0)) {
     int rc = cai_cli_shell_plain(&state->shell, NULL, 0U, 1, cli_shell_literal,
                                  state, error);
-    state->block_spacing_pending = 1;
+    state->ui.block_spacing_pending = 1;
     return rc != CAI_OK ? rc
            : cli_markdown(state, "**Shell command finished.**") == 0
                ? CAI_OK
@@ -2781,14 +2271,14 @@ static int cli_replay_output_body(cli_state *state,
 static int cli_replay_output_raw(cli_state *state,
                                  const cai_agent_session_event *event,
                                  int render, int logging, cai_error *error) {
-  unsigned long long saved = state->presentation_timestamp_ns;
-  int active = state->presentation_event;
+  unsigned long long saved = state->ui.presentation_timestamp_ns;
+  int active = state->ui.presentation_event;
   int rc;
-  state->presentation_timestamp_ns = event->timestamp_ns;
-  state->presentation_event = 1;
+  state->ui.presentation_timestamp_ns = event->timestamp_ns;
+  state->ui.presentation_event = 1;
   rc = cli_replay_output_body(state, event, render, logging, error);
-  state->presentation_timestamp_ns = saved;
-  state->presentation_event = active;
+  state->ui.presentation_timestamp_ns = saved;
+  state->ui.presentation_event = active;
   return rc;
 }
 
@@ -3505,7 +2995,8 @@ static int cli_list_sessions(cli_state *state, cai_error *error) {
   rc = cai_sink_from_callbacks(&callbacks, &sink, error);
   if (rc == CAI_OK)
     rc = cai_cli_sessions_print(sink, state->sessions, state->session_count, 1,
-                                state->width > 2 ? state->width - 2 : 1, error);
+                                state->ui.width > 2 ? state->ui.width - 2 : 1,
+                                error);
   cai_sink_close(sink);
   if (cli_finish_response(state) != 0 && rc == CAI_OK)
     rc = CAI_ERR_TRANSPORT;
@@ -4547,13 +4038,13 @@ static int cli_theme_offset_command(cli_state *state, const char *argument,
       return cai_cli_error(error, CAI_ERR_INVALID,
                            "Theme offset requires a signed 64-bit integer.");
     *setting = value;
-    rc = cli_set_theme_scope(state, state->theme_scope, error);
+    rc = cli_set_theme_scope(state, state->ui.theme_scope, error);
     if (rc != CAI_OK) {
       *setting = previous;
       return rc;
     }
   }
-  cli_theme_for_scope(state, &state->theme, scope, &selected);
+  cli_theme_for_scope(state, &state->ui.theme, scope, &selected);
   snprintf(message, sizeof(message),
            "%s theme offset: `%lld`. Effective libmdf theme: `%s`.",
            scope == 2   ? "Review"
@@ -4568,8 +4059,7 @@ static int cli_theme_offset_command(cli_state *state, const char *argument,
 
 static int cli_theme_command(cli_state *state, const char *arguments,
                              cai_error *error) {
-  cai_cli_theme selected, effective;
-  mdf *renderer = NULL;
+  cai_cli_theme selected;
   cai_sink_callbacks callbacks;
   cai_sink *sink = NULL;
   char name[128], message[192];
@@ -4588,7 +4078,7 @@ static int cli_theme_command(cli_state *state, const char *arguments,
     callbacks.context = state;
     rc = cai_sink_from_callbacks(&callbacks, &sink, error);
     if (rc == CAI_OK)
-      rc = cai_cli_theme_describe(&state->theme, sink, error);
+      rc = cai_cli_theme_describe(&state->ui.theme, sink, error);
     cai_sink_close(sink);
     if (rc == CAI_OK) {
       char details[384];
@@ -4598,9 +4088,10 @@ static int cli_theme_command(cli_state *state, const char *arguments,
           "`%lld`.\n\nActive libmdf theme: `%s`.\n",
           state->options.theme_offset, state->options.subagent_theme_offset,
           state->options.review_theme_offset,
-          state->render_theme.ascii              ? "ascii"
-          : state->render_theme.markdown != NULL ? state->render_theme.markdown
-                                                 : "default");
+          state->ui.render_theme.ascii ? "ascii"
+          : state->ui.render_theme.markdown != NULL
+              ? state->ui.render_theme.markdown
+              : "default");
       if (cli_text(state, details, strlen(details)) != 0)
         rc = CAI_ERR_TRANSPORT;
     }
@@ -4616,40 +4107,9 @@ static int cli_theme_command(cli_state *state, const char *arguments,
   reason = cai_cli_theme_parse(name, &selected);
   if (reason != NULL)
     return cai_cli_error(error, CAI_ERR_INVALID, reason);
-  /* Both submission keys retain this command until INPUT_BOUNDARY, with the
-   * worker paused, or idle. Never replace a renderer mid-response. */
-  cli_theme_for_scope(state, &selected, state->theme_scope, &effective);
-  rc = cli_renderer_create(state, &effective, &renderer, error);
-  if (rc == CAI_OK &&
-      (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0 ||
-       renderer->set_geometry(renderer, state->width, state->width >= 5 ? 2 : 0,
-                              0) != MDF_OK ||
-       sl_set_prompt_theme(state->sl, getenv("NO_COLOR") != NULL
-                                          ? SL_PROMPT_THEME_PLAIN
-                                          : selected.prompt) != SL_OK))
-    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "apply terminal theme");
-  if (rc != CAI_OK) {
-    if (renderer != NULL)
-      renderer->destroy(renderer);
+  rc = cai_cli_presenter_set_theme(cli_presenter(state), &selected, error);
+  if (rc != CAI_OK)
     return rc;
-  }
-  /* A terminal call can span several write_stdin tools. Keep its identity,
-   * output limit, UTF-8/control decoder and pending command state intact. */
-  rc = cai_cli_theme_tools(&effective, state->tool_display, error);
-  if (rc == CAI_OK)
-    rc = cai_tool_display_set_color(state->tool_display,
-                                    state->interactive && !selected.ascii &&
-                                        getenv("NO_COLOR") == NULL,
-                                    error);
-  if (rc != CAI_OK) {
-    renderer->destroy(renderer);
-    return rc;
-  }
-  state->renderer->destroy(state->renderer);
-  state->renderer = renderer;
-  state->theme = selected;
-  state->render_theme = effective;
-  state->documents_rendered = 0;
   snprintf(message, sizeof(message), "Theme changed to `%s:%s`.\n%s",
            cai_cli_theme_prompt_name(&selected),
            selected.ascii ? "ascii" : selected.markdown,
@@ -5278,7 +4738,7 @@ static int cli_handle_command(cli_state *state, const char *line,
     if (strcmp(arg, "compact") != 0 && strcmp(arg, "full") != 0)
       return cai_cli_error(error, CAI_ERR_INVALID,
                            "use /output compact or /output full");
-    rc = cai_tool_display_set_mode(state->tool_display,
+    rc = cai_tool_display_set_mode(state->ui.tool_display,
                                    strcmp(arg, "full") == 0
                                        ? CAI_TOOL_OUTPUT_FULL
                                        : CAI_TOOL_OUTPUT_COMPACT,
@@ -5705,8 +5165,8 @@ static int cli_handle_command(cli_state *state, const char *line,
 
 static int cli_dispatch_command(cli_state *state, const char *line,
                                 cai_error *error, int *handled) {
-  int rc, saved_command_output = state->command_output;
-  int saved_presentation_event = state->presentation_event;
+  int rc, saved_command_output = state->ui.command_output;
+  int saved_presentation_event = state->ui.presentation_event;
   char *normalized = NULL;
   const char *command = line;
   /* Classification and execution share horizontal-whitespace semantics.
@@ -5733,41 +5193,41 @@ static int cli_dispatch_command(cli_state *state, const char *line,
     command = normalized;
   }
   if (line[0] == '/') {
-    state->command_output = 1;
-    state->presentation_event = 0;
+    state->ui.command_output = 1;
+    state->ui.presentation_event = 0;
   }
-  state->renderer_error = MDF_OK;
+  state->ui.renderer_error = MDF_OK;
   if ((line[0] == '/' || line[0] == '!') &&
       cli_command_input(state, line) != 0) {
     free(normalized);
-    state->command_output = saved_command_output;
-    state->presentation_event = saved_presentation_event;
+    state->ui.command_output = saved_command_output;
+    state->ui.presentation_event = saved_presentation_event;
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "display command input");
   }
   rc = cli_handle_command(state, command, error, handled);
-  if (state->renderer_error == MDF_ERROR_NOMEM)
+  if (state->ui.renderer_error == MDF_ERROR_NOMEM)
     rc = cai_cli_error(error, CAI_ERR_NOMEM, "render command output");
-  if (rc != CAI_OK && !state->sink_failed &&
-      (state->renderer_error == MDF_ERROR_PARSE ||
-       state->renderer_error == MDF_ERROR_INVALID)) {
+  if (rc != CAI_OK && !state->ui.sink_failed &&
+      (state->ui.renderer_error == MDF_ERROR_PARSE ||
+       state->ui.renderer_error == MDF_ERROR_INVALID)) {
     mdf *replacement = NULL;
-    int recovered =
-        cli_renderer_create(state, &state->render_theme, &replacement, error);
+    int recovered = cli_renderer_create(state, &state->ui.render_theme,
+                                        &replacement, error);
     if (recovered == CAI_OK) {
-      state->renderer->destroy(state->renderer);
-      state->renderer = replacement;
-      state->response_open = state->reasoning_open = 0;
-      state->documents_rendered = 0;
-      state->block_spacing_pending = 1;
-      state->renderer_error = MDF_OK;
+      state->ui.renderer->destroy(state->ui.renderer);
+      state->ui.renderer = replacement;
+      state->ui.response_open = state->ui.reasoning_open = 0;
+      state->ui.documents_rendered = 0;
+      state->ui.block_spacing_pending = 1;
+      state->ui.renderer_error = MDF_OK;
       rc = cai_cli_error(error, CAI_ERR_INVALID,
                          "Cannot render command output: Markdown input "
                          "exceeded a limit or was invalid.");
     } else
       rc = recovered;
   }
-  state->command_output = saved_command_output;
-  state->presentation_event = saved_presentation_event;
+  state->ui.command_output = saved_command_output;
+  state->ui.presentation_event = saved_presentation_event;
   free(normalized);
   /* FIFO delivery can return without an active editor. Refresh the retained
    * native status rows before closing, rather than adding a feed farewell. */
@@ -6201,12 +5661,12 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     parsed = -1;
   if (parsed > 0) {
     const char *reason =
-        cai_cli_theme_parse(state->options.theme, &state->theme);
+        cai_cli_theme_parse(state->options.theme, &state->ui.theme);
     if (reason != NULL) {
       cai_cli_error(&error, CAI_ERR_INVALID, reason);
       parsed = -1;
     }
-    cli_theme_for_scope(state, &state->theme, 0, &state->render_theme);
+    cli_theme_for_scope(state, &state->ui.theme, 0, &state->ui.render_theme);
   }
   if (parsed > 0 &&
       cai_config_environment(state->configuration, &state->environment,
@@ -6539,7 +5999,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     if (!state->controller) {
       prompt_config.prompt_theme = getenv("NO_COLOR") != NULL
                                        ? SL_PROMPT_THEME_PLAIN
-                                       : state->theme.prompt;
+                                       : state->ui.theme.prompt;
       if (state->interactive)
         cai_cli_input_adapter_configure(state->input_adapter, &prompt_config);
       prompt_config.line_max_len = 65536U + 512U;
@@ -6574,7 +6034,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       }
     }
   }
-  state->width = state->controller ? 80 : cli_render_width();
+  state->ui.width = state->controller ? 80 : cli_render_width();
   if ((state->interactive &&
        (sl_bind_key(state->sl, SL_KEY_ESCAPE, cli_cancel_editor, NULL) !=
             SL_OK ||
@@ -6587,7 +6047,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     goto cleanup;
   }
   if (!state->controller &&
-      cli_renderer_create(state, &state->render_theme, &state->renderer,
+      cli_renderer_create(state, &state->ui.render_theme, &state->ui.renderer,
                           &error) != CAI_OK) {
     cli_print_error(state, "initialize Markdown renderer", &error);
     goto cleanup;
@@ -6890,7 +6350,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
         rc = cli_messages_process(state, 0, &error);
       if (rc != CAI_OK) {
         cli_print_error(state, "input", &error);
-        if (state->sink_failed || rc == CAI_ERR_NOMEM ||
+        if (state->ui.sink_failed || rc == CAI_ERR_NOMEM ||
             state->runtime == NULL || state->exit_requested) {
           sl_free_string(state->sl, line);
           goto cleanup;
@@ -6969,7 +6429,7 @@ cleanup:
   }
   cli_shell_unwatch(state);
   cai_cli_shell_close(&state->shell);
-  if (state->batch && !state->options.review && state->renderer != NULL) {
+  if (state->batch && !state->options.review && state->ui.renderer != NULL) {
     cai_error final_error;
     cai_error_init(&final_error);
     if (cli_output_final(state, &final_error) != CAI_OK) {
@@ -7025,15 +6485,7 @@ cleanup:
   cai_cli_pouch_close(&state->messaging_pouch);
   if (state->sl != NULL)
     (void)cai_cli_log_notices(state->log, cli_notice, state);
-  if (state->renderer != NULL) {
-    (void)cli_finish_response(state);
-    (void)cli_finish_reasoning(state);
-    state->renderer->destroy(state->renderer);
-  }
-  if (state->notice_renderer != NULL)
-    state->notice_renderer->destroy(state->notice_renderer);
-  cai_tool_display_close(state->tool_display);
-  cai_sink_close(state->tool_sink);
+  cai_cli_presenter_close(cli_presenter(state));
   if (state->sl != NULL) {
     (void)sl_output_stream_end(state->sl);
     sl_destroy(state->sl);

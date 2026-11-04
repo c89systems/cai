@@ -36,6 +36,7 @@
     target_link_libraries(cai_cli_softline_resize_repro PRIVATE softline::softline_static)
     cai_configure_cli_target(cai_cli_softline_resize_repro)
     add_executable(cai_cli_resize_fixture tests/cli_resize_fixture.c)
+    target_link_options(cai_cli_resize_fixture PRIVATE -Wl,--wrap=sl_output_stream_write)
     target_link_libraries(cai_cli_resize_fixture PRIVATE cai_cli_support)
     cai_configure_cli_target(cai_cli_resize_fixture)
     cai_cli_use_storage_fixture(cai_cli_resize_fixture)
@@ -60,8 +61,15 @@
       set_tests_properties(cai_cli_softline_resize_${_cai_resize_mode}_shrink
         cai_cli_softline_resize_${_cai_resize_mode}_grow PROPERTIES TIMEOUT 20)
     endforeach()
-    add_executable(cai_cli_geometry_test tests/cli_geometry_test.c)
-    target_link_libraries(cai_cli_geometry_test PRIVATE cai_cli_support)
+    # Compile the reusable presenter without application/store objects. This
+    # fixture proves its link boundary while observing actual owner-side I/O.
+    add_executable(cai_cli_geometry_test tests/cli_geometry_test.c
+      cli/softline_presenter.c cli/literal.c cli/reasoning.c cli/theme.c cli/error.c)
+    target_link_options(cai_cli_geometry_test PRIVATE -Wl,--wrap=ioctl
+      -Wl,--wrap=sl_output_stream_reconcile -Wl,--wrap=sl_output_stream_write
+      -Wl,--wrap=sl_output_stream_write_quoted_prompt)
+    target_link_libraries(cai_cli_geometry_test PRIVATE cai_static
+      softline::softline_static libmdf::mdf_static)
     cai_configure_cli_target(cai_cli_geometry_test)
     add_test(NAME cai_cli_geometry COMMAND cai_cli_geometry_test)
     add_executable(cai_cli_tool_result_test tests/cli_tool_result_test.c)
@@ -70,7 +78,7 @@
     target_compile_options(cai_cli_tool_result_test PRIVATE -UNDEBUG)
     add_test(NAME cai_cli_tool_result COMMAND cai_cli_tool_result_test)
     add_executable(cai_cli_messages_test tests/cli_messages_test.c
-      cli/identity.c cli/pouch.c cli/pouch_stream.c cli/session_commands.c cli/log.c cli/message_names.c)
+      cli/identity.c cli/pouch.c cli/pouch_stream.c cli/error.c cli/session_commands.c cli/log.c cli/message_names.c)
     target_link_libraries(cai_cli_messages_test PRIVATE cai_static
       softline::softline_static lockdc::static)
     cai_configure_cli_target(cai_cli_messages_test)
@@ -260,7 +268,7 @@
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_shell_context_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_cli_shell_fixture>")
     set_tests_properties(cai_cli_shell_context PROPERTIES TIMEOUT 30)
-    add_executable(cai_cli_shell_runner_test tests/cli_shell_runner_test.c cli/shell.c cli/pouch_stream.c)
+    add_executable(cai_cli_shell_runner_test tests/cli_shell_runner_test.c cli/shell.c cli/pouch_stream.c cli/error.c)
     target_link_libraries(cai_cli_shell_runner_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_shell_runner_test)
     target_compile_options(cai_cli_shell_runner_test PRIVATE -UNDEBUG)
@@ -340,7 +348,7 @@
     add_test(NAME cai_cli_runtime_options COMMAND cai_cli_runtime_options_test
       "${CMAKE_CURRENT_BINARY_DIR}")
     add_executable(cai_cli_storage_stream_test
-      tests/cli_storage_stream_test.c cli/pouch_stream.c)
+      tests/cli_storage_stream_test.c cli/pouch_stream.c cli/error.c)
     target_link_libraries(cai_cli_storage_stream_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_storage_stream_test)
     add_test(NAME cai_cli_storage_stream COMMAND cai_cli_storage_stream_test)
@@ -388,7 +396,7 @@
         PROPERTIES LABELS "cli;local;offline" TIMEOUT 15)
     endforeach()
     add_executable(cai_cli_log_test tests/cli_log_test.c
-      cli/identity.c cli/log.c cli/response.c cli/pouch_stream.c)
+      cli/identity.c cli/log.c cli/response.c cli/pouch_stream.c cli/error.c)
     target_link_libraries(cai_cli_log_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_log_test)
     add_test(NAME cai_cli_log COMMAND cai_cli_log_test "${CMAKE_CURRENT_BINARY_DIR}")
@@ -401,14 +409,14 @@
         "$<TARGET_FILE:cai_cli_startup_fixture>")
     set_tests_properties(cai_cli_startup PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_quota_refresh_test tests/cli_quota_refresh_test.c
-      cli/quota_refresh.c cli/pouch_stream.c)
+      cli/quota_refresh.c cli/pouch_stream.c cli/error.c)
     target_link_libraries(cai_cli_quota_refresh_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_quota_refresh_test)
     target_compile_options(cai_cli_quota_refresh_test PRIVATE -UNDEBUG)
     add_test(NAME cai_cli_quota_refresh COMMAND cai_cli_quota_refresh_test)
     set_tests_properties(cai_cli_quota_refresh PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_pouch_startup_test tests/cli_pouch_startup_test.c
-      cli/identity.c cli/pouch_stream.c cli/log.c)
+      cli/identity.c cli/pouch_stream.c cli/error.c cli/log.c)
     target_link_libraries(cai_cli_pouch_startup_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_pouch_startup_test)
     target_compile_options(cai_cli_pouch_startup_test PRIVATE -UNDEBUG)
@@ -437,7 +445,7 @@
         "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_cli_pouch_startup_test>")
     set_tests_properties(cai_cli_replay_limits PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_pouch_compaction_test tests/cli_pouch_compaction_test.c
-      cli/identity.c cli/pouch_stream.c cli/log.c)
+      cli/identity.c cli/pouch_stream.c cli/error.c cli/log.c)
     target_link_libraries(cai_cli_pouch_compaction_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_pouch_compaction_test)
     target_compile_options(cai_cli_pouch_compaction_test PRIVATE -UNDEBUG)
@@ -558,7 +566,7 @@
         "$<TARGET_FILE:cai_cli_mock_fixture>")
     set_tests_properties(cai_cli_terminal_handoff PROPERTIES TIMEOUT 45)
     add_executable(cai_cli_prompt_history_test tests/cli_prompt_history_test.c
-      cli/identity.c cli/pouch_stream.c cli/log.c)
+      cli/identity.c cli/pouch_stream.c cli/error.c cli/log.c)
     target_link_libraries(cai_cli_prompt_history_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_prompt_history_test)
     cai_cli_use_storage_fixture(cai_cli_prompt_history_test)

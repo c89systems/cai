@@ -11,7 +11,9 @@
 /* Pause only after a complete physical feed write. The test waits until tmux
  * has displayed the marker, changes geometry, then releases the owner callback.
  * This exercises a resize inside CAI's real runtime/renderer dispatch. */
-static int fixture_output(sl_t *sl, const char *bytes, size_t length) {
+int __real_sl_output_stream_write(sl_t *sl, const char *bytes, size_t length);
+int __wrap_sl_output_stream_write(sl_t *sl, const char *bytes, size_t length);
+int __wrap_sl_output_stream_write(sl_t *sl, const char *bytes, size_t length) {
   static size_t total;
   static int paused;
   const char *ready = getenv("CAI_TEST_RESIZE_READY");
@@ -19,13 +21,13 @@ static int fixture_output(sl_t *sl, const char *bytes, size_t length) {
   FILE *file;
   struct pollfd fd;
   char token;
-  int result, rc = sl_output_stream_write(sl, bytes, length);
+  int result, rc = __real_sl_output_stream_write(sl, bytes, length);
   total += length;
   if (rc != SL_OK || paused || total < 4096U || length == 0U ||
       bytes[length - 1U] != '\n' || ready == NULL || release == NULL)
     return rc;
   paused = 1;
-  if (sl_output_stream_write(sl, "RESIZE SINK READY\n", 18U) != SL_OK)
+  if (__real_sl_output_stream_write(sl, "RESIZE SINK READY\n", 18U) != SL_OK)
     return SL_ERROR_IO;
   file = fopen(ready, "w");
   if (file == NULL)
@@ -44,7 +46,5 @@ static int fixture_output(sl_t *sl, const char *bytes, size_t length) {
   close(fd.fd);
   return rc;
 }
-#define sl_output_stream_write fixture_output
 #include "../cli/app_run.c"
-#undef sl_output_stream_write
 int main(int argc, char **argv) { return cai_cli_app_main(argc, argv, NULL); }

@@ -42,37 +42,39 @@ static int test_streaming_tables(void) {
   const char *short_row = "| tool | short |\n";
   if (state == NULL)
     return 1;
-  state->width = 120;
+  state->ui.width = 120;
   for (scenario = 0; scenario < 3; ++scenario) {
     const char *row = scenario == 1 ? long_row : short_row;
     memset(&total, 0, sizeof(total));
-    if (cli_renderer_create(state, &state->render_theme, &state->renderer,
+    if (cli_renderer_create(state, &state->ui.render_theme, &state->ui.renderer,
                             NULL) != CAI_OK)
       goto done;
     sink.userdata = &total;
     sink.write = table_count_write;
-    if (state->renderer->set_sink(state->renderer, &sink) != MDF_OK ||
-        state->renderer->feed(state->renderer, header, strlen(header)) !=
+    if (state->ui.renderer->set_sink(state->ui.renderer, &sink) != MDF_OK ||
+        state->ui.renderer->feed(state->ui.renderer, header, strlen(header)) !=
             MDF_OK ||
-        state->renderer->feed(state->renderer, row, strlen(row)) != MDF_OK ||
+        state->ui.renderer->feed(state->ui.renderer, row, strlen(row)) !=
+            MDF_OK ||
         total.rows != 0U)
       goto done;
     rows = scenario == 0 ? 5 : 1030;
     for (i = 0; i < rows; i++)
-      if (state->renderer->feed(state->renderer, row, strlen(row)) != MDF_OK)
+      if (state->ui.renderer->feed(state->ui.renderer, row, strlen(row)) !=
+          MDF_OK)
         goto done;
     if ((scenario == 0 && total.rows != 0U) ||
         (scenario != 0 && total.rows == 0U) ||
-        state->renderer->finish_document(state->renderer) != MDF_OK ||
+        state->ui.renderer->finish_document(state->ui.renderer) != MDF_OK ||
         total.rows != (size_t)rows + 1U)
       goto done;
-    state->renderer->destroy(state->renderer);
-    state->renderer = NULL;
+    state->ui.renderer->destroy(state->ui.renderer);
+    state->ui.renderer = NULL;
   }
   rc = 0;
 done:
-  if (state->renderer != NULL)
-    state->renderer->destroy(state->renderer);
+  if (state->ui.renderer != NULL)
+    state->ui.renderer->destroy(state->ui.renderer);
   free(state);
   if (rc)
     fprintf(stderr, "full-layout table fallback lost layout or body rows\n");
@@ -100,9 +102,9 @@ static int test_command_timer_boundary(void) {
   tick_stub = 1;
   tick_calls = 0;
   for (scenario = 0; scenario < 4; scenario++) {
-    state->response_open = scenario == 0;
-    state->reasoning_open = scenario == 1;
-    state->notice_open = scenario == 2;
+    state->ui.response_open = scenario == 0;
+    state->ui.reasoning_open = scenario == 1;
+    state->ui.notice_open = scenario == 2;
     if (write(descriptors[1], &expiration, sizeof(expiration)) !=
             (ssize_t)sizeof(expiration) ||
         cli_timer_wakeup(NULL, NULL, state) != SL_OK ||
@@ -584,16 +586,16 @@ static int test_output_failure(int operation) {
   sl_config_init(&config);
   config.output_fd = pipe_fd[1];
   state.sl = sl_create_with_config(&config);
-  state.width = 80;
+  state.ui.width = 80;
   mdf_options_init(&options);
-  options.width = state.width;
+  options.width = state.ui.width;
   options.boring = 1;
   if (state.sl == NULL || sl_output_stream_begin(state.sl) != SL_OK ||
-      mdf_create(MDF_FORMAT_ANSI, &options, &state.renderer) != MDF_OK)
+      mdf_create(MDF_FORMAT_ANSI, &options, &state.ui.renderer) != MDF_OK)
     goto cleanup;
   sink.userdata = &state;
   sink.write = cli_renderer_sink;
-  if (state.renderer->set_sink(state.renderer, &sink) != MDF_OK)
+  if (state.ui.renderer->set_sink(state.ui.renderer, &sink) != MDF_OK)
     goto cleanup;
   if (operation == 2) {
     const char *table = "| Left | Right |\n| --- | --- |\n| a | b |\n";
@@ -603,7 +605,7 @@ static int test_output_failure(int operation) {
   close(pipe_fd[1]);
   pipe_fd[1] = -1;
   if (operation == 8)
-    state.block_spacing_pending = 1;
+    state.ui.block_spacing_pending = 1;
   event.data = "Output unavailable.\n\n";
   event.data_length = strlen(event.data);
   if (operation == 0 || operation == 8) {
@@ -660,10 +662,10 @@ static int test_output_failure(int operation) {
              : cli_replay_event(&state, &replay, NULL);
   }
 cleanup:
-  if (state.notice_renderer != NULL)
-    state.notice_renderer->destroy(state.notice_renderer);
-  if (state.renderer != NULL)
-    state.renderer->destroy(state.renderer);
+  if (state.ui.notice_renderer != NULL)
+    state.ui.notice_renderer->destroy(state.ui.notice_renderer);
+  if (state.ui.renderer != NULL)
+    state.ui.renderer->destroy(state.ui.renderer);
   if (state.sl != NULL)
     sl_destroy(state.sl);
   close(pipe_fd[0]);
@@ -968,16 +970,16 @@ static int test_reasoning_replay(void) {
   memset(&state, 0, sizeof(state));
   memset(&event, 0, sizeof(event));
   memset(&capture, 0, sizeof(capture));
-  state.width = 80;
+  state.ui.width = 80;
   mdf_options_init(&options);
-  options.width = state.width;
+  options.width = state.ui.width;
   options.margin_left = 2;
   options.ansi_mode = MDF_ANSI_OFF;
-  if (mdf_create(MDF_FORMAT_ANSI, &options, &state.renderer) != MDF_OK)
+  if (mdf_create(MDF_FORMAT_ANSI, &options, &state.ui.renderer) != MDF_OK)
     return 1;
   sink.userdata = &capture;
   sink.write = reasoning_capture_body;
-  if (state.renderer->set_sink(state.renderer, &sink) != MDF_OK)
+  if (state.ui.renderer->set_sink(state.ui.renderer, &sink) != MDF_OK)
     rc = CAI_ERR_TRANSPORT;
   for (i = 0U; rc == CAI_OK && i < sizeof(types) / sizeof(types[0]); i++) {
     event.type = types[i];
@@ -985,11 +987,11 @@ static int test_reasoning_replay(void) {
     event.sequence = (unsigned long long)i + 1U;
     rc = cli_replay_render(&state, &event, NULL);
   }
-  state.renderer->destroy(state.renderer);
+  state.ui.renderer->destroy(state.ui.renderer);
   /* This sink captures Markdown rendering alone. Softline block spacing is
    * exercised separately by the real-terminal replay regression. */
-  if (rc != CAI_OK || state.reasoning_open || state.reasoning.started ||
-      state.documents_rendered != 4 ||
+  if (rc != CAI_OK || state.ui.reasoning_open || state.reasoning.started ||
+      state.ui.documents_rendered != 4 ||
       strstr(capture.bytes, "  Commentary.\n  > Body one λ continues.") ==
           NULL ||
       strstr(capture.bytes, "  > Body two.\n  Answer.") == NULL ||
@@ -1020,10 +1022,10 @@ static int test_deferred_command_spacing(void) {
   if (fcntl(pipes[0], F_SETFL, O_NONBLOCK) != 0)
     goto done;
   state->sl = sl_create();
-  state->width = 80;
-  state->feed_breaks = 2;
+  state->ui.width = 80;
+  state->ui.feed_breaks = 2;
   if (state->sl == NULL || sl_output_stream_begin(state->sl) != SL_OK ||
-      cli_renderer_create(state, &state->render_theme, &state->renderer,
+      cli_renderer_create(state, &state->ui.render_theme, &state->ui.renderer,
                           NULL) != CAI_OK ||
       cli_command_input(state, "/delayed") != 0)
     goto done;
@@ -1059,10 +1061,10 @@ static int test_deferred_command_spacing(void) {
     goto done;
   rc = 0;
 done:
-  if (state->renderer != NULL)
-    state->renderer->destroy(state->renderer);
-  if (state->notice_renderer != NULL)
-    state->notice_renderer->destroy(state->notice_renderer);
+  if (state->ui.renderer != NULL)
+    state->ui.renderer->destroy(state->ui.renderer);
+  if (state->ui.notice_renderer != NULL)
+    state->ui.notice_renderer->destroy(state->ui.notice_renderer);
   if (state->sl != NULL) {
     (void)sl_output_stream_end(state->sl);
     sl_destroy(state->sl);
@@ -1094,16 +1096,17 @@ static int test_timestamps(void) {
   close(pipes[1]);
   state->sl = sl_create();
   state->interactive = 1;
-  state->width = 80;
+  state->ui.width = 80;
   state->options.utc = 1;
-  state->presentation_event = 1;
-  state->presentation_timestamp_ns = 1793622600123456789ULL;
+  state->ui.presentation_event = 1;
+  state->ui.presentation_timestamp_ns = 1793622600123456789ULL;
   cai_error_init(&error);
-  if (cai_cli_theme_parse("default", &state->theme) != NULL ||
+  if (cai_cli_theme_parse("default", &state->ui.theme) != NULL ||
       sl_output_stream_begin(state->sl) != SL_OK ||
-      cli_renderer_create(state, &state->theme, &state->renderer, &error) !=
-          CAI_OK ||
-      cli_timestamp(state, stamp, sizeof(stamp)) == 0 ||
+      cli_renderer_create(state, &state->ui.theme, &state->ui.renderer,
+                          &error) != CAI_OK ||
+      cai_cli_presenter_timestamp(cli_presenter(state), stamp, sizeof(stamp)) ==
+          0 ||
       cli_command_input(state, "/status") != 0 ||
       cli_tool_markdown(state, "Tool result body.",
                         strlen("Tool result body.")) != 0 ||
@@ -1111,16 +1114,18 @@ static int test_timestamps(void) {
       cli_text(state, "Visible answer.", 15U) != 0 ||
       cli_finish_response(state) != 0)
     rc = 1;
-  state->presentation_timestamp_ns = 0U;
-  if (cli_timestamp(state, expected, sizeof(expected)) != 0)
+  state->ui.presentation_timestamp_ns = 0U;
+  if (cai_cli_presenter_timestamp(cli_presenter(state), expected,
+                                  sizeof(expected)) != 0)
     rc = 1;
   state->interactive = 0;
-  state->presentation_event = 0;
-  if (cli_timestamp(state, expected, sizeof(expected)) != 0)
+  state->ui.presentation_event = 0;
+  if (cai_cli_presenter_timestamp(cli_presenter(state), expected,
+                                  sizeof(expected)) != 0)
     rc = 1;
-  state->renderer->destroy(state->renderer);
-  if (state->notice_renderer != NULL)
-    state->notice_renderer->destroy(state->notice_renderer);
+  state->ui.renderer->destroy(state->ui.renderer);
+  if (state->ui.notice_renderer != NULL)
+    state->ui.notice_renderer->destroy(state->ui.notice_renderer);
   (void)sl_output_stream_end(state->sl);
   sl_destroy(state->sl);
   fflush(stdout);
@@ -1208,19 +1213,19 @@ int main(void) {
   if (state.sl == NULL || sl_output_stream_begin(state.sl) != SL_OK) {
     return 1;
   }
-  state.width = 80;
+  state.ui.width = 80;
   mdf_options_init(&renderer_options);
   renderer_options.output_fd = STDOUT_FILENO;
-  renderer_options.width = state.width;
+  renderer_options.width = state.ui.width;
   renderer_options.ansi_mode = MDF_ANSI_OFF;
   renderer_options.margin_left = 2;
-  if (mdf_create(MDF_FORMAT_ANSI, &renderer_options, &state.renderer) !=
+  if (mdf_create(MDF_FORMAT_ANSI, &renderer_options, &state.ui.renderer) !=
       MDF_OK) {
     return 1;
   }
   sink.userdata = &state;
   sink.write = cli_renderer_sink;
-  if (state.renderer->set_sink(state.renderer, &sink) != MDF_OK) {
+  if (state.ui.renderer->set_sink(state.ui.renderer, &sink) != MDF_OK) {
     return 1;
   }
   if (cli_prompt(&state, "Hello") != 0 ||
@@ -1228,7 +1233,7 @@ int main(void) {
       cli_prompt(&state, "Next") != 0)
     return 1;
   state.interactive = 1;
-  state.presentation_event = 1; /* Legacy fixture has no original time. */
+  state.ui.presentation_event = 1; /* Legacy fixture has no original time. */
   if (unsetenv("NO_COLOR") != 0)
     return 1;
   if (cli_notice(&state, "* WARN: colored diagnostic") != 0)
@@ -1277,8 +1282,10 @@ int main(void) {
     rc = cli_event(&state, &event, NULL);
   }
   if (cai_cli_reasoning_title(&state.reasoning, &title) != 0 ||
-      strcmp(title, "Actual provider summary") != 0 || state.reasoning_open) {
-    fprintf(stderr, "single header: %s open=%d\n", title, state.reasoning_open);
+      strcmp(title, "Actual provider summary") != 0 ||
+      state.ui.reasoning_open) {
+    fprintf(stderr, "single header: %s open=%d\n", title,
+            state.ui.reasoning_open);
     return 1;
   }
   event.type = CAI_AGENT_EVENT_TEXT_DELTA;
@@ -1367,7 +1374,7 @@ int main(void) {
       return 1;
   }
   /* Worker answers already streamed; batch stdout belongs to the parent. */
-  documents = state.documents_rendered;
+  documents = state.ui.documents_rendered;
   event.subagent_name = "worker";
   if (rc == CAI_OK)
     rc = cli_event(&state, &event, NULL);
@@ -1376,18 +1383,20 @@ int main(void) {
   if (rc == CAI_OK)
     rc = cli_event(&state, &event, NULL);
   state.batch = 0;
-  if (state.documents_rendered != documents)
+  if (state.ui.documents_rendered != documents)
     return 1;
-  cai_tool_display_close(state.tool_display);
-  cai_sink_close(state.tool_sink);
+  cai_tool_display_close(state.ui.tool_display);
+  cai_sink_close(state.ui.tool_sink);
   /* A split SGR sequence and a reset-only blank row never receive markers. */
-  state.row_line_start = 1;
-  state.row_ansi = 0;
-  state.notice_first_row = 1;
-  if (cli_notice_sink(&state, "\033[", 2U) != 0 ||
-      cli_notice_sink(&state, "1mDecorated\n\033[0",
-                      strlen("1mDecorated\n\033[0")) != 0 ||
-      cli_notice_sink(&state, "m\nPlain row\n", strlen("m\nPlain row\n")) != 0)
+  state.ui.row_line_start = 1;
+  state.ui.row_ansi = 0;
+  state.ui.notice_first_row = 1;
+  if (cai_cli_presenter_notice_sink(cli_presenter(&state), "\033[", 2U) != 0 ||
+      cai_cli_presenter_notice_sink(cli_presenter(&state),
+                                    "1mDecorated\n\033[0",
+                                    strlen("1mDecorated\n\033[0")) != 0 ||
+      cai_cli_presenter_notice_sink(cli_presenter(&state), "m\nPlain row\n",
+                                    strlen("m\nPlain row\n")) != 0)
     return 1;
   state.timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
   if (state.timer_fd < 0 || cli_timer_wakeup(state.sl, NULL, &state) != SL_OK) {
@@ -1398,9 +1407,9 @@ int main(void) {
   if (sl_output_stream_end(state.sl) != SL_OK) {
     rc = CAI_ERR_TRANSPORT;
   }
-  state.renderer->destroy(state.renderer);
-  if (state.notice_renderer != NULL)
-    state.notice_renderer->destroy(state.notice_renderer);
+  state.ui.renderer->destroy(state.ui.renderer);
+  if (state.ui.notice_renderer != NULL)
+    state.ui.notice_renderer->destroy(state.ui.notice_renderer);
   sl_destroy(state.sl);
   if (dup2(saved_stdout, STDOUT_FILENO) < 0) {
     return 1;
@@ -1408,11 +1417,11 @@ int main(void) {
   close(saved_stdout);
   count = read(pipe_fd[0], output, sizeof(output) - 1U);
   close(pipe_fd[0]);
-  if (count < 0 || rc != CAI_OK || state.reasoning_open ||
+  if (count < 0 || rc != CAI_OK || state.ui.reasoning_open ||
       cai_cli_reasoning_title(&state.reasoning, &title) != 0 ||
       strcmp(title, "Tool follow-up") != 0) {
     fprintf(stderr, "finished reasoning: rc=%d title=%s open=%d\n", rc, title,
-            state.reasoning_open);
+            state.ui.reasoning_open);
     return 1;
   }
   output[count] = '\0';

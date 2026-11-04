@@ -22,17 +22,6 @@ typedef struct cli_stream {
   void (*destroy)(void *);
 } cli_stream;
 
-int cai_cli_error(cai_error *error, int code, const char *message) {
-  char *copy;
-  if (error != NULL) {
-    copy = strdup(message != NULL ? message : "lockd operation failed");
-    cai_error_cleanup(error);
-    error->code = code;
-    error->message = copy;
-  }
-  return code;
-}
-
 int cai_cli_lc_error(cai_error *error, const lc_error *source) {
   char message[2048];
   int rc;
