@@ -6,6 +6,7 @@
 #include <string.h>
 
 #define INPUT_RESULTS 16U
+#define INPUT_DETACHED_CLIENTS 16U
 typedef struct input_node {
   struct input_node *next;
   cai_input_entry value;
@@ -20,6 +21,7 @@ struct cai_input_queue_client {
   unsigned long long id, high;
   cai_input_result results[INPUT_RESULTS];
   size_t next_result;
+  int attached;
 };
 struct cai_input_queue {
   cai_input_queue_config config;
@@ -27,7 +29,7 @@ struct cai_input_queue {
   input_node *head, *tail;
   input_node *receipts;
   cai_input_queue_client *clients;
-  size_t count, references;
+  size_t count, references, detached_clients;
   size_t origin_count;
   unsigned long long revision, view_revision, serial, client_serial, token;
   unsigned long long uncertain_client, uncertain_request;
@@ -48,6 +50,7 @@ static void node_free(input_node *node) {
 }
 static void queue_release(cai_input_queue *queue) {
   input_node *node;
+  cai_input_queue_client *client;
   if (--queue->references != 0U)
     return;
   while ((node = queue->head) != NULL) {
@@ -57,6 +60,10 @@ static void queue_release(cai_input_queue *queue) {
   while ((node = queue->receipts) != NULL) {
     queue->receipts = node->next;
     node_free(node);
+  }
+  while ((client = queue->clients) != NULL) {
+    queue->clients = client->next;
+    cai_free_mem(NULL, client);
   }
   cai_free_mem(NULL, queue);
 }
@@ -84,6 +91,53 @@ static cai_input_queue_client *find_client(cai_input_queue *queue,
     if (client->id == id)
       return client;
   return NULL;
+}
+static int client_attached(cai_input_queue *queue, unsigned long long id) {
+  cai_input_queue_client *client = find_client(queue, id);
+  return client != NULL && client->attached;
+}
+static void client_touch(cai_input_queue_client *client) {
+  cai_input_queue_client **at;
+  cai_input_queue *queue = client->queue;
+  for (at = &queue->clients; *at != NULL; at = &(*at)->next)
+    if (*at == client) {
+      *at = client->next;
+      client->next = queue->clients;
+      queue->clients = client;
+      return;
+    }
+}
+static void clients_prune(cai_input_queue *queue) {
+  while (queue->detached_clients > INPUT_DETACHED_CLIENTS) {
+    cai_input_queue_client **at, **oldest = NULL, *client;
+    for (at = &queue->clients; *at != NULL; at = &(*at)->next)
+      if (!(*at)->attached)
+        oldest = at;
+    client = *oldest;
+    *oldest = client->next;
+    cai_free_mem(NULL, client);
+    --queue->detached_clients;
+  }
+}
+static int client_cached(cai_input_queue *queue, unsigned long long id,
+                         cai_input_queue_client **out, cai_error *error) {
+  cai_input_queue_client *client = find_client(queue, id);
+  if (client == NULL) {
+    client = cai_alloc(NULL, sizeof(*client));
+    if (client == NULL)
+      return cai_set_error(error, CAI_ERR_NOMEM,
+                           "restore input producer receipts");
+    memset(client, 0, sizeof(*client));
+    client->queue = queue;
+    client->id = id;
+    client->next = queue->clients;
+    queue->clients = client;
+    ++queue->detached_clients;
+    clients_prune(queue);
+  } else
+    client_touch(client);
+  *out = client;
+  return CAI_OK;
 }
 static input_node *find_origin(cai_input_queue *queue, const char *origin) {
   input_node *node;
@@ -161,6 +215,7 @@ static cai_input_result *result_find(cai_input_queue_client *client,
 static void result_save(cai_input_queue_client *client,
                         const cai_input_result *result) {
   cai_input_result *saved = result_find(client, result->request_id);
+  client_touch(client);
   if (saved != NULL)
     *saved = *result;
   else {
@@ -415,7 +470,7 @@ static int prepare_request(cai_input_queue *queue, unsigned long long client,
       return CAI_OK;
     }
     if (record->entry.edit_held &&
-        find_client(queue, record->entry.edit_owner) != NULL) {
+        client_attached(queue, record->entry.edit_owner)) {
       deny(prepared, CAI_ERR_INVALID, "item is already being edited");
       return CAI_OK;
     }
@@ -713,6 +768,7 @@ int cai_input_queue_client_open(cai_input_queue *queue,
     return rc;
   }
   client->id = ++queue->client_serial;
+  client->attached = 1;
   client->queue = queue;
   client->next = queue->clients;
   queue->clients = client;
@@ -720,23 +776,47 @@ int cai_input_queue_client_open(cai_input_queue *queue,
   *out = client;
   return CAI_OK;
 }
+int cai_input_queue_client_resume(cai_input_queue *queue, unsigned long long id,
+                                  cai_input_queue_client **out,
+                                  cai_error *error) {
+  cai_input_queue_client *client;
+  int rc = queue_valid(queue, error);
+  if (out != NULL)
+    *out = NULL;
+  if (rc != CAI_OK)
+    return rc;
+  if (out == NULL || id == 0U || (client = find_client(queue, id)) == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "producer receipts unavailable; reconcile uncertain "
+                         "input without automatically reoffering it");
+  if (client->attached)
+    return cai_set_error(error, CAI_ERR_LIMIT,
+                         "input producer is already attached");
+  client->attached = 1;
+  --queue->detached_clients;
+  ++queue->references;
+  client_touch(client);
+  *out = client;
+  return CAI_OK;
+}
 void cai_input_queue_client_close(cai_input_queue_client *client) {
-  cai_input_queue_client **at;
   cai_input_queue *queue;
-  if (client == NULL)
+  if (client == NULL || !client->attached)
     return;
   queue = client->queue;
-  for (at = &queue->clients; *at != NULL; at = &(*at)->next)
-    if (*at == client) {
-      *at = client->next;
-      break;
-    }
-  cai_free_mem(NULL, client);
+  client->attached = 0;
+  ++queue->detached_clients;
+  client_touch(client);
+  clients_prune(queue);
   queue_release(queue);
 }
 unsigned long long
 cai_input_queue_client_id(const cai_input_queue_client *client) {
-  return client != NULL ? client->id : 0U;
+  return client != NULL && client->attached ? client->id : 0U;
+}
+unsigned long long
+cai_input_queue_client_last_request(const cai_input_queue_client *client) {
+  return client != NULL && client->attached ? client->high : 0U;
 }
 int cai_input_queue_get_state(const cai_input_queue *queue,
                               cai_input_state *out, cai_error *error) {
@@ -823,7 +903,7 @@ int cai_input_queue_entry_at(cai_input_queue_client *client, size_t index,
                              cai_input_entry *out, cai_error *error) {
   input_node *node;
   int rc;
-  if (client == NULL || out == NULL)
+  if (client == NULL || !client->attached || out == NULL)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "input queue entry is unavailable");
   rc = queue_valid(client->queue, error);
@@ -870,8 +950,9 @@ int cai_input_queue_request(cai_input_queue_client *client,
   cai_error local;
   unsigned long long position = 0U;
   int rc;
-  if (client == NULL || request == NULL || result == NULL ||
-      request->request_id == 0U || request->operation < CAI_INPUT_OFFER ||
+  if (client == NULL || !client->attached || request == NULL ||
+      result == NULL || request->request_id == 0U ||
+      request->operation < CAI_INPUT_OFFER ||
       request->operation > CAI_INPUT_FORGET_ORIGIN ||
       memchr(request->origin, '\0', sizeof(request->origin)) == NULL)
     return cai_set_error(error, CAI_ERR_INVALID,
@@ -1070,6 +1151,9 @@ int cai_input_queue_restore(cai_input_queue *queue,
         record->client_id != queue->client_serial + 1U)
       return cai_set_error(error, CAI_ERR_PROTOCOL,
                            "invalid input queue client record");
+    rc = client_cached(queue, record->client_id, &client, error);
+    if (rc != CAI_OK)
+      return rc;
     queue->client_serial = record->client_id;
   } else if (record->type == CAI_INPUT_RECORD_CLAIM) {
     cai_input_entry claimed = record->entry;
@@ -1096,6 +1180,9 @@ int cai_input_queue_restore(cai_input_queue *queue,
          record->result.outcome != CAI_INPUT_REJECTED))
       return cai_set_error(error, CAI_ERR_PROTOCOL,
                            "invalid input queue request record");
+    rc = client_cached(queue, record->client_id, &client, error);
+    if (rc != CAI_OK)
+      return rc;
     if (record->result.outcome == CAI_INPUT_REJECTED) {
       if (record->after_revision != queue->revision)
         return cai_set_error(error, CAI_ERR_PROTOCOL,

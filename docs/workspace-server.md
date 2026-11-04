@@ -13,10 +13,11 @@ ownership races and killed-owner recovery. The core attachment controller
 versus last-client lifetime. Input-controller handoffs carry the original
 authority generation and check it on owner-thread dispatch. Typed protocol
 envelopes (`protocol.h`) stream metadata/payload tokens and distinguish
-provisional data from validated record completion. The application
-controller/frontend cutover, connection handshake and
-headless/attach CLI are still pending;
-the transport primitives alone do not enable those CLI modes.
+provisional data from validated record completion. Queue producers can resume
+their retained receipts after disconnect or ordered journal recovery, without
+another producer reservation. The application controller/frontend cutover,
+connection handshake and headless/attach CLI are still pending; these core
+components alone do not enable those CLI modes.
 
 ## Confirmed product decisions
 
@@ -188,6 +189,15 @@ identity and receipt; it never blindly reoffers text with a new ID. Existing
 input queue IDs/revisions/edit tokens remain authoritative. Extend their
 resumable producer/receipt contract where required rather than maintaining a
 second deduplication layer that can execute input twice.
+
+The core queue now retains 16 results for each active producer and a cache of
+the 16 most recently used detached producers. Reattaching a retained identity
+does not append a CLIENT record. Only one handle may own that producer at once.
+Recovery creates detached receipt state from ordered CLIENT/REQUEST records;
+live handles cannot survive a crashed server. Expired receipts and IDs omitted
+from a trim/export initialization baseline stay unavailable, rather than
+becoming new submissions. Frontends retain their own last-issued request ID
+and reconcile unknown work before making any replacement offer.
 
 ## CBOR and framing
 

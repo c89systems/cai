@@ -173,10 +173,28 @@ int cai_input_queue_retain(cai_input_queue *queue, cai_error *error);
 void cai_input_queue_release(cai_input_queue *queue);
 int cai_input_queue_client_open(cai_input_queue *queue,
                                 cai_input_queue_client **out, cai_error *error);
-/** Detaches observations; accepted entries and edit holds remain. */
+/** Resume an existing logical producer after transport loss. No new producer
+ * is reserved and no journal record is appended. Only one live handle may own
+ * an identity. The queue retains receipts for the 16 most recently used
+ * detached producers (16 results per producer); journal replay restores this
+ * bounded cache. If unavailable, fail rather than readmit an uncertain offer.
+ * A trimmed/export initialization baseline can deliberately omit old receipts.
+ * Inspect/reconcile accepted work; never automatically reoffer an unknown
+ * request with a new producer or request ID. */
+int cai_input_queue_client_resume(cai_input_queue *queue, unsigned long long id,
+                                  cai_input_queue_client **out,
+                                  cai_error *error);
+/** Detaches observations; accepted entries and edit holds remain. The logical
+ * producer's bounded receipts may be resumed independently of this handle. */
 void cai_input_queue_client_close(cai_input_queue_client *client);
 unsigned long long
 cai_input_queue_client_id(const cai_input_queue_client *client);
+/** Highest processed request ID known to this producer. On reconnect, keep
+ * the larger of this and the frontend's own last issued ID. Read-only IDs need
+ * not survive a server restart; uncertain submissions keep their original ID.
+ */
+unsigned long long
+cai_input_queue_client_last_request(const cai_input_queue_client *client);
 int cai_input_queue_request(cai_input_queue_client *client,
                             const cai_input_request *request,
                             cai_input_result *result, cai_error *error);

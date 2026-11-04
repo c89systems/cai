@@ -260,6 +260,7 @@ static void uncertain_appends(queue_fixture *fixture) {
   cai_input_entry item;
   cai_input_claim claim;
   size_t committed;
+  unsigned long long producer;
   open_queue(fixture, 0U, 0U);
   clients(fixture);
   fixture->fail = 2;
@@ -267,6 +268,17 @@ static void uncertain_appends(queue_fixture *fixture) {
                 CAI_INPUT_QUEUED, 0);
   assert(result.outcome == CAI_INPUT_UNKNOWN && state(fixture).uncertain &&
          state(fixture).count == 0U);
+  producer = cai_input_queue_client_id(fixture->clients[0]);
+  cai_input_queue_client_close(fixture->clients[0]);
+  fixture->clients[0] = NULL;
+  /* A disconnected sender can reconcile its original unknown receipt while
+   * recovery still fences mutations; reconnect itself performs no append. */
+  committed = fixture->count;
+  assert(cai_input_queue_client_resume(fixture->queue, producer,
+                                       &fixture->clients[0], NULL) == CAI_OK);
+  assert(fixture->count == committed &&
+         cai_input_queue_client_last_request(fixture->clients[0]) ==
+             result.request_id);
   committed = fixture->count - 1U;
   assert(send(fixture, 0U, CAI_INPUT_OFFER, "not admitted", NULL,
               CAI_INPUT_QUEUED, 0)
@@ -313,6 +325,126 @@ static void uncertain_appends(queue_fixture *fixture) {
          state(fixture).count == 0U);
   assert(cai_input_queue_claim(fixture->queue, item.id, item.revision, &claim,
                                NULL) == CAI_ERR_INVALID);
+  clear(fixture);
+}
+static void reconnect_receipts(queue_fixture *fixture) {
+  cai_input_queue_client *other = NULL;
+  cai_input_result offered, result;
+  cai_input_entry item;
+  cai_input_request duplicate;
+  cai_input_claim claim;
+  unsigned long long producer, last;
+  size_t count, i;
+  open_queue(fixture, 0U, 0U);
+  clients(fixture);
+  producer = cai_input_queue_client_id(fixture->clients[0]);
+  assert(cai_input_queue_client_resume(fixture->queue, producer, &other,
+                                       NULL) == CAI_ERR_LIMIT &&
+         other == NULL);
+  assert(cai_input_queue_client_resume(fixture->queue, 0U, &other, NULL) ==
+             CAI_ERR_INVALID &&
+         other == NULL);
+  offered = send(fixture, 0U, CAI_INPUT_OFFER, "acknowledgement lost", NULL,
+                 CAI_INPUT_QUEUED, 0);
+  assert(offered.outcome == CAI_INPUT_ACCEPTED);
+  count = fixture->count;
+  cai_input_queue_client_close(fixture->clients[0]);
+  fixture->clients[0] = NULL;
+  assert(cai_input_queue_client_resume(fixture->queue, producer,
+                                       &fixture->clients[0], NULL) == CAI_OK);
+  assert(cai_input_queue_client_id(fixture->clients[0]) == producer &&
+         cai_input_queue_client_last_request(fixture->clients[0]) ==
+             offered.request_id &&
+         fixture->count == count);
+  memset(&duplicate, 0, sizeof(duplicate));
+  duplicate.request_id = offered.request_id;
+  duplicate.operation = CAI_INPUT_OFFER;
+  duplicate.text = "this must never execute";
+  assert(cai_input_queue_request(fixture->clients[0], &duplicate, &result,
+                                 NULL) == CAI_OK);
+  assert(result.outcome == CAI_INPUT_ACCEPTED &&
+         result.item_id == offered.item_id && state(fixture).count == 1U &&
+         fixture->count == count);
+  item = entry(fixture, 0U, 0U);
+  assert(strcmp(item.text, "acknowledgement lost") == 0);
+  assert(cai_input_queue_set_ready(fixture->queue, item.id, 1, NULL) == CAI_OK);
+  assert(cai_input_queue_claim(fixture->queue, item.id, item.revision, &claim,
+                               NULL) == CAI_OK);
+  cai_input_claim_cleanup(&claim);
+  count = fixture->count;
+  /* A server restart reconstructs outcomes from ordered records, even when
+   * the accepted input has already been consumed. No text-based guesswork. */
+  close_queue(fixture);
+  open_queue(fixture, 0U, 0U);
+  for (i = 0U; i < count; ++i)
+    assert(cai_input_queue_restore(fixture->queue, &fixture->records[i],
+                                   (unsigned long long)i + 1U, NULL) == CAI_OK);
+  assert(cai_input_queue_client_resume(fixture->queue, producer,
+                                       &fixture->clients[0], NULL) == CAI_OK);
+  assert(cai_input_queue_request(fixture->clients[0], &duplicate, &result,
+                                 NULL) == CAI_OK);
+  assert(result.outcome == CAI_INPUT_ACCEPTED &&
+         result.item_id == offered.item_id && state(fixture).count == 0U &&
+         fixture->count == count);
+  /* Expired receipts stay unknown after reconnect; the old ID is fenced. */
+  for (i = 0U; i < 17U; ++i)
+    assert(send(fixture, 0U, CAI_INPUT_SYNCHRONIZE, NULL, NULL,
+                CAI_INPUT_QUEUED, 0)
+               .outcome == CAI_INPUT_ACCEPTED);
+  last = cai_input_queue_client_last_request(fixture->clients[0]);
+  cai_input_queue_client_close(fixture->clients[0]);
+  fixture->clients[0] = NULL;
+  assert(cai_input_queue_client_resume(fixture->queue, producer,
+                                       &fixture->clients[0], NULL) == CAI_OK);
+  assert(cai_input_queue_client_last_request(fixture->clients[0]) == last);
+  assert(cai_input_queue_request(fixture->clients[0], &duplicate, &result,
+                                 NULL) == CAI_OK);
+  assert(result.outcome == CAI_INPUT_UNKNOWN && state(fixture).count == 0U &&
+         fixture->count == count);
+  cai_input_queue_client_close(fixture->clients[0]);
+  fixture->clients[0] = NULL;
+  for (i = 0U; i < 17U; ++i) {
+    assert(cai_input_queue_client_open(fixture->queue, &other, NULL) == CAI_OK);
+    last = cai_input_queue_client_id(other);
+    cai_input_queue_client_close(other);
+    other = NULL;
+  }
+  count = fixture->count;
+  assert(cai_input_queue_client_resume(fixture->queue, producer, &other,
+                                       NULL) == CAI_ERR_INVALID &&
+         other == NULL);
+  assert(fixture->count == count);
+  assert(cai_input_queue_client_open(fixture->queue, &fixture->clients[0],
+                                     NULL) == CAI_OK);
+  assert(cai_input_queue_client_id(fixture->clients[0]) > last);
+  producer = cai_input_queue_client_id(fixture->clients[0]);
+  /* Cache pressure never evicts live producer state. */
+  for (i = 0U; i < 17U; ++i) {
+    assert(cai_input_queue_client_open(fixture->queue, &other, NULL) == CAI_OK);
+    cai_input_queue_client_close(other);
+    other = NULL;
+  }
+  assert(cai_input_queue_client_id(fixture->clients[0]) == producer &&
+         cai_input_queue_client_last_request(fixture->clients[0]) == 0U);
+  result = send(fixture, 0U, CAI_INPUT_OFFER, "live producer survived churn",
+                NULL, CAI_INPUT_QUEUED, 0);
+  assert(result.outcome == CAI_INPUT_ACCEPTED && state(fixture).count == 1U);
+  count = fixture->count;
+  close_queue(fixture);
+  open_queue(fixture, 0U, 0U);
+  for (i = 0U; i < count; ++i)
+    assert(cai_input_queue_restore(fixture->queue, &fixture->records[i],
+                                   (unsigned long long)i + 1U, NULL) == CAI_OK);
+  /* Its old reservation was outside the cache; its recent committed request
+   * restores that producer's high watermark and receipt at the journal tail. */
+  assert(cai_input_queue_client_resume(fixture->queue, producer,
+                                       &fixture->clients[0], NULL) == CAI_OK);
+  duplicate.request_id = result.request_id;
+  assert(cai_input_queue_request(fixture->clients[0], &duplicate, &offered,
+                                 NULL) == CAI_OK);
+  assert(offered.outcome == CAI_INPUT_ACCEPTED &&
+         offered.item_id == result.item_id && state(fixture).count == 1U &&
+         fixture->count == count);
   clear(fixture);
 }
 static void lanes_and_stop(queue_fixture *fixture) {
@@ -668,6 +800,7 @@ int main(void) {
   delivery_projection();
   producer_receipts(fixture);
   checkpoint_restore(fixture);
+  reconnect_receipts(fixture);
   edit_and_claim(fixture);
   held_recovery(fixture);
   uncertain_appends(fixture);

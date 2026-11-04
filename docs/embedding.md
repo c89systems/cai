@@ -120,6 +120,18 @@ resynchronize without removing work. Deselect before closing the runtime;
 detach frontend connections before freeing their callback contexts. No worker
 thread or HTTP listener is created by this core controller.
 
+For transport reconnects, retain the queue producer ID and last issued request
+ID. `cai_input_queue_client_resume` reattaches the same producer without a new
+journal reservation, preserving its known receipts and high watermark.
+`cai_input_queue_client_last_request` reports the backend watermark; use the
+larger of this and the frontend's last issued ID for subsequent requests.
+Reconcile an uncertain submission with its original identity. The bounded cache
+retains 16 results per producer and the 16 most recently used detached producers;
+active producers are not evicted. Ordered journal recovery rebuilds this cache.
+Missing/expired outcomes remain unknown; never automatically resubmit with a new
+identity. A trim/export initialization baseline can omit earlier receipts while
+still preserving accepted work and producer-ID allocation.
+
 For a shared frontend server, supply `cai_input_controller_config.authorize`
 and a fixed authenticated attachment identity on each connection. Every copied
 handoff carries `cai_input_scope` (conversation epoch and original control
