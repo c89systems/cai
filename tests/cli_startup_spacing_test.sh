@@ -19,14 +19,17 @@ finish() {
   cleanup "$status"
 }
 trap finish EXIT
-for mode in shell banner; do
+for mode in shell banner unterminated-banner; do
   program="$cli"
   marker='SHELL PROMPT cai'
   unset CAI_TEST_APP_BANNER
-  if [[ "$mode" == banner ]]; then
+  if [[ "$mode" != shell ]]; then
     program="$host"
     export CAI_TEST_APP_BANNER=$'HOST STARTUP BANNER\n'
     marker='HOST STARTUP BANNER'
+    if [[ "$mode" == unterminated-banner ]]; then
+      export CAI_TEST_APP_BANNER='HOST STARTUP BANNER'
+    fi
   fi
   {
     printf '#!/usr/bin/env bash\nset -euo pipefail\n'
@@ -44,7 +47,7 @@ for mode in shell banner; do
   wait_for ready
   awk -v marker="$marker" '
     $0 == marker {above=NR}
-    /^> STARTUP_USER$/ {found=1; if (!above || NR-above != 2) exit 1}
+    /^  > STARTUP_USER$/ {found=1; if (!above || NR-above != 2) exit 1}
     END {if (!found) exit 1}' "$root/screen" || {
       cat "$root/screen" >&2; fail 'Expected exactly one blank row before first user prompt';
     }

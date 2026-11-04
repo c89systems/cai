@@ -6070,6 +6070,21 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
                    "failed to initialize terminal renderers\n");
     goto cleanup;
   }
+  if (state->interactive) {
+    const char *banner = application != NULL ? application->banner : NULL;
+    size_t length = banner != NULL ? strlen(banner) : 0U;
+    /* A normal shell invocation starts on a fresh row. Raw host banners are
+     * written before the feed, so seed its separator accounting from their
+     * actual ending instead of adding another complete line break. */
+    state->ui.feed_breaks = length == 0U ? 1 : 0;
+    while (length > 0U && state->ui.feed_breaks < 2) {
+      char ch = banner[--length];
+      if (ch == '\n')
+        state->ui.feed_breaks++;
+      else if (ch != '\r')
+        break;
+    }
+  }
   if (!state->controller &&
       cli_renderer_create(state, &state->ui.render_theme, &state->ui.renderer,
                           &error) != CAI_OK) {
