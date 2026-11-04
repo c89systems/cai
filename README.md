@@ -653,11 +653,12 @@ Offsets requiring Unicode chart symbols, or having no listed code, use `J`
 `CAI_UTC=true`, `[ui] utc=true`, or the application `ui.utc` setting selects
 Zulu time; `--no-utc` restores local display. Batch stdout stays unchanged.
 Replay uses original event times; entries without recorded times stay unstamped.
-User-prompt stamps beside `>` await a Softline quoted-prompt metadata API;
-prompt quoting continues through Softline without embedding presentation text
-in drafts, prompt history, or model context.
+Submitted prompts are rendered through libmdf's blockquote and escaped text
+tokens; Softline receives the rendered bytes and owns the editor and queue.
+Prompt stamps beside `>` still need presentation support in that libmdf feed
+path. Presentation text never enters drafts, prompt history, or model context.
 The sticky status DTG currently shares Softline's status-message style;
-independent metadata styling there needs the same upstream extension.
+independent metadata styling there needs a Softline status metadata extension.
 
 Theme selection belongs to `libcai_app`, including its C and Lua embedders.
 `cai --list-themes` lists softline themes, their default libmdf pairings, and

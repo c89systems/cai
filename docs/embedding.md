@@ -536,9 +536,11 @@ when child events are forwarded into the parent. Rendering uses the viewing
 host's local timezone at that instant unless UTC is selected. Missing original
 times are omitted, not replaced with the replay clock. Noninteractive output
 is unaffected. Feed timestamps use gray without additional dimming;
-slash-command replies share the command input's timestamp. Softline's
-quoted-prompt metadata extension is still required
-for an independently dimmed timestamp beside `>`.
+slash-command replies share the command input's timestamp. Submitted prompts
+use libmdf blockquote and escaped text tokens. Independently styled timestamps
+beside `>` remain pending presentation support in that feed path; they do not
+require a Softline quote API. Softline receives rendered bytes and retains
+editor and queue ownership.
 The completed status message includes its DTG but shares Softline's status
 style until an independently styled status metadata slot is available.
 
