@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
 #include "config.h"
 #include "app_internal.h"
 #include "identity.h"
@@ -12,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -233,20 +235,23 @@ static int fail(cai_error *error, const char *path, const char *reason) {
   return -1;
 }
 static int absolute_path(char *out, size_t size, const char *path,
+                         const char *directory, const cai_config *cfg,
                          cai_error *error) {
-  char cwd[PATH_MAX];
   int n;
+  if (directory == NULL && cfg != NULL)
+    directory = cai_config_directory(cfg);
   if (path[0] == '~' && path[1] == '/') {
-    const char *home = getenv("HOME");
+    const char *home =
+        cfg != NULL ? cai_config_getenv(cfg, "HOME") : getenv("HOME");
     if (home == NULL || home[0] != '/')
       return fail(error, path, "set an absolute HOME to expand this path");
     n = snprintf(out, size, "%s/%s", home, path + 2U);
   } else if (path[0] == '/')
     n = snprintf(out, size, "%s", path);
   else {
-    if (getcwd(cwd, sizeof(cwd)) == NULL)
-      return fail(error, path, "resolve current directory");
-    n = snprintf(out, size, "%s/%s", cwd, path);
+    if (directory == NULL || directory[0] != '/')
+      return fail(error, path, "an absolute workspace is required");
+    n = snprintf(out, size, "%s/%s", directory, path);
   }
   return n < 0 || (size_t)n >= size
              ? fail(error, path, "application path is too long")
@@ -254,7 +259,8 @@ static int absolute_path(char *out, size_t size, const char *path,
 }
 /* Store every derived value in the owned config: consumers never borrow a
  * temporary path and repeated application runs have no global identity. */
-static int default_string(cai_config *cfg, const char *section, const char *key,
+static int default_string(cai_config *cfg, const char *directory,
+                          const char *section, const char *key,
                           const char *value, const char **target, int document,
                           int is_path, cai_error *error) {
   const char *resolved;
@@ -264,7 +270,8 @@ static int default_string(cai_config *cfg, const char *section, const char *key,
     if (value == NULL || value[0] == '\0')
       return fail(error, key, "path must not be empty");
     if (value[0] != '/') {
-      if (absolute_path(absolute, sizeof(absolute), value, error) < 0)
+      if (absolute_path(absolute, sizeof(absolute), value, directory, cfg,
+                        error) < 0)
         return -1;
       value = absolute;
     }
@@ -324,10 +331,11 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
     if (home[0] == '\0')
       return fail(error, "home_dir",
                   "application home must be a nonempty path");
-    if (absolute_path(home_path, sizeof(home_path), home, error) < 0)
+    if (absolute_path(home_path, sizeof(home_path), home, o->directory, cfg,
+                      error) < 0)
       return -1;
-    rc = default_string(cfg, "paths", "home_dir", home_path, &o->home_dir,
-                        document, 1, error);
+    rc = default_string(cfg, o->directory, "paths", "home_dir", home_path,
+                        &o->home_dir, document, 1, error);
     if (rc != CAI_OK)
       return rc;
     home = home_path;
@@ -355,8 +363,8 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
         return rc;
       v = path;
     }
-    rc = default_string(cfg, "paths", root_keys[i], v, roots[i], document, 1,
-                        error);
+    rc = default_string(cfg, o->directory, "paths", root_keys[i], v, roots[i],
+                        document, 1, error);
     if (rc != CAI_OK)
       return rc;
   }
@@ -394,8 +402,8 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
         return fail(error, NULL, "application runtime path too long");
       v = path;
     }
-    rc = default_string(cfg, "paths", "runtime_dir", v, &o->runtime_dir,
-                        document, 1, error);
+    rc = default_string(cfg, o->directory, "paths", "runtime_dir", v,
+                        &o->runtime_dir, document, 1, error);
     if (rc != CAI_OK)
       return rc;
   }
@@ -426,13 +434,13 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
         return fail(error, NULL, "application path too long");
       v = path;
     }
-    rc = default_string(cfg, i == 2U ? "store.default" : "paths",
+    rc = default_string(cfg, o->directory, i == 2U ? "store.default" : "paths",
                         i == 2U ? "key_file" : keys[i], v, children[i],
                         document, 1, error);
     if (rc != CAI_OK)
       return rc;
   }
-  /* Retained inputs must stay anchored here, before --temp changes cwd.
+  /* Retained inputs stay anchored here before --temp selects its workspace.
    * INI paths are already config-relative absolutes; CLI paths use this
    * selected workspace. Unset optional paths retain automatic discovery. */
   inputs[0] = &o->auth_json;
@@ -443,8 +451,8 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
   for (i = 0U; !document && i < 5U; i++) {
     if (*inputs[i] == NULL)
       continue;
-    rc = default_string(cfg, input_sections[i], input_keys[i], *inputs[i],
-                        inputs[i], 0, 1, error);
+    rc = default_string(cfg, o->directory, input_sections[i], input_keys[i],
+                        *inputs[i], inputs[i], 0, 1, error);
     if (rc != CAI_OK)
       return rc;
   }
@@ -460,11 +468,12 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
     return fail(
         error, NULL,
         "queue_prefix must be a single lowercase identifier (up to 32 bytes)");
-  rc = default_string(cfg, "storage", "namespace_prefix", o->namespace_prefix,
-                      &o->namespace_prefix, document, 0, error);
+  rc = default_string(cfg, o->directory, "storage", "namespace_prefix",
+                      o->namespace_prefix, &o->namespace_prefix, document, 0,
+                      error);
   if (rc == CAI_OK)
-    rc = default_string(cfg, "messaging", "queue_prefix", o->queue_prefix,
-                        &o->queue_prefix, document, 0, error);
+    rc = default_string(cfg, o->directory, "messaging", "queue_prefix",
+                        o->queue_prefix, &o->queue_prefix, document, 0, error);
   if (rc != CAI_OK)
     return rc;
   namespaces[0] = &o->sessions_namespace;
@@ -485,8 +494,8 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
         strspn(v, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567"
                   "89._-") != strlen(v))
       return fail(error, NULL, "invalid storage namespace");
-    rc = default_string(cfg, "storage", ns_keys[i], v, namespaces[i], document,
-                        0, error);
+    rc = default_string(cfg, o->directory, "storage", ns_keys[i], v,
+                        namespaces[i], document, 0, error);
     if (rc != CAI_OK)
       return rc;
   }
@@ -513,7 +522,8 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
   }
   return CAI_OK;
 }
-int cai_cli_app_schema(cai_config **out, cai_error *error) {
+static int app_schema(const cai_config_context *context, cai_config **out,
+                      cai_error *error) {
   static const cai_config_field stores[] = {
       {"store.*", "endpoint", CAI_CONFIG_STRING, "",
        "pouch:// root or HTTP(S) lockd endpoint. Each selected store opens "
@@ -548,7 +558,7 @@ int cai_cli_app_schema(cai_config **out, cai_error *error) {
                                      : "0";
   }
   rc = cai_config_open(extension, sizeof(extension) / sizeof(extension[0]),
-                       NULL, &sdk, error);
+                       context, &sdk, error);
   if (rc != CAI_OK)
     return -1;
   selected = calloc(sdk->field_count(sdk) + sizeof(stores) / sizeof(stores[0]),
@@ -582,7 +592,7 @@ int cai_cli_app_schema(cai_config **out, cai_error *error) {
   }
   for (i = 0U; i < sizeof(stores) / sizeof(stores[0]); i++)
     selected[count++] = stores[i];
-  rc = cai_config_open_schema(selected, count, NULL, out, error);
+  rc = cai_config_open_schema(selected, count, context, out, error);
   free(selected);
   cai_config_close(sdk);
   if (rc != CAI_OK)
@@ -622,6 +632,9 @@ int cai_cli_app_schema(cai_config **out, cai_error *error) {
     rc = cai_config_set_default(*out, "storage", "conversation_retention_days",
                                 "30", error);
   return rc == CAI_OK ? 1 : -1;
+}
+int cai_cli_app_schema(cai_config **out, cai_error *error) {
+  return app_schema(NULL, out, error);
 }
 static void optional_string(const cai_config *cfg, const char *section,
                             const char *key, const char **out) {
@@ -760,7 +773,7 @@ static int tool_environment(cai_config *cfg, const char *prefix,
       const char *v = app_environment(prefix, aliases[i][0]);
       char home[PATH_MAX];
       if (v != NULL && strcmp(aliases[i][0], "HOME") == 0) {
-        if (absolute_path(home, sizeof(home), v, error) < 0)
+        if (absolute_path(home, sizeof(home), v, NULL, cfg, error) < 0)
           return environment_error(prefix, aliases[i][0], error);
         v = home;
       }
@@ -786,7 +799,7 @@ static int tool_environment(cai_config *cfg, const char *prefix,
         key[j] = (char)(key[j] - 'a' + 'A');
     v = app_environment(prefix, key);
     if (v != NULL && strcmp(key, "PATHS_HOME_DIR") == 0) {
-      if (absolute_path(home, sizeof(home), v, error) < 0)
+      if (absolute_path(home, sizeof(home), v, NULL, cfg, error) < 0)
         return environment_error(prefix, key, error);
       v = home;
     }
@@ -840,6 +853,9 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
   char selected[PATH_MAX];
   char config_root[PATH_MAX];
   char home_root[PATH_MAX];
+  char workspace[PATH_MAX];
+  cai_config_context context;
+  struct stat workspace_status;
   size_t i;
   int rc, n, config_dir_flag, home_flag;
   *configuration = NULL;
@@ -897,20 +913,26 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
     if (early.home_dir == NULL)
       early.home_dir = application->home_directory;
   }
-  if (early.directory != NULL && chdir(early.directory) != 0)
-    return fail(error, early.directory, "cannot change workspace");
+  if (realpath(early.directory != NULL ? early.directory : ".", workspace) ==
+          NULL ||
+      stat(workspace, &workspace_status) != 0 ||
+      !S_ISDIR(workspace_status.st_mode))
+    return fail(error, early.directory, "cannot resolve workspace directory");
+  memset(&context, 0, sizeof(context));
+  context.directory = workspace;
   config_root[0] = '\0';
   if (early.home_dir != NULL) {
     if (early.home_dir[0] == '\0')
       return fail(error, "home_dir",
                   "application home must be a nonempty path");
-    if (absolute_path(home_root, sizeof(home_root), early.home_dir, error) < 0)
+    if (absolute_path(home_root, sizeof(home_root), early.home_dir, workspace,
+                      NULL, error) < 0)
       return -1;
     early.home_dir = home_root;
   }
   if (early.config_dir != NULL &&
-      absolute_path(config_root, sizeof(config_root), early.config_dir, error) <
-          0)
+      absolute_path(config_root, sizeof(config_root), early.config_dir,
+                    workspace, NULL, error) < 0)
     return -1;
   if (early.config_dir == NULL) {
     if (early.home_dir != NULL) {
@@ -923,7 +945,7 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
                                 defaults.program_name, error) != CAI_OK)
       return -1;
   }
-  rc = cai_cli_app_schema(&cfg, error);
+  rc = app_schema(&context, &cfg, error);
   if (rc < 0) {
     cai_config_close(cfg);
     return -1;
@@ -933,12 +955,16 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
     cai_sink *sink = NULL;
     FILE *file = stdout;
     documented = early;
+    documented.directory = workspace;
     documented.config_dir = config_root;
     *options = early;
     if (application_defaults(cfg, &documented, application, 1, error) != CAI_OK)
       return -1;
     if (early.dump_config_file != NULL) {
-      file = fopen(early.dump_config_file, "wb");
+      if (absolute_path(selected, sizeof(selected), early.dump_config_file,
+                        workspace, cfg, error) < 0)
+        return -1;
+      file = fopen(selected, "wb");
       if (file == NULL)
         return fail(error, early.dump_config_file,
                     "cannot open configuration template output");
@@ -957,7 +983,8 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
   }
   if (!early.no_config) {
     if (early.config_file != NULL)
-      rc = absolute_path(selected, sizeof(selected), early.config_file, error);
+      rc = absolute_path(selected, sizeof(selected), early.config_file,
+                         workspace, cfg, error);
     else {
       n = snprintf(selected, sizeof(selected), "%s/config.ini", config_root);
       rc = n < 0 || (size_t)n >= sizeof(selected)
@@ -967,6 +994,7 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
     if (rc < 0)
       return -1;
     documented = early;
+    documented.directory = workspace;
     documented.config_dir = config_root;
     if (application_defaults(cfg, &documented, application, 1, error) != CAI_OK)
       return -1;
@@ -1169,8 +1197,9 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
   if (rc <= 0)
     return rc;
   if (home_flag || (options->home_dir == NULL && early.home_dir != NULL)) {
-    if (default_string(cfg, "paths", "home_dir", early.home_dir,
-                       &options->home_dir, 0, 1, error) != CAI_OK)
+    if (default_string(cfg, options->directory, "paths", "home_dir",
+                       early.home_dir, &options->home_dir, 0, 1,
+                       error) != CAI_OK)
       return -1;
   }
   if (config_dir_flag ||
@@ -1179,10 +1208,18 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
       return -1;
     options->config_dir = cfg->get(cfg, "paths", "config_dir");
   }
-  if (early.directory == NULL && options->directory != NULL &&
-      chdir(options->directory) != 0)
-    return fail(error, options->directory,
-                "cannot change configured workspace");
+  /* Explicit CLI selection was already canonicalized before configuration;
+   * do not resolve that relative argv spelling against the host cwd again. */
+  if (early.directory == NULL && options->directory != NULL) {
+    if (realpath(options->directory, workspace) == NULL ||
+        stat(workspace, &workspace_status) != 0 ||
+        !S_ISDIR(workspace_status.st_mode))
+      return fail(error, options->directory,
+                  "cannot resolve configured workspace directory");
+  }
+  if (cfg->set(cfg, "paths", "directory", workspace, error) != CAI_OK)
+    return -1;
+  options->directory = cfg->get(cfg, "paths", "directory");
   if (application_defaults(cfg, options, application, 0, error) != CAI_OK)
     return -1;
   if (cai_cli_validate_options(options) < 0)

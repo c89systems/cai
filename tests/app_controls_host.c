@@ -19,7 +19,13 @@ typedef struct host {
   int ready, sent, finished;
   int events, replay, starts, text, acks, rejected, goal_changes;
   int deliveries;
+  char directory[4096];
 } host;
+static void unchanged_directory(const host *h) {
+  char current[4096];
+  assert(getcwd(current, sizeof(current)) != NULL &&
+         strcmp(current, h->directory) == 0);
+}
 
 static host *delivery_host;
 unsigned int cai_test_storage_open_count(void);
@@ -154,6 +160,7 @@ static void *worker(void *context) {
 static int event(void *context, const cai_agent_runtime_event *e,
                  cai_error *error) {
   host *h = context;
+  unchanged_directory(h);
   (void)error;
   assert(pthread_equal(h->owner, pthread_self()));
   h->events++;
@@ -228,6 +235,7 @@ static int event(void *context, const cai_agent_runtime_event *e,
 static int replay(void *context, const cai_agent_session_event *e,
                   cai_error *error) {
   host *h = context;
+  unchanged_directory(h);
   assert(pthread_equal(h->owner, pthread_self()));
   assert(e->type != NULL);
   h->replay++;
@@ -244,6 +252,7 @@ static void ack(void *context, unsigned long long id, int status,
   cai_app_status snapshot;
   cai_error local;
   const char *release = getenv("CAI_TEST_APP_RELEASE");
+  unchanged_directory(h);
   assert(pthread_equal(h->owner, pthread_self()) && id > 0U);
   if (strcmp(h->mode, "shell_stop") == 0) {
     /* Acknowledgements must follow PTY teardown and editor restoration. */
@@ -279,6 +288,7 @@ int main(int argc, char **argv) {
   char original_tty[256];
   struct termios original_attributes, restored_attributes;
   memset(&h, 0, sizeof(h));
+  assert(getcwd(h.directory, sizeof(h.directory)) != NULL);
   h.owner = pthread_self();
   h.mode = getenv("CAI_TEST_APP_CONTROL");
   assert(h.mode != NULL);
@@ -323,6 +333,7 @@ int main(int argc, char **argv) {
   pthread_mutex_unlock(&h.lock);
   assert(pthread_join(thread, NULL) == 0);
   assert(rc == CAI_OK);
+  unchanged_directory(&h);
   assert(h.app->get_status(h.app, &snapshot, &error) == CAI_OK);
   assert(!snapshot.running && !snapshot.runtime_ready &&
          snapshot.exit_code == code);

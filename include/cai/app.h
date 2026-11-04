@@ -200,11 +200,12 @@ typedef struct cai_app_config {
 
 typedef struct cai_app cai_app;
 /** Synchronous terminal application receiver. Use on the host's main thread.
- * One run owns the process terminal, environment, cwd, locale and signals;
+ * One run owns the process terminal, environment, locale and signals;
  * hosts must serialize other use of those resources. They are restored before
- * return, including error paths. Repeated runs are supported; concurrent or
- * recursive runs are rejected. Borrowed loggers may receive calls from native
- * workers and must be thread-safe. */
+ * return, including error paths. Workspace selection never changes the host
+ * cwd; subprocesses receive an explicit working directory. Repeated runs are
+ * supported; concurrent or recursive runs are rejected. Borrowed loggers may
+ * receive calls from native workers and must be thread-safe. */
 struct cai_app {
   /** argv contains only CAI options (exclude the program name). Empty is valid.
    * Returns CAI status for invocation/restoration errors. On CAI_OK, exit_code

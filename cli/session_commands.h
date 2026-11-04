@@ -31,9 +31,10 @@ int cai_cli_session_delete(cai_cli_pouch *pouch, cai_cli_pouch *messaging,
                            char id[CAI_AGENT_SESSION_ID_MAX], cai_error *error);
 /* NULL basename selects paired ID files under export_directory. A named
  * .md/.jsonl selects one projection; any other name gets both suffixes.
- * Relative names use the selected workspace/current directory. */
+ * Relative names use the explicit selected workspace, never the host cwd. */
 int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
-                           const char *export_directory, const char *basename,
+                           const char *workspace, const char *export_directory,
+                           const char *basename,
                            cai_agent_runtime *active_runtime,
                            cai_sink *destination, cai_error *error);
 

@@ -554,9 +554,12 @@ repeatability and negative aliases. `app->write_help` writes CAI's formatter to
 a caller-owned sink. Neither method loads configuration, logs in or starts UI.
 
 The host must run on its main thread and serialize process-global state use.
-CAI temporarily owns stdin/stdout and may change cwd, environment, locale and
+CAI temporarily owns stdin/stdout and may change environment, locale and
 signal handlers. These are restored on return, including invalid options and
 runtime failures. No concurrent or recursive application runs are permitted.
+Workspace selection, configuration and temporary workspaces leave the host cwd
+unchanged. Relative CLI paths use the selected workspace, while INI paths use
+the configuration file's directory; only subprocesses enter their workdir.
 The receiver may run again after returning. Close it only while idle. Worker
 threads finish before return; they never call the Lua facade.
 
@@ -975,7 +978,7 @@ Relative forwarded input paths resolve against the original selected workspace
 before entering the temporary workspace; INI paths remain relative to the
 configuration file.
 Auth and messaging retain their selected stores. Teardown closes workers,
-clients and softline, restores the preceding working directory, and deletes
+clients and softline, and deletes
 private history, prompt history and managed cache data. The workspace deletion
 question defaults to No. Non-interactive runs, EOF, errors, and host STOP
 preserve the workspace unless `--yes` / `--force` is passed. STOP also interrupts

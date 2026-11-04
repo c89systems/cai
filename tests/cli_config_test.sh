@@ -20,6 +20,9 @@ run --config "$root/broken.ini" --dump-config "$root/dumped.ini"; ok
 cmp "$root/default.ini" "$root/dumped.ini"
 run --dump-config "$root/dumped.ini"; ok
 cmp "$root/default.ini" "$root/dumped.ini"
+run --dump-config workspace-defaults.ini; ok
+[[ ! -s "$root/stdout" && -s "$work/workspace-defaults.ini" ]]
+cmp "$root/default.ini" "$work/workspace-defaults.ini"
 run --dump-config "$root/missing/output.ini"; bad
 contains "$root/stderr" 'cannot open configuration template output'
 run --dump-config /dev/full; bad

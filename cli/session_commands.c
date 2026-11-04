@@ -298,12 +298,11 @@ static int export_append(void *context, const char *scope, const char *id,
   return CAI_OK;
 }
 
-static int offline_runtime(cai_cli_pouch *pouch, const char *id,
-                           const cai_cli_session *metadata,
-                           export_store *storage,
-                           cai_agent_session_store *callbacks,
-                           cai_client **client, cai_agent_runtime **runtime,
-                           cai_error *error) {
+static int
+offline_runtime(cai_cli_pouch *pouch, const char *id, const char *workspace,
+                const cai_cli_session *metadata, export_store *storage,
+                cai_agent_session_store *callbacks, cai_client **client,
+                cai_agent_runtime **runtime, cai_error *error) {
   cai_client_config client_config;
   cai_agent_runtime_config config;
   struct stat status;
@@ -337,7 +336,7 @@ static int offline_runtime(cai_cli_pouch *pouch, const char *id,
   config.workspace_directory =
       stat(metadata->workspace, &status) == 0 && S_ISDIR(status.st_mode)
           ? metadata->workspace
-          : ".";
+          : workspace;
   config.resume_session_id = id;
   config.disable_terminal = 1;
   config.disable_review_subagent = 1;
@@ -435,16 +434,24 @@ static int export_file(const char *path, char *temporary, size_t capacity,
 
 /* Named destinations are workspace-relative, independent of the managed
  * export root. Only an exact .md/.jsonl suffix selects one projection. */
-static int export_targets(const cai_cli_pouch *pouch, const char *root,
-                          const char *id, const char *basename,
-                          char paths[2][PATH_MAX], cai_error *error) {
+static int export_targets(const cai_cli_pouch *pouch, const char *workspace,
+                          const char *root, const char *id,
+                          const char *basename, char paths[2][PATH_MAX],
+                          cai_error *error) {
   static const char *const suffixes[] = {".md", ".jsonl"};
-  char directory[PATH_MAX];
+  char directory[PATH_MAX], resolved[PATH_MAX];
   char *slash;
   size_t length, i;
   int selected = -1, n, rc;
   struct stat status;
   memset(paths, 0, 2U * PATH_MAX);
+  if (basename != NULL) {
+    rc = cai_cli_workspace_path(resolved, sizeof(resolved), workspace, basename,
+                                error);
+    if (rc != CAI_OK)
+      return rc;
+    basename = resolved;
+  }
   if (basename == NULL) {
     rc = export_path(pouch, directory, sizeof(directory), root, id, error);
     if (rc == CAI_OK)
@@ -510,7 +517,8 @@ static int export_targets(const cai_cli_pouch *pouch, const char *root,
 }
 
 int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
-                           const char *export_root, const char *basename,
+                           const char *workspace, const char *export_root,
+                           const char *basename,
                            cai_agent_runtime *active_runtime,
                            cai_sink *destination, cai_error *error) {
   cai_cli_session metadata;
@@ -552,10 +560,11 @@ int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
   if (rc == CAI_OK)
     rc = cai_cli_pouch_session(pouch, id, &metadata, error);
   if (rc == CAI_OK && active_runtime == NULL)
-    rc = offline_runtime(pouch, id, &metadata, &storage, &callbacks, &client,
-                         &runtime, error);
+    rc = offline_runtime(pouch, id, workspace, &metadata, &storage, &callbacks,
+                         &client, &runtime, error);
   if (rc == CAI_OK)
-    rc = export_targets(pouch, export_root, id, basename, paths, error);
+    rc = export_targets(pouch, workspace, export_root, id, basename, paths,
+                        error);
   /* Finish every selected stream before publishing any output. */
   for (i = 0U; rc == CAI_OK && i < 2U; i++) {
     if (paths[i][0] == '\0')

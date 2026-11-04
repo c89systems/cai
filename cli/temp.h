@@ -7,7 +7,7 @@
 #define PATH_MAX 4096
 #endif
 typedef struct cai_cli_temp {
-  int parent_fd, root_fd, cwd_fd;
+  int parent_fd, root_fd;
   char root[PATH_MAX], workspace[PATH_MAX], private_dir[PATH_MAX];
   char state[PATH_MAX], cache[PATH_MAX], data[PATH_MAX];
   char clipboard[PATH_MAX], logs[PATH_MAX], key[PATH_MAX], exports[PATH_MAX];

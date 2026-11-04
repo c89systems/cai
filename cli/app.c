@@ -30,7 +30,6 @@ typedef struct process_state {
   char **environment;
   size_t count;
   char *locale;
-  int directory;
   int flags[3];
   struct sigaction actions[sizeof(signals) / sizeof(signals[0])];
   sigset_t mask;
@@ -50,13 +49,10 @@ static void process_free(process_state *saved) {
     free(saved->environment[i]);
   free(saved->environment);
   free(saved->locale);
-  if (saved->directory >= 0)
-    close(saved->directory);
 }
 static int process_save(process_state *saved, cai_error *error) {
   size_t i;
   memset(saved, 0, sizeof(*saved));
-  saved->directory = -1;
   while (environ != NULL && environ[saved->count] != NULL)
     saved->count++;
   saved->environment = calloc(saved->count + 1U, sizeof(char *));
@@ -72,9 +68,7 @@ static int process_save(process_state *saved, cai_error *error) {
   saved->locale = strdup(setlocale(LC_CTYPE, NULL));
   if (saved->locale == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "snapshot host locale");
-  saved->directory = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (saved->directory < 0 ||
-      pthread_sigmask(SIG_SETMASK, NULL, &saved->mask) != 0)
+  if (pthread_sigmask(SIG_SETMASK, NULL, &saved->mask) != 0)
     return cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "snapshot host process state");
   for (i = 0U; i < sizeof(signals) / sizeof(signals[0]); i++)
@@ -88,8 +82,6 @@ static int process_save(process_state *saved, cai_error *error) {
 static int process_restore(process_state *saved, cai_error *error) {
   size_t i;
   int failed = 0;
-  if (fchdir(saved->directory) != 0)
-    failed = 1;
   if (clearenv() != 0)
     failed = 1;
   for (i = 0U; i < saved->count; i++) {

@@ -15,7 +15,7 @@
 
 void cai_cli_temp_init(cai_cli_temp *temp) {
   memset(temp, 0, sizeof(*temp));
-  temp->parent_fd = temp->root_fd = temp->cwd_fd = -1;
+  temp->parent_fd = temp->root_fd = -1;
 }
 static int path(char *out, const char *base, const char *suffix,
                 cai_error *error) {
@@ -36,11 +36,9 @@ int cai_cli_temp_open(cai_cli_temp *temp, cai_cli_options *options,
     return rc;
   temp->parent_fd =
       open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-  temp->cwd_fd = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (temp->parent_fd < 0 || temp->cwd_fd < 0)
-    return cai_cli_error(
-        error, CAI_ERR_TRANSPORT,
-        "open temporary workspace parent or original directory");
+  if (temp->parent_fd < 0)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "open temporary workspace parent");
   if (realpath(parent, temp->root) == NULL)
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "resolve temporary cache");
   strcpy(parent, temp->root);
@@ -71,8 +69,7 @@ int cai_cli_temp_open(cai_cli_temp *temp, cai_cli_options *options,
   PATH(key, state, "pouch.key");
   PATH(exports, data, "exports");
 #undef PATH
-  if (chdir(temp->workspace) != 0)
-    return cai_cli_error(error, CAI_ERR_TRANSPORT, "enter temporary workspace");
+  options->directory = temp->workspace;
   options->state_dir = temp->state;
   options->cache_dir = temp->cache;
   options->data_dir = temp->data;
@@ -129,8 +126,6 @@ int cai_cli_temp_close(cai_cli_temp *temp, int force, int ask, int stop_fd,
   const char *name;
   int remove_workspace = force, rc = CAI_OK;
   *kept = 0;
-  if (temp->cwd_fd >= 0 && fchdir(temp->cwd_fd) != 0)
-    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "restore original directory");
   if (temp->root_fd >= 0) {
     name = strrchr(temp->root, '/') + 1U;
     if (fstat(temp->root_fd, &opened) != 0 ||
@@ -151,12 +146,10 @@ int cai_cli_temp_close(cai_cli_temp *temp, int force, int ask, int stop_fd,
     } else
       *kept = 1;
   }
-  if (temp->cwd_fd >= 0)
-    close(temp->cwd_fd);
   if (temp->root_fd >= 0)
     close(temp->root_fd);
   if (temp->parent_fd >= 0)
     close(temp->parent_fd);
-  temp->cwd_fd = temp->root_fd = temp->parent_fd = -1;
+  temp->root_fd = temp->parent_fd = -1;
   return rc;
 }

@@ -7,7 +7,8 @@
  * and creation. A dump writes only its explicit destination or stdout.
  * Owned configuration outlives
  * clients and runtimes borrowing its strings. Return 1=start, 0=utility,
- * -1=error. */
+ * -1=error. Successful startup options borrow a configuration-owned canonical
+ * workspace directory. This function never changes the host cwd. */
 int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
                       cai_config **configuration,
                       const cai_app_config *application, cai_error *error);

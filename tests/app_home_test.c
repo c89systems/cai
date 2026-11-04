@@ -26,12 +26,14 @@ static void load(const cai_app_config *app, const char *const *flags,
                  size_t count, int expected) {
   size_t i;
   int rc;
+  char current[4096];
   assert(count + 2U <= sizeof(arguments) / sizeof(arguments[0]));
   cai_config_close(cfg);
   cfg = NULL;
   free_arguments();
   cai_error_cleanup(&error);
-  assert(chdir(original) == 0);
+  assert(getcwd(current, sizeof(current)) != NULL &&
+         strcmp(current, original) == 0);
   arguments[0] = strdup("host");
   for (i = 0U; i < count; i++) {
     arguments[i + 1U] = strdup(flags[i]);
@@ -46,6 +48,8 @@ static void load(const cai_app_config *app, const char *const *flags,
             error.message != NULL ? error.message : options.diagnostic,
             count != 0U ? flags[0] : "host defaults");
   assert(rc == expected);
+  assert(getcwd(current, sizeof(current)) != NULL &&
+         strcmp(current, original) == 0);
 }
 
 static void equal(const char *actual, const char *expected) {
@@ -113,7 +117,45 @@ int main(void) {
   load(&app, flags, 4U, 1);
   roots(home);
   assert(getcwd(cwd, sizeof(cwd)) != NULL);
-  under(cwd, original, "moved");
+  equal(cwd, original);
+  under(options.directory, original, "moved");
+  /* CLI workspace selection overrides INI, and all relative CLI inputs use
+   * that workspace while INI paths retain the file's own directory. */
+  flags[4] = "-C";
+  flags[5] = "moved";
+  flags[6] = "--agents-md";
+  flags[7] = "policy.md";
+  flags[8] = "--pouch-key-file";
+  flags[9] = "selected.key";
+  write_ini(selected, "[paths]\ndirectory = missing-ignored\n"
+                      "skills_dir = ini-skills\n");
+  load(&app, flags, 10U, 1);
+  under(options.directory, original, "moved");
+  under(options.agents_md, options.directory, "policy.md");
+  under(options.pouch_key_file, options.directory, "selected.key");
+  under(options.skills_dir, original, "ini-skills");
+  under(options.home_dir, options.directory, "unified");
+  assert(symlink("moved", "alias") == 0);
+  flags[5] = "alias";
+  load(&app, flags, 10U, 1);
+  under(options.directory, original, "moved");
+  {
+    const char *relative[4];
+    char file[8192];
+    snprintf(file, sizeof(file), "%s/moved/local.ini", original);
+    write_ini(file, "[agent]\nidentity = workspace-relative-config\n");
+    relative[0] = "-C";
+    relative[1] = "alias";
+    relative[2] = "-c";
+    relative[3] = "local.ini";
+    load(&app, relative, 4U, 1);
+    equal(options.identity, "workspace-relative-config");
+    under(options.directory, original, "moved");
+  }
+  flags[5] = "missing-rejected";
+  load(&app, flags, 6U, -1);
+  flags[5] = "selected.ini"; /* Existing file, not a directory. */
+  load(&app, flags, 6U, -1);
 
   /* INI root paths are config-relative. Loading this file does not redirect
    * configuration discovery or generate another config.ini. */
@@ -206,6 +248,5 @@ int main(void) {
   cai_config_close(cfg);
   free_arguments();
   cai_error_cleanup(&error);
-  assert(chdir(original) == 0);
   return 0;
 }

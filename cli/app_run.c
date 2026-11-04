@@ -219,6 +219,7 @@ typedef struct cli_state {
   sl_watch_id_t shell_watches[3];
   int shell_watched[3];
   char workspace[PATH_MAX];
+  char operation_paths[4][PATH_MAX];
   char workspace_approval_root[PATH_MAX];
   int workspace_approval_pending;
   char message_queue_override[129];
@@ -5573,9 +5574,9 @@ static int cli_handle_command(cli_state *state, const char *line,
     destination = NULL;
     rc = cai_sink_from_callbacks(&callbacks, &destination, error);
     if (rc == CAI_OK)
-      rc = cai_cli_session_export(&state->pouch, id, state->options.export_dir,
-                                  length != 0U ? basename : NULL,
-                                  state->runtime, destination, error);
+      rc = cai_cli_session_export(
+          &state->pouch, id, state->workspace, state->options.export_dir,
+          length != 0U ? basename : NULL, state->runtime, destination, error);
     cai_sink_close(destination);
     if (cli_finish_response(state) != 0 && rc == CAI_OK)
       rc = CAI_ERR_TRANSPORT;
@@ -6119,10 +6120,28 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     goto cleanup;
   (void)setlocale(LC_CTYPE, "");
   result = 1;
-  if (realpath(".", state->workspace) == NULL) {
+  if (realpath(state->options.directory, state->workspace) == NULL) {
     cli_diagnostic(state, PSLOG_LEVEL_ERROR, "cannot resolve workspace");
     result = 2;
     goto cleanup;
+  }
+  {
+    const char **paths[4];
+    size_t path_index;
+    paths[0] = &state->options.out;
+    paths[1] = &state->options.import_file;
+    paths[2] = &state->options.install_skill;
+    paths[3] = &state->options.chrome_manifest;
+    for (path_index = 0U; path_index < sizeof(paths) / sizeof(paths[0]);
+         ++path_index) {
+      if (*paths[path_index] == NULL)
+        continue;
+      if (cai_cli_workspace_path(state->operation_paths[path_index], PATH_MAX,
+                                 state->workspace, *paths[path_index],
+                                 &error) != CAI_OK)
+        goto cleanup;
+      *paths[path_index] = state->operation_paths[path_index];
+    }
   }
   if (state->options.install_skill != NULL) {
     result = cai_cli_install_skill(&state->options, state->log->logger);
@@ -6249,9 +6268,10 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     destination = NULL;
     rc = cai_sink_stdout(&destination, &error);
     if (rc == CAI_OK)
-      rc = cai_cli_session_export(
-          &state->pouch, state->options.export_id, state->options.export_dir,
-          state->options.export_out, NULL, destination, &error);
+      rc = cai_cli_session_export(&state->pouch, state->options.export_id,
+                                  state->workspace, state->options.export_dir,
+                                  state->options.export_out, NULL, destination,
+                                  &error);
     cai_sink_close(destination);
     if (rc != CAI_OK)
       cli_print_error(state, "export conversation", &error);
@@ -6826,8 +6846,7 @@ cleanup:
   }
   cai_cli_input_adapter_close(state->input_adapter);
   cai_input_controller_close(state->input_controller);
-  if (state->temporary.root[0] != '\0' || state->temporary.cwd_fd >= 0 ||
-      state->temporary.parent_fd >= 0) {
+  if (state->temporary.root[0] != '\0' || state->temporary.parent_fd >= 0) {
     cai_error cleanup_error;
     int kept = 0;
     cai_error_init(&cleanup_error);

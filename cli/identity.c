@@ -101,6 +101,20 @@ int cai_cli_xdg_path(char *out, size_t size, const char *variable,
                              "application path is too long")
              : CAI_OK;
 }
+int cai_cli_workspace_path(char *out, size_t size, const char *workspace,
+                           const char *path, cai_error *error) {
+  int n;
+  if (out == NULL || size == 0U || workspace == NULL || workspace[0] != '/' ||
+      path == NULL || path[0] == '\0')
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "filename and absolute workspace are required");
+  n = path[0] == '/' ? snprintf(out, size, "%s", path)
+                     : snprintf(out, size, "%s/%s", workspace, path);
+  return n >= 0 && (size_t)n < size
+             ? CAI_OK
+             : cai_cli_error(error, CAI_ERR_INVALID,
+                             "workspace filename is too long");
+}
 int cai_cli_private_directory(const char *path, cai_error *error) {
   char copy[4096], *cursor;
   struct stat status;

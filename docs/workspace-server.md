@@ -18,6 +18,10 @@ their retained receipts after disconnect or ordered journal recovery, without
 another producer reservation. Immutable environment views now scope client
 credentials and command/plugin tools; configuration accepts explicit directory/
 environment contexts and produces effective views without process mutation.
+Application workspace selection, retained inputs, export and temporary
+workspaces now use explicit paths without changing/restoring the host cwd.
+The legacy terminal receiver still temporarily mutates environment, locale
+and signals; that remaining process scaffolding has not been cut over.
 The owner-loop workspace host (`workspace_server.h`) now binds those components
 to actual Unix connections, validates greetings incrementally, publishes roles
 and isolates disconnected/slow subscribers. It has no worker or renderer.
