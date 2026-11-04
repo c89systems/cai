@@ -1,5 +1,10 @@
 # Attachable frontends and a persistent application controller
 
+The next cutover is specified in [workspace-server.md](workspace-server.md):
+one server per workspace, Unix-domain sockets with streaming CBOR, and one
+controlling attachment with observers and explicit takeover. That decision
+supersedes the HTTP-first transport order below; HTTP remains a later adapter.
+
 Status: target architecture, with the input-queue foundation implemented on
 2026-11-03. Core `input_queue.h` and `input_controller.h` provide conversation
 authority, copied asynchronous requests/results, revisioned observations and

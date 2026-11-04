@@ -719,6 +719,10 @@ set(CAI_SOURCES
   src/cai_chrome.c
   src/cai_chrome_protocol.c
   src/cai_client.c
+  src/cai_cbor.c
+  src/cai_wire.c
+  src/cai_wire_peer.c
+  src/cai_workspace.c
   src/cai_conversation.c
   src/cai_env.c
   src/cai_process_environment.c
@@ -1017,6 +1021,30 @@ endif()
 
 if(CAI_BUILD_TESTS)
   add_executable(cai_input_queue_test tests/input_queue_test.c)
+  add_executable(cai_cbor_test tests/cbor_test.c)
+  target_link_libraries(cai_cbor_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_cbor_test)
+  target_compile_options(cai_cbor_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_cbor COMMAND cai_cbor_test)
+  set_tests_properties(cai_cbor PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
+  add_executable(cai_wire_test tests/wire_test.c)
+  target_link_libraries(cai_wire_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_wire_test)
+  target_compile_options(cai_wire_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_wire COMMAND cai_wire_test)
+  set_tests_properties(cai_wire PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
+  add_executable(cai_wire_peer_test tests/wire_peer_test.c)
+  target_link_libraries(cai_wire_peer_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_wire_peer_test)
+  target_compile_options(cai_wire_peer_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_wire_peer COMMAND cai_wire_peer_test)
+  set_tests_properties(cai_wire_peer PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
+  add_executable(cai_workspace_test tests/workspace_test.c)
+  target_link_libraries(cai_workspace_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_workspace_test)
+  target_compile_options(cai_workspace_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_workspace COMMAND cai_workspace_test)
+  set_tests_properties(cai_workspace PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   add_executable(cai_input_controller_test tests/input_controller_test.c)
   target_link_libraries(cai_input_controller_test PRIVATE ${_cai_internal_link_target})
   cai_configure_cli_target(cai_input_controller_test)

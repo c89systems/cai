@@ -120,6 +120,29 @@ resynchronize without removing work. Deselect before closing the runtime;
 detach frontend connections before freeing their callback contexts. No worker
 thread or HTTP listener is created by this core controller.
 
+The Unix transport foundation is also independent of libcai_app and terminal
+libraries. `<cai/cbor.h>` decodes fragments into borrowed tokens and writes
+tokens directly to a sink, without a DOM or retained value. A definite string
+can span many DATA calls; indefinite strings contain independently valid
+chunks. Every begun string/container has an END token. Finish verifies one
+complete root item. Callbacks are provisional until successful completion;
+never execute a partially decoded request.
+
+`<cai/wire.h>` wraps one CBOR item in a four-byte big-endian length (at most
+128 KiB). Known record lengths come from field/chunk sizes; unknown-length
+output uses successive chunk records, normally 32 KiB. Encoders do not size a
+serialized buffer or backpatch. `cai_wire_peer` adds nonblocking Unix-socket I/O
+and a bounded copied write backlog, without a socket worker. Poll for POLLOUT
+only while `cai_wire_peer_pending()` is nonzero. Drop a failed/overflowed peer
+and reconcile at the application layer; never retry part of a failed record.
+
+`<cai/workspace.h>` derives a canonical workspace identity and private endpoint,
+owns its native listener lock, validates peer credentials and reclaims stale
+sockets after a crash. Discovery never opens conversation storage. These are
+transport primitives, not the completed attach/headless CLI. The lifecycle,
+roles and persistence cutover is specified in
+[workspace-server.md](workspace-server.md).
+
 Lua `runtime:pending_input()` returns an owner-thread attachment with `state()`,
 one-based `entry(index)`, `request(table)`, `set_ready(index, boolean)`,
 `claim(index)` and `close()`. Requests use operation names such as `offer`,
