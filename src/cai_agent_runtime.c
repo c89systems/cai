@@ -13,6 +13,7 @@
 #include "cai_input_queue_codec.h"
 #include "cai_internal.h"
 #include "cai_mcp_search.h"
+#include "cai_process_child.h"
 #include "cai_terminal_text.h"
 
 #include <ctype.h>
@@ -9999,6 +10000,8 @@ static int cai_runtime_git_capture(const char *workspace, char *const argv[],
       _exit(127);
     }
     (void)close(pipe_fds[1]);
+    if (cai_process_child_signals() != 0)
+      _exit(126);
     execve(executable, argv, environment);
     _exit(127);
   }

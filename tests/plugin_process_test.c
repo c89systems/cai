@@ -5,6 +5,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,13 @@ static int child(const char *mode) {
   unsigned char bytes[2048];
   ssize_t n;
   size_t i;
+  sigset_t mask;
+  struct sigaction action;
+  assert(sigprocmask(SIG_SETMASK, NULL, &mask) == 0);
+  assert(!sigismember(&mask, SIGTERM) && !sigismember(&mask, SIGINT) &&
+         !sigismember(&mask, SIGHUP) && !sigismember(&mask, SIGQUIT));
+  assert(sigaction(SIGPIPE, NULL, &action) == 0 &&
+         action.sa_handler == SIG_DFL);
   memset(bytes, 'a', sizeof(bytes));
   if (strcmp(mode, "wait") == 0) {
     for (;;)
@@ -127,6 +135,18 @@ static void *exercise(void *context) {
   const char *roots[1];
   transfer t;
   int before = descriptors();
+  sigset_t blocked, original, seen;
+  struct sigaction ignored, original_pipe, pipe_action;
+  sigemptyset(&blocked);
+  sigaddset(&blocked, SIGTERM);
+  sigaddset(&blocked, SIGINT);
+  sigaddset(&blocked, SIGHUP);
+  sigaddset(&blocked, SIGQUIT);
+  assert(pthread_sigmask(SIG_BLOCK, &blocked, &original) == 0);
+  memset(&ignored, 0, sizeof(ignored));
+  ignored.sa_handler = SIG_IGN;
+  sigemptyset(&ignored.sa_mask);
+  assert(sigaction(SIGPIPE, &ignored, &original_pipe) == 0);
   assert(paths != NULL);
   assert(snprintf(paths->root, sizeof(paths->root), "%s/process-XXXXXX",
                   w->build) < (int)sizeof(paths->root));
@@ -172,6 +192,13 @@ static void *exercise(void *context) {
   assert(unlink(paths->manifest) == 0 && rmdir(paths->root) == 0);
   free(paths);
   assert(descriptors() == before);
+  assert(pthread_sigmask(SIG_SETMASK, NULL, &seen) == 0 &&
+         sigismember(&seen, SIGTERM) && sigismember(&seen, SIGINT) &&
+         sigismember(&seen, SIGHUP) && sigismember(&seen, SIGQUIT));
+  assert(sigaction(SIGPIPE, NULL, &pipe_action) == 0 &&
+         pipe_action.sa_handler == SIG_IGN);
+  assert(pthread_sigmask(SIG_SETMASK, &original, NULL) == 0 &&
+         sigaction(SIGPIPE, &original_pipe, NULL) == 0);
   return NULL;
 }
 int main(int argc, char **argv) {

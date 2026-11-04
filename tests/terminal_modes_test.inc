@@ -2,6 +2,137 @@ typedef struct terminal_gate {
   int fd;
   int released;
 } terminal_gate;
+static void test_process_signal_scope_body(test_state *state) {
+  cai_exec_tool_config exec;
+  cai_terminal_tool_config terminal;
+  cai_tool_registry *registry;
+  cai_sink_callbacks callbacks;
+  cai_sink *sink;
+  cai_error error;
+  write_state *writer = calloc(1U, sizeof(*writer));
+  sigset_t blocked, original, seen;
+  struct sigaction ignored, previous_pipe, pipe_action;
+  int kind, tty, which;
+  char expected[32];
+  const char *arguments;
+  sigemptyset(&blocked);
+  sigaddset(&blocked, SIGTERM);
+  sigaddset(&blocked, SIGINT);
+  sigaddset(&blocked, SIGHUP);
+  sigaddset(&blocked, SIGQUIT);
+  memset(&ignored, 0, sizeof(ignored));
+  ignored.sa_handler = SIG_IGN;
+  sigemptyset(&ignored.sa_mask);
+  if (writer == NULL || pthread_sigmask(SIG_BLOCK, &blocked, &original) != 0) {
+    test_fail(state, "process_signals_setup",
+              "cannot allocate or block signals");
+    free(writer);
+    return;
+  }
+  if (sigaction(SIGPIPE, &ignored, &previous_pipe) != 0) {
+    pthread_sigmask(SIG_SETMASK, &original, NULL);
+    free(writer);
+    test_fail(state, "process_signals_setup", "cannot set SIGPIPE disposition");
+    return;
+  }
+  for (kind = 0; kind < 2; kind++) {
+    memset(&exec, 0, sizeof(exec));
+    memset(&terminal, 0, sizeof(terminal));
+    memset(&callbacks, 0, sizeof(callbacks));
+    exec.root_path = terminal.root_path = CAI_TEST_BINARY_DIR;
+    exec.yolo = terminal.yolo = 1;
+    exec.allow_pty = terminal.foreground = 1;
+    registry = NULL;
+    sink = NULL;
+    cai_error_init(&error);
+    callbacks.write = test_write;
+    callbacks.context = writer;
+    if (cai_tool_registry_new(&registry, &error) != CAI_OK ||
+        (kind ? cai_tool_registry_register_terminal_tools(registry, &terminal,
+                                                          &error)
+              : cai_tool_registry_register_exec_tool(registry, &exec,
+                                                     &error)) != CAI_OK ||
+        cai_sink_from_callbacks(&callbacks, &sink, &error) != CAI_OK)
+      test_fail(state, "process_signals_registry",
+                "cannot register command tool");
+    if (sink != NULL) {
+      for (tty = 0; tty < 2; tty++)
+        for (which = 0; which < 2; which++) {
+          memset(writer, 0, sizeof(*writer));
+          arguments =
+              which
+                  ? (tty ? "{\"cmd\":\"kill -s PIPE $$; exit 0\",\"tty\":true}"
+                         : "{\"cmd\":\"kill -s PIPE $$; exit 0\"}")
+                  : (tty ? "{\"cmd\":\"kill -s TERM $$; exit 0\",\"tty\":true}"
+                         : "{\"cmd\":\"kill -s TERM $$; exit 0\"}");
+          expect_int(state, "process_signals_run",
+                     cai_tool_registry_run(registry,
+                                           CAI_TERMINAL_EXEC_TOOL_NAME,
+                                           arguments, sink, &error),
+                     CAI_OK);
+          snprintf(expected, sizeof(expected), "\"signal\":%d",
+                   which ? SIGPIPE : SIGTERM);
+          expect_substr(state, "process_signals_child_default", writer->buffer,
+                        expected);
+        }
+    }
+    cai_sink_close(sink);
+    cai_tool_registry_destroy(registry);
+    cai_error_cleanup(&error);
+  }
+  expect_int(state, "process_signals_parent_mask",
+             pthread_sigmask(SIG_SETMASK, NULL, &seen), 0L);
+  expect_int(state, "process_signals_parent_still_blocked",
+             sigismember(&seen, SIGTERM), 1L);
+  expect_int(state, "process_signals_parent_pipe",
+             sigaction(SIGPIPE, NULL, &pipe_action), 0L);
+  expect_int(state, "process_signals_parent_still_ignored",
+             pipe_action.sa_handler == SIG_IGN, 1L);
+  pthread_sigmask(SIG_SETMASK, &original, NULL);
+  sigaction(SIGPIPE, &previous_pipe, NULL);
+  free(writer);
+}
+#if defined(__linux__) && !defined(__GLIBC__)
+extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
+#endif
+static void *test_process_signal_worker(void *context) {
+  test_state *state = context;
+#if defined(__linux__) && !defined(__GLIBC__)
+  pthread_attr_t attributes;
+  size_t stack_size = 0U, default_size = 0U;
+  int rc = pthread_attr_init(&attributes);
+  expect_int(state, "process_signals_musl_default_attributes", rc, 0L);
+  if (rc == 0) {
+    expect_int(state, "process_signals_musl_default_stack",
+               pthread_attr_getstacksize(&attributes, &default_size), 0L);
+    expect_int(state, "process_signals_musl_default_stack_ceiling",
+               default_size > 0U && default_size <= 128U * 1024U, 1L);
+    pthread_attr_destroy(&attributes);
+  }
+  rc = pthread_getattr_np(pthread_self(), &attributes);
+  expect_int(state, "process_signals_musl_worker_attributes", rc, 0L);
+  if (rc == 0) {
+    expect_int(state, "process_signals_musl_worker_stack",
+               pthread_attr_getstacksize(&attributes, &stack_size), 0L);
+    /* Inspect the configured default independently of libc's reported extent;
+     * this worker was created with NULL attributes, without a stack override.
+     */
+    printf("musl default stack: %lu bytes; worker extent: %lu bytes\n",
+           (unsigned long)default_size, (unsigned long)stack_size);
+    pthread_attr_destroy(&attributes);
+  }
+#endif
+  test_process_signal_scope_body(state);
+  return NULL;
+}
+static void test_process_signal_scope(test_state *state) {
+  pthread_t worker;
+  int rc = pthread_create(&worker, NULL, test_process_signal_worker, state);
+  expect_int(state, "process_signals_worker_start", rc, 0L);
+  if (rc == 0)
+    expect_int(state, "process_signals_worker_join", pthread_join(worker, NULL),
+               0L);
+}
 static int test_terminal_release_output(void *context,
                                         const cai_terminal_event *event,
                                         cai_error *error) {

@@ -54856,6 +54856,7 @@ static const test_entry test_entries[] = {
     {"terminal_tools", test_terminal_tools},
     {"terminal_wait_policy", test_terminal_wait_policy},
     {"terminal_process_modes", test_terminal_process_modes},
+    {"process_signal_scope", test_process_signal_scope},
     {"terminal_busy_output", test_terminal_busy_output},
     {"terminal_sink_failure_preserves_output",
      test_terminal_sink_failure_preserves_output},

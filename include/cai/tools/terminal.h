@@ -1,5 +1,7 @@
 /** @file cai/tools/terminal.h
- *  Single-process pipe/PTY command tools for CAI agent mode.
+ *  Single-process pipe/PTY command tools for CAI agent mode. Executed children
+ *  use an empty signal mask and default stop/pipe/job-control dispositions;
+ *  the embedding process's signal state is unchanged.
  */
 #ifndef CAI_TOOLS_TERMINAL_H
 #define CAI_TOOLS_TERMINAL_H

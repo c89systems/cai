@@ -3,6 +3,7 @@
 #define _XOPEN_SOURCE 700
 #include "cai_internal.h"
 #include "cai_plugins_internal.h"
+#include "cai_process_child.h"
 #include "cai_process_environment.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -173,6 +174,8 @@ static int process_run(void *context, cai_source *arguments, cai_sink *output,
 #endif
       for (fd = 3L; fd < maxfd; fd++)
         (void)close((int)fd);
+    if (cai_process_child_signals() != 0)
+      _exit(126);
     execve(buffers->executable, process->argv, environment);
     _exit(127);
   }

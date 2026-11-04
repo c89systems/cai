@@ -1,4 +1,5 @@
 #include "cai_internal.h"
+#include "cai_process_child.h"
 
 #include <cai/auth.h>
 
@@ -1807,6 +1808,12 @@ int cai_chatgpt_login_open_browser_with_config(
     if (opener_pid > 0) {
       close(pipe_fds[1]);
       _exit(0);
+    }
+    if (cai_process_child_signals() != 0) {
+      child_errno = errno;
+      ignored_write = write(pipe_fds[1], &child_errno, sizeof(child_errno));
+      (void)ignored_write;
+      _exit(127);
     }
     unsetenv("LD_PRELOAD");
     execlp(command, command, authorize_url, (char *)NULL);

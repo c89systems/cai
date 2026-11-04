@@ -1,4 +1,5 @@
 #include "../cai_internal.h"
+#include "../cai_process_child.h"
 #include "../cai_process_environment.h"
 #include "../cai_utf8.h"
 
@@ -1240,6 +1241,8 @@ static int cai_terminal_start(cai_terminal_manager *manager, const char *cmd,
     }
     close(workdir_fd);
     cai_terminal_close_inherited_fds(inherited_fd_limit);
+    if (cai_process_child_signals() != 0)
+      _exit(126);
     execve(manager->shell_path, argv, manager->environment);
     _exit(127);
   }

@@ -1,4 +1,5 @@
 #include "../cai_internal.h"
+#include "../cai_process_child.h"
 #include "../cai_process_environment.h"
 
 #include <cai/tools/exec.h>
@@ -1424,6 +1425,8 @@ static int cai_exec_spawn(const cai_exec_context *ctx,
       _exit(126);
     }
     close(sync_fd[0]);
+    if (cai_process_child_signals() != 0)
+      _exit(126);
     cai_exec_child_exec(ctx, args, workdir, bwrap_path, use_sandbox);
   }
   setpgid(pid, pid);

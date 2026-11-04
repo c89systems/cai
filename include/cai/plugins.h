@@ -11,7 +11,9 @@ typedef struct cai_plugins cai_plugins;
 
 /** Per-invocation borrowed capabilities. A host executor must obey this policy.
  * Package discovery is limited to configured roots. Process tools follow the
- * command environment policy; they are not an OS sandbox. No VM is required. */
+ * command environment policy; they are not an OS sandbox. Executed children
+ * clear the host's signal mask and restore default process-control signal
+ * dispositions. The host remains unchanged. No VM is required. */
 typedef struct cai_plugin_call {
   /** Borrowed through invocation. Agent registration retains this view;
    * NULL there inherits the client's view. A direct call with NULL captures

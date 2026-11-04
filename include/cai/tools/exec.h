@@ -60,7 +60,9 @@ typedef struct cai_exec_tool_config {
   int yolo;
 } cai_exec_tool_config;
 
-/** Register the sandboxed `exec_command` preset on a tool registry. */
+/** Register the sandboxed `exec_command` preset on a tool registry. Children
+ * use an empty signal mask and default process-control dispositions, without
+ * changing the host's signal state. */
 int cai_tool_registry_register_exec_tool(cai_tool_registry *registry,
                                          const cai_exec_tool_config *config,
                                          cai_error *error);
