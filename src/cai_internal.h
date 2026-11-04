@@ -35,8 +35,9 @@ void cai_runtime_test_set_capacity_wait_fn(int (*fn)(struct cai_agent_runtime *,
 #endif
 
 /** Private state behind cai_client::impl. Owns copied connection settings,
- * provider authentication, catalog caches and cumulative usage. Agents borrow
- * their client; close sessions/agents before closing the client. */
+ * credential strings, catalog caches and cumulative usage. Supplied auth and
+ * logger handles are borrowed. Agents borrow their client; close sessions and
+ * agents before closing the client. */
 typedef struct cai_client_impl {
   cai_environment *environment;
   cai_allocator allocator;
