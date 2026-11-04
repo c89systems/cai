@@ -32,6 +32,8 @@ typedef struct host {
   pthread_t caller, owner;
   const char *mode;
   pthread_mutex_t lock;
+  cai_input_connection *input;
+  unsigned long long conversation;
   int starts, completed, text, replay, acks, rejected, steered, has_owner;
 } host;
 unsigned int cai_test_storage_open_count(void);
@@ -47,6 +49,33 @@ static void owner(host *h) {
   }
   assert(pthread_equal(h->owner, pthread_self()));
   assert(getenv("CAI_CONTROLLER_PRIVATE") == NULL);
+}
+static int authorize(void *context, uint64_t attachment, uint64_t generation,
+                     cai_error *error) {
+  host *h = context;
+  owner(h);
+  if (attachment == 42U && generation == 7U)
+    return CAI_OK;
+  if (error != NULL) {
+    error->code = CAI_ERR_INVALID;
+    error->message = strdup("frontend does not control this workspace");
+    assert(error->message != NULL);
+  }
+  return CAI_ERR_INVALID;
+}
+static void input_offer(host *h, unsigned long long id, const char *text,
+                        cai_input_intent intent) {
+  cai_input_scope scope;
+  cai_input_request request;
+  scope.conversation = h->conversation;
+  scope.generation = 7U;
+  memset(&request, 0, sizeof(request));
+  request.request_id = id;
+  request.operation = CAI_INPUT_OFFER;
+  request.intent = intent;
+  request.text = text;
+  assert(cai_input_connection_request(h->input, &scope, &request, NULL) ==
+         CAI_OK);
 }
 static int event(void *context, const cai_agent_runtime_event *e,
                  cai_error *error) {
@@ -83,6 +112,11 @@ static int event(void *context, const cai_agent_runtime_event *e,
       strcmp(h->mode, "steer") == 0 && !h->steered) {
     h->steered = 1;
     control(h, CAI_APP_STEER, "CONTROLLER STEERING");
+  }
+  if (e->type == CAI_AGENT_EVENT_TOOL_CALL_COMPLETED &&
+      strcmp(h->mode, "input_steer") == 0 && !h->steered) {
+    h->steered = 1;
+    input_offer(h, 2U, "FRONTEND STEERING", CAI_INPUT_STEERING);
   }
   if (e->type == CAI_AGENT_EVENT_RUN_COMPLETED) {
     pthread_mutex_lock(&h->lock);
@@ -189,7 +223,83 @@ static void open_host(host *h, const char *mode) {
   config.control_context = h;
   config.register_agent_tools = register_tools;
   config.register_agent_tools_context = h;
+  config.input.authorize = authorize;
+  config.input.authorize_context = h;
   assert(cai_app_open(&config, &h->app, NULL) == CAI_OK);
+}
+static cai_input_observation *input_wait(host *h,
+                                         cai_input_observation_type type,
+                                         unsigned long long request) {
+  struct pollfd fd;
+  cai_input_observation *value;
+  size_t ticks;
+  fd.fd = cai_input_connection_fd(h->input);
+  fd.events = POLLIN;
+  for (ticks = 0U; ticks < 1000U; ++ticks) {
+    assert(cai_input_connection_poll(h->input, &value, NULL) == CAI_OK);
+    if (value == NULL) {
+      fd.revents = 0;
+      assert(poll(&fd, 1U, 10000) == 1 && (fd.revents & POLLIN) != 0);
+      continue;
+    }
+    if (value->type == type && (type != CAI_INPUT_OBSERVATION_RESULT ||
+                                value->result.request_id == request))
+      return value;
+    cai_input_observation_close(value);
+  }
+  abort();
+}
+static void input_start(host *h) {
+  cai_input_observation *value;
+  assert(cai_app_connect_input(h->app, 42U, &h->input, NULL) == CAI_OK);
+  value = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT, 0U);
+  h->conversation = value->conversation;
+  assert(h->conversation != 0U && value->producer != 0U &&
+         value->last_request == 0U);
+  cai_input_observation_close(value);
+  input_offer(h, 1U, "CONTROLLER FIRST PROMPT", CAI_INPUT_QUEUED);
+}
+static void input_reconnect(host *h) {
+  cai_input_observation *value;
+  unsigned long long producer;
+  value = input_wait(h, CAI_INPUT_OBSERVATION_CHANGE, 0U);
+  producer = value->producer;
+  assert(producer != 0U);
+  cai_input_observation_close(value);
+  /* Deliberately drop the acceptance acknowledgement. A new observer
+   * connection must recover it without admitting a second prompt. */
+  cai_input_connection_close(h->input);
+  h->input = NULL;
+  assert(cai_app_resume_input(h->app, 84U, h->conversation, producer, &h->input,
+                              NULL) == CAI_OK);
+  value = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT, 0U);
+  assert(value->producer == producer && value->last_request >= 1U);
+  cai_input_observation_close(value);
+  input_offer(h, 1U, "THIS DUPLICATE MUST NEVER RUN", CAI_INPUT_QUEUED);
+  value = input_wait(h, CAI_INPUT_OBSERVATION_RESULT, 1U);
+  assert(value->result.outcome == CAI_INPUT_ACCEPTED);
+  cai_input_observation_close(value);
+  input_offer(h, 3U, "THIS OBSERVER MUST NEVER RUN", CAI_INPUT_QUEUED);
+  value = input_wait(h, CAI_INPUT_OBSERVATION_RESULT, 3U);
+  assert(value->result.outcome == CAI_INPUT_REJECTED &&
+         strstr(value->result.reason, "does not control") != NULL);
+  cai_input_observation_close(value);
+  cai_input_connection_close(h->input);
+  h->input = NULL;
+  assert(cai_app_resume_input(h->app, 42U, h->conversation, producer, &h->input,
+                              NULL) == CAI_OK);
+  value = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT, 0U);
+  assert(value->last_request == 3U);
+  cai_input_observation_close(value);
+  input_offer(h, 4U, "/status", CAI_INPUT_STEERING);
+  value = input_wait(h, CAI_INPUT_OBSERVATION_RESULT, 4U);
+  assert(value->result.outcome == CAI_INPUT_REJECTED &&
+         strstr(value->result.reason, "presentation") != NULL);
+  cai_input_observation_close(value);
+  input_offer(h, 5U, "!printf command", CAI_INPUT_QUEUED);
+  value = input_wait(h, CAI_INPUT_OBSERVATION_RESULT, 5U);
+  assert(value->result.outcome == CAI_INPUT_REJECTED);
+  cai_input_observation_close(value);
 }
 static void independent_controllers(int argc, char **argv) {
   host a, b;
@@ -278,6 +388,8 @@ int main(int argc, char **argv) {
   }
   cai_app_status_init(&status);
   open_host(&h, mode);
+  assert(cai_app_connect_input(h.app, 42U, &h.input, NULL) == CAI_ERR_INVALID &&
+         h.input == NULL);
   assert(cai_app_join(h.app, &code, NULL) == CAI_ERR_INVALID);
   assert(cai_app_start(h.app, NULL, argc - 1, (const char *const *)(argv + 1),
                        NULL) == CAI_OK);
@@ -285,13 +397,18 @@ int main(int argc, char **argv) {
   if (strcmp(mode, "startup_stop") != 0 && strcmp(mode, "replay_stop") != 0 &&
       strncmp(mode, "invalid", 7U) != 0) {
     wait_ready(&h);
-    control(&h,
-            strcmp(mode, "goal") == 0 ? CAI_APP_REPLACE_GOAL
-                                      : CAI_APP_QUEUE_PROMPT,
-            "CONTROLLER FIRST PROMPT");
+    if (strncmp(mode, "input", 5U) == 0)
+      input_start(&h);
+    else
+      control(&h,
+              strcmp(mode, "goal") == 0 ? CAI_APP_REPLACE_GOAL
+                                        : CAI_APP_QUEUE_PROMPT,
+              "CONTROLLER FIRST PROMPT");
     if (strcmp(mode, "observer_error") != 0 &&
         strcmp(mode, "stop_active") != 0) {
       wait_count(&h, strcmp(mode, "queue") == 0 ? 3 : 1, 0);
+      if (strncmp(mode, "input", 5U) == 0)
+        input_reconnect(&h);
       assert(cai_app_get_status(h.app, &status, NULL) == CAI_OK &&
              status.running);
       if (strcmp(mode, "run") == 0) {
@@ -374,6 +491,14 @@ int main(int argc, char **argv) {
     assert(h.starts == 0 && h.acks == 1);
   }
   cai_app_close(h.app);
+  if (h.input != NULL) {
+    cai_input_observation *value;
+    do {
+      assert(cai_input_connection_poll(h.input, &value, NULL) == CAI_OK);
+      cai_input_observation_close(value);
+    } while (value != NULL);
+    cai_input_connection_close(h.input);
+  }
   cai_app_status_cleanup(&status);
   pthread_mutex_destroy(&h.lock);
   return 0;

@@ -1,5 +1,6 @@
 cai_app_close
 cai_app_config_init
+cai_app_connect_input
 cai_app_control
 cai_app_get_status
 cai_app_join
@@ -9,6 +10,7 @@ cai_app_observe_status
 cai_app_open
 cai_app_option_at
 cai_app_option_count
+cai_app_resume_input
 cai_app_run
 cai_app_start
 cai_app_status_cleanup

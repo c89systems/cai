@@ -19,6 +19,7 @@ typedef struct cai_app_bridge {
   cai_app_command *head, *tail;
   cai_app_status status;
   const cai_app_config *config;
+  cai_input_controller *input;
 } cai_app_bridge;
 int cai_app_bridge_open(cai_app_bridge **out, const cai_app_config *config,
                         cai_error *error);
@@ -33,6 +34,12 @@ int cai_app_bridge_status(cai_app_bridge *bridge, cai_app_status *out,
                           cai_error *error);
 int cai_app_bridge_observe(cai_app_bridge *bridge, cai_app_status *out,
                            cai_error *error);
+void cai_app_bridge_bind_input(cai_app_bridge *bridge,
+                               cai_input_controller *input);
+int cai_app_bridge_input(cai_app_bridge *bridge, uint64_t attachment,
+                         unsigned long long conversation,
+                         unsigned long long producer,
+                         cai_input_connection **out, cai_error *error);
 int cai_app_bridge_publish(cai_app_bridge *bridge, cai_agent_runtime *runtime,
                            cai_error *error);
 void cai_app_bridge_error(cai_app_bridge *bridge, const cai_error *error);

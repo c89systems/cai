@@ -3,9 +3,10 @@
 Status: implemented in-process queue boundary, 2026-11-03. Public core headers
 `input_queue.h` and `input_controller.h`, the Lua runtime attachment and
 `cli/input_adapter.c` implement the authority and Softline bridge described
-here. Each conversation journals its own queue. Network transport, application
-lifetime detach/reattach and a separate application owner remain future work in
-the [attachable frontend architecture](frontend-architecture.md). Illustrative
+here. Each conversation journals its own queue. The terminal-free application
+owner exposes in-process input connect/resume, owned observations and status
+wakeups. Socket application binding and the terminal client cutover remain
+future work in the [attachable frontend architecture](frontend-architecture.md). Illustrative
 C shapes below explain responsibilities; installed headers define exact APIs.
 
 Softline must retain its existing local queue as the constructor default. A
@@ -79,6 +80,17 @@ admission but before its acknowledgement cannot cause an identical frontend
 retry to create a second input. Consumption records use the same backend item
 identity. Refactor the existing journal admission/consumption rules instead of
 creating a separate full-queue snapshot or a second execution log.
+
+Connections publish their logical producer and processed request watermark.
+Reconnect uses that producer within the verified conversation epoch, keeping
+the greater of the frontend's last-issued ID and the reported watermark.
+Missing/evicted/already-attached producers fail explicitly; they never silently
+reserve another identity. Result lookup precedes current authority checks, so
+a former controller can resolve accepted work after takeover. New authority
+rejections are journaled without payload text and remain rejected if control
+is later restored. The application exposes this boundary through
+`cai_app_connect_input` and `cai_app_resume_input`; returned connections may
+retain observations after receiver shutdown, but no runtime or journal access.
 
 libcai_app supplies command classification, authenticated controller roles,
 transport request deduplication and the client bridge. It maps native inputs,

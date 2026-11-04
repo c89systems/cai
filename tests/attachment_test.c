@@ -235,13 +235,24 @@ static int authorize(void *context, uint64_t id, uint64_t generation,
                      cai_error *error) {
   return cai_attachment_controller_authorize(context, id, generation, error);
 }
+typedef struct admission_writes {
+  size_t accepted, rejected;
+} admission_writes;
 static int persist(void *context, const cai_input_record *record,
                    unsigned long long *position, cai_error *error) {
-  size_t *count = context;
+  admission_writes *count = context;
   (void)error;
   *position = 0U;
-  if (record->type == CAI_INPUT_RECORD_REQUEST)
-    ++*count;
+  if (record->type == CAI_INPUT_RECORD_REQUEST) {
+    if (record->result.outcome == CAI_INPUT_ACCEPTED)
+      ++count->accepted;
+    else {
+      assert(record->result.outcome == CAI_INPUT_REJECTED &&
+             record->request.text == NULL);
+      assert(record->before_revision == record->after_revision);
+      ++count->rejected;
+    }
+  }
   return CAI_OK;
 }
 static void admission(void) {
@@ -254,7 +265,8 @@ static void admission(void) {
   client a, b;
   uint64_t first, second, generation;
   cai_input_operation operation;
-  size_t writes = 0U;
+  admission_writes writes;
+  memset(&writes, 0, sizeof(writes));
   memset(&a, 0, sizeof(a));
   memset(&b, 0, sizeof(b));
   assert(cai_attachment_controller_open(NULL, &roles, NULL) == CAI_OK);
@@ -289,14 +301,15 @@ static void admission(void) {
   drain(&a);
   drain(&b);
   assert(a.result.outcome == CAI_INPUT_REJECTED &&
-         b.result.outcome == CAI_INPUT_REJECTED && writes == 0U);
+         b.result.outcome == CAI_INPUT_REJECTED && writes.accepted == 0U &&
+         writes.rejected == 2U);
   assert(strstr(a.result.reason, "stale") != NULL);
   a.scope.generation = generation;
   send(&a, CAI_INPUT_OFFER);
   assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
   drain(&a);
   drain(&b);
-  assert(a.result.outcome == CAI_INPUT_ACCEPTED && writes == 1U);
+  assert(a.result.outcome == CAI_INPUT_ACCEPTED && writes.accepted == 1U);
   /* Observers may synchronize/reconcile, but STOP/approval/etc are mutations.
    */
   send(&b, CAI_INPUT_SYNCHRONIZE);
@@ -310,7 +323,7 @@ static void admission(void) {
     send(&b, operation);
     assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
     drain(&b);
-    assert(b.result.outcome == CAI_INPUT_REJECTED && writes == 1U);
+    assert(b.result.outcome == CAI_INPUT_REJECTED && writes.accepted == 1U);
   }
   assert(cai_input_queue_get_state(queue, &queue_state, NULL) == CAI_OK &&
          queue_state.count == 1U && !queue_state.stopped);
@@ -320,7 +333,7 @@ static void admission(void) {
   assert(cai_attachment_controller_stop(roles, NULL) == CAI_OK);
   assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
   drain(&a);
-  assert(a.result.outcome == CAI_INPUT_REJECTED && writes == 1U);
+  assert(a.result.outcome == CAI_INPUT_REJECTED && writes.accepted == 1U);
   assert(cai_input_queue_get_state(queue, &queue_state, NULL) == CAI_OK &&
          queue_state.count == 1U);
   cai_input_connection_close(a.connection);

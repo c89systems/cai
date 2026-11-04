@@ -288,6 +288,25 @@ int cai_app_observe_status(const cai_app *self, cai_app_status *out,
   const app_impl *app = self != NULL ? self->impl : NULL;
   return cai_app_bridge_observe(app != NULL ? app->bridge : NULL, out, error);
 }
+int cai_app_connect_input(cai_app *self, uint64_t attachment,
+                          cai_input_connection **out, cai_error *error) {
+  app_impl *app = self != NULL ? self->impl : NULL;
+  return cai_app_bridge_input(app != NULL ? app->bridge : NULL, attachment, 0U,
+                              0U, out, error);
+}
+int cai_app_resume_input(cai_app *self, uint64_t attachment,
+                         unsigned long long conversation,
+                         unsigned long long producer,
+                         cai_input_connection **out, cai_error *error) {
+  app_impl *app = self != NULL ? self->impl : NULL;
+  if (out != NULL)
+    *out = NULL;
+  if (conversation == 0U || producer == 0U)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "verified conversation and producer required");
+  return cai_app_bridge_input(app != NULL ? app->bridge : NULL, attachment,
+                              conversation, producer, out, error);
+}
 size_t cai_app_option_count(const cai_app *self) {
   return self != NULL ? cai_cli_help_count() : 0U;
 }

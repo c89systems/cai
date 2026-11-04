@@ -43,10 +43,15 @@ Startup captures explicit directory/environment contexts; native runtime/replay
 observers receive borrowed events on the owner. A coalescing status descriptor
 reports readiness, controls and shutdown without idle polling. This is the
 backend ownership entry point, not yet a socket application server. The
-synchronous terminal receiver remains to be composed over it. Remote command
-presentation, frontend attachments and Lua asynchronous observations are still
-pending; the current terminal-free typed control surface rejects slash/! input
-and leaves restored frontend actions queued.
+synchronous terminal receiver remains to be composed over it. In-process
+frontends can now use `cai_app_connect_input`/`cai_app_resume_input` to attach to
+the active queue without opening a runtime or store. Their owned observations
+include the producer identity and processed request watermark. Attachment
+admission runs on the controller owner with the authenticated identity and
+original authority generation; trusted native `control()` is a separate host
+surface. Remote command presentation, socket application binding and Lua
+asynchronous observations remain pending. The terminal-free owner rejects new
+slash/! input explicitly and leaves restored frontend actions queued.
 
 ## Confirmed product decisions
 
@@ -230,6 +235,16 @@ live handles cannot survive a crashed server. Expired receipts and IDs omitted
 from a trim/export initialization baseline stay unavailable, rather than
 becoming new submissions. Frontends retain their own last-issued request ID
 and reconcile unknown work before making any replacement offer.
+
+The input controller resumes a producer only against its verified conversation
+epoch. Producer lookup runs on the owner; an unknown or already-attached
+identity disconnects that connection with an actionable reason, without
+reserving a replacement or failing other clients. Across a process restart the
+host must verify the persistent session identity before using its new epoch.
+Historical receipts are looked up before current authority: an observer can
+learn whether its earlier prompt was accepted, but cannot admit new work.
+Authority rejections are durable receipts without the rejected text, so gaining
+control later cannot cause the same rejected request ID to execute.
 
 ## CBOR and framing
 

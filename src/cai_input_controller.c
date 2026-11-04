@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "cai_input_queue_internal.h"
 #include "cai_internal.h"
 #include <cai/input_controller.h>
 #include <errno.h>
@@ -29,10 +30,12 @@ struct cai_input_connection {
   cai_input_queue_client *client;
   input_submission *head, *tail;
   input_message *messages, *messages_tail;
+  input_message *binding_notice;
   size_t submitted, ordinary, reserved[3], message_count, message_bytes;
-  unsigned long long conversation;
+  unsigned long long conversation, resume_producer;
   uint64_t attachment;
-  int fd, wake_fd, detached, synchronized, needs_snapshot;
+  cai_input_result binding_error;
+  int fd, wake_fd, detached, synchronized, needs_snapshot, binding_failed;
 };
 struct cai_input_controller {
   cai_input_controller_config config;
@@ -124,6 +127,33 @@ static void append_message(cai_input_connection *connection,
   connection->message_bytes += message->bytes;
   signal_fd(connection->wake_fd);
 }
+static void producer_metadata(cai_input_connection *connection,
+                              cai_input_observation *value) {
+  if (value->conversation == connection->conversation &&
+      connection->client != NULL) {
+    value->producer = cai_input_queue_client_id(connection->client);
+    value->last_request =
+        cai_input_queue_client_last_request(connection->client);
+  }
+}
+/* Caller holds the controller lock. No fallback to a new logical producer. */
+static void binding_failed(cai_input_connection *connection, int code,
+                           const char *reason) {
+  input_message *message;
+  if (connection->binding_failed)
+    return;
+  message = connection->binding_notice;
+  connection->binding_notice = NULL;
+  connection->binding_failed = 1;
+  connection->needs_snapshot = connection->synchronized = 0;
+  connection->binding_error.outcome = CAI_INPUT_REJECTED;
+  connection->binding_error.code = code;
+  snprintf(connection->binding_error.reason,
+           sizeof(connection->binding_error.reason), "%s", reason);
+  message->value.conversation = connection->conversation;
+  message->value.result = connection->binding_error;
+  append_message(connection, message);
+}
 static void disconnect_locked(cai_input_connection *connection) {
   input_message *message;
   if (!connection->synchronized)
@@ -132,6 +162,7 @@ static void disconnect_locked(cai_input_connection *connection) {
   message = message_new(CAI_INPUT_OBSERVATION_DISCONNECTED);
   if (message != NULL) {
     message->value.conversation = connection->conversation;
+    producer_metadata(connection, &message->value);
     append_message(connection, message);
   }
 }
@@ -157,6 +188,7 @@ static void observe(void *context, const cai_input_change *change) {
       continue;
     }
     message->value.conversation = connection->conversation;
+    producer_metadata(connection, &message->value);
     message->value.change = *change;
     message->value.state = change->state;
     message->value.change.entry.text = NULL;
@@ -192,6 +224,7 @@ static int snapshot(cai_input_connection *connection, cai_error *error) {
   if (message == NULL)
     return cai_set_error(error, CAI_ERR_NOMEM, "copy input queue snapshot");
   message->value.conversation = connection->conversation;
+  producer_metadata(connection, &message->value);
   rc = cai_input_queue_get_state(controller->queue, &message->value.state,
                                  error);
   if (rc == CAI_OK && message->value.state.count != 0U) {
@@ -273,8 +306,12 @@ static void connection_free(cai_input_connection *connection) {
     connection->messages = message->next;
     cai_input_observation_close(&message->value);
   }
-  close(connection->fd);
-  close(connection->wake_fd);
+  if (connection->binding_notice != NULL)
+    cai_input_observation_close(&connection->binding_notice->value);
+  if (connection->fd >= 0)
+    close(connection->fd);
+  if (connection->wake_fd >= 0)
+    close(connection->wake_fd);
   cai_free_mem(NULL, connection);
 }
 int cai_input_controller_select(cai_input_controller *controller,
@@ -318,17 +355,22 @@ int cai_input_controller_select(cai_input_controller *controller,
     disconnect_locked(connection);
     cai_input_queue_client_close(connection->client);
     connection->client = NULL;
+    if (connection->resume_producer != 0U && !connection->binding_failed) {
+      binding_failed(connection, CAI_ERR_INVALID,
+                     "conversation changed before producer resume");
+    }
     connection->conversation = controller->conversation;
-    connection->needs_snapshot = 1;
+    connection->needs_snapshot = !connection->binding_failed;
   }
   pthread_mutex_unlock(&controller->lock);
   cai_input_queue_release(previous);
   signal_fd(controller->wake_fd);
   return rc;
 }
-int cai_input_controller_connect(cai_input_controller *controller,
-                                 uint64_t attachment,
-                                 cai_input_connection **out, cai_error *error) {
+static int connect_input(cai_input_controller *controller, uint64_t attachment,
+                         unsigned long long conversation,
+                         unsigned long long producer,
+                         cai_input_connection **out, cai_error *error) {
   cai_input_connection *connection;
   if (controller == NULL || out == NULL)
     return cai_set_error(error, CAI_ERR_INVALID,
@@ -338,8 +380,15 @@ int cai_input_controller_connect(cai_input_controller *controller,
   if (connection == NULL)
     return cai_set_error(error, CAI_ERR_NOMEM, "allocate input connection");
   memset(connection, 0, sizeof(*connection));
+  connection->fd = connection->wake_fd = -1;
+  connection->binding_notice = message_new(CAI_INPUT_OBSERVATION_DISCONNECTED);
+  if (connection->binding_notice == NULL) {
+    connection_free(connection);
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "reserve producer binding receipt");
+  }
   if (wakeup_open(&connection->fd, &connection->wake_fd) != 0) {
-    cai_free_mem(NULL, connection);
+    connection_free(connection);
     return cai_set_error(error, CAI_ERR_TRANSPORT,
                          "open input observation wakeup");
   }
@@ -352,6 +401,14 @@ int cai_input_controller_connect(cai_input_controller *controller,
   }
   connection->controller = controller;
   connection->attachment = attachment;
+  if (producer != 0U && conversation != controller->conversation) {
+    pthread_mutex_unlock(&controller->lock);
+    connection_free(connection);
+    return cai_set_error(
+        error, CAI_ERR_INVALID,
+        "conversation changed; producer resume was not accepted");
+  }
+  connection->resume_producer = producer;
   connection->conversation = controller->conversation;
   connection->needs_snapshot = 1;
   connection->next = controller->connections;
@@ -362,6 +419,24 @@ int cai_input_controller_connect(cai_input_controller *controller,
   signal_fd(controller->wake_fd);
   *out = connection;
   return CAI_OK;
+}
+int cai_input_controller_connect(cai_input_controller *controller,
+                                 uint64_t attachment,
+                                 cai_input_connection **out, cai_error *error) {
+  return connect_input(controller, attachment, 0U, 0U, out, error);
+}
+int cai_input_controller_resume(cai_input_controller *controller,
+                                uint64_t attachment,
+                                unsigned long long conversation,
+                                unsigned long long producer,
+                                cai_input_connection **out, cai_error *error) {
+  if (out != NULL)
+    *out = NULL;
+  if (conversation == 0U || producer == 0U)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "verified conversation and producer are required");
+  return connect_input(controller, attachment, conversation, producer, out,
+                       error);
 }
 static int reserved(cai_input_operation operation) {
   return operation == CAI_INPUT_SYNCHRONIZE ? 0
@@ -406,6 +481,7 @@ int cai_input_connection_request(cai_input_connection *connection,
   controller = connection->controller;
   pthread_mutex_lock(&controller->lock);
   if (controller->closed || connection->detached ||
+      connection->binding_failed ||
       (slot >= 0 ? connection->reserved[slot] != 0U
                  : connection->ordinary >= 16U)) {
     pthread_mutex_unlock(&controller->lock);
@@ -427,6 +503,21 @@ int cai_input_connection_request(cai_input_connection *connection,
   pthread_mutex_unlock(&controller->lock);
   signal_fd(controller->wake_fd);
   return CAI_OK;
+}
+typedef struct input_admission {
+  cai_input_controller *controller;
+  cai_input_connection *connection;
+  input_submission *submission;
+} input_admission;
+static int authorize_submission(void *context, cai_error *error) {
+  input_admission *admission = context;
+  cai_input_controller *controller = admission->controller;
+  return controller->config.authorize != NULL
+             ? controller->config.authorize(
+                   controller->config.authorize_context,
+                   admission->connection->attachment,
+                   admission->submission->scope.generation, error)
+             : CAI_OK;
 }
 int cai_input_controller_pump(cai_input_controller *controller,
                               size_t max_requests, cai_error *error) {
@@ -453,9 +544,32 @@ int cai_input_controller_pump(cai_input_controller *controller,
   connection = controller->connections;
   pthread_mutex_unlock(&controller->lock);
   for (; connection != NULL; connection = connection->next) {
-    if (connection->client == NULL && controller->queue != NULL) {
-      rc = cai_input_queue_client_open(controller->queue, &connection->client,
-                                       error);
+    if (connection->client == NULL && controller->queue != NULL &&
+        !connection->binding_failed) {
+      if (connection->resume_producer != 0U) {
+        cai_error binding;
+        cai_error_init(&binding);
+        rc = cai_input_queue_client_resume(controller->queue,
+                                           connection->resume_producer,
+                                           &connection->client, &binding);
+        if (rc == CAI_OK)
+          connection->resume_producer = 0U;
+        else if (rc == CAI_ERR_INVALID || rc == CAI_ERR_LIMIT) {
+          pthread_mutex_lock(&controller->lock);
+          binding_failed(connection, rc,
+                         binding.message != NULL
+                             ? binding.message
+                             : "producer resume was not accepted");
+          pthread_mutex_unlock(&controller->lock);
+          rc = CAI_OK;
+        } else
+          cai_set_error(error, rc,
+                        binding.message != NULL ? binding.message
+                                                : "producer resume failed");
+        cai_error_cleanup(&binding);
+      } else
+        rc = cai_input_queue_client_open(controller->queue, &connection->client,
+                                         error);
       if (rc != CAI_OK)
         return rc;
     }
@@ -491,36 +605,25 @@ int cai_input_controller_pump(cai_input_controller *controller,
       }
       message->value.conversation = submission->scope.conversation;
       message->value.result.request_id = submission->value.request_id;
-      if (connection->client == NULL ||
-          (submission->scope.conversation != connection->conversation &&
-           !(submission->scope.conversation == 0U &&
-             submission->value.operation == CAI_INPUT_SYNCHRONIZE))) {
+      if (connection->binding_failed) {
+        message->value.result = connection->binding_error;
+        message->value.result.request_id = submission->value.request_id;
+      } else if (connection->client == NULL ||
+                 (submission->scope.conversation != connection->conversation &&
+                  !(submission->scope.conversation == 0U &&
+                    submission->value.operation == CAI_INPUT_SYNCHRONIZE))) {
         message->value.result.outcome = CAI_INPUT_REJECTED;
         message->value.result.code = CAI_ERR_INVALID;
         strcpy(message->value.result.reason,
                "conversation changed; request was not accepted");
       } else {
-        cai_error admission;
-        cai_error_init(&admission);
-        rc = CAI_OK;
-        if (controller->config.authorize != NULL &&
-            submission->value.operation != CAI_INPUT_SYNCHRONIZE &&
-            submission->value.operation != CAI_INPUT_RESOLVE)
-          rc = controller->config.authorize(
-              controller->config.authorize_context, connection->attachment,
-              submission->scope.generation, &admission);
-        if (rc != CAI_OK) {
-          message->value.result.outcome = CAI_INPUT_REJECTED;
-          message->value.result.code = rc;
-          snprintf(message->value.result.reason,
-                   sizeof(message->value.result.reason), "%s",
-                   admission.message != NULL ? admission.message
-                                             : "input authority was revoked");
-          rc = CAI_OK;
-        } else
-          rc = cai_input_queue_request(connection->client, &submission->value,
-                                       &message->value.result, error);
-        cai_error_cleanup(&admission);
+        input_admission admission;
+        admission.controller = controller;
+        admission.connection = connection;
+        admission.submission = submission;
+        rc = cai_input_queue_admit(connection->client, &submission->value,
+                                   authorize_submission, &admission,
+                                   &message->value.result, error);
         if (rc != CAI_OK) {
           message->value.result.outcome = CAI_INPUT_REJECTED;
           message->value.result.code = rc;
@@ -534,6 +637,7 @@ int cai_input_controller_pump(cai_input_controller *controller,
           rc = snapshot(connection, error);
       }
       slot = reserved(submission->value.operation);
+      producer_metadata(connection, &message->value);
       /* The result owns this request's bounded receipt reservation until poll.
        */
       message->reservation = slot;

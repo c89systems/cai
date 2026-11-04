@@ -1,4 +1,5 @@
 #include "cai_input_queue_codec.h"
+#include "cai_input_queue_internal.h"
 #include "cai_internal.h"
 #include <cai/input_queue.h>
 #include <pthread.h>
@@ -941,9 +942,10 @@ int cai_input_queue_set_ready(cai_input_queue *queue, unsigned long long id,
   return rc;
 }
 
-int cai_input_queue_request(cai_input_queue_client *client,
-                            const cai_input_request *request,
-                            cai_input_result *result, cai_error *error) {
+int cai_input_queue_admit(cai_input_queue_client *client,
+                          const cai_input_request *request,
+                          int (*authorize)(void *, cai_error *), void *context,
+                          cai_input_result *result, cai_error *error) {
   cai_input_queue *queue;
   cai_input_result *saved;
   input_prepared prepared;
@@ -1002,31 +1004,46 @@ int cai_input_queue_request(cai_input_queue_client *client,
   }
   cai_error_init(&local);
   memset(&prepared, 0, sizeof(prepared));
-  rc = reserve_changes(queue, &local);
+  rc = authorize != NULL ? authorize(context, &local) : CAI_OK;
   if (rc != CAI_OK) {
-    result_set(result, request->request_id, CAI_INPUT_REJECTED, rc,
-               "input queue observation limit reached");
-    result_save(client, result);
-    cai_error_cleanup(&local);
-    return CAI_OK;
-  }
-  rc = prepare_request(queue, client->id, request, NULL, &prepared, &local);
-  if (rc == CAI_OK && prepared.record.result.outcome == CAI_INPUT_ACCEPTED &&
-      prepared.record.request.text != NULL &&
-      (request->operation == CAI_INPUT_OFFER ||
-       request->operation == CAI_INPUT_END_EDIT))
-    rc = reserve_input_event(
-        prepared.append != NULL ? prepared.append : prepared.node, &local);
-  if (rc != CAI_OK) {
-    prepared_clear(&prepared);
-    memset(&prepared, 0, sizeof(prepared));
     prepared.record.type = CAI_INPUT_RECORD_REQUEST;
     prepared.record.client_id = client->id;
     prepared.record.before_revision = prepared.record.after_revision =
         queue->revision;
     prepared.record.request = *request;
-    result_set(&prepared.record.result, request->request_id, CAI_INPUT_REJECTED,
-               rc, "input could not be prepared; nothing was accepted");
+    result_set(
+        &prepared.record.result, request->request_id, CAI_INPUT_REJECTED, rc,
+        local.message != NULL ? local.message : "input authority was revoked");
+  } else {
+    rc = reserve_changes(queue, &local);
+    if (rc != CAI_OK) {
+      result_set(result, request->request_id, CAI_INPUT_REJECTED, rc,
+                 "input queue observation limit reached");
+      result_save(client, result);
+      cai_error_cleanup(&local);
+      return CAI_OK;
+    }
+    rc = prepare_request(queue, client->id, request, NULL, &prepared, &local);
+    if (rc == CAI_OK && prepared.record.result.outcome == CAI_INPUT_ACCEPTED &&
+        prepared.record.request.text != NULL &&
+        (request->operation == CAI_INPUT_OFFER ||
+         request->operation == CAI_INPUT_END_EDIT))
+      rc = reserve_input_event(
+          prepared.append != NULL ? prepared.append : prepared.node, &local);
+    if (rc != CAI_OK) {
+      prepared_clear(&prepared);
+      memset(&prepared, 0, sizeof(prepared));
+      prepared.record.type = CAI_INPUT_RECORD_REQUEST;
+      prepared.record.client_id = client->id;
+      prepared.record.before_revision = prepared.record.after_revision =
+          queue->revision;
+      prepared.record.request = *request;
+      result_set(&prepared.record.result, request->request_id,
+                 CAI_INPUT_REJECTED, rc,
+                 local.message != NULL
+                     ? local.message
+                     : "input could not be prepared; nothing was accepted");
+    }
   }
   /* Rejected requests keep an outcome, not an unbounded rejected payload. */
   if (prepared.record.result.outcome == CAI_INPUT_REJECTED) {
@@ -1058,6 +1075,11 @@ int cai_input_queue_request(cai_input_queue_client *client,
   prepared_clear(&prepared);
   cai_error_cleanup(&local);
   return CAI_OK;
+}
+int cai_input_queue_request(cai_input_queue_client *client,
+                            const cai_input_request *request,
+                            cai_input_result *result, cai_error *error) {
+  return cai_input_queue_admit(client, request, NULL, NULL, result, error);
 }
 int cai_input_queue_claim(cai_input_queue *queue, unsigned long long id,
                           unsigned long long revision, cai_input_claim *out,

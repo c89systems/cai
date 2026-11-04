@@ -278,6 +278,40 @@ int cai_app_bridge_observe(cai_app_bridge *b, cai_app_status *out,
   pthread_mutex_unlock(&b->lock);
   return rc;
 }
+void cai_app_bridge_bind_input(cai_app_bridge *b, cai_input_controller *input) {
+  if (b == NULL)
+    return;
+  pthread_mutex_lock(&b->lock);
+  b->input = input;
+  if (input == NULL) {
+    b->status.runtime_ready = 0;
+    status_wake(b);
+  }
+  pthread_mutex_unlock(&b->lock);
+}
+int cai_app_bridge_input(cai_app_bridge *b, uint64_t attachment,
+                         unsigned long long conversation,
+                         unsigned long long producer,
+                         cai_input_connection **out, cai_error *error) {
+  int rc;
+  if (out != NULL)
+    *out = NULL;
+  if (b == NULL || out == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "input connection output required");
+  pthread_mutex_lock(&b->lock);
+  if (!b->accepting || b->stop_requested || !b->status.runtime_ready ||
+      b->input == NULL)
+    rc = cai_cli_error(error, CAI_ERR_INVALID,
+                       "application input backend is not ready");
+  else
+    rc = producer == 0U
+             ? cai_input_controller_connect(b->input, attachment, out, error)
+             : cai_input_controller_resume(b->input, attachment, conversation,
+                                           producer, out, error);
+  pthread_mutex_unlock(&b->lock);
+  return rc;
+}
 int cai_app_bridge_publish(cai_app_bridge *b, cai_agent_runtime *runtime,
                            cai_error *error) {
   cai_app_status view, copy;

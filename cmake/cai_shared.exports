@@ -264,6 +264,7 @@ cai_input_controller_connect
 cai_input_controller_fd
 cai_input_controller_open
 cai_input_controller_pump
+cai_input_controller_resume
 cai_input_controller_select
 cai_input_item_id
 cai_input_item_list_count

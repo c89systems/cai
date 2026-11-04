@@ -1455,7 +1455,9 @@ static int cli_prompt_classify(void *context, const char *text,
   sl_prompt_queue_mode_t mode = policy->intent == CAI_INPUT_STEERING
                                     ? SL_PROMPT_QUEUE_MODE_STEER
                                     : SL_PROMPT_QUEUE_MODE_QUEUED;
-  (void)error;
+  if (state->controller && (text[0] == '/' || text[0] == '!'))
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "frontend command presentation is not connected");
   mode = cli_prompt_mode(state, text, mode);
   policy->intent = mode == SL_PROMPT_QUEUE_MODE_STEER ? CAI_INPUT_STEERING
                                                       : CAI_INPUT_QUEUED;
@@ -3353,6 +3355,9 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
   if (rc == CAI_OK)
     rc = cli_set_theme_scope(state, 0, error);
   if (rc == CAI_OK) {
+    cai_app_bridge_bind_input(state->bridge, state->input_admin != NULL
+                                                 ? state->input_controller
+                                                 : NULL);
     rc = cli_sync_status(state, error);
   }
   if (rc == CAI_OK && state->interactive) {
@@ -3375,6 +3380,7 @@ static int cli_prepare_clipboard(cli_state *state, cai_error *error) {
 }
 
 static void cli_close_runtime(cli_state *state) {
+  cai_app_bridge_bind_input(state->bridge, NULL);
   if (state->input_controller != NULL)
     (void)cai_input_controller_select(state->input_controller, NULL, NULL);
   cai_input_queue_client_close(state->input_admin);
@@ -6460,7 +6466,9 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       goto cleanup;
     }
     sl_config_init(&prompt_config);
-    rc = cai_input_controller_open(NULL, &state->input_controller, &error);
+    rc = cai_input_controller_open(application != NULL ? &application->input
+                                                       : NULL,
+                                   &state->input_controller, &error);
     if (rc == CAI_OK && state->interactive)
       rc = cai_cli_input_adapter_open(state->input_controller,
                                       &state->input_adapter, &error);
@@ -6964,6 +6972,7 @@ cleanup:
     sl_destroy(state->sl);
   }
   cai_cli_input_adapter_close(state->input_adapter);
+  cai_app_bridge_bind_input(state->bridge, NULL);
   cai_input_controller_close(state->input_controller);
   if (state->temporary.root[0] != '\0' || state->temporary.parent_fd >= 0) {
     cai_error cleanup_error;

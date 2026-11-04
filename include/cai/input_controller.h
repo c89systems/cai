@@ -33,6 +33,10 @@ typedef enum cai_input_observation_type {
 typedef struct cai_input_observation {
   cai_input_observation_type type;
   unsigned long long conversation;
+  /** Bound logical producer and its processed high watermark. Present on
+   * snapshots/changes and current-conversation results. Keep the larger of
+   * last_request and the frontend's own last-issued ID on reconnect. */
+  unsigned long long producer, last_request;
   cai_input_state state;
   cai_input_change change;
   cai_input_result result;
@@ -58,6 +62,18 @@ int cai_input_controller_select(cai_input_controller *controller,
 int cai_input_controller_connect(cai_input_controller *controller,
                                  uint64_t attachment,
                                  cai_input_connection **out, cai_error *error);
+/** Thread-safe reconnect to a retained producer in the current conversation.
+ * No new producer is reserved. conversation must be the verified epoch from
+ * this controller instance; after a server restart the host first verifies
+ * the persistent session identity and obtains its new epoch. Producer lookup
+ * happens on owner dispatch. An unavailable/already-attached producer emits
+ * DISCONNECTED with result.code/reason, without failing other connections or
+ * silently opening a new producer. Such a connection is terminal. */
+int cai_input_controller_resume(cai_input_controller *controller,
+                                uint64_t attachment,
+                                unsigned long long conversation,
+                                unsigned long long producer,
+                                cai_input_connection **out, cai_error *error);
 /** Thread-safe observation detach; never stops/clears accepted work. */
 void cai_input_connection_close(cai_input_connection *connection);
 /** Copy and signal only. Success means transport handoff, not acceptance.

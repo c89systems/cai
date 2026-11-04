@@ -2,6 +2,7 @@
 #define CAI_APP_H
 
 #include <cai/config.h>
+#include <cai/input_controller.h>
 #include <cai/tools/todo.h>
 
 #ifdef __cplusplus
@@ -177,6 +178,12 @@ typedef struct cai_app_config {
    * packages from configured tool roots. --no-plugins disables either source.
    * Host VM executors marshal calls to their owner thread themselves. */
   struct cai_plugins *plugins;
+  /** Optional gate for attachment-bound queue mutations, evaluated on the
+   * owner at admission after receipt lookup. Bind IDs to authenticated
+   * connections; never trust an ID supplied in an untrusted request body.
+   * Callback/context follow input_controller.h's lifetime/reentry contract.
+   * Trusted native control() calls are separate from attachment admission. */
+  cai_input_controller_config input;
   /** Optional owner-thread observers, alongside normal rendering and logging.
    * Events are borrowed only for the call. Return CAI_OK, or an error to abort
    * the run. Observers may call control/get_status, but must not reenter run,
@@ -302,6 +309,27 @@ int cai_app_status_fd(const cai_app *self);
  */
 int cai_app_observe_status(const cai_app *self, cai_app_status *out,
                            cai_error *error);
+/** Thread-safe attachment to the active conversation's backend queue. Does
+ * not open a runtime/store or wait for a snapshot. Use connection_fd/poll and
+ * request from input_controller.h. Requires a ready controller or interactive
+ * receiver; batch/review modes have no frontend queue. attachment is a fixed
+ * authenticated identity chosen by the host. NULL input.authorize is trusted
+ * in-process operation. The current terminal-free owner accepts model input
+ * and queue operations; slash/! presentation is not wired there and is
+ * rejected. A host must enforce authority separately for its trusted control()
+ * surface. Close every returned connection; it may outlive receiver
+ * stop/join/close, retaining observations/allocation, never runtime or journal
+ * authority. Do not race receiver close with a new connect/resume call. */
+int cai_app_connect_input(cai_app *self, uint64_t attachment,
+                          cai_input_connection **out, cai_error *error);
+/** Resume a verified retained producer rather than reserving another one.
+ * See input_controller_resume for epoch/identity and asynchronous failure
+ * semantics. A changed session or unavailable receipt must be reconciled;
+ * never automatically reoffer an uncertain prompt under a new producer. */
+int cai_app_resume_input(cai_app *self, uint64_t attachment,
+                         unsigned long long conversation,
+                         unsigned long long producer,
+                         cai_input_connection **out, cai_error *error);
 /** Close after run returns or an asynchronous controller is joined, outside
  * its callbacks. Calls made before then are ignored. NULL is accepted.
  * Must not race other receiver calls. */
