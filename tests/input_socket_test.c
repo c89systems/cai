@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <cai/workspace_registry.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <lc/lc.h>
 #include <pthread.h>
 #include <pty.h>
@@ -27,6 +28,8 @@ typedef struct frontend {
   sl_t *editor;
   int descriptors[2];
   size_t results;
+  size_t control_results;
+  int control_code;
   cai_input_result result;
 } frontend;
 typedef struct fixture {
@@ -35,13 +38,17 @@ typedef struct fixture {
   cai_input_queue *queue;
   char *runtime, *workspace;
   unsigned long long clock;
+  size_t cancellations;
 } fixture;
 static int observed(void *context, const cai_app_client_event *event,
                     cai_error *error) {
   frontend *f = context;
   f->state = *event->state;
-  if (event->input != NULL &&
-      event->input->type == CAI_INPUT_OBSERVATION_RESULT) {
+  if (event->type == CAI_APP_CLIENT_CONTROL_RESULT) {
+    ++f->control_results;
+    f->control_code = event->input->result.code;
+  } else if (event->input != NULL &&
+             event->input->type == CAI_INPUT_OBSERVATION_RESULT) {
     ++f->results;
     f->result = event->input->result;
   }
@@ -210,6 +217,66 @@ static void takeover(fixture *f, frontend *v) {
                                  NULL) == CAI_OK);
   assert(drive(f, v, NULL) == CAI_OK &&
          v->state.transport.controller == v->state.transport.attachment);
+}
+static int cancelled(void *context, cai_error *error) {
+  fixture *f = context;
+  (void)error;
+  ++f->cancellations;
+  return CAI_OK;
+}
+static void cancellation_cases(fixture *f) {
+  frontend a, b;
+  unsigned long long old_generation;
+  size_t results;
+  int wake[2];
+  char byte;
+  cai_cli_input_socket *startup = NULL;
+  assert(cai_cli_input_socket_open(NULL, 0U, &startup, NULL) == CAI_OK);
+  cai_cli_input_socket_close(startup);
+  cai_cli_workspace_host_cancel(f->host, cancelled, f);
+  open_frontend(f, &a, 1, 0U, 0U);
+  assert(pipe(wake) == 0 && fcntl(wake[0], F_SETFL, O_NONBLOCK) == 0);
+  cai_cli_input_socket_set_wakeup(a.queue, wake[1]);
+  assert(request(&a, SL_QUEUE_RESUME, NULL, 0U, 0U) == 1U);
+  assert(read(wake[0], &byte, 1U) == 1);
+  cai_cli_input_socket_set_wakeup(a.queue, -1);
+  close(wake[0]);
+  close(wake[1]);
+  assert(drive(f, &a, NULL) == CAI_OK);
+  results = a.results;
+  old_generation = a.state.transport.generation;
+  assert(cai_app_client_cancel(a.client, 1U, old_generation, NULL) == CAI_OK);
+  assert(drive(f, &a, NULL) == CAI_OK && a.control_results == 1U &&
+         a.control_code == CAI_OK && f->cancellations == 1U);
+  assert(a.state.last_request == 1U && a.results == results && count(f) == 0U);
+  /* Exact repeats acknowledge the first effect; they cannot cancel a later
+   * turn. Control identities never consume queue producer watermarks. */
+  assert(cai_app_client_cancel(a.client, 1U, old_generation, NULL) == CAI_OK);
+  assert(drive(f, &a, NULL) == CAI_OK && a.control_results == 2U &&
+         a.control_code == CAI_OK && f->cancellations == 1U);
+  open_frontend(f, &b, 1, 0U, 0U);
+  assert(cai_app_client_cancel(b.client, 1U, b.state.transport.generation,
+                               NULL) == CAI_ERR_INVALID);
+  assert(drive(f, &a, &b) == CAI_OK && b.control_results == 0U &&
+         f->cancellations == 1U);
+  takeover(f, &b);
+  assert(drive(f, &a, &b) == CAI_OK);
+  assert(cai_app_client_cancel(a.client, 2U, old_generation, NULL) ==
+         CAI_ERR_INVALID);
+  assert(drive(f, &a, &b) == CAI_OK && a.control_results == 2U &&
+         f->cancellations == 1U);
+  assert(cai_app_client_cancel(b.client, 2U, b.state.transport.generation,
+                               NULL) == CAI_OK);
+  assert(drive(f, &a, &b) == CAI_OK && b.control_code == CAI_OK &&
+         f->cancellations == 2U);
+  cai_cli_workspace_host_cancel(f->host, NULL, NULL);
+  assert(cai_app_client_cancel(b.client, 3U, b.state.transport.generation,
+                               NULL) == CAI_OK);
+  assert(drive(f, &a, &b) == CAI_OK && b.control_code != CAI_OK &&
+         f->cancellations == 2U);
+  close_frontend(&a);
+  close_frontend(&b);
+  assert(drive(f, NULL, NULL) == CAI_OK);
 }
 static void cases(fixture *f) {
   frontend *a = calloc(1U, sizeof(*a)), *b = calloc(1U, sizeof(*b));
@@ -445,6 +512,7 @@ static void *run(void *unused) {
                                       NULL) == CAI_OK);
   assert(cai_cli_workspace_host_ready(f->host, NULL) == CAI_OK);
   reject_instance(f);
+  cancellation_cases(f);
   cases(f);
   assert(cai_cli_workspace_host_input(f->host, NULL, NULL, NULL) == CAI_OK);
   cai_cli_workspace_host_close(f->host);

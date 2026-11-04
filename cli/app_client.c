@@ -231,6 +231,9 @@ static int receive(void *context, const cai_protocol_event *event,
       client->state.last_request = o.last_request;
     break;
   case CAI_PROTOCOL_RESULT:
+    if (m->category == CAI_CLI_INPUT_CONTROL_RESULT)
+      return notify(client, CAI_APP_CLIENT_CONTROL_RESULT, m->header.request,
+                    &o, error);
     if (m->category == CAI_CLI_INPUT_BIND_REJECTED) {
       if (!client->state.binding ||
           m->header.request != client->binding_request)
@@ -596,6 +599,32 @@ int cai_app_client_subscribe(cai_app_client *c, uint64_t request,
   }
   return rc;
 }
+int cai_app_client_cancel(cai_app_client *c, uint64_t request,
+                          uint64_t generation, cai_error *error) {
+  cai_protocol_header header;
+  cai_cbor_token token;
+  int rc = valid(c, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (request == 0U || !c->state.ready || c->state.conversation == 0U)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "nonzero cancellation ID required");
+  memset(&header, 0, sizeof(header));
+  memset(&token, 0, sizeof(token));
+  header.kind = CAI_PROTOCOL_CANCEL;
+  header.conversation = c->state.conversation;
+  header.request = request;
+  header.generation = generation;
+  header.attachment = c->state.transport.attachment;
+  token.type = CAI_CBOR_NULL;
+  rc = cai_workspace_client_begin(c->socket, &header, 1U, 1, error);
+  if (rc == CAI_OK)
+    rc = cai_workspace_client_write(c->socket, &token, error);
+  if (rc == CAI_OK)
+    rc = cai_workspace_client_end(c->socket, error);
+  return rc;
+}
+
 int cai_app_client_unsubscribe(cai_app_client *c, cai_error *error) {
   cai_cli_transcript_message m;
   int rc = valid(c, error);

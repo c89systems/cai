@@ -1,5 +1,6 @@
 /* Standalone process scaffolding. Native embedding uses public lifecycle
  * APIs directly; examples/app.c remains the minimal public-only example. */
+#include "attach.h"
 #include "options.h"
 #include "process.h"
 #include <cai/app.h>
@@ -53,9 +54,23 @@ int main(int argc, char **argv) {
   }
   /* Reuse the primary parser so a value such as -i '--headless' cannot
    * accidentally select a process mode. Help/version/dump remain utilities. */
-  if (cai_cli_read_options(argc, argv, NULL, &options) > 0 && options.headless)
+  rc = cai_cli_read_options(argc, argv, NULL, &options);
+  if (rc > 0 && options.server != NULL &&
+      (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))) {
+    error.code = CAI_ERR_INVALID;
+    error.message = strdup("--server requires an interactive terminal");
+    rc = CAI_ERR_INVALID;
+  } else if (rc > 0 && options.headless)
     rc = cai_cli_headless_run(&config, argc - 1,
                               (const char *const *)(argv + 1), &code, &error);
+  else if (rc > 0 && isatty(STDIN_FILENO) && isatty(STDOUT_FILENO) &&
+           !options.non_interactive && !options.review && !options.temporary &&
+           !options.list && !options.list_all && !options.resume_list &&
+           !options.delete_list && options.delete_id == NULL &&
+           options.export_id == NULL && options.import_file == NULL &&
+           !options.login && !options.chrome_setup && !options.chrome_remove &&
+           options.install_skill == NULL && options.message == NULL)
+    rc = cai_cli_attach_run(&config, argc, argv, &code, &error);
   else {
     rc = cai_app_open(&config, &app, &error);
     if (rc == CAI_OK)

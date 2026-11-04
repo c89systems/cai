@@ -35,9 +35,10 @@ process. Its identity-only probe verifies an owner during STARTING or READY
 without acquiring an attachment or changing authority/lifetime; the real
 headless executable is covered by that probe too. Native registry publication
 and incremental reading, native verified selector resolution and guarded
-instance admission are implemented. Controller/frontend composition,
-automatic startup and the attach
-CLI remain pending. Explicit foreground headless startup is implemented below.
+instance admission are implemented. The initial terminal/socket composition,
+automatic startup and `-s` attach CLI are now implemented; remaining parity work
+is listed in [terminal attachment](terminal-attachment.md). Explicit foreground
+headless startup is implemented below.
 The implemented [status projection](workspace-wire-status.md) keeps numeric usage
 values typed and separates semantic updates from frontend elapsed-time ticks.
 The socket client exposes borrowed completed views to controllers and observers
@@ -45,8 +46,8 @@ without a queue producer or a transcript subscription. Headless owners share
 the backend's debounced quota cache with all attachments.
 The executable now also has a tested quiet fork/exec owner handoff and exact
 child watch, described in [workspace process handoff](workspace-process.md).
-It uses the existing CBOR transport and native server lifecycle; the terminal
-composition does not yet call it automatically.
+It uses the existing CBOR transport and native server lifecycle; normal
+interactive startup now calls it automatically when no owner is discovered.
 
 The application receiver now also provides `cai_app_start`/`cai_app_join`: an
 asynchronous terminal-free owner using the shared startup, runtime, durable
@@ -64,8 +65,9 @@ admission runs on the controller owner with the authenticated identity and
 original authority generation; trusted native `control()` is a separate host
 surface. The owner now executes backend slash/! commands through the shared
 handler and publishes bounded Markdown replies in execution history. Terminal
-actions are delegated to their originating producer; the frontend consumer and
-Lua asynchronous observations remain pending. See
+actions are delegated to their originating producer; the terminal consumes
+these records without opening a runtime or store. Some presentation delegates
+and Lua asynchronous observations remain pending. See
 [command execution](workspace-commands.md).
 
 `cai_app_start_server` now adds the workspace socket host to that same owner.
@@ -88,8 +90,9 @@ model input through the same backend producers and receipts. Snapshot production
 is incremental and credit-bound; it never copies a whole pending queue.
 Disconnect/takeover releases editor holds through durable controller-origin
 records, without changing request IDs or accepted text. New owners release
-orphaned edits before queue selection. Command presentation, automatic process
-startup and the terminal client cutover are still pending.
+orphaned edits before queue selection. Command presentation and automatic
+process startup are connected to the terminal client; the final receiver and
+feature-parity cutover remains pending.
 
 The executable now implements `-x` / `--headless` over this public lifecycle.
 It defaults to a persistent workspace owner with no terminal frontend, emits JSON

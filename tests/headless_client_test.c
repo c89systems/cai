@@ -226,7 +226,7 @@ int main(int argc, char **argv) {
   sl_t *editor = NULL;
   view *v = calloc(1U, sizeof(*v));
   unsigned char expected[16];
-  int shutdown, work, abrupt, ephemeral, render;
+  int shutdown, work, abrupt, ephemeral, render, hold;
   assert(argc == 4 && v != NULL);
   if (strcmp(argv[3], "probe") == 0 || strcmp(argv[3], "named") == 0) {
     identify(argv[1], argv[2],
@@ -237,9 +237,10 @@ int main(int argc, char **argv) {
   shutdown = strcmp(argv[3], "shutdown") == 0;
   work = strcmp(argv[3], "work") == 0;
   render = strcmp(argv[3], "render") == 0;
+  hold = strcmp(argv[3], "hold") == 0;
   abrupt = strcmp(argv[3], "abrupt") == 0;
   ephemeral = strcmp(argv[3], "ephemeral") == 0;
-  assert(shutdown || work || render || abrupt || ephemeral ||
+  assert(shutdown || work || render || abrupt || ephemeral || hold ||
          strcmp(argv[3], "inspect") == 0);
   if (work || render) {
     editor = sl_create();
@@ -266,7 +267,7 @@ int main(int argc, char **argv) {
   config.transcript_context = v;
   config.execution = execution;
   config.execution_context = v;
-  v->until = now_ms() + 10000U;
+  v->until = now_ms() + (hold ? 30000U : 10000U);
   assert(cai_app_client_open(&config, now_ms(), &v->client, &v->error) ==
          CAI_OK);
   while (v->state.transport.phase != CAI_WORKSPACE_CONNECTED ||
@@ -287,6 +288,10 @@ int main(int argc, char **argv) {
       step(v);
     assert(v->state.session[0] != '\0');
     printf("%s\n", v->state.session);
+    fflush(stdout);
+    if (hold)
+      while (v->state.transport.controller == v->state.transport.attachment)
+        step(v);
     if (work || render) {
       cai_input_request request;
       cai_input_scope scope;

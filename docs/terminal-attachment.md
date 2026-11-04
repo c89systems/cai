@@ -1,0 +1,71 @@
+# Terminal attachment
+
+The normal interactive executable now discovers the selected workspace owner
+and attaches through the native Unix socket client. `-s` / `--server SELECTOR`
+selects an existing owner by its verified name, path or stable workspace ID;
+it never invents a directory or starts a missing named workspace. Without a
+selector, an absent owner is started quietly by the existing executable handoff.
+The editor remains available while that child restores context and announces
+READY. Explicit `-x` owners persist; ordinary automatic owners stop after their
+last attachment leaves unless persistence was explicitly configured.
+
+Native hosts can use `cai_app_terminal_run` from `cai/app_terminal.h` with an
+explicit transport target. It uses the same terminal implementation, resolves
+frontend preferences and opens no runtime, authentication store or SDK client.
+It never starts a process. The CLI's discovery/fork/exec scaffolding is separate
+from this library receiver. Existing `cai_app.run` composition has not yet been
+cut over; asynchronous server lifecycle APIs remain the backend entry points.
+
+The adapter drives public client interests from Softline descriptor watches.
+Wake bytes schedule socket progress after editor requests; they do not contain
+input or create another queue. A timer serves transport/startup deadlines and
+active elapsed-time display only; there is no idle polling timer. Role snapshots
+make observers explicit. `/takeover` requests control and `/shutdown` requests
+controller-authorized owner shutdown. `/quit` and Alt-Q detach locally even
+when observing; editing an accepted queue item retains normal native semantics.
+
+Enter and Alt-Enter use Softline's queued-turns profile, with the backend owning
+admission, revisions, approval and delivery. Escape uses Softline CANCEL, then
+requests cancellation of the remote foreground operation. Cancellation IDs are
+separate from queue IDs. Exact duplicate cancellation acknowledgements do not
+cancel a later turn; stale generations and observers cannot cancel work.
+
+Each conversation retains its own complete editor and queue binding, including
+draft, undo state, provisional receipts and edit state. Switching parks that
+editor and unbinds its transport before selecting another. Returning resumes
+the original producer without moving input between conversations. Explicit
+startup inputs for an existing owner pass through the same editor/backend queue;
+commands wait for application before subsequent inputs. A newly launched owner
+receives the startup arguments itself, avoiding duplicate submission.
+
+Transcript spans feed the common incremental presenter. Execution records feed
+the common tool formatter in one pass, with a bounded completed-call metadata
+cache. Only decoded subprocess output uses raw command presentation. Command
+status and duration can arrive after its output, producing one final
+`Ran COMMAND (TIME)` footer without a preparatory scan. Ordinary prompt and
+assistant bodies are not collected. Accepted slash commands retain at most the
+same 66,048-byte bound as input admission so their display and frontend actions
+can be applied atomically. Themes and actions from replay or another producer
+never execute on the attaching terminal.
+
+## Remaining cutover work
+
+This is a working terminal/socket composition, not a claim of complete feature
+parity. Remote prompt-history recall and Alt-Q draft persistence, skill catalog
+completion, all pager/layout delegates, full shared help, review progress parity,
+default replay-tail selection, workspace switching, concurrent first-launch
+reconciliation, immediate live command-progress events and explicit
+startup-configuration compatibility still require
+integration. Discovery currently runs before editor construction; a slow identity
+probe can delay that construction. Automatic executable-path discovery currently
+uses Linux `/proc/self/exe`. Batch/temp and the original synchronous app receiver
+still use their existing composition. These remain part of the active goal.
+
+Verification uses real Unix sockets, a local HTTP provider and native PTYs.
+`cai_cli_attach` exercises named attach, observer rejection/takeover, conversation
+switching, invalid selections, draft restoration, startup input, cancellation,
+request-boundary steering, reconnect, formatted command output, quiet autostart
+and last-detach shutdown. Its public-header-only embedding host aborts on any
+attempt to open an SDK storage client. Separate tests cover cancellation
+duplicates/authority, queue reconnect identities and one-pass output with late
+status, sink failure and metadata-cache pressure on default-stack workers.

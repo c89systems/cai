@@ -381,10 +381,11 @@ static int receive(void *context, const cai_protocol_event *event,
                          "request attachment does not match its connection");
   control = header->kind == CAI_PROTOCOL_DETACH ||
             header->kind == CAI_PROTOCOL_TAKEOVER ||
-            header->kind == CAI_PROTOCOL_SHUTDOWN;
+            header->kind == CAI_PROTOCOL_SHUTDOWN ||
+            header->kind == CAI_PROTOCOL_CANCEL;
   if (control) {
-    if (header->conversation != 0U || header->sequence != 0U ||
-        header->stream != 0U)
+    if ((header->kind != CAI_PROTOCOL_CANCEL && header->conversation != 0U) ||
+        header->sequence != 0U || header->stream != 0U)
       return cai_set_error(error, CAI_ERR_PROTOCOL,
                            "invalid workspace control metadata");
     if (event->type == CAI_PROTOCOL_PAYLOAD &&
@@ -392,6 +393,8 @@ static int receive(void *context, const cai_protocol_event *event,
       return cai_set_error(error, CAI_ERR_PROTOCOL,
                            "workspace controls require a null payload");
     if (event->type == CAI_PROTOCOL_COMPLETE) {
+      if (header->kind == CAI_PROTOCOL_CANCEL)
+        return notify(peer, CAI_WORKSPACE_MESSAGE, event, NULL, error);
       if (header->kind == CAI_PROTOCOL_DETACH)
         peer->detach = 1;
       else if (header->kind == CAI_PROTOCOL_TAKEOVER) {

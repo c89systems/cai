@@ -250,7 +250,7 @@ static int receive(void *context, const cai_protocol_event *event,
       h->kind == CAI_PROTOCOL_DETACH || h->kind == CAI_PROTOCOL_TAKEOVER ||
       h->kind == CAI_PROTOCOL_SHUTDOWN || h->kind == CAI_PROTOCOL_SUBSCRIBE ||
       h->kind == CAI_PROTOCOL_UNSUBSCRIBE || h->kind == CAI_PROTOCOL_PROBE ||
-      h->kind == CAI_PROTOCOL_IDENTITY)
+      h->kind == CAI_PROTOCOL_IDENTITY || h->kind == CAI_PROTOCOL_CANCEL)
     return invalid(error);
   if (h->kind == CAI_PROTOCOL_ROLE) {
     if (h->conversation != 0U || h->sequence != 0U || h->stream != 0U)
@@ -514,7 +514,8 @@ int cai_workspace_client_begin(cai_workspace_client *client,
       (header->kind != CAI_PROTOCOL_REQUEST &&
        header->kind != CAI_PROTOCOL_SYNCHRONIZE &&
        header->kind != CAI_PROTOCOL_SUBSCRIBE &&
-       header->kind != CAI_PROTOCOL_UNSUBSCRIBE) ||
+       header->kind != CAI_PROTOCOL_UNSUBSCRIBE &&
+       header->kind != CAI_PROTOCOL_CANCEL) ||
       (mutation && (client->state.phase != CAI_WORKSPACE_CONNECTED ||
                     client->state.controller != client->state.attachment ||
                     header->generation != client->state.generation)))

@@ -2,8 +2,9 @@
 
 This is executable scaffolding for the workspace frontend cutover. Native
 embedding continues to use `cai_app_start_server`; libraries do not fork or
-install process signal handlers. The terminal frontend and automatic startup
-selection remain separate composition work.
+install process signal handlers. The executable's
+[terminal attachment](terminal-attachment.md) now uses this handoff for automatic
+startup after workspace discovery.
 
 Before starting UI/runtime threads, the executable may launch its own absolute
 program path through a private `--_workspace-owner FD -- ...` entry point.

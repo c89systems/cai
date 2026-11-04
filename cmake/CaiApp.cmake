@@ -1,4 +1,4 @@
-add_library(cai_app_objects OBJECT cli/app.c cli/app_client.c cli/input_socket.c cli/app_run.c cli/kanban.c)
+add_library(cai_app_objects OBJECT cli/app.c cli/app_client.c cli/input_socket.c cli/frontend.c cli/app_run.c cli/kanban.c)
 target_link_libraries(cai_app_objects PRIVATE cai_cli_support)
 cai_configure_c_target(cai_app_objects)
 add_library(cai_app_static STATIC $<TARGET_OBJECTS:cai_app_objects>
@@ -77,6 +77,10 @@ if(CAI_BUILD_TESTS)
   add_test(NAME cai_transcript_wire COMMAND cai_transcript_wire_test)
   set_tests_properties(cai_transcript_wire PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   add_executable(cai_app_client_test tests/app_client_test.c)
+  add_executable(cai_app_terminal_host tests/app_terminal_host.c)
+  target_link_libraries(cai_app_terminal_host PRIVATE cai_app_static)
+  target_link_options(cai_app_terminal_host PRIVATE -Wl,--wrap=lc_client_open)
+  cai_configure_cli_target(cai_app_terminal_host)
   add_executable(cai_input_socket_test tests/input_socket_test.c)
   target_link_libraries(cai_input_socket_test PRIVATE cai_app_static)
   target_link_options(cai_input_socket_test PRIVATE -Wl,--wrap=lc_client_open)
@@ -309,6 +313,7 @@ if(CAI_INSTALL)
   endif()
   install(FILES "${CAI_PUBLIC_INCLUDE_DIR}/cai/app.h"
     "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_client.h"
+    "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_terminal.h"
     "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_view.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/cai" COMPONENT cai-app)
   install(EXPORT caiAppTargets NAMESPACE cai:: FILE cai-app-targets.cmake

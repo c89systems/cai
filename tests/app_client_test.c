@@ -295,6 +295,7 @@ static void *wrong_owner(void *context) {
          CAI_ERR_INVALID);
   assert(cai_app_client_takeover(f->client, 1U, 1U, NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_shutdown(f->client, 1U, 1U, NULL) == CAI_ERR_INVALID);
+  assert(cai_app_client_cancel(f->client, 1U, 1U, NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_subscribe(f->client, 1U, 0U, "session", NULL, 0U, 0U,
                                   NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_unsubscribe(f->client, NULL) == CAI_ERR_INVALID);

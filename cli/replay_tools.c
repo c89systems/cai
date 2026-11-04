@@ -42,6 +42,7 @@ typedef struct replay_call {
 struct cai_cli_replay_tools {
   lonejson *json;
   replay_call *calls;
+  int following;
 };
 static int same(const char *a, const char *b) {
   return a != NULL && strcmp(a, b) == 0;
@@ -130,15 +131,13 @@ static lonejson_status string_chunk(void *context,
                                     lonejson_error *error) {
   replay_call *c = context;
   (void)error;
-  if (c->rendering) {
-    if (c->output && path_is(path, "output")) {
-      c->event.type = CAI_AGENT_EVENT_TERMINAL_OUTPUT;
-      c->event.data = bytes;
-      c->event.data_length = count;
-      c->rc = cai_tool_display_event(c->display, &c->event, c->error);
-      if (c->rc != CAI_OK)
-        return LONEJSON_STATUS_IO_ERROR;
-    }
+  if (c->rendering && c->output && path_is(path, "output")) {
+    c->event.type = CAI_AGENT_EVENT_TERMINAL_OUTPUT;
+    c->event.data = bytes;
+    c->event.data_length = count;
+    c->rc = cai_tool_display_event(c->display, &c->event, c->error);
+    if (c->rc != CAI_OK)
+      return LONEJSON_STATUS_IO_ERROR;
   } else if (!c->output && (path_is(path, "cmd") || path_is(path, "path") ||
                             path_is(path, "action"))) {
     size_t n = count;
@@ -181,7 +180,7 @@ static lonejson_status number_chunk(void *context,
                                     lonejson_error *error) {
   replay_call *c = context;
   (void)error;
-  if (!c->rendering && c->output &&
+  if (c->output &&
       (path_is(path, "exit_code") || path_is(path, "signal") ||
        path_is(path, "command_id") || path_is(path, "duration_ms")))
     append(c->number, &c->number_length, sizeof(c->number), bytes, count);
@@ -213,7 +212,7 @@ static lonejson_status bool_value(void *context,
                                   lonejson_error *error) {
   replay_call *c = context;
   (void)error;
-  if (!c->rendering && c->output) {
+  if (c->output) {
     if (path_is(path, "output_truncated"))
       c->truncated = value;
     if (path_is(path, "isError"))
@@ -269,10 +268,10 @@ static int parse_feed(cai_cli_replay_tools *r, replay_call *c,
   }
   return c->invalid ? CAI_ERR_PROTOCOL : CAI_OK;
 }
-int cai_cli_replay_tools_index(cai_cli_replay_tools **out,
-                               const cai_execution_record *record,
-                               unsigned long long sequence,
-                               unsigned long long first, cai_error *error) {
+static int tools_index(cai_cli_replay_tools **out,
+                       const cai_execution_record *record,
+                       unsigned long long sequence, unsigned long long first,
+                       int following, cai_error *error) {
   cai_cli_replay_tools *r = *out;
   replay_call *c, *other, **link;
   lonejson_config config;
@@ -296,6 +295,10 @@ int cai_cli_replay_tools_index(cai_cli_replay_tools **out,
     }
     *out = r;
   }
+  if (r->following && !following)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "cannot mix tool presentation receivers");
+  r->following = following;
   for (link = &r->calls; (c = *link) != NULL;) {
     if (first != 0U && c->last < first && !c->parsing) {
       *link = c->next;
@@ -305,6 +308,33 @@ int cai_cli_replay_tools_index(cai_cli_replay_tools **out,
   }
   c = find(r, record);
   if (c == NULL) {
+    if (following) {
+      size_t count = 0U;
+      replay_call **victim = NULL;
+      for (link = &r->calls; *link != NULL; link = &(*link)->next) {
+        ++count;
+        if (((*link)->completed || (*link)->failed) && !(*link)->opened &&
+            !(*link)->parsing)
+          victim = link;
+      }
+      /* Completed metadata is a bounded correlation cache, not another
+       * conversation history. Never evict a live/yielded command or decoder. */
+      if (count >= 256U) {
+        replay_call *removed;
+        if (victim == NULL)
+          return cai_cli_error(error, CAI_ERR_LIMIT,
+                               "too many active tool presentations");
+        removed = *victim;
+        *victim = removed->next;
+        for (other = r->calls; other != NULL; other = other->next) {
+          if (other->origin == removed)
+            other->origin = NULL;
+          if (other->last_output == removed)
+            other->last_output = NULL;
+        }
+        call_free(removed);
+      }
+    }
     c = calloc(1U, sizeof(*c));
     if (c != NULL) {
       c->session = strdup(record->session_id);
@@ -336,7 +366,8 @@ int cai_cli_replay_tools_index(cai_cli_replay_tools **out,
   if (same(record->kind, "tool.arguments") &&
       c->action != CAI_AGENT_TOOL_ACTION_PATCH)
     (void)parse_feed(r, c, record, 0);
-  if ((same(record->kind, "tool.output") ||
+  if (!following &&
+      (same(record->kind, "tool.output") ||
        same(record->kind, "tool.partial_output")) &&
       (c->action == CAI_AGENT_TOOL_ACTION_EXECUTE ||
        c->action == CAI_AGENT_TOOL_ACTION_WRITE_STDIN ||
@@ -379,6 +410,12 @@ int cai_cli_replay_tools_index(cai_cli_replay_tools **out,
   if (c->rc != CAI_OK)
     return cai_cli_error(error, c->rc, "decode replay tool metadata");
   return CAI_OK;
+}
+int cai_cli_replay_tools_index(cai_cli_replay_tools **out,
+                               const cai_execution_record *record,
+                               unsigned long long sequence,
+                               unsigned long long first, cai_error *error) {
+  return tools_index(out, record, sequence, first, 0, error);
 }
 static void event_init(replay_call *c) {
   memset(&c->event, 0, sizeof(c->event));
@@ -452,6 +489,20 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
     return rc;
   }
   if (command) {
+    if (r->following && c->action == CAI_AGENT_TOOL_ACTION_WRITE_STDIN &&
+        c->origin == NULL && c->terminal_length != 0U) {
+      replay_call *candidate;
+      for (candidate = r->calls; candidate != NULL; candidate = candidate->next)
+        if (candidate != c &&
+            candidate->action == CAI_AGENT_TOOL_ACTION_EXECUTE &&
+            !candidate->has_exit && candidate->opened &&
+            same(candidate->session, c->session) &&
+            strcmp(candidate->terminal, c->terminal) == 0) {
+          c->origin = candidate;
+          origin = candidate;
+          break;
+        }
+    }
     event_init(origin);
     c->event = origin->event;
     if (c->event.timestamp_ns == 0U) {
@@ -602,8 +653,10 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
                                                  : "Completed";
     label = origin->label_length != 0U ? origin->label : c->name;
     c->event.terminal_duration_ms = origin->duration_ms;
-    rc = cai_tool_display_replay_begin(display, &c->event, verb, label, success,
-                                       error);
+    rc = r->following
+             ? cai_tool_display_saved_begin(display, &c->event, label, error)
+             : cai_tool_display_replay_begin(display, &c->event, verb, label,
+                                             success, error);
     origin->opened = rc == CAI_OK;
   }
   if (rc == CAI_OK && command && !same(record->kind, "tool.failed")) {
@@ -615,6 +668,29 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
   } else if (rc == CAI_OK) {
     c->event.type = CAI_AGENT_EVENT_TERMINAL_OUTPUT;
     rc = cai_tool_display_event(display, &c->event, error);
+  }
+  if (r->following && record->final && command && c->busy) {
+    c->event.type = CAI_AGENT_EVENT_TOOL_CALL_COMPLETED;
+    rc = cai_tool_display_summary(display, &c->event, "Busy",
+                                  "command not started", 1, error);
+    origin->opened = 0;
+    if (rc == CAI_OK)
+      rc = cai_cli_tool_busy_write(c->terminal, c->active_command, mode, width,
+                                   markdown, context, error);
+    return rc;
+  }
+  if (r->following && record->final && command) {
+    origin->duration_ms = c->duration_ms;
+    origin->has_exit = c->has_exit;
+    origin->exit_code = c->exit_code;
+    origin->has_signal = c->has_signal;
+    origin->signal = c->signal;
+    origin->truncated |= c->truncated;
+    event_init(origin);
+    c->event = origin->event;
+    c->event.terminal_duration_ms = c->duration_ms;
+    if (origin->has_exit || origin->has_signal || c->failed)
+      origin->last_output = c;
   }
   if (record->final && origin->opened &&
       (!command || origin->last_output == c)) {
@@ -631,6 +707,18 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
     origin->opened = 0;
   }
   return rc;
+}
+int cai_cli_replay_tools_follow(cai_cli_replay_tools **out,
+                                const cai_execution_record *record,
+                                cai_tool_display *display, int mode,
+                                size_t width,
+                                int (*markdown)(void *, const char *, size_t),
+                                void *context, int *handled, cai_error *error) {
+  int rc = tools_index(out, record, record->source_sequence, 0U, 1, error);
+  if (rc != CAI_OK)
+    return rc;
+  return cai_cli_replay_tools_render(*out, record, display, mode, width,
+                                     markdown, context, handled, error);
 }
 int cai_cli_replay_tools_finish(cai_cli_replay_tools *r, cai_error *error) {
   replay_call *c;

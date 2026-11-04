@@ -13,6 +13,11 @@ typedef struct cai_cli_input_socket cai_cli_input_socket;
  * Pending editor proposals themselves survive only with the retained editor. */
 int cai_cli_input_socket_open(cai_app_client *, unsigned long long last_issued,
                               cai_cli_input_socket **, cai_error *);
+/** Borrow a nonblocking wake descriptor. Successful editor handoffs signal
+ * it without reentering Softline; the frontend drains it and updates socket
+ * interests. Negative disables. NULL client at open permits a startup editor
+ * before an owner is ready; reconnect attaches its first transport. */
+void cai_cli_input_socket_set_wakeup(cai_cli_input_socket *, int descriptor);
 cai_cli_input_adapter *cai_cli_input_socket_adapter(cai_cli_input_socket *);
 /* Forward public client events; transcript spans use a separate callback.
  * The first accepted baseline establishes request-ID mapping. Later baselines

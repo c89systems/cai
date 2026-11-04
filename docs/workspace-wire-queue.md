@@ -26,7 +26,9 @@ lengths from those fields, with no preliminary serialization.
 the captured conversation epoch and view revision in envelope conversation and
 sequence. RESULT carries the original request ID/conversation; its sequence is
 zero. Result categories are 0 for an input receipt, 1 for binding rejection, and
-2 for an input observation reset. Reset uses request zero. Input operations
+2 for an input observation reset, and 3 for a connection-control outcome.
+Reset uses request zero. A control result does not advance producer request
+watermarks or update the accepted queue. Input operations
 follow `cai_input_operation` through RESOLVE; the trusted internal
 FORGET_ORIGIN operation is unavailable on the wire. Intent and outcome values
 use their native enums. Frontends cannot provide provenance origins.
@@ -68,6 +70,13 @@ destruction. Requests never move to a different conversation. Reattachment
 reconciles original producers and receipts; it does not automatically resubmit
 uncertain text. Per-conversation queue ownership and the original generation
 rules remain unchanged.
+
+CANCEL carries a null payload, nonzero connection-scoped request identity, the
+original authority generation and active conversation epoch; sequence/stream
+are zero. The owner checks authority and epoch immediately before cancelling
+foreground work, outside the trusted host mailbox. The last identical request
+returns its cached outcome; changed or older identities are rejected. A replayed
+cancel cannot affect a later turn. Detach and shutdown remain separate operations.
 
 Every control-generation change releases the previous generation's edit
 capabilities before admitting new work, including native input connections

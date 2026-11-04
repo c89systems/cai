@@ -29,7 +29,9 @@ delegated instead of executed by the server. A frontend may act only on a live
 record addressed to its own producer, after verifying its current connection
 and conversation. Replay displays history and never repeats frontend actions.
 Other observers do not apply another terminal's theme or quit request. The
-Softline command consumer remains to be connected during the terminal cutover.
+Softline command consumer now applies live actions from its own producer. The
+terminal's remaining delegate/parity work is listed in
+[terminal attachment](terminal-attachment.md).
 
 Backend commands keep the current native handler semantics, including context
 selection, goals, inference settings, catalog queries, retention and shell
@@ -40,8 +42,9 @@ their existing fatal handling.
 
 This is an incremental cutover. The legacy terminal still uses its existing
 presenter adapter. The headless document adapter emits semantic history for
-socket/native consumers. Automatic terminal attach, observer query routing and
-frontend-local command application remain part of the overall frontend work.
+socket/native consumers. Automatic terminal attach and frontend-local theme/
+output actions are connected. Observer query routing and full delegate parity
+remain part of the overall frontend work.
 
 `cai_agent_runtime_execution_open` supplies the reusable core writer used by
 this adapter. It copies metadata, accepts fragmented UTF-8, emits bounded chunks

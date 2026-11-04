@@ -1052,6 +1052,19 @@ static int cli_terminal_shell_stop(void *context) {
   cli_state *state = context;
   return cai_app_bridge_shell_stop(state->bridge);
 }
+/** Socket controls run immediately after generation validation, without
+ * entering the trusted host mailbox and outliving that authority. */
+static int cli_remote_cancel(void *context, cai_error *error) {
+  cli_state *state = context;
+  cai_cli_messages_cancel_send(state->messages);
+  if (state->shell.pid > 0) {
+    cai_cli_shell_cancel(&state->shell);
+    return CAI_OK;
+  }
+  return cai_agent_runtime_cancel_turn(
+      state->review_runtime != NULL ? state->review_runtime : state->runtime,
+      error);
+}
 
 static int cli_terminal_shell(cli_state *state, int share, cai_error *error) {
   pslog_field fields[3];
@@ -2948,6 +2961,9 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     rc = cai_cli_workspace_host_history(state->workspace_host, &state->pouch,
                                         error);
   if (rc == CAI_OK)
+    cai_cli_workspace_host_cancel(state->workspace_host, cli_remote_cancel,
+                                  state);
+  if (rc == CAI_OK)
     rc = cai_cli_workspace_host_ready(state->workspace_host, error);
   if (rc == CAI_OK) {
     cai_app_bridge_bind_input(state->bridge, state->input_admin != NULL
@@ -4573,8 +4589,6 @@ static int cli_retention_command(cli_state *state, const char *arg, int history,
 static int cli_handle_command(cli_state *state, const char *line,
                               cai_error *error, int *handled) {
   const char *arg;
-  char *end;
-  unsigned long number;
   int rc;
   *handled = 1;
   if (strncmp(line, "/history", 8U) == 0 &&
@@ -5261,20 +5275,18 @@ static int cli_handle_command(cli_state *state, const char *line,
     return cli_list_sessions(state, error);
   }
   if (strncmp(line, "/resume ", 8U) == 0) {
+    char selected[129];
+    cai_cli_session destination;
     arg = line + 8U;
-    errno = 0;
-    number = strtoul(arg, &end, 10);
-    if (errno != 0 || arg == end || *end != '\0' || number == 0U) {
-      return cai_cli_error(error, CAI_ERR_INVALID, "Usage: /resume <number>");
-    }
-    rc = cli_load_sessions(state, error);
-    if (rc != CAI_OK)
-      return rc;
-    if (number > state->session_count) {
-      return cai_cli_error(error, CAI_ERR_INVALID,
-                           "No session with that number.");
-    }
-    return cli_switch_session(state, state->sessions[number - 1U].id, 0, error);
+    arg += strspn(arg, " \t");
+    rc = cai_cli_session_select(&state->pouch, state->workspace, arg, selected,
+                                error);
+    if (rc == CAI_OK)
+      rc = cai_cli_pouch_session(&state->pouch, selected, &destination, error);
+    if (rc == CAI_OK && strcmp(destination.workspace, state->workspace) != 0)
+      rc = cai_cli_error(error, CAI_ERR_INVALID,
+                         "session belongs to another directory");
+    return rc == CAI_OK ? cli_switch_session(state, selected, 0, error) : rc;
   }
   if (line[0] == '/')
     return cai_cli_error(error, CAI_ERR_INVALID,

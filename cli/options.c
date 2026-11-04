@@ -99,6 +99,7 @@ static int cai_cli_short_value_option(const char *flag) {
   case 'R':
   case 'D':
   case 'c':
+  case 's':
     return flag[length - 1U];
   default:
     return 0;
@@ -525,6 +526,8 @@ static int cli_read_options(int argc, char *const *argv,
       continue;
     }
     field = NULL;
+    if (strcmp(flag, "-s") == 0 || strcmp(flag, "--server") == 0)
+      field = &options->server;
     if (strcmp(flag, "-i") == 0 || strcmp(flag, "--instruction") == 0) {
       if (++i >= argc || argv[i][0] == '\0') {
         cai_cli_option_error(options, "%s requires a value\n", flag);
@@ -733,6 +736,19 @@ int cai_cli_read_options(int argc, char *const *argv,
 int cai_cli_validate_options(cai_cli_options *options) {
   static const char *const providers[] = {"chatgpt", "openai", "openrouter",
                                           "berget",  "custom", NULL};
+  if (options->server != NULL &&
+      (options->headless || options->temporary || options->list ||
+       options->list_all || options->resume_list || options->delete_list ||
+       options->delete_id != NULL || options->export_id != NULL ||
+       options->import_file != NULL || options->login ||
+       options->chrome_setup || options->chrome_remove ||
+       options->install_skill != NULL || options->message != NULL ||
+       options->non_interactive || options->review)) {
+    cai_cli_option_error(options,
+                         "--server selects an interactive attachment; "
+                         "it cannot be combined with server or utility modes");
+    return -1;
+  }
   if (options->headless &&
       (options->non_interactive || options->review || options->review_and_fix ||
        options->list || options->list_all || options->resume_list ||
@@ -917,9 +933,10 @@ int cai_cli_validate_options(cai_cli_options *options) {
                          "--login cannot be combined with session work\n");
     return -1;
   }
-  if (options->list || options->list_all || options->resume_list ||
-      options->export_id != NULL || options->import_file != NULL ||
-      options->install_skill != NULL || options->message != NULL)
+  if (options->server != NULL || options->list || options->list_all ||
+      options->resume_list || options->export_id != NULL ||
+      options->import_file != NULL || options->install_skill != NULL ||
+      options->message != NULL)
     return 1;
   if (strcmp(options->provider, "custom") == 0) {
     if (options->endpoint == NULL ||

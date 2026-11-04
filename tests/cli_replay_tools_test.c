@@ -79,7 +79,11 @@ static int record(fixture *f, const char *session, const char *id,
     if (!f->phase)
       rc = cai_cli_replay_tools_index(&f->tools, &r, ++f->sequence, 1U,
                                       &f->error);
-    else {
+    else if (f->phase == 2) {
+      rc = cai_cli_replay_tools_follow(&f->tools, &r, f->display, f->mode, 72U,
+                                       markdown, f, &handled, &f->error);
+      assert(handled);
+    } else {
       rc = cai_cli_replay_tools_render(f->tools, &r, f->display, f->mode, 72U,
                                        markdown, f, &handled, &f->error);
       assert(handled);
@@ -373,6 +377,71 @@ static void call_timestamps(void) {
   assert(strstr(f.text, finished) == NULL);
   close_fixture(&f);
 }
+/** A remote reader has no lookahead/index scan. Output must flow before its
+ * final status, and a yielded command keeps one identity through write_stdin.
+ */
+static void following(void) {
+  fixture f;
+  open_fixture(&f, 0);
+  f.phase = 2;
+  FEED("s", "exec", "exec_command", "tool.started", NULL, "", 1U);
+  FEED("s", "exec", "exec_command", "tool.arguments", "data",
+       "{\"cmd\":\"printf progress\"}", 1U);
+  FEED("s", "exec", "exec_command", "tool.completed", NULL, "", 1U);
+  FEED(
+      "s", "exec", "exec_command", "tool.output", "data",
+      "{\"session_id\":\"slot\",\"output\":\"progress\\n\",\"duration_ms\":50}",
+      1U);
+  assert(strstr(f.text, "progress\n") != NULL &&
+         strstr(f.text, "Ran") == NULL && strstr(f.text, "Running") == NULL);
+  FEED("s", "wait", "write_stdin", "tool.started", NULL, "", 1U);
+  FEED("s", "wait", "write_stdin", "tool.arguments", "data",
+       "{\"session_id\":\"slot\"}", 1U);
+  FEED("s", "wait", "write_stdin", "tool.completed", NULL, "", 1U);
+  FEED("s", "wait", "write_stdin", "tool.output", "data",
+       "{\"output\":\"done\\n\",\"exit_code\":2,\"signal\":0,\"duration_ms\":"
+       "1300}",
+       1U);
+  assert(strstr(f.text, "done\n") != NULL &&
+         strstr(f.text, "Ran printf progress (1s)") != NULL &&
+         strstr(f.text, "exit=2 signal=0") != NULL);
+  assert(strstr(strstr(f.text, "Ran") + 3U, "Ran") == NULL);
+  close_fixture(&f);
+}
+
+static void following_cache(void) {
+  fixture f;
+  unsigned int i;
+  char id[32];
+  open_fixture(&f, 0);
+  f.phase = 2;
+  FEED("s", "live", "exec_command", "tool.arguments", "data",
+       "{\"cmd\":\"kept command\"}", 1U);
+  FEED("s", "live", "exec_command", "tool.completed", NULL, "", 1U);
+  FEED("s", "live", "exec_command", "tool.output", "data",
+       "{\"session_id\":\"active\",\"output\":\"before\\n\"}", 1U);
+  for (i = 0U; i < 300U; ++i) {
+    snprintf(id, sizeof(id), "completed-%u", i);
+    FEED("s", id, "list_files", "tool.completed", NULL, "", 1U);
+  }
+  FEED("s", "tail", "write_stdin", "tool.arguments", "data",
+       "{\"session_id\":\"active\"}", 1U);
+  FEED("s", "tail", "write_stdin", "tool.completed", NULL, "", 1U);
+  FEED("s", "tail", "write_stdin", "tool.output", "data",
+       "{\"output\":\"after\\n\",\"exit_code\":0,\"duration_ms\":30}", 1U);
+  assert(strstr(f.text, "Ran kept command (30ms)") != NULL);
+  close_fixture(&f);
+  open_fixture(&f, 0);
+  f.phase = 2;
+  FEED("s", "failed-sink", "exec_command", "tool.arguments", "data",
+       "{\"cmd\":\"sink failure\"}", 1U);
+  f.fail = 1;
+  assert(record(&f, "s", "failed-sink", "exec_command", "tool.output", "data",
+                "{\"output\":\"body\",\"exit_code\":0}",
+                1U) == CAI_ERR_TRANSPORT);
+  close_fixture(&f);
+}
+
 int main(void) {
   call_timestamps();
   commands(0, 1U);
@@ -383,6 +452,8 @@ int main(void) {
   streamed_markdown();
   large_output();
   invalid_output();
+  following();
+  following_cache();
   puts("replay tool presentation passed");
   return 0;
 }

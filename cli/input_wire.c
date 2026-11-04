@@ -238,11 +238,12 @@ static int unpack(cai_cli_input_wire_decoder *d, cai_error *error) {
     o->change.state = o->state;
     return entry_unpack(f + 12U, &o->change.entry, error);
   case CAI_PROTOCOL_RESULT:
-    if (f[0].number > CAI_CLI_INPUT_RESET || f[3].number > CAI_INPUT_UNKNOWN ||
-        f[4].number > CAI_ERR_LIMIT)
+    if (f[0].number > CAI_CLI_INPUT_CONTROL_RESULT ||
+        f[3].number > CAI_INPUT_UNKNOWN || f[4].number > CAI_ERR_LIMIT)
       return invalid(error);
     m->category = (cai_cli_input_result_kind)f[0].number;
-    o->type = m->category == CAI_CLI_INPUT_RECEIPT
+    o->type = m->category == CAI_CLI_INPUT_RECEIPT ||
+                      m->category == CAI_CLI_INPUT_CONTROL_RESULT
                   ? CAI_INPUT_OBSERVATION_RESULT
                   : CAI_INPUT_OBSERVATION_DISCONNECTED;
     o->producer = f[1].number;

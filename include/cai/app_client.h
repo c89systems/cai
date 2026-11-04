@@ -32,7 +32,10 @@ typedef enum cai_app_client_event_type {
   CAI_APP_CLIENT_CONNECTION = 0,
   CAI_APP_CLIENT_INPUT,
   CAI_APP_CLIENT_BIND_REJECTED,
-  CAI_APP_CLIENT_STATUS
+  CAI_APP_CLIENT_STATUS,
+  /** input->result is a connection control outcome, independent of the queue.
+   */
+  CAI_APP_CLIENT_CONTROL_RESULT
 } cai_app_client_event_type;
 typedef struct cai_app_client_event {
   cai_app_client_event_type type;
@@ -128,6 +131,10 @@ int cai_app_client_takeover(cai_app_client *, uint64_t request,
                             uint64_t original_generation, cai_error *);
 int cai_app_client_shutdown(cai_app_client *, uint64_t request,
                             uint64_t original_generation, cai_error *);
+/** Cancel foreground work without stopping the server. Connection-scoped IDs
+ * are independent of input IDs. Only repeat the last identical control. */
+int cai_app_client_cancel(cai_app_client *, uint64_t request,
+                          uint64_t original_generation, cai_error *);
 /** Subscribe to the active session without opening stores or queue producers.
  * Epoch zero resolves the explicitly named session. A resume position requires
  * its original collection identity and last accepted sequence. Request IDs

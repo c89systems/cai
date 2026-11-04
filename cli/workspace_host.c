@@ -21,6 +21,9 @@ typedef struct host_peer {
   unsigned long long binding_request, snapshot_request;
   uint64_t stream, stream_high, status_revision;
   int detached, binding;
+  uint64_t cancel_request, cancel_generation, cancel_conversation;
+  int cancel_code;
+  char cancel_reason[192];
 } host_peer;
 struct cai_cli_workspace_host {
   cai_workspace_server *server;
@@ -32,6 +35,8 @@ struct cai_cli_workspace_host {
   char session[129];
   uint64_t generation;
   cai_app_view status;
+  int (*cancel)(void *, cai_error *);
+  void *cancel_context;
   host_peer peers[CAI_ATTACHMENT_LIMIT];
 };
 static int output_begin(void *context, const cai_protocol_header *header,
@@ -262,6 +267,60 @@ static int message(void *context, const cai_workspace_server_event *event,
   if (event->message->header->kind == CAI_PROTOCOL_SUBSCRIBE ||
       event->message->header->kind == CAI_PROTOCOL_UNSUBSCRIBE)
     return transcript_request(peer, event->message, error);
+  if (event->message->header->kind == CAI_PROTOCOL_CANCEL) {
+    const cai_protocol_header *h = event->message->header;
+    cai_cli_input_wire_message result;
+    cai_error local;
+    unsigned long long epoch = 0U;
+    if (event->message->type != CAI_PROTOCOL_COMPLETE)
+      return CAI_OK;
+    memset(&result, 0, sizeof(result));
+    cai_error_init(&local);
+    if (h->request == 0U || h->request < peer->cancel_request ||
+        (h->request == peer->cancel_request &&
+         (h->generation != peer->cancel_generation ||
+          h->conversation != peer->cancel_conversation)))
+      rc = cai_cli_error(&local, CAI_ERR_INVALID,
+                         "cancellation identity is stale");
+    else if (h->request == peer->cancel_request) {
+      rc = peer->cancel_code;
+      if (rc != CAI_OK)
+        cai_cli_error(&local, rc, peer->cancel_reason);
+    } else {
+      rc = authorize(host, peer->attachment, h->generation, &local);
+      if (rc == CAI_OK)
+        rc =
+            host->input != NULL
+                ? cai_input_controller_conversation(host->input, &epoch, &local)
+                : cai_cli_error(&local, CAI_ERR_INVALID,
+                                "foreground context unavailable");
+      if (rc == CAI_OK && epoch != h->conversation)
+        rc = cai_cli_error(&local, CAI_ERR_INVALID,
+                           "cancellation conversation changed");
+      if (rc == CAI_OK)
+        rc = host->cancel != NULL
+                 ? host->cancel(host->cancel_context, &local)
+                 : cai_cli_error(&local, CAI_ERR_INVALID,
+                                 "foreground context unavailable");
+      peer->cancel_request = h->request;
+      peer->cancel_generation = h->generation;
+      peer->cancel_conversation = h->conversation;
+      peer->cancel_code = rc;
+      snprintf(peer->cancel_reason, sizeof(peer->cancel_reason), "%s",
+               local.message != NULL ? local.message : "");
+    }
+    result.header.kind = CAI_PROTOCOL_RESULT;
+    result.header.request = h->request;
+    result.category = CAI_CLI_INPUT_CONTROL_RESULT;
+    result.observation.result.code = rc;
+    result.observation.result.outcome =
+        rc == CAI_OK ? CAI_INPUT_ACCEPTED : CAI_INPUT_REJECTED;
+    snprintf(result.observation.result.reason,
+             sizeof(result.observation.result.reason), "%s",
+             local.message != NULL ? local.message : "");
+    cai_error_cleanup(&local);
+    return send_message(peer, &result, error);
+  }
   if (peer->decoder == NULL) {
     rc = cai_cli_input_wire_decoder_open(&peer->decoder, error);
     if (rc != CAI_OK)
@@ -493,6 +552,14 @@ int cai_cli_workspace_host_open(const char *runtime_directory,
   else
     *out = host;
   return rc;
+}
+void cai_cli_workspace_host_cancel(cai_cli_workspace_host *host,
+                                   int (*cancel)(void *, cai_error *),
+                                   void *context) {
+  if (host != NULL) {
+    host->cancel = cancel;
+    host->cancel_context = context;
+  }
 }
 int cai_cli_workspace_host_ready(cai_cli_workspace_host *host,
                                  cai_error *error) {

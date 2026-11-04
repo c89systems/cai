@@ -22,6 +22,8 @@ typedef struct cai_cli_options {
   const char *sessions_store, *auth_store, *messaging_store;
   const char *home_dir, *runtime_dir;
   const char *workspace_name;
+  /** Explicit existing-workspace selector; never starts a server. */
+  const char *server;
   const char *state_dir, *cache_dir, *data_dir;
   const char *clipboard_dir, *log_dir, *pouch_key_file;
   int help, version, headless;

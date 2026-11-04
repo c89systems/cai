@@ -220,6 +220,8 @@ static const cai_app_option options[] = {
      "Bound retained text (default 4194304)", 0, 0},
     {"--model-metadata", '\0', CAI_APP_STRING, "FILE",
      "Provider model metadata JSON", 0, 0},
+    {"--server", 's', CAI_APP_STRING, "SELECTOR",
+     "Attach to an existing workspace by name, path or stable ID", 0, 0},
     {"--model", 'm', CAI_APP_STRING, "ID",
      "Model (provider default if omitted)", 0, 0},
     {"--reasoning-effort", 'r', CAI_APP_STRING, "LEVEL",

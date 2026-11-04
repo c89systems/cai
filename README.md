@@ -153,9 +153,13 @@ runtime, review, storage, and presentation contracts.
 `cai -x` / `cai --headless` runs a persistent workspace server in the foreground
 without a terminal frontend. It logs JSON to stderr with automatic color;
 normal `LOG_` overrides apply. SIGINT, SIGTERM, SIGHUP and SIGQUIT stop the owner
-cleanly. Native clients use `cai/app_client.h`; the terminal attach/autostart
-cutover remains in progress. See the [workspace specification](docs/workspace-server.md)
-for the implemented boundaries and remaining work.
+cleanly. Normal interactive `cai` discovers or quietly starts this workspace's
+owner. `cai -s NAME` / `--server NAME` attaches to an existing named/path/ID
+workspace. Native socket clients use `cai/app_client.h`; a reusable terminal
+receiver is declared in `cai/app_terminal.h`. See
+[terminal attachment](docs/terminal-attachment.md) for the tested workflow and
+remaining parity work, and the [workspace specification](docs/workspace-server.md)
+for the complete design.
 
 Workspace servers normally stop after their last client disconnects.
 `--headless` selects persistence as its default; `[server] persist`,
@@ -174,7 +178,7 @@ probe. A name is reserved by an OS lock for the server lifetime, without
 polling or lease renewals. `cai/workspace_discovery.h` offers native asynchronous
 name/ID/path resolution and incremental verified listing. Pin the result's
 instance in a workspace/app client greeting before attaching. Terminal
-selection by name is still pending.
+selection by name uses `-s` / `--server` and performs that same verification.
 
 Agent startup requires workspace approval. On first use, run `cai -y`
 (`--yes` or `--force`) to approve the current directory and its descendants for
@@ -1082,7 +1086,7 @@ successfully. When messaging is enabled, the summary includes its active queue.
 `-L`/`--list-all` lists conversations across all directories in the configured
 session store. `-R`/`--resume` without an ID and `/resume` show the same
 numbered list for the current directory;
-`/resume <number>` loads an entry. Rows show ID, directory, and a first-prompt
+`/resume <number-or-ID>` loads an entry. Rows show ID, directory, and a first-prompt
 preview, clipped to the terminal width or 80 columns without a terminal.
 `-R ID`/`--resume ID` addresses a saved session in the current directory directly.
 `-R NUMBER`/`--resume NUMBER` selects the corresponding row from that directory's

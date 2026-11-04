@@ -127,6 +127,13 @@ int cai_tool_display_replay_begin(cai_tool_display *display,
                                   const cai_agent_runtime_event *event,
                                   const char *verb, const char *label,
                                   int success, cai_error *error);
+/** Begin saved/remote command output before final status and duration are
+ * available. Stream TERMINAL_OUTPUT, then finish with the actual terminal
+ * completion. Shows one Ran/Cancelled footer after output, never Running.
+ * Retains only the copied plain label and bounded preview/control state. */
+int cai_tool_display_saved_begin(cai_tool_display *,
+                                 const cai_agent_runtime_event *,
+                                 const char *label, cai_error *);
 /** Release the renderer and retained state. NULL is accepted; the sink is
  * left open. Do not call from its sink callback.
  */

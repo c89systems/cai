@@ -31,6 +31,7 @@ typedef struct cai_display_call {
   unsigned long long command_started_ms;
   unsigned long long timestamp_ns;
   int replay;
+  int saved_footer;
   size_t lines;
   int partial_line;
   int pending_cr;
@@ -1457,7 +1458,7 @@ int cai_tool_display_event(cai_tool_display *d,
       rc = display_text(
           d, "  [command output truncated by the tool's output limit]\n",
           error);
-    if (rc == CAI_OK && c->running_shown && !c->replay) {
+    if (rc == CAI_OK && (c->saved_footer || (c->running_shown && !c->replay))) {
       rc = display_marker_suffix(
           d, ok,
           e->type == CAI_AGENT_EVENT_TERMINAL_COMMAND_CANCELLED ? "Cancelled"
@@ -1575,6 +1576,29 @@ int cai_tool_display_replay_begin(cai_tool_display *d,
                                  completed, error);
   }
   return display_marker(d, success != 0, verb, label, strlen(label), error);
+}
+
+int cai_tool_display_saved_begin(cai_tool_display *d,
+                                 const cai_agent_runtime_event *e,
+                                 const char *label, cai_error *error) {
+  cai_display_call *call;
+  int rc;
+  if (d == NULL || e == NULL || label == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "saved command label required");
+  if (display_find(d, e) != NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "saved command already active");
+  rc = display_call_new(d, e, &call, error);
+  if (rc != CAI_OK)
+    return rc;
+  call->command = cai_strdup(NULL, label);
+  if (call->command == NULL) {
+    display_remove(d, call);
+    return cai_set_error(error, CAI_ERR_NOMEM, "copy saved command label");
+  }
+  call->command_active = call->replay = call->saved_footer = 1;
+  return CAI_OK;
 }
 
 void cai_tool_display_close(cai_tool_display *d) {

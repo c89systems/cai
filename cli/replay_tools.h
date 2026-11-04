@@ -21,5 +21,14 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *tools,
                                 void *context, int *handled, cai_error *error);
 /* Flush any command whose recorded tail was interrupted. */
 int cai_cli_replay_tools_finish(cai_cli_replay_tools *tools, cai_error *error);
+/** One-pass remote presentation: consume ordered decoded execution chunks
+ * directly, without a history index scan or retaining output. Saved command
+ * status/duration arrive after output and are printed in one final Ran footer.
+ * Do not mix this receiver with the two-pass index/render receiver. */
+int cai_cli_replay_tools_follow(cai_cli_replay_tools **,
+                                const cai_execution_record *,
+                                cai_tool_display *, int mode, size_t width,
+                                int (*markdown)(void *, const char *, size_t),
+                                void *, int *handled, cai_error *);
 void cai_cli_replay_tools_close(cai_cli_replay_tools *tools);
 #endif

@@ -120,6 +120,26 @@ static int headless_options(void) {
   return 0;
 }
 
+static int attachment_options(void) {
+  cai_cli_options options;
+  static char program[] = "cai", server[] = "--server", short_server[] = "-s";
+  static char selector[] = "workspace", instruction[] = "-i", text[] = "task";
+  static char group[] = "-ks", headless[] = "-x", custom[] = "custom",
+              provider[] = "-p";
+  char *a[] = {program, server, selector, instruction, text};
+  char *b[] = {program, group, instruction, instruction, text};
+  char *c[] = {program, short_server, selector, headless};
+  char *d[] = {program, short_server, selector, provider, custom};
+  return cai_cli_parse_options(5, a, &options) != 1 ||
+         strcmp(options.server, selector) != 0 ||
+         cai_cli_instruction_at(&options, 0U) != text ||
+         cai_cli_parse_options(5, b, &options) != 1 || !options.insecure ||
+         strcmp(options.server, instruction) != 0 ||
+         cai_cli_instruction_at(&options, 0U) != text ||
+         cai_cli_parse_options(4, c, &options) != -1 ||
+         cai_cli_parse_options(5, d, &options) != 1;
+}
+
 static int short_argument_options(void) {
   static const char *const invalid[] = {"", "-", "--", "-z", "-Nq"};
   char program[] = "cai";
@@ -798,9 +818,9 @@ int main(void) {
       cai_cli_parse_options(3, invalid_legacy_instructions, &options) != -1 ||
       cai_cli_parse_options(3, invalid_legacy_workspace, &options) != -1)
     return 1;
-  return headless_options() || value_option_instructions() ||
-         config_option_precedence() || replay_options() ||
-         resume_alias_options() || delete_options() ||
+  return headless_options() || attachment_options() ||
+         value_option_instructions() || config_option_precedence() ||
+         replay_options() || resume_alias_options() || delete_options() ||
          short_argument_options() || grouped_value_options() ||
          help_columns() || shell_options() || listing_options() ||
          storage_options() || tool_options() || capture_options() ||

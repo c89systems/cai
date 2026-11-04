@@ -1,14 +1,17 @@
 #include "input_socket.h"
 #include "error.h"
+#include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 struct cai_cli_input_socket {
   cai_cli_input_adapter *adapter;
   cai_app_client *client;
   char session[129];
   unsigned long long producer, base, highest, source_high, item_namespace;
   int fixed, detached;
+  int wakeup;
   cai_error error;
 };
 static int unavailable(cai_error *error, const char *message) {
@@ -56,6 +59,13 @@ static int request(void *context, const cai_input_scope *scope,
   int rc;
   cai_error_cleanup(&s->error);
   rc = submit(s, scope, value, &s->error);
+  if (rc == CAI_OK && s->wakeup >= 0) {
+    char byte = 'q';
+    ssize_t n;
+    do {
+      n = write(s->wakeup, &byte, 1U);
+    } while (n < 0 && errno == EINTR);
+  }
   if (rc != CAI_OK)
     cai_cli_error(error, rc,
                   s->error.message != NULL ? s->error.message
@@ -80,9 +90,11 @@ int cai_cli_input_socket_open(cai_app_client *client,
   int rc;
   if (out != NULL)
     *out = NULL;
-  if (out == NULL || client == NULL)
+  if (out == NULL)
     return unavailable(error, "Application client and queue output required");
-  rc = cai_app_client_get_state(client, &state, error);
+  memset(&state, 0, sizeof(state));
+  rc =
+      client != NULL ? cai_app_client_get_state(client, &state, error) : CAI_OK;
   if (rc != CAI_OK)
     return rc;
   if (state.bound || state.binding)
@@ -92,6 +104,7 @@ int cai_cli_input_socket_open(cai_app_client *client,
   if (s == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "Allocate socket queue binding");
   s->client = client;
+  s->wakeup = -1;
   s->base = s->highest = last_issued;
   cai_error_init(&s->error);
   memset(&transport, 0, sizeof(transport));
@@ -106,6 +119,10 @@ int cai_cli_input_socket_open(cai_app_client *client,
   }
   *out = s;
   return CAI_OK;
+}
+void cai_cli_input_socket_set_wakeup(cai_cli_input_socket *s, int descriptor) {
+  if (s != NULL)
+    s->wakeup = descriptor;
 }
 cai_cli_input_adapter *cai_cli_input_socket_adapter(cai_cli_input_socket *s) {
   return s != NULL ? s->adapter : NULL;
@@ -159,7 +176,8 @@ int cai_cli_input_socket_observe(cai_cli_input_socket *s,
                : CAI_OK;
   if (event->type == CAI_APP_CLIENT_BIND_REJECTED)
     return cai_cli_input_socket_disconnect(s, error);
-  if (event->type == CAI_APP_CLIENT_STATUS)
+  if (event->type == CAI_APP_CLIENT_STATUS ||
+      event->type == CAI_APP_CLIENT_CONTROL_RESULT)
     return CAI_OK;
   if (event->type != CAI_APP_CLIENT_INPUT || event->input == NULL)
     return unavailable(error, "Typed input observation required");

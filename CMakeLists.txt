@@ -934,7 +934,7 @@ if(CAI_BUILD_APP)
 endif()
 
 if(CAI_BUILD_CLI)
-  add_executable(cai_cli cli/main.c cli/process.c cli/bootstrap.c cli/spawn.c)
+  add_executable(cai_cli cli/main.c cli/process.c cli/bootstrap.c cli/spawn.c cli/attach.c)
   set_target_properties(cai_cli PROPERTIES OUTPUT_NAME cai)
   if(CAI_TARGET_ID MATCHES "-linux-musl$")
     set_target_properties(cai_cli PROPERTIES SKIP_BUILD_RPATH ON)
@@ -1628,6 +1628,7 @@ if(CAI_INSTALL)
   install(DIRECTORY "${CAI_PUBLIC_INCLUDE_DIR}/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     PATTERN "app.h" EXCLUDE PATTERN "app_client.h" EXCLUDE
     PATTERN "app_view.h" EXCLUDE
+    PATTERN "app_terminal.h" EXCLUDE
     PATTERN "lua_tools.h" EXCLUDE)
   install(DIRECTORY "${CAI_GENERATED_INCLUDE_DIR}/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
   install(FILES "${CAI_LIBYAML_LICENSE}"
