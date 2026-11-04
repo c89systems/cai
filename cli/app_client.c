@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "input_wire.h"
 #include "pouch_stream.h"
+#include "status_wire.h"
 #include "transcript_wire.h"
 #include <cai/app_client.h>
 #include <pthread.h>
@@ -11,6 +12,9 @@ struct cai_app_client {
   cai_workspace_client *socket;
   cai_cli_input_wire_decoder *decoder;
   cai_cli_transcript_decoder *transcript_decoder;
+  cai_cli_status_decoder *status_decoder;
+  cai_app_view view;
+  uint64_t now;
   cai_app_client_config config;
   cai_app_client_state state;
   cai_input_observation baseline;
@@ -45,6 +49,7 @@ static int notify(cai_app_client *client, cai_app_client_event_type type,
   event.request = request;
   event.state = &client->state;
   event.input = input;
+  event.status = type == CAI_APP_CLIENT_STATUS ? &client->view : NULL;
   return client->config.event != NULL
              ? client->config.event(client->config.context, &event, error)
              : CAI_OK;
@@ -83,6 +88,22 @@ static int receive(void *context, const cai_protocol_event *event,
   const cai_cli_input_wire_message *m = NULL;
   cai_input_observation o;
   int rc;
+  if (event->header->kind == CAI_PROTOCOL_STATUS) {
+    const cai_app_view *view = NULL;
+    if (client->status_decoder == NULL) {
+      rc = cai_cli_status_decoder_open(&client->status_decoder, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
+    rc = cai_cli_status_decode(client->status_decoder, event, &view, error);
+    if (rc != CAI_OK || view == NULL)
+      return rc;
+    if (view->revision <= client->view.revision)
+      return invalid(error);
+    cai_cli_status_take(client->status_decoder, &client->view);
+    client->view.received_ms = client->now;
+    return notify(client, CAI_APP_CLIENT_STATUS, 0U, NULL, error);
+  }
   if (event->header->kind == CAI_PROTOCOL_WELCOME ||
       event->header->kind == CAI_PROTOCOL_ROLE) {
     rc = cai_workspace_client_get_state(client->socket,
@@ -274,10 +295,22 @@ int cai_app_client_get_state(cai_app_client *client, cai_app_client_state *out,
           client->snapshot = 0;
       client->state.transcript.active = client->state.transcript.replaying =
           client->state.transcript.subscribing = client->event_open = 0;
+      client->view.stale = 1;
     }
     *out = client->state;
   }
   return rc;
+}
+int cai_app_client_get_view(cai_app_client *client, const cai_app_view **out,
+                            cai_error *error) {
+  cai_app_client_state state;
+  int rc = cai_app_client_get_state(client, &state, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (out == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID, "status view output required");
+  *out = client->view.revision == 0U ? NULL : &client->view;
+  return CAI_OK;
 }
 int cai_app_client_pump(cai_app_client *client, uint64_t now,
                         cai_error *error) {
@@ -288,6 +321,7 @@ int cai_app_client_pump(cai_app_client *client, uint64_t now,
   if (client->pumping)
     return cai_cli_error(error, CAI_ERR_INVALID, "client pump cannot reenter");
   before = client->state.transport.phase;
+  client->now = now;
   client->pumping = 1;
   rc = cai_workspace_client_pump(client->socket, now, error);
   (void)cai_workspace_client_get_state(client->socket, &client->state.transport,
@@ -298,6 +332,9 @@ int cai_app_client_pump(cai_app_client *client, uint64_t now,
         client->snapshot = 0;
     client->state.transcript.active = client->state.transcript.replaying =
         client->state.transcript.subscribing = client->event_open = 0;
+    client->view.stale = 1;
+    cai_cli_status_decoder_close(client->status_decoder);
+    client->status_decoder = NULL;
     if (rc == CAI_OK && before != client->state.transport.phase)
       rc = notify(client, CAI_APP_CLIENT_CONNECTION, 0U, NULL, error);
   }
@@ -581,5 +618,7 @@ void cai_app_client_close(cai_app_client *client) {
   cai_workspace_client_close(client->socket);
   cai_cli_input_wire_decoder_close(client->decoder);
   cai_cli_transcript_decoder_close(client->transcript_decoder);
+  cai_cli_status_decoder_close(client->status_decoder);
+  cai_cli_status_cleanup(&client->view);
   free(client);
 }

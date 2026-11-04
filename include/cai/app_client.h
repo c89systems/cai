@@ -4,6 +4,7 @@
  */
 #ifndef CAI_APP_CLIENT_H
 #define CAI_APP_CLIENT_H
+#include <cai/app_view.h>
 #include <cai/input_controller.h>
 #include <cai/transcript.h>
 #include <cai/workspace_client.h>
@@ -29,7 +30,8 @@ typedef struct cai_app_client_state {
 typedef enum cai_app_client_event_type {
   CAI_APP_CLIENT_CONNECTION = 0,
   CAI_APP_CLIENT_INPUT,
-  CAI_APP_CLIENT_BIND_REJECTED
+  CAI_APP_CLIENT_BIND_REJECTED,
+  CAI_APP_CLIENT_STATUS
 } cai_app_client_event_type;
 typedef struct cai_app_client_event {
   cai_app_client_event_type type;
@@ -40,6 +42,8 @@ typedef struct cai_app_client_event {
    * or transport loss invalidates that baseline and all editor capabilities.
    * The client retains only baseline metadata and one bounded wire row. */
   const cai_input_observation *input;
+  /** Borrowed completed view for STATUS, otherwise NULL. */
+  const cai_app_view *status;
 } cai_app_client_event;
 typedef struct cai_app_client_config {
   const char *runtime_directory;
@@ -75,6 +79,11 @@ int cai_app_client_pump(cai_app_client *, uint64_t now_ms, cai_error *);
 /** Copy fixed metadata; no allocation, file access or frontend mirror. */
 int cai_app_client_get_state(cai_app_client *, cai_app_client_state *,
                              cai_error *);
+/** Borrow the latest completed view until the next pump/close; NULL before the
+ * first view. No queue producer is needed. A disconnected view remains
+ * inspectable with stale=1. Callback consumers may query this getter. */
+int cai_app_client_get_view(cai_app_client *, const cai_app_view **,
+                            cai_error *);
 /** Explicit producer selection after CONNECTED. Zero producer creates a new
  * producer; nonzero requires the exact session. After verifying the instance
  * on a new connection, epoch zero resolves that session's current epoch.

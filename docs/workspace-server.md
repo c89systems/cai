@@ -38,9 +38,11 @@ and incremental reading, native verified selector resolution and guarded
 instance admission are implemented. Controller/frontend composition,
 automatic startup and the attach
 CLI remain pending. Explicit foreground headless startup is implemented below.
-The next [status projection](workspace-wire-status.md) keeps numeric usage
+The implemented [status projection](workspace-wire-status.md) keeps numeric usage
 values typed and separates semantic updates from frontend elapsed-time ticks.
-That application binding is specified but not yet connected to the socket.
+The socket client exposes borrowed completed views to controllers and observers
+without a queue producer or a transcript subscription. Headless owners share
+the backend's debounced quota cache with all attachments.
 The executable now also has a tested quiet fork/exec owner handoff and exact
 child watch, described in [workspace process handoff](workspace-process.md).
 It uses the existing CBOR transport and native server lifecycle; the terminal
@@ -115,8 +117,10 @@ borrowed rows/receipts, preserves original request scopes and offers explicit
 bind/resume/takeover/shutdown/detach. It never opens a runtime/store or gathers
 a queue snapshot. Its event loop has one descriptor and a handshake deadline,
 without a worker or idle polling. Failed initial binding and interrupted
-baselines do not change the last validated session identity. Socket command,
-status and terminal presentation remain to be connected to the frontend.
+baselines do not change the last validated session identity. Socket command
+and terminal presentation remain to be connected to the frontend. Typed status
+is delivered independently; its semantic revisions do not generate timer or
+per-token traffic. Partial frames never replace the last completed view.
 
 The constructor-selected Softline queue bridge now supports that public client
 as well as direct native connections, with one shared editor observation path.

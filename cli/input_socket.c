@@ -159,6 +159,8 @@ int cai_cli_input_socket_observe(cai_cli_input_socket *s,
                : CAI_OK;
   if (event->type == CAI_APP_CLIENT_BIND_REJECTED)
     return cai_cli_input_socket_disconnect(s, error);
+  if (event->type == CAI_APP_CLIENT_STATUS)
+    return CAI_OK;
   if (event->type != CAI_APP_CLIENT_INPUT || event->input == NULL)
     return unavailable(error, "Typed input observation required");
   observation = *event->input;

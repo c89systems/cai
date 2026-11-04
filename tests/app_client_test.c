@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #include "../cli/input_wire.h"
+#include "../cli/status_wire.h"
 #include "../cli/transcript_wire.h"
 #include <assert.h>
 #include <cai/app_client.h>
@@ -25,6 +26,7 @@ typedef struct fixture {
   char text[80];
   int cancel;
   size_t subscriptions, spans, record_ends;
+  size_t statuses;
   cai_transcript_kind reject_kind;
   int reject_transcript;
 } fixture;
@@ -98,6 +100,12 @@ static int observed(void *context, const cai_app_client_event *event,
   if (event->type == CAI_APP_CLIENT_CONNECTION) {
     ++f->roles;
     assert(event->input == NULL);
+  } else if (event->type == CAI_APP_CLIENT_STATUS) {
+    const cai_app_view *view;
+    assert(event->input == NULL && event->status != NULL);
+    assert(cai_app_client_get_view(f->client, &view, NULL) == CAI_OK &&
+           view == event->status && !view->stale);
+    ++f->statuses;
   } else if (event->type == CAI_APP_CLIENT_BIND_REJECTED) {
     ++f->rejected;
     assert(!state.bound && !state.ready && !state.binding);
@@ -674,6 +682,74 @@ static void rejection_and_eof(const char *runtime, const char *workspace) {
   close_fixture(f);
   free(f);
 }
+static void status_tests(const char *runtime, const char *workspace) {
+  fixture f;
+  cai_cli_input_wire_output output;
+  cai_app_view source;
+  const cai_app_view *view;
+  cai_protocol_header h;
+  cai_cbor_token t;
+  size_t i;
+  for (i = 0U; i < 3U; ++i) {
+    open_fixture(&f, runtime, workspace);
+    assert(exchange(&f) == CAI_OK);
+    assert(cai_app_client_get_view(f.client, &view, NULL) == CAI_OK &&
+           view == NULL && !state(&f).bound && state(&f).producer == 0U);
+    memset(&source, 0, sizeof(source));
+    source.available = 1;
+    source.revision = 1U;
+    source.conversation = 89U;
+    source.session_id = "status-without-producer";
+    source.provider = "custom";
+    source.effective.model = "literal\033[31m**model**";
+    source.quota.has_credit_balance = 1;
+    source.quota.credit_balance = 58816.38;
+    source.goal.has_goal = 1;
+    source.goal.status = "paused";
+    output.context = &f;
+    output.begin = begin;
+    output.write = write_token;
+    output.end = end;
+    assert(cai_cli_status_write(&output, &source, NULL) == CAI_OK);
+    assert(exchange(&f) == CAI_OK && f.statuses == 1U && f.binds == 0U);
+    assert(cai_app_client_get_view(f.client, &view, NULL) == CAI_OK &&
+           view != NULL && view->available && !view->stale &&
+           view->revision == 1U && view->conversation == 89U &&
+           view->quota.credit_balance == 58816.38 &&
+           strcmp(view->effective.model, source.effective.model) == 0);
+    if (i == 0U) {
+      /* An actual partially flushed frame followed by EOF must not replace
+       * the accepted view or create a second status notification. */
+      memset(&h, 0, sizeof(h));
+      h.kind = CAI_PROTOCOL_STATUS;
+      h.sequence = 2U;
+      assert(begin(&f, &h, 150U, NULL) == CAI_OK);
+      memset(&t, 0, sizeof(t));
+      t.type = CAI_CBOR_ARRAY;
+      t.argument = 2U;
+      assert(write_token(&f, &t, NULL) == CAI_OK);
+      assert(cai_workspace_server_pump(f.server, 2U, NULL) == CAI_OK);
+      assert(cai_app_client_pump(f.client, 2U, NULL) == CAI_OK);
+      cai_workspace_server_close(f.server);
+      f.server = NULL;
+      assert(cai_app_client_pump(f.client, 3U, NULL) == CAI_ERR_PROTOCOL);
+      assert(cai_app_client_get_view(f.client, &view, NULL) == CAI_OK &&
+             view->stale && view->revision == 1U && f.statuses == 1U);
+    } else {
+      if (i == 1U) {
+        ++source.revision;
+        f.cancel = 1;
+      }
+      /* Replayed revisions fail; consumer refusal is also terminal. */
+      assert(cai_cli_status_write(&output, &source, NULL) == CAI_OK);
+      assert(exchange(&f) == (i == 1U ? CAI_ERR_CANCELLED : CAI_ERR_PROTOCOL));
+      assert(state(&f).transport.phase == CAI_WORKSPACE_FAILED);
+      assert(cai_app_client_get_view(f.client, &view, NULL) == CAI_OK &&
+             view->stale);
+    }
+    close_fixture(&f);
+  }
+}
 static void *run(void *context) {
   char path[] = "./ac.XXXXXX";
   char *runtime, *workspace;
@@ -688,6 +764,7 @@ static void *run(void *context) {
   malformed(runtime, workspace);
   rejection_and_eof(runtime, workspace);
   transcript_tests(runtime, workspace);
+  status_tests(runtime, workspace);
   directory = opendir(runtime);
   assert(directory != NULL);
   while ((entry = readdir(directory)) != NULL)

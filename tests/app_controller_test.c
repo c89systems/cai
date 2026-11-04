@@ -442,7 +442,8 @@ static int wire_event(void *context, const cai_protocol_event *event,
   const cai_input_observation *o;
   int rc;
   if (event->header->kind == CAI_PROTOCOL_WELCOME ||
-      event->header->kind == CAI_PROTOCOL_ROLE)
+      event->header->kind == CAI_PROTOCOL_ROLE ||
+      event->header->kind == CAI_PROTOCOL_STATUS)
     return CAI_OK;
   rc = cai_cli_input_wire_decode(v->decoder, event, &message, error);
   if (rc != CAI_OK || message == NULL)
@@ -824,6 +825,7 @@ typedef struct typed_view {
   cai_input_entry entry;
   cai_input_result result;
   size_t roles, snapshots, results, disconnected;
+  size_t statuses;
   size_t replay_begins, replay_ends, transcript_ends, transcript_failures,
       assistant_seen;
   uint64_t transcript_sequence, transcript_offset;
@@ -882,6 +884,14 @@ static int typed_event(void *context, const cai_app_client_event *event,
       ++v->roles;
     if (v->state.transport.phase == CAI_WORKSPACE_DISCONNECTED)
       ++v->disconnected;
+  } else if (event->type == CAI_APP_CLIENT_STATUS) {
+    const cai_app_view *view = NULL;
+    assert(event->input == NULL && event->status != NULL);
+    assert(cai_app_client_get_view(v->client, &view, NULL) == CAI_OK &&
+           view == event->status && view->available && !view->stale);
+    assert(view->runtime_ready && view->running && view->provider != NULL &&
+           view->session_id != NULL && view->log_path != NULL);
+    ++v->statuses;
   } else if (o->type == CAI_INPUT_OBSERVATION_SNAPSHOT_END)
     ++v->snapshots;
   else if (o->type == CAI_INPUT_OBSERVATION_RESULT) {

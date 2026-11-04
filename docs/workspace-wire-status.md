@@ -1,8 +1,10 @@
 # Workspace status projection
 
-This is the next application binding to implement. Queue and transcript
-delivery already exist; the socket client does not yet expose this status
-projection. Finite binary64 is its codec prerequisite.
+The owner and typed socket client implement this projection alongside queue
+and transcript delivery. `cai_app_client_get_view` borrows the last completed
+`cai_app_view`, and `CAI_APP_CLIENT_STATUS` reports accepted replacements.
+Terminal consumption and Lua socket-client bindings remain part of the frontend
+cutover. Finite binary64 preserves currency/quota values without conversion.
 
 Status is an ephemeral presentation view of the existing owner, outside model
 input and the journal. Attaching does not restore context, read logs or open a
@@ -12,9 +14,11 @@ from the verified connection's ROLE generation.
 
 ## Observation and framing
 
-Use STATUS in the existing envelope: request/stream/generation/attachment zero,
-a nonzero per-owner revision in sequence, and the current conversation epoch
-(or zero before readiness). Revisions are scoped to the verified owner instance.
+Use STATUS in the existing envelope: request/stream zero, server-stamped
+attachment/generation, a nonzero per-owner revision in sequence, and the current
+conversation epoch (or zero before readiness). Revisions are scoped to the
+verified owner instance. As with other application records, attachment and
+generation come from the transport; only ROLE grants control.
 
 The payload is a definite `[available, body]` array. A successful body contains
 these definite groups in order:
@@ -43,7 +47,9 @@ trips. Presence flags distinguish unavailable values from zero.
 
 Derive frame sizes from known fields and encode directly through the shared
 CBOR/transport path, without sizing serialization. The metadata record uses
-the existing 128 KiB cap. If it cannot be represented, send available=false
+the existing 128 KiB cap, reserving maximum widths for the transport-stamped
+attachment/generation and the cache-assigned revision. If it cannot be
+represented, send available=false
 with `[code, reason]`, with reason bounded to 191 bytes. This invalidates only
 the status view, not the attachment, accepted input or transcript subscription.
 A malformed frame or rejecting consumer still causes protocol/transport failure.
@@ -62,6 +68,8 @@ Coalescing applies before encoding: an already-started record must finish or
 the connection must close. Revisions increase, but may have gaps when newer
 unsent views replace older ones.
 No worker, runtime, timer or provider request is created per attachment.
+`cai_app_view_elapsed` provides the frontend clock calculation with saturation
+and explicit stale/unavailable handling.
 
 Elapsed-time-only changes do not trigger publication. Clients anchor received
 elapsed values to their own monotonic clock and advance active turn/goal
@@ -75,8 +83,9 @@ view, an unsent newer revision and available credit make status work ready.
 
 Quota collection belongs to the backend's shared debounced worker. Frontends
 neither query the provider nor parse pslog. Moving that worker out of the
-legacy Softline watch wiring is part of this cutover. Initial absence is
-explicit; an arriving quota cache produces a new status revision.
+legacy Softline watch wiring is implemented for headless owners. Initial absence
+is explicit; an arriving quota cache produces a new status revision. Startup
+and completed turns share the existing five-minute debounce.
 
 ## Verification
 

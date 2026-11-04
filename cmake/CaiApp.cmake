@@ -40,6 +40,19 @@ if(CAI_BUILD_SHARED)
   cai_configure_c_target(cai_app_shared)
 endif()
 if(CAI_BUILD_TESTS)
+  add_executable(cai_status_host_test tests/status_host_test.c)
+  target_link_libraries(cai_status_host_test PRIVATE cai_app_static)
+  target_link_options(cai_status_host_test PRIVATE -Wl,--wrap=lc_client_open)
+  cai_configure_cli_target(cai_status_host_test)
+  target_compile_options(cai_status_host_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_status_host COMMAND cai_status_host_test)
+  set_tests_properties(cai_status_host PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
+  add_executable(cai_status_wire_test tests/status_wire_test.c)
+  target_link_libraries(cai_status_wire_test PRIVATE cai_app_static)
+  cai_configure_cli_target(cai_status_wire_test)
+  target_compile_options(cai_status_wire_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_status_wire COMMAND cai_status_wire_test)
+  set_tests_properties(cai_status_wire PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   add_executable(cai_transcript_test tests/transcript_test.c)
   target_link_libraries(cai_transcript_test PRIVATE cai_app_static)
   target_link_options(cai_transcript_test PRIVATE "-Wl,--wrap=malloc"
@@ -296,6 +309,7 @@ if(CAI_INSTALL)
   endif()
   install(FILES "${CAI_PUBLIC_INCLUDE_DIR}/cai/app.h"
     "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_client.h"
+    "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_view.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/cai" COMPONENT cai-app)
   install(EXPORT caiAppTargets NAMESPACE cai:: FILE cai-app-targets.cmake
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/cai_app" COMPONENT cai-app)

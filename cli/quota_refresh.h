@@ -6,7 +6,8 @@
 #include <time.h>
 
 /* A sleeping worker: only explicit startup, turn completion and /status
- * requests cause network activity. Results are consumed on the UI thread. */
+ * requests cause network activity. Results are consumed on the app owner
+ * thread; observers share that cache without starting workers or requests. */
 typedef int (*cai_cli_quota_fetch_fn)(void *, cai_chatgpt_quota *, cai_error *);
 typedef struct cai_cli_quota_refresh {
   pthread_t thread;

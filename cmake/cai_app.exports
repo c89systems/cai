@@ -4,6 +4,7 @@ cai_app_client_config_init
 cai_app_client_detach
 cai_app_client_directory
 cai_app_client_get_state
+cai_app_client_get_view
 cai_app_client_open
 cai_app_client_prepare
 cai_app_client_pump
@@ -31,4 +32,5 @@ cai_app_start_server
 cai_app_status_cleanup
 cai_app_status_fd
 cai_app_status_init
+cai_app_view_elapsed
 cai_app_write_help

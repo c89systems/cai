@@ -1632,6 +1632,68 @@ static int cli_log_wakeup(sl_t *sl, const sl_watch_event_t *event,
                                                                  : SL_ERROR_IO;
 }
 
+static int cli_publish_status(cli_state *state, cai_agent_runtime *runtime,
+                              cai_error *error) {
+  cai_agent_runtime_ids ids;
+  cai_app_view view;
+  unsigned long long conversation;
+  const cai_app_status *status;
+  int rc = cai_app_bridge_publish(state->bridge, runtime, error);
+  if (rc != CAI_OK || state->workspace_host == NULL)
+    return rc;
+  memset(&ids, 0, sizeof(ids));
+  memset(&view, 0, sizeof(view));
+  if (runtime != NULL) {
+    rc = cai_agent_runtime_get_ids(runtime, &ids, error);
+    if (rc != CAI_OK)
+      return rc;
+    rc = cai_input_controller_conversation(state->input_controller,
+                                           &conversation, error);
+    if (rc != CAI_OK)
+      return rc;
+    view.conversation = conversation;
+  }
+  view.available = 1;
+  view.provider = state->options.provider;
+  view.last_response_id = ids.response_id;
+  view.provider_conversation_id = ids.conversation_id;
+  view.quota = state->quota;
+  view.yolo = state->options.yolo;
+  view.foreground = state->options.foreground;
+  view.yield_time_ms = state->options.yield_time_ms;
+  /* The cached native status owns these strings. The host compares/copies
+   * bounded metadata while borrowed, with no I/O or callbacks under this lock.
+   * Goal objectives and detailed errors never enter the wire projection. */
+  pthread_mutex_lock(&state->bridge->lock);
+  status = &state->bridge->status;
+  view.running = status->running;
+  view.runtime_ready = status->runtime_ready;
+  view.outcome = status->outcome;
+  view.exit_code = status->exit_code;
+  view.runtime_state = status->state;
+  view.session_id = status->session_id;
+  view.log_path = status->log_path;
+  view.effective = status->effective;
+  view.pending = status->pending;
+  view.metrics = status->metrics;
+  view.goal.has_goal = status->goal.has_goal;
+  view.goal.status = status->goal.status;
+  view.goal.has_token_budget = status->goal.has_token_budget;
+  view.goal.token_budget = status->goal.token_budget;
+  view.goal.tokens_used = status->goal.tokens_used;
+  view.goal.remaining_tokens = status->goal.remaining_tokens;
+  view.goal.elapsed_seconds = status->goal.elapsed_seconds;
+  view.goal.created_at = status->goal.created_at;
+  view.goal.updated_at = status->goal.updated_at;
+  rc = cai_cli_workspace_host_status(state->workspace_host, &view, error);
+  pthread_mutex_unlock(&state->bridge->lock);
+  if (state->controller && state->was_busy != view.metrics.turn_active) {
+    state->was_busy = view.metrics.turn_active;
+    if (!state->was_busy)
+      cli_refresh_quota(state, 0);
+  }
+  return rc;
+}
 static int cli_sync_status(cli_state *state, cai_error *error) {
   cai_agent_runtime *display_runtime =
       state->review_runtime != NULL ? state->review_runtime : state->runtime;
@@ -1651,7 +1713,7 @@ static int cli_sync_status(cli_state *state, cai_error *error) {
   const char *reasoning_title;
   int busy, timer_active;
   int rc;
-  rc = cai_app_bridge_publish(state->bridge, state->runtime, error);
+  rc = cli_publish_status(state, state->runtime, error);
   if (rc != CAI_OK)
     return rc;
   if (!state->interactive) {
@@ -2913,7 +2975,7 @@ static int cli_close_runtime(cli_state *state, cai_error *error) {
     cai_agent_runtime_close(state->review_runtime);
     state->review_runtime = NULL;
   }
-  (void)cai_app_bridge_publish(state->bridge, NULL, NULL);
+  (void)cli_publish_status(state, NULL, NULL);
   if (state->has_message_watch) {
     (void)sl_watch_remove(state->sl, state->message_watch_id);
     state->has_message_watch = 0;
@@ -3536,8 +3598,7 @@ static int cli_host_process(cli_state *state, cai_error *error) {
     }
     {
       pslog_field fields[3];
-      int published =
-          cai_app_bridge_publish(state->bridge, state->runtime, error);
+      int published = cli_publish_status(state, state->runtime, error);
       const char *message = rc == CAI_OK              ? "Host control accepted"
                             : applied.message != NULL ? applied.message
                                                       : cai_status_string(rc);
@@ -3555,13 +3616,13 @@ static int cli_host_process(cli_state *state, cai_error *error) {
     }
     cai_error_cleanup(&applied);
   }
-  return cai_app_bridge_publish(state->bridge, state->runtime, error);
+  return cli_publish_status(state, state->runtime, error);
 }
 
 /* Level-triggered runtime, input, store and socket readiness share one owner
  * loop. Idle servers wait indefinitely except for an actual host deadline. */
 static int cli_pump(cli_state *state, long timeout, cai_error *error) {
-  struct pollfd descriptors[5U + CAI_CLI_WORKSPACE_HOST_FDS];
+  struct pollfd descriptors[6U + CAI_CLI_WORKSPACE_HOST_FDS];
   size_t server_count = 0U;
   int fd, rc, stopping;
   rc = cai_cli_pouch_ownership_check(&state->pouch, error);
@@ -3583,15 +3644,19 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
     descriptors[4].fd = state->controller && state->messages != NULL
                             ? cai_cli_messages_fd(state->messages)
                             : -1;
+    descriptors[5].fd = state->controller && state->quota_refresh.started
+                            ? state->quota_refresh.fd
+                            : -1;
     descriptors[0].events = descriptors[1].events = descriptors[2].events =
-        descriptors[3].events = descriptors[4].events = POLLIN;
-    rc = cai_cli_workspace_host_prepare(state->workspace_host, descriptors + 5U,
+        descriptors[3].events = descriptors[4].events = descriptors[5].events =
+            POLLIN;
+    rc = cai_cli_workspace_host_prepare(state->workspace_host, descriptors + 6U,
                                         CAI_CLI_WORKSPACE_HOST_FDS,
                                         &server_count, &timeout, error);
     if (rc != CAI_OK)
       return rc;
     do {
-      rc = poll(descriptors, 5U + server_count, (int)timeout);
+      rc = poll(descriptors, 6U + server_count, (int)timeout);
     } while (rc < 0 && errno == EINTR);
     if (rc < 0)
       return cai_cli_error(error, CAI_ERR_TRANSPORT, "wait for app events");
@@ -3614,6 +3679,9 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
     rc = cli_host_process(state, error);
   if (rc == CAI_OK && !state->interactive)
     rc = cli_messages_process(state, 0, error);
+  if (rc == CAI_OK && state->controller &&
+      cai_cli_quota_take(&state->quota_refresh, &state->quota))
+    rc = cli_sync_status(state, error);
   return rc;
 }
 static int cli_host_wakeup(sl_t *sl, const sl_watch_event_t *event,
@@ -6234,18 +6302,19 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
         client_config.timeout_ms > 0L ? client_config.timeout_ms : 10000L;
     if (cai_client_open(&quota_config, &state->quota_client, &quota_error) ==
         CAI_OK) {
-      if (state->interactive &&
+      if ((state->interactive || state->controller) &&
           cai_cli_quota_open(&state->quota_refresh, cli_fetch_quota,
                              state->quota_client, &quota_error) == CAI_OK) {
-        if (sl_watch_add(state->sl, state->quota_refresh.fd,
+        if (state->interactive &&
+            sl_watch_add(state->sl, state->quota_refresh.fd,
                          SL_WATCH_READ | SL_WATCH_ERROR, cli_quota_wakeup,
-                         state, &state->quota_watch_id) == SL_OK)
-          state->has_quota_watch = 1;
-        else {
+                         state, &state->quota_watch_id) != SL_OK) {
           cai_cli_quota_close(&state->quota_refresh);
           cli_diagnostic(
               state, PSLOG_LEVEL_WARN,
               "quota updates unavailable: cannot watch quota worker");
+        } else if (state->interactive) {
+          state->has_quota_watch = 1;
         }
       }
     }
@@ -6260,7 +6329,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     cli_print_error(state, "open agent session", &error);
     goto cleanup;
   }
-  rc = cai_app_bridge_publish(bridge, state->runtime, &error);
+  rc = cli_publish_status(state, state->runtime, &error);
   if (rc != CAI_OK)
     goto cleanup;
   if (cli_sandbox_notice(state) != 0) {
@@ -6290,7 +6359,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       result = 0;
     goto cleanup;
   }
-  if (state->interactive)
+  if (state->interactive || state->controller)
     cli_refresh_quota(state, 0);
   rc = cli_start_automation(state, &error);
   if (rc != CAI_OK) {
@@ -6459,7 +6528,7 @@ cleanup:
   if (bridge != NULL) {
     cai_error snapshot;
     cai_error_init(&snapshot);
-    if (cai_app_bridge_publish(bridge, state->runtime, &snapshot) != CAI_OK) {
+    if (cli_publish_status(state, state->runtime, &snapshot) != CAI_OK) {
       cai_app_bridge_error(bridge, &snapshot);
       result = 1;
     }

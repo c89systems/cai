@@ -290,7 +290,8 @@ The current application SDK still links Softline/libmdf; separating optional
 frontend packages is part of the remaining cutover. Core libcai remains
 independent of those dependencies.
 
-`<cai/app_client.h>` is the typed socket-side queue interface in libcai_app.
+`<cai/app_client.h>` is the typed socket-side queue, transcript and status
+interface in libcai_app.
 Open it with explicit runtime/workspace paths and service its single descriptor
 and deadline through `prepare`/`pump`. It creates no worker, runtime, store,
 Softline or libmdf object. Connection callbacks report verified instance,
@@ -320,8 +321,21 @@ Consumers acknowledge their cursor by returning success from END. Completed
 replay advances across skipped commit records to its captured watermark; live
 events follow it. ERROR aborts provisional rendering and requires explicit
 resubscription without resubmitting input. See the
-[payload and lifetime contract](workspace-wire-transcript.md). Application
-status presentation and the terminal frontend cutover remain pending.
+[payload and lifetime contract](workspace-wire-transcript.md).
+
+Status observation needs neither a queue producer nor a transcript subscription.
+`CAI_APP_CLIENT_STATUS` delivers a borrowed completed `cai_app_view`; query the
+same view with `cai_app_client_get_view` (NULL until the first update). Strings
+are literal data valid until the next pump/close. Escape them when rendering.
+The view includes effective/pending settings, identifiers/log path, context,
+usage, quota, execution policy and goal state/duration, excluding goal objectives
+and detailed errors. The owner coalesces unsent semantic changes; elapsed-only
+updates do not generate records. `cai_app_view_elapsed` advances active timers
+from the received monotonic anchor, without a provider call or server poll.
+Unavailable metadata invalidates only the view. After disconnect the last view
+remains explicitly stale and its durations no longer advance. ROLE still owns
+control authority. See the [status contract](workspace-wire-status.md).
+Terminal consumption and Lua socket-client bindings remain pending.
 
 An idle controller stays open until STOP. After observing shutdown, call
 `cai_app_join` outside UI/owner callbacks, then close or start the receiver

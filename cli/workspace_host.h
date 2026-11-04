@@ -1,6 +1,7 @@
 #ifndef CAI_CLI_WORKSPACE_HOST_H
 #define CAI_CLI_WORKSPACE_HOST_H
 #include "app_internal.h"
+#include <cai/app_view.h>
 #include <cai/workspace_server.h>
 #include <poll.h>
 #define CAI_CLI_WORKSPACE_HOST_FDS                                             \
@@ -18,6 +19,10 @@ int cai_cli_workspace_host_open(const char *runtime_directory,
                                 struct pslog_logger *logger,
                                 cai_cli_workspace_host **out, cai_error *error);
 int cai_cli_workspace_host_ready(cai_cli_workspace_host *, cai_error *);
+/* Borrow the owner snapshot only for this call. Cache semantic changes; no
+ * socket I/O, subscriber callbacks or elapsed-only publication here. */
+int cai_cli_workspace_host_status(cai_cli_workspace_host *,
+                                  const cai_app_view *, cai_error *);
 /* Bind only after queue restoration; unbind before runtime destruction.
  * Unbind durably releases disconnected editors' holds without draft delivery.
  */

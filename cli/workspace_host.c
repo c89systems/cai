@@ -4,6 +4,7 @@
 #include "input_wire.h"
 #include "log.h"
 #include "pouch_stream.h"
+#include "status_wire.h"
 #include "transcript_feed.h"
 #include <cai/workspace_server.h>
 #include <limits.h>
@@ -18,7 +19,7 @@ typedef struct host_peer {
   cai_cli_transcript_decoder *transcript_decoder;
   cai_input_connection *input;
   unsigned long long binding_request, snapshot_request;
-  uint64_t stream, stream_high;
+  uint64_t stream, stream_high, status_revision;
   int detached, binding;
 } host_peer;
 struct cai_cli_workspace_host {
@@ -30,6 +31,7 @@ struct cai_cli_workspace_host {
   cai_cli_transcript_publisher *history;
   char session[129];
   uint64_t generation;
+  cai_app_view status;
   host_peer peers[CAI_ATTACHMENT_LIMIT];
 };
 static int output_begin(void *context, const cai_protocol_header *header,
@@ -56,6 +58,17 @@ static int send_message(host_peer *peer, const cai_cli_input_wire_message *m,
   output.write = output_write;
   output.end = output_end;
   return cai_cli_input_wire_write(&output, m, error);
+}
+static int send_status(host_peer *peer, uint64_t now, cai_error *error) {
+  cai_cli_input_wire_output output;
+  cai_app_view view = peer->host->status;
+  output.context = peer;
+  output.begin = output_begin;
+  output.write = output_write;
+  output.end = output_end;
+  cai_app_view_elapsed(&view, now, &view.metrics.turn_elapsed_ms,
+                       &view.goal.elapsed_seconds);
+  return cai_cli_status_write(&output, &view, error);
 }
 static int send_transcript(host_peer *peer, const cai_transcript_event *event,
                            cai_error *error) {
@@ -167,6 +180,35 @@ static int publish(cai_cli_workspace_host *host, cai_error *error) {
     cai_app_bridge_server(host->bridge, &snapshot,
                           cai_workspace_server_instance(host->server));
   return rc;
+}
+int cai_cli_workspace_host_status(cai_cli_workspace_host *host,
+                                  const cai_app_view *source,
+                                  cai_error *error) {
+  cai_app_view view;
+  uint64_t now;
+  int rc;
+  if (host == NULL)
+    return CAI_OK;
+  if (source == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID, "status source required");
+  view = *source;
+  rc = cai_cli_status_representable(&view);
+  if (rc != CAI_OK) {
+    memset(&view, 0, sizeof(view));
+    view.conversation = source->conversation;
+    view.code = rc;
+    strcpy(view.reason, "Status metadata exceeds the wire profile");
+  }
+  if (host->status.revision != 0U && cai_cli_status_equal(&host->status, &view))
+    return CAI_OK;
+  if (host->status.revision == UINT64_MAX)
+    return cai_cli_error(error, CAI_ERR_LIMIT, "status revision exhausted");
+  rc = clock_ms(&now, error);
+  if (rc != CAI_OK)
+    return rc;
+  view.received_ms = now;
+  view.revision = host->status.revision + 1U;
+  return cai_cli_status_copy(&host->status, &view, error);
 }
 static int authorize(void *context, uint64_t attachment, uint64_t generation,
                      cai_error *error) {
@@ -496,6 +538,12 @@ int cai_cli_workspace_host_prepare(cai_cli_workspace_host *host,
     }
     if (peer->detached)
       *timeout = 0L;
+    if (peer->attachment != 0U && !peer->detached &&
+        peer->status_revision < host->status.revision &&
+        cai_workspace_server_pending(host->server, peer->attachment, &pending,
+                                     NULL) == CAI_OK &&
+        pending <= 65536U)
+      *timeout = 0L;
   }
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
     size_t pending;
@@ -573,6 +621,15 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
     cai_error_init(&local);
     rc = cai_workspace_server_pending(host->server, peer->attachment, &pending,
                                       &local);
+    if (rc == CAI_OK && pending <= 65536U &&
+        peer->status_revision < host->status.revision) {
+      rc = send_status(peer, now, &local);
+      if (rc == CAI_OK) {
+        peer->status_revision = host->status.revision;
+        rc = cai_workspace_server_pending(host->server, peer->attachment,
+                                          &pending, &local);
+      }
+    }
     if (rc == CAI_OK && pending <= 65536U)
       rc = output_one(peer, &local);
     if (rc == CAI_OK && peer->stream != 0U) {
@@ -626,6 +683,7 @@ void cai_cli_workspace_host_close(cai_cli_workspace_host *host) {
       cai_cli_transcript_decoder_close(host->peers[i].transcript_decoder);
     }
     cai_workspace_server_close(host->server);
+    cai_cli_status_cleanup(&host->status);
     free(host);
   }
 }

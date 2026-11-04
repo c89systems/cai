@@ -25,6 +25,7 @@ typedef struct view {
   cai_error error;
   uint64_t until;
   size_t matched;
+  size_t statuses;
   int reading, found, done, finished, accepted, closing;
 } view;
 static uint64_t now_ms(void) {
@@ -36,6 +37,15 @@ static int event(void *context, const cai_app_client_event *e,
                  cai_error *error) {
   view *v = context;
   (void)error;
+  if (e->type == CAI_APP_CLIENT_STATUS) {
+    const cai_app_view *status = NULL;
+    assert(cai_app_client_get_view(v->client, &status, NULL) == CAI_OK &&
+           status == e->status && status->available && !status->stale);
+    assert(status->runtime_ready && status->session_id != NULL &&
+           status->effective.model != NULL && status->provider != NULL);
+    assert(status->log_path == NULL || status->log_path[0] == '/');
+    ++v->statuses;
+  }
   if (e->type == CAI_APP_CLIENT_INPUT && e->input != NULL &&
       e->input->type == CAI_INPUT_OBSERVATION_RESULT) {
     assert(e->input->result.outcome == CAI_INPUT_ACCEPTED);
@@ -213,6 +223,9 @@ int main(int argc, char **argv) {
     step(v);
   assert(v->state.transport.persist == !ephemeral &&
          v->state.transport.controller == v->state.transport.attachment);
+  while (v->statuses == 0U)
+    step(v);
+  assert(!v->state.bound && v->state.producer == 0U);
   if (shutdown) {
     assert(cai_app_client_shutdown(v->client, 1U, v->state.transport.generation,
                                    &v->error) == CAI_OK);
