@@ -12,7 +12,7 @@ set(prefix "${root}/relocated")
 foreach(path include/cai/app.h include/cai/app_client.h lib/libcai_app.a lib/pkgconfig/cai-app.pc
     lib/cmake/cai_app/cai_app-config.cmake share/doc/libcai_app/embedding.md
     share/cai_app/dependencies.json
-    share/doc/libcai_app/examples/main.c share/doc/libcai_app/examples/app.lua)
+    share/doc/libcai_app/examples/app.c share/doc/libcai_app/examples/app.lua)
   if(NOT EXISTS "${prefix}/${path}")
     message(FATAL_ERROR "missing application SDK payload: ${path}")
   endif()
@@ -30,8 +30,8 @@ foreach(index RANGE 0 3)
     message(FATAL_ERROR "invalid application dependency digest")
   endif()
 endforeach()
-file(COPY "${prefix}/share/doc/libcai_app/examples/main.c" DESTINATION "${root}/source")
-file(RENAME "${root}/source/main.c" "${root}/source/example.c")
+file(COPY "${prefix}/share/doc/libcai_app/examples/app.c" DESTINATION "${root}/source")
+file(RENAME "${root}/source/app.c" "${root}/source/example.c")
 file(WRITE "${root}/source/main.c" [=[
 #define main cai_example_main
 #include "example.c"

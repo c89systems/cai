@@ -47,7 +47,7 @@ verify_application_sdk "$scratch/sdk" arm64-apple-darwin
 paths=(include/cai/app.h lib/libcai_app.a lib/libcai_app.so
   lib/pkgconfig/cai-app.pc lib/cmake/cai_app/cai_app-config.cmake
   share/cai_app/dependencies.json share/doc/libcai_app/embedding.md
-  share/doc/libcai_app/examples/main.c share/doc/libcai_app/examples/app.lua)
+  share/doc/libcai_app/examples/app.c share/doc/libcai_app/examples/app.lua)
 for path in "${paths[@]}"; do mkdir -p "$scratch/sdk/$(dirname "$path")"; touch "$scratch/sdk/$path"; done
 for target in x86_64-linux-gnu x86_64-linux-musl aarch64-linux-gnu aarch64-linux-musl armhf-linux-gnu armhf-linux-musl; do
   verify_application_sdk "$scratch/sdk" "$target"
