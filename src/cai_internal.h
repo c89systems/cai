@@ -35,6 +35,7 @@ void cai_runtime_test_set_capacity_wait_fn(int (*fn)(struct cai_agent_runtime *,
 #endif
 
 typedef struct cai_client_impl {
+  cai_environment *environment;
   cai_allocator allocator;
   char *api_key;
   cai_chatgpt_auth *chatgpt_auth;
@@ -314,7 +315,8 @@ int cai_session_account_goal_usage(cai_session *session, int *limited,
 
 int cai_resolve_api_key(const cai_allocator *allocator,
                         const char *explicit_key, const char *env_name,
-                        char **out, cai_error *error);
+                        const cai_environment *environment, char **out,
+                        cai_error *error);
 int cai_client_refresh_chatgpt_auth(cai_client *client, cai_error *error);
 int cai_client_refresh_chatgpt_auth_after_http(cai_client *client,
                                                long http_status,

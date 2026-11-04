@@ -373,8 +373,8 @@ static int cai_exec_context_new(const cai_exec_tool_config *config,
   if (rc == CAI_OK) {
     static const char *const defaults[] = {"PATH=/usr/local/bin:/usr/bin:/bin",
                                            "TMPDIR=/tmp", "LANG=C", NULL};
-    rc = cai_process_environment_new(ctx->yolo, defaults, &ctx->environment,
-                                     error);
+    rc = cai_process_environment_new(config->environment, ctx->yolo, defaults,
+                                     &ctx->environment, error);
   }
   if (rc != CAI_OK) {
     cai_exec_context_cleanup(ctx);
@@ -1963,10 +1963,16 @@ int cai_agent_register_exec_tool(cai_agent *agent,
                                  const cai_exec_tool_config *config,
                                  cai_error *error) {
   cai_agent_impl *impl;
+  cai_exec_tool_config effective;
 
   if (agent == NULL || agent->impl == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID, "agent is required");
   }
   impl = CAI_AGENT_IMPL(agent);
-  return cai_tool_registry_register_exec_tool(impl->tools, config, error);
+  memset(&effective, 0, sizeof(effective));
+  if (config != NULL)
+    effective = *config;
+  if (effective.environment == NULL)
+    effective.environment = cai_client_environment(impl->client);
+  return cai_tool_registry_register_exec_tool(impl->tools, &effective, error);
 }

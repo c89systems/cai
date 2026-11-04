@@ -343,7 +343,7 @@ static void test_yolo_environment(test_state *state) {
   for (mode = 0; mode < 2; mode++) {
     expect_int(
         state, "yolo_environment_snapshot",
-        cai_process_environment_new(mode, defaults, &environment, &error),
+        cai_process_environment_new(NULL, mode, defaults, &environment, &error),
         CAI_OK);
     if (environment != NULL) {
       for (i = 0U; i < 3U; i++)
@@ -361,9 +361,10 @@ static void test_yolo_environment(test_state *state) {
   }
   unsetenv("HOME");
   unsetenv("XDG_CONFIG_HOME");
-  expect_int(state, "environment_unset_snapshot",
-             cai_process_environment_new(0, defaults, &environment, &error),
-             CAI_OK);
+  expect_int(
+      state, "environment_unset_snapshot",
+      cai_process_environment_new(NULL, 0, defaults, &environment, &error),
+      CAI_OK);
   if (environment != NULL) {
     expect_int(state, "unset_home_not_fabricated",
                yolo_env(environment, "HOME") == NULL, 1);

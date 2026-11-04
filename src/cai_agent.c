@@ -1,6 +1,7 @@
 #include "cai_input_queue_codec.h"
 #include "cai_internal.h"
 #include "cai_plugins_internal.h"
+#include <cai/environment.h>
 #include <cai/tools/todo.h>
 #include <float.h>
 
@@ -935,6 +936,7 @@ void cai_agent_destroy(cai_agent *agent) {
     impl->tools->destroy(impl->tools);
   }
   cai_plugins_close(impl->plugins);
+  cai_environment_close(impl->plugin_call.environment);
   cai_free_mem(NULL, impl->plugin_workspace);
   if (impl->plugins_lock_initialized)
     pthread_mutex_destroy(&impl->plugins_lock);

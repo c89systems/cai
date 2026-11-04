@@ -1535,7 +1535,7 @@ static void test_env_precedence(test_state *state) {
   setenv("OPENAI_API_KEY", "env-key", 1);
   key = NULL;
   expect_int(state, "env_fallback",
-             cai_resolve_api_key(NULL, NULL, NULL, &key, &error), CAI_OK);
+             cai_resolve_api_key(NULL, NULL, NULL, NULL, &key, &error), CAI_OK);
   expect_str(state, "env_fallback_value", key, "env-key");
   cai_free_mem(NULL, key);
   cai_error_cleanup(&error);
@@ -1543,7 +1543,7 @@ static void test_env_precedence(test_state *state) {
   write_file_or_die(".env", "OPENAI_API_KEY=dotenv-key\n");
   key = NULL;
   expect_int(state, "env_ignores_dotenv",
-             cai_resolve_api_key(NULL, NULL, NULL, &key, &error), CAI_OK);
+             cai_resolve_api_key(NULL, NULL, NULL, NULL, &key, &error), CAI_OK);
   expect_str(state, "env_ignores_dotenv_value", key, "env-key");
   cai_free_mem(NULL, key);
   cai_error_cleanup(&error);
@@ -1558,9 +1558,10 @@ static void test_env_precedence(test_state *state) {
 
   write_file_or_die(".env", "OPENAI_API_KEY=dotenv-key\n");
   key = NULL;
-  expect_int(state, "explicit_override",
-             cai_resolve_api_key(NULL, "explicit-key", NULL, &key, &error),
-             CAI_OK);
+  expect_int(
+      state, "explicit_override",
+      cai_resolve_api_key(NULL, "explicit-key", NULL, NULL, &key, &error),
+      CAI_OK);
   expect_str(state, "explicit_override_value", key, "explicit-key");
   cai_free_mem(NULL, key);
   cai_error_cleanup(&error);
@@ -1569,7 +1570,7 @@ static void test_env_precedence(test_state *state) {
   unsetenv("OPENAI_API_KEY");
   key = NULL;
   expect_int(state, "env_missing_key",
-             cai_resolve_api_key(NULL, NULL, NULL, &key, &error),
+             cai_resolve_api_key(NULL, NULL, NULL, NULL, &key, &error),
              CAI_ERR_INVALID);
   if (key != NULL) {
     test_fail(state, "env_missing_key", "unexpected key allocated");
@@ -1589,10 +1590,10 @@ static void test_env_precedence(test_state *state) {
   unlink(".env");
   setenv("OPENROUTER_API_KEY", "openrouter-env-key", 1);
   key = NULL;
-  expect_int(
-      state, "openrouter_env_fallback",
-      cai_resolve_api_key(NULL, NULL, CAI_OPENROUTER_API_KEY_ENV, &key, &error),
-      CAI_OK);
+  expect_int(state, "openrouter_env_fallback",
+             cai_resolve_api_key(NULL, NULL, CAI_OPENROUTER_API_KEY_ENV, NULL,
+                                 &key, &error),
+             CAI_OK);
   expect_str(state, "openrouter_env_fallback_value", key, "openrouter-env-key");
   cai_free_mem(NULL, key);
   cai_error_cleanup(&error);
@@ -54123,6 +54124,7 @@ static void test_mcp_raw_input_transport_failures(test_state *state) {
 #include "chat_refusal_test.inc"
 #include "chat_stream_callbacks_test.inc"
 #include "chat_tool_images_test.inc"
+#include "environment_client_test.inc"
 #include "reasoning_pending_test.inc"
 #include "yolo_test.inc"
 
@@ -54674,6 +54676,9 @@ static const test_entry test_entries[] = {
      test_mcp_streamable_http_server_error_no_recovery},
     {"mcp_handler", test_mcp_handler},
     {"client_open", test_client_open},
+    {"client_environment", test_client_environment},
+    {"environment_tools", test_environment_tools},
+    {"agent_environment", test_agent_environment},
     {"mike_mind_prompt_contract", test_mike_mind_prompt_contract},
     {"response_json", test_response_json},
     {"response_request_tools_cleanup", test_response_request_tools_cleanup},

@@ -12,6 +12,9 @@ extern "C" {
 
 /** Configuration for the opt-in `exec_command` tool preset. */
 typedef struct cai_exec_tool_config {
+  /** Environment snapshot used when registering tools. NULL inherits the
+   * agent client's view, or captures the process for a standalone registry. */
+  cai_environment *environment;
   /** Optional override for the model-facing tool name. */
   const char *name;
   /** Optional override for the model-facing tool description. */

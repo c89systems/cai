@@ -3,6 +3,7 @@
 
 #include <cai/agent_runtime.h>
 #include <cai/cai.h>
+#include <cai/environment.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,6 +41,13 @@ typedef struct cai_config_field {
 } cai_config_field;
 
 typedef struct cai_config cai_config;
+/** Explicit construction context. NULL members capture cwd/environment once
+ * at open. An explicit directory must be absolute. Environment is retained;
+ * directory is copied. Later host cwd/environment changes do not affect it. */
+typedef struct cai_config_context {
+  const char *directory;
+  cai_environment *environment;
+} cai_config_context;
 /** Receiver for strict INI parsing and settings. Borrowed values remain valid
  * until successful load, set, resolve_path or close. This owner-thread object
  * has no implicit environment, authentication or transport side effects. */
@@ -69,6 +77,9 @@ struct cai_config {
   int (*set)(cai_config *self, const char *section, const char *key,
              const char *value, cai_error *error);
   int (*apply_environment)(const cai_config *self, cai_error *error);
+  /** Owned immutable environment result; never modifies the host process. */
+  int (*environment)(const cai_config *self, cai_environment **out,
+                     cai_error *error);
   int (*write_template)(const cai_config *self, cai_sink *sink,
                         cai_error *error);
   int (*create_template_file)(const cai_config *self, const char *path,
@@ -90,12 +101,23 @@ struct cai_config {
  * retaining its native type/range. NULL choices inherit native choices.
  * Empty open contains no explicit values. No configuration files are read. */
 int cai_config_open(const cai_config_field *extensions, size_t count,
-                    cai_config **out, cai_error *error);
+                    const cai_config_context *context, cai_config **out,
+                    cai_error *error);
 /** Open with exactly the supplied fields, copied and validated. Hosts can
  * select supported fields from an SDK receiver's field_at/field_count and add
  * their own declarations. [env] remains available in every schema. */
 int cai_config_open_schema(const cai_config_field *fields, size_t count,
-                           cai_config **out, cai_error *error);
+                           const cai_config_context *context, cai_config **out,
+                           cai_error *error);
+/** Borrow the captured absolute base directory until close. */
+const char *cai_config_directory(const cai_config *self);
+/** Borrow the effective [env]/captured value. Captured values (including empty
+ * values) win unless config_env_has_precedence=true. No global getenv call. */
+const char *cai_config_getenv(const cai_config *self, const char *name);
+/** Produce an owned immutable effective environment, independent of subsequent
+ * config mutations/close. Caller releases it with cai_environment_close. */
+int cai_config_environment(const cai_config *self, cai_environment **out,
+                           cai_error *error);
 /** Borrow schema metadata until set_default or close. NULL/out-of-range is
  * accepted and returns zero/NULL. */
 size_t cai_config_field_count(const cai_config *self);
@@ -138,9 +160,9 @@ long long cai_config_get_integer(const cai_config *self, const char *section,
                                  const char *key, long long fallback);
 double cai_config_get_real(const cai_config *self, const char *section,
                            const char *key, double fallback);
-/** Resolve and retain an explicitly supplied path using current HOME.
+/** Resolve and retain an explicitly supplied path using the effective HOME.
  * Empty/missing resolves to NULL (automatic). Relative paths are based on
- * origin's parent, or cwd for a source without an absolute filename. */
+ * origin's parent, or captured directory without an absolute filename. */
 int cai_config_resolve_path(cai_config *self, const char *section,
                             const char *key, const char **out,
                             cai_error *error);

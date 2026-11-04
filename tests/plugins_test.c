@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #include <assert.h>
+#include <cai/environment.h>
 #include <cai/plugins.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -159,6 +160,31 @@ int main(int argc, char **argv) {
   assert(cai_plugins_open(&config, &plugins, &error) == CAI_OK);
   assert(cai_plugins_reload(plugins, &error) == CAI_OK);
   run(plugins, "echo", "{\"hello\":\"world\"}", &call, "{\"hello\":\"world\"}");
+  {
+    static const char *const entries[] = {"HOME=/plugin home",
+                                          "PATH=/usr/bin:/bin",
+                                          "CAI_TEST_PLUGIN_ENV=owned", NULL};
+    cai_environment *environment = NULL;
+    assert(cai_environment_open(entries, &environment, &error) == CAI_OK);
+    file_write(manifest,
+               "{\"name\":\"echo\",\"description\":\"environment\","
+               "\"executor\":\"process\",\"parameters\":{\"type\":\"object\"},"
+               "\"argv\":[\"/bin/sh\",\"-c\",\"cat >/dev/null; "
+               "printf '%s|%s' \\\"$HOME\\\" "
+               "\\\"${CAI_TEST_PLUGIN_ENV-unset}\\\"\"]}");
+    assert(cai_plugins_load(plugins, package, &error) == CAI_OK);
+    call.environment = environment;
+    call.yolo = 1;
+    run(plugins, "echo", "{}", &call, "/plugin home|owned");
+    call.yolo = 0;
+    run(plugins, "echo", "{}", &call, "/plugin home|unset");
+    call.environment = NULL;
+    cai_environment_close(environment);
+    file_write(manifest, "{\"name\":\"echo\",\"description\":\"Echo "
+                         "input\",\"executor\":\"process\",\"parameters\":{"
+                         "\"type\":\"object\"},\"argv\":[\"/bin/cat\"]}");
+    assert(cai_plugins_load(plugins, package, &error) == CAI_OK);
+  }
   /* A failed candidate cannot erase a working tool. */
   file_write(
       manifest,

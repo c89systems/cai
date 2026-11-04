@@ -15,7 +15,10 @@ authority generation and check it on owner-thread dispatch. Typed protocol
 envelopes (`protocol.h`) stream metadata/payload tokens and distinguish
 provisional data from validated record completion. Queue producers can resume
 their retained receipts after disconnect or ordered journal recovery, without
-another producer reservation. The application controller/frontend cutover,
+another producer reservation. Immutable environment views now scope client
+credentials and command/plugin tools; configuration accepts explicit directory/
+environment contexts and produces effective views without process mutation.
+The application controller/frontend cutover,
 connection handshake and headless/attach CLI are still pending; these core
 components alone do not enable those CLI modes.
 

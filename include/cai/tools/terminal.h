@@ -96,6 +96,11 @@ typedef int (*cai_terminal_policy_fn)(void *context, const char *command,
  * does not provide an OS sandbox in either mode.
  */
 typedef struct cai_terminal_tool_config {
+  /** Retained immutable environment. NULL inherits the agent client's view,
+   * or captures the process once for a standalone registry. YOLO transitions
+   * rebuild filtering from this same view, never the current host environment.
+   */
+  cai_environment *environment;
   /** Required workspace base. Workdirs are confined here unless yolo is set. */
   const char *root_path;
   /** Initial working directory below root; NULL selects root. */

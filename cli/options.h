@@ -4,10 +4,14 @@
 #include <stddef.h>
 #include <stdio.h>
 
+struct cai_environment;
+
 #define CAI_CLI_STATUS_DEFAULT_FIELDS                                          \
   "model:ctx:dir:branch:weekly:crd:yolo:goal"
 
 typedef struct cai_cli_options {
+  /* Borrow the application-owned effective configuration environment. */
+  struct cai_environment *environment;
   const char *program_name;
   const char *invocation_name;
   char environment_prefix[65];

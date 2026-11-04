@@ -727,6 +727,7 @@ set(CAI_SOURCES
   src/cai_workspace.c
   src/cai_conversation.c
   src/cai_env.c
+  src/cai_environment.c
   src/cai_process_environment.c
   src/cai_config.c
   src/cai_display.c
@@ -1024,6 +1025,18 @@ endif()
 
 if(CAI_BUILD_TESTS)
   add_executable(cai_input_queue_test tests/input_queue_test.c)
+  add_executable(cai_environment_test tests/environment_test.c)
+  target_link_libraries(cai_environment_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_environment_test)
+  target_compile_options(cai_environment_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_environment COMMAND cai_environment_test)
+  set_tests_properties(cai_environment PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
+  add_executable(cai_config_context_test tests/config_context_test.c)
+  target_link_libraries(cai_config_context_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_config_context_test)
+  target_compile_options(cai_config_context_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_config_context COMMAND cai_config_context_test "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(cai_config_context PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   add_executable(cai_attachment_test tests/attachment_test.c)
   target_link_libraries(cai_attachment_test PRIVATE ${_cai_internal_link_target})
   cai_configure_cli_target(cai_attachment_test)

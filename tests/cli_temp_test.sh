@@ -163,24 +163,29 @@ unset CAI_TEST_API_BASE_URL
 fi
 
 # Runtime reopen, /new, and enabling/disabling messaging retain store handles.
-# Count SDK opens, rather than infer reuse from the eventual output.
-base=("$controls" --config "$config" --no-terminal -C "$work"
-      --sessions-store sessions --messaging-store sessions)
+# Count SDK opens, rather than infer reuse from the eventual output. MCP uses
+# the auth store too: cover both a shared root and a deliberately separate one.
 export CAI_TEST_APP_CONTROL=stores
-for temporary in false true; do
-  flags=()
-  if [[ "$temporary" == true ]]; then
-    flags=(--temp --force)
-    export CAI_TEST_APP_STORE_OPENS=2
-  else
-    export CAI_TEST_APP_STORE_OPENS=1
-  fi
-  terminal_start "${flags[@]}"
-  send '/queue on\r'; expect 'Message queue:'
-  send '/queue off\r'; expect 'Messaging is disabled'
-  send '/new\r'; expect 'New session'
-  send '/queue on\r'; expect 'Message queue:'
-  terminal_close
+for auth_store in sessions default; do
+  base=("$controls" --config "$config" --no-terminal -C "$work"
+        --sessions-store sessions --messaging-store sessions --auth-store "$auth_store"
+        --message-queue cai.store-reuse)
+  for temporary in false true; do
+    flags=()
+    CAI_TEST_APP_STORE_OPENS=1
+    if [[ "$auth_store" == default ]]; then CAI_TEST_APP_STORE_OPENS=2; fi
+    if [[ "$temporary" == true ]]; then
+      flags=(--temp --force)
+      CAI_TEST_APP_STORE_OPENS=$((CAI_TEST_APP_STORE_OPENS + 1))
+    fi
+    export CAI_TEST_APP_STORE_OPENS
+    terminal_start "${flags[@]}"
+    send '/queue on\r'; expect 'Message queue:'
+    send '/queue off\r'; expect 'Messaging is disabled'
+    send '/new\r'; expect 'New session'
+    send '/queue on\r'; expect 'Message queue:'
+    terminal_close
+  done
 done
 unset CAI_TEST_APP_STORE_OPENS
 

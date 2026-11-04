@@ -150,6 +150,30 @@ its reported monotonic deadline without polling while idle. The owner still
 performs runtime/transport shutdown; the attachment controller never exits a
 process, starts workers or closes application stores.
 
+`<cai/environment.h>` supplies immutable shared views for independent hosts.
+Open with an explicit `NAME=value` vector, or NULL to capture the process once.
+An empty vector selects an empty environment. Derivation copies changes into
+a new view; NULL values remove names and empty values stay empty. Retain/release
+references across threads; readers never modify the host environment.
+
+`cai_client_config.environment` retains a view for API-key lookup and default
+command/plugin environments. Agent registrations inherit that client's view
+unless explicitly overridden. A terminal retains its source view across YOLO
+changes, rebuilding filtering without rereading a changed process environment.
+Standalone registries can supply their own view; direct plugin invocations
+borrow it through the call.
+
+Configuration constructors take a `cai_config_context` with an absolute base
+directory and environment. NULL members capture startup defaults once. Relative
+file opens and path resolution continue using that directory even if the host
+changes cwd. `cai_config_getenv` reads the effective captured/[env] value;
+`cai_config_environment` returns an owned immutable view, usable in client or
+tool configuration after the config is changed or closed. Captured values,
+including empty ones, win unless `config_env_has_precedence=true`.
+The explicit `apply_environment` utility still changes process-global state;
+use the immutable view for independently running controllers. The current
+terminal receiver's wider lifecycle extraction remains pending.
+
 The Unix transport foundation is also independent of libcai_app and terminal
 libraries. `<cai/cbor.h>` decodes fragments into borrowed tokens and writes
 tokens directly to a sink, without a DOM or retained value. A definite string

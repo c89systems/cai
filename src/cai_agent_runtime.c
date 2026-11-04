@@ -1,5 +1,6 @@
 #include <cai/agent_runtime.h>
 #include <cai/dtg.h>
+#include <cai/environment.h>
 #include <cai/mcp.h>
 #include <cai/smith.h>
 #include <cai/tools/goal.h>
@@ -2194,6 +2195,7 @@ static void cai_runtime_clear_subagents(cai_agent_runtime *runtime) {
 }
 
 static void cai_runtime_clear_smith_profile(cai_agent_runtime *runtime) {
+  cai_environment_close(runtime->smith_terminal_config.environment);
   cai_free_mem(NULL, runtime->smith_identity);
   cai_free_mem(NULL, runtime->smith_model);
   cai_free_mem(NULL, runtime->smith_reasoning_effort);
@@ -2477,10 +2479,18 @@ static int cai_runtime_capture_preset_profile(
   }
   if (rc == CAI_OK && config->terminal_tool_config != NULL) {
     runtime->smith_terminal_config = *terminal_config;
+    runtime->smith_terminal_config.environment = NULL;
     runtime->smith_terminal_config.root_path = NULL;
-    rc = cai_runtime_copy_optional_string(
-        terminal_config->default_workdir,
-        &runtime->smith_terminal_default_workdir, error);
+    if (terminal_config->environment != NULL) {
+      rc = cai_environment_retain(terminal_config->environment, error);
+      if (rc == CAI_OK)
+        runtime->smith_terminal_config.environment =
+            terminal_config->environment;
+    }
+    if (rc == CAI_OK)
+      rc = cai_runtime_copy_optional_string(
+          terminal_config->default_workdir,
+          &runtime->smith_terminal_default_workdir, error);
     if (rc == CAI_OK) {
       rc = cai_runtime_copy_optional_string(terminal_config->shell_path,
                                             &runtime->smith_terminal_shell_path,

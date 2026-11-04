@@ -99,6 +99,7 @@ typedef struct cli_state {
   int review_block;
   char *normal_reasoning_override, *high_reasoning_override;
   cai_config *configuration;
+  cai_environment *environment;
   cai_agent_session_store store;
   cai_cli_pouch pouch;
   cai_cli_pouch auth_pouch, messaging_pouch;
@@ -6074,6 +6075,12 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     cli_theme_for_scope(state, &state->theme, 0, &state->render_theme);
   }
   if (parsed > 0 &&
+      cai_config_environment(state->configuration, &state->environment,
+                             &error) != CAI_OK)
+    parsed = -1;
+  if (parsed > 0)
+    state->options.environment = state->environment;
+  if (parsed > 0 &&
       cai_cli_stores_resolve(state->configuration, &error) != CAI_OK)
     parsed = -1;
   if (parsed > 0) {
@@ -6444,6 +6451,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     state->has_log_watch = state->log->wakeup_fd >= 0;
   }
   cai_client_config_init(&client_config);
+  client_config.environment = state->environment;
   client_config.logger = state->log->logger;
   rc = cli_load_model_metadata(&state->options, &metadata_json, &error);
   if (rc != CAI_OK) {
@@ -6532,6 +6540,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     cai_client_config quota_config;
     cai_error_init(&quota_error);
     cai_client_config_init(&quota_config);
+    quota_config.environment = state->environment;
     quota_config.logger = state->log->logger;
     quota_config.chatgpt_auth = &state->shared_auth;
     quota_config.ca_bundle_path = client_config.ca_bundle_path;
@@ -6858,6 +6867,7 @@ cleanup:
   cai_cli_replay_tools_close(state->replay_tools);
   free(metadata_json);
   cai_config_close(state->configuration);
+  cai_environment_close(state->environment);
   cai_error_cleanup(&error);
   if (cai_cli_log_release(state->log) != 0)
     result = 1;

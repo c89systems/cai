@@ -461,6 +461,9 @@ if(CAI_BUILD_TESTS)
     mcp_streamable_http_server_error_no_recovery
     mcp_handler
     client_open
+    client_environment
+    environment_tools
+    agent_environment
     mike_mind_prompt_contract
     response_json
     response_request_tools_cleanup

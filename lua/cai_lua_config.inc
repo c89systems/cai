@@ -36,7 +36,7 @@ static int cai_lua_config_new(lua_State *L) {
   memset(handle, 0, sizeof(*handle));
   luaL_setmetatable(L, CAI_LUA_CONFIG);
   cai_error_init(&error);
-  rc = cai_config_open(NULL, 0U, &ptr, &error);
+  rc = cai_config_open(NULL, 0U, NULL, &ptr, &error);
   if (rc != CAI_OK)
     return cai_lua_fail(L, rc, &error);
   handle->ptr = ptr;

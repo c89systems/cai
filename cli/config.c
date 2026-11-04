@@ -548,7 +548,7 @@ int cai_cli_app_schema(cai_config **out, cai_error *error) {
                                      : "0";
   }
   rc = cai_config_open(extension, sizeof(extension) / sizeof(extension[0]),
-                       &sdk, error);
+                       NULL, &sdk, error);
   if (rc != CAI_OK)
     return -1;
   selected = calloc(sdk->field_count(sdk) + sizeof(stores) / sizeof(stores[0]),
@@ -582,7 +582,7 @@ int cai_cli_app_schema(cai_config **out, cai_error *error) {
   }
   for (i = 0U; i < sizeof(stores) / sizeof(stores[0]); i++)
     selected[count++] = stores[i];
-  rc = cai_config_open_schema(selected, count, out, error);
+  rc = cai_config_open_schema(selected, count, NULL, out, error);
   free(selected);
   cai_config_close(sdk);
   if (rc != CAI_OK)

@@ -62,14 +62,14 @@ static const char *const cai_terminal_environment_defaults[] = {
     "LESSHISTFILE=/dev/null",
     NULL};
 
-static int cai_terminal_environment_new(int yolo, char ***out,
-                                        cai_error *error) {
+static int cai_terminal_environment_new(const cai_environment *base, int yolo,
+                                        char ***out, cai_error *error) {
   static const char *const pagers[] = {"PAGER=cat", "GIT_PAGER=cat",
                                        "GH_PAGER=cat"};
   char **environment, **grown;
   size_t count, i, j, key_length;
-  int rc = cai_process_environment_new(yolo, cai_terminal_environment_defaults,
-                                       &environment, error);
+  int rc = cai_process_environment_new(
+      base, yolo, cai_terminal_environment_defaults, &environment, error);
   *out = NULL;
   if (rc != CAI_OK)
     return rc;
@@ -270,6 +270,7 @@ typedef struct cai_terminal_manager {
   char *default_workdir;
   char *shell_path;
   char **environment;
+  cai_environment *source_environment;
   int yolo;
   int foreground;
   long default_yield_ms;
@@ -865,6 +866,7 @@ static void cai_terminal_manager_destroy(cai_terminal_manager *manager) {
   cai_free_mem(NULL, manager->default_workdir);
   cai_free_mem(NULL, manager->shell_path);
   cai_process_environment_free(manager->environment);
+  cai_environment_close(manager->source_environment);
   cai_free_mem(NULL, manager->command);
   cai_free_mem(NULL, manager->workdir);
   cai_free_mem(NULL, manager->output);
@@ -933,8 +935,17 @@ static int cai_terminal_manager_new(const cai_terminal_tool_config *config,
                                  : cai_strdup(NULL, resolved);
   manager->shell_path = cai_strdup(
       NULL, config->shell_path != NULL ? config->shell_path : "/bin/sh");
-  environment_rc =
-      cai_terminal_environment_new(config->yolo, &manager->environment, error);
+  if (config->environment != NULL) {
+    environment_rc = cai_environment_retain(config->environment, error);
+    if (environment_rc == CAI_OK)
+      manager->source_environment = config->environment;
+  } else
+    environment_rc =
+        cai_environment_open(NULL, &manager->source_environment, error);
+  if (environment_rc == CAI_OK)
+    environment_rc =
+        cai_terminal_environment_new(manager->source_environment, config->yolo,
+                                     &manager->environment, error);
   manager->default_yield_ms = config->default_yield_time_ms > 0L
                                   ? config->default_yield_time_ms
                                   : CAI_TERMINAL_DEFAULT_YIELD_TIME_MS;
@@ -974,6 +985,7 @@ static int cai_terminal_manager_new(const cai_terminal_tool_config *config,
     cai_free_mem(NULL, manager->default_workdir);
     cai_free_mem(NULL, manager->shell_path);
     cai_process_environment_free(manager->environment);
+    cai_environment_close(manager->source_environment);
     cai_free_mem(NULL, manager);
     return cai_set_error(error, CAI_ERR_NOMEM,
                          "failed to allocate terminal manager");
@@ -984,6 +996,7 @@ static int cai_terminal_manager_new(const cai_terminal_tool_config *config,
     cai_free_mem(NULL, manager->default_workdir);
     cai_free_mem(NULL, manager->shell_path);
     cai_process_environment_free(manager->environment);
+    cai_environment_close(manager->source_environment);
     cai_free_mem(NULL, manager);
     return cai_set_error(error, CAI_ERR_TRANSPORT,
                          "failed to initialize terminal manager lock");
@@ -995,6 +1008,7 @@ static int cai_terminal_manager_new(const cai_terminal_tool_config *config,
     cai_free_mem(NULL, manager->default_workdir);
     cai_free_mem(NULL, manager->shell_path);
     cai_process_environment_free(manager->environment);
+    cai_environment_close(manager->source_environment);
     cai_free_mem(NULL, manager);
     return cai_set_error(error, CAI_ERR_TRANSPORT,
                          "failed to initialize terminal manager condition");
@@ -1946,7 +1960,8 @@ int cai_terminal_tools_yolo_internal(cai_tool_registry *registry,
   fd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
   rc = fd < 0 ? cai_set_error(error, CAI_ERR_INVALID,
                               "cannot open terminal policy root")
-              : cai_terminal_environment_new(enabled, &environment, error);
+              : cai_terminal_environment_new(manager->source_environment,
+                                             enabled, &environment, error);
   if (rc == CAI_OK) {
     pthread_mutex_lock(&manager->lock);
     if (manager->running || manager->starting || manager->operation_active)
@@ -2050,9 +2065,16 @@ int cai_tool_registry_register_terminal_tools(
 int cai_agent_register_terminal_tools(cai_agent *agent,
                                       const cai_terminal_tool_config *config,
                                       cai_error *error) {
+  cai_terminal_tool_config effective;
   if (agent == NULL || agent->impl == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID, "agent is required");
   }
+  memset(&effective, 0, sizeof(effective));
+  if (config != NULL)
+    effective = *config;
+  if (effective.environment == NULL)
+    effective.environment =
+        cai_client_environment(CAI_AGENT_IMPL(agent)->client);
   return cai_tool_registry_register_terminal_tools(CAI_AGENT_IMPL(agent)->tools,
-                                                   config, error);
+                                                   &effective, error);
 }

@@ -167,6 +167,7 @@ cai_client_delete_conversation_handle
 cai_client_delete_conversation_item
 cai_client_delete_conversation_item_handle
 cai_client_delete_response
+cai_client_environment
 cai_client_list_conversation_items
 cai_client_list_conversation_items_handle
 cai_client_list_models
@@ -195,6 +196,8 @@ cai_config_apply_runtime
 cai_config_apply_terminal
 cai_config_close
 cai_config_create_template_file
+cai_config_directory
+cai_config_environment
 cai_config_field_at
 cai_config_field_count
 cai_config_get
@@ -202,6 +205,7 @@ cai_config_get_bool
 cai_config_get_integer
 cai_config_get_list
 cai_config_get_real
+cai_config_getenv
 cai_config_load
 cai_config_load_file
 cai_config_open
@@ -236,6 +240,13 @@ cai_dtg_format_time
 cai_dtg_parse
 cai_dtg_time_parts
 cai_dtg_zone
+cai_environment_close
+cai_environment_count
+cai_environment_derive
+cai_environment_entries
+cai_environment_get
+cai_environment_open
+cai_environment_retain
 cai_error_cleanup
 cai_error_init
 cai_execution_record_cleanup

@@ -29,6 +29,8 @@ struct pslog_logger;
 
 /** OpenAI API client handle. */
 typedef struct cai_client cai_client;
+/** Immutable environment view from cai/environment.h. */
+typedef struct cai_environment cai_environment;
 /** Agent facade handle that owns config, tools, and an implicit session. */
 typedef struct cai_agent cai_agent;
 /** Stateful agent session using the client's selected wire protocol. */
@@ -188,6 +190,10 @@ typedef struct cai_usage_accounting {
 
 /** Configuration for opening a cai client. */
 typedef struct cai_client_config {
+  /** Optional immutable environment retained by the client. NULL captures the
+   * process environment once at open. API-key lookup and inherited command/
+   * plugin tool environments use it without changing the hosting process. */
+  cai_environment *environment;
   /** API key string; when NULL cai looks at api_key_env. */
   const char *api_key;
   /** Environment variable to read when api_key is NULL. */

@@ -2,6 +2,7 @@
 #define _XOPEN_SOURCE 700
 #include "cai_internal.h"
 #include "cai_plugins_internal.h"
+#include <cai/environment.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -821,6 +822,7 @@ int cai_agent_use_plugins(cai_agent *agent, cai_plugins *plugins,
   size_t i, base;
   int rc = CAI_OK;
   char *workspace = NULL;
+  cai_environment *environment;
   if (agent == NULL || agent->impl == NULL || (plugins != NULL && call == NULL))
     return cai_set_error(error, CAI_ERR_INVALID,
                          "agent and plugin call configuration required");
@@ -839,6 +841,14 @@ int cai_agent_use_plugins(cai_agent *agent, cai_plugins *plugins,
   workspace = cai_strdup(NULL, call->workspace != NULL ? call->workspace : ".");
   if (workspace == NULL)
     return cai_set_error(error, CAI_ERR_NOMEM, "copy plugin workspace");
+  environment = call->environment != NULL
+                    ? call->environment
+                    : cai_client_environment(impl->client);
+  rc = cai_environment_retain(environment, error);
+  if (rc != CAI_OK) {
+    cai_free_mem(NULL, workspace);
+    return rc;
+  }
   base = cai_tool_registry_count(impl->tools);
   for (i = 0U; rc == CAI_OK && i < base; i++)
     rc = plugins_reserve(plugins, cai_tool_registry_name_at(impl->tools, i),
@@ -847,6 +857,7 @@ int cai_agent_use_plugins(cai_agent *agent, cai_plugins *plugins,
     plugins_retain(plugins);
     impl->plugins = plugins;
     impl->plugin_call = *call;
+    impl->plugin_call.environment = environment;
     impl->plugin_workspace = workspace;
     impl->plugin_call.workspace = workspace;
     impl->plugins_base = base;
@@ -854,10 +865,13 @@ int cai_agent_use_plugins(cai_agent *agent, cai_plugins *plugins,
     if (rc != CAI_OK) {
       impl->plugins = NULL;
       impl->plugin_workspace = NULL;
+      impl->plugin_call.environment = NULL;
       cai_plugins_close(plugins);
     }
   }
-  if (rc != CAI_OK)
+  if (rc != CAI_OK) {
+    cai_environment_close(environment);
     cai_free_mem(NULL, workspace);
+  }
   return rc;
 }

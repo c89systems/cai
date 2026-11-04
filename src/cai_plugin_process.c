@@ -119,7 +119,8 @@ static int process_run(void *context, cai_source *arguments, cai_sink *output,
     rc = cai_set_error(error, CAI_ERR_CANCELLED, "plugin invocation cancelled");
     goto cleanup;
   }
-  rc = cai_process_environment_new(call->yolo, NULL, &environment, error);
+  rc = cai_process_environment_new(call->environment, call->yolo, NULL,
+                                   &environment, error);
   if (rc == CAI_OK)
     rc = process_program(process->argv[0], environment, buffers->workspace,
                          buffers->executable, error);

@@ -1,4 +1,5 @@
 #include "cai_internal.h"
+#include <cai/environment.h>
 
 #include <ctype.h>
 #include <stdio.h>
@@ -165,7 +166,8 @@ static int cai_load_dotenv_api_key_internal(const cai_allocator *allocator,
 
 int cai_resolve_api_key(const cai_allocator *allocator,
                         const char *explicit_key, const char *env_name,
-                        char **out, cai_error *error) {
+                        const cai_environment *environment, char **out,
+                        cai_error *error) {
   const char *env_key;
   const char *key_name;
 
@@ -188,7 +190,8 @@ int cai_resolve_api_key(const cai_allocator *allocator,
     return cai_set_error(error, CAI_ERR_INVALID,
                          "api key environment variable name is invalid");
   }
-  env_key = getenv(key_name);
+  env_key = environment != NULL ? cai_environment_get(environment, key_name)
+                                : getenv(key_name);
   if (env_key == NULL || env_key[0] == '\0') {
     char message[128];
 

@@ -1,6 +1,7 @@
 #include "cai_internal.h"
 
 #include <cai/auth.h>
+#include <cai/environment.h>
 
 #include <string.h>
 
@@ -111,6 +112,7 @@ static void cai_client_destroy_fields(cai_client_impl *impl) {
   if (impl == NULL) {
     return;
   }
+  cai_environment_close(impl->environment);
   cai_client_clear_secret(impl->api_key);
   cai_free_mem(&impl->allocator, impl->api_key);
   cai_free_mem(&impl->allocator, impl->base_url);
@@ -226,6 +228,18 @@ int cai_client_open(const cai_client_config *config, cai_client **out,
     impl->json_response_limit_bytes = CAI_DEFAULT_JSON_RESPONSE_LIMIT;
   }
 
+  if (effective->environment != NULL) {
+    rc = cai_environment_retain(effective->environment, error);
+    if (rc == CAI_OK)
+      impl->environment = effective->environment;
+  } else
+    rc = cai_environment_open(NULL, &impl->environment, error);
+  if (rc != CAI_OK) {
+    cai_client_destroy_fields(impl);
+    cai_free_mem(&impl->allocator, impl);
+    cai_free_mem(&effective->allocator, client);
+    return rc;
+  }
   if (effective->chatgpt_auth != NULL) {
     char *access_token;
 
@@ -246,9 +260,10 @@ int cai_client_open(const cai_client_config *config, cai_client **out,
                              effective->api_key_env != NULL
                                  ? effective->api_key_env
                                  : CAI_OPENAI_API_KEY_ENV,
-                             &impl->api_key, error);
+                             impl->environment, &impl->api_key, error);
   }
   if (rc != CAI_OK) {
+    cai_client_destroy_fields(impl);
     cai_free_mem(&impl->allocator, impl);
     cai_free_mem(&effective->allocator, client);
     return rc;
@@ -453,6 +468,12 @@ int cai_client_refresh_chatgpt_auth_after_http(cai_client *client,
     return CAI_OK;
   }
   return cai_client_refresh_chatgpt_auth(client, error);
+}
+
+cai_environment *cai_client_environment(const cai_client *client) {
+  return client != NULL && client->impl != NULL
+             ? CAI_CLIENT_IMPL(client)->environment
+             : NULL;
 }
 
 void cai_client_close(cai_client *client) {

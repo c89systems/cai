@@ -13,6 +13,10 @@ typedef struct cai_plugins cai_plugins;
  * Package discovery is limited to configured roots. Process tools follow the
  * command environment policy; they are not an OS sandbox. No VM is required. */
 typedef struct cai_plugin_call {
+  /** Borrowed through invocation. Agent registration retains this view;
+   * NULL there inherits the client's view. A direct call with NULL captures
+   * the process for that invocation. No process-global mutation. */
+  cai_environment *environment;
   const char *workspace;
   int yolo;
   long timeout_ms;

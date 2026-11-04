@@ -101,7 +101,7 @@ static void numeric_locale_test(void) {
   field.type = CAI_CONFIG_REAL;
   field.default_value = "1.5";
   cai_error_init(&error);
-  assert(cai_config_open(&field, 1U, &config, &error) == CAI_OK);
+  assert(cai_config_open(&field, 1U, NULL, &config, &error) == CAI_OK);
   assert(load(config, "[client_limits]\nmax_spend_usd=1.5\n", 1U, 0, &error) ==
          CAI_OK);
   assert(config->get_real(config, "client_limits", "max_spend_usd", 0.0) ==
@@ -185,7 +185,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   cai_error_init(&error);
-  assert(cai_config_open(NULL, 0U, &config, &error) == CAI_OK);
+  assert(cai_config_open(NULL, 0U, NULL, &config, &error) == CAI_OK);
   for (i = 1U; i <= 16U; i *= 2U) {
     assert(load(config, valid, i, 0, &error) == CAI_OK);
     assert(strcmp(config->get(config, "agent", "model"), "custom-model") == 0);
@@ -296,7 +296,12 @@ int main(int argc, char **argv) {
       line = *end != '\0' ? end + 1 : end;
     }
   }
-  assert(cai_config_open(NULL, 0U, &again, &error) == CAI_OK);
+  {
+    cai_config_context context;
+    memset(&context, 0, sizeof(context));
+    context.directory = argv[1];
+    assert(cai_config_open(NULL, 0U, &context, &again, &error) == CAI_OK);
+  }
   assert(load(again, bytes, 1U, 0, &error) == CAI_OK &&
          again->get(again, "client", "provider") == NULL);
   snprintf(path, sizeof(path), "%s/config-private.ini", argv[1]);
@@ -380,7 +385,7 @@ int main(int argc, char **argv) {
   field.default_value = "secret-DO-NOT-LOG";
   field.description = "Line one\nunsafe = active\r[malicious]";
   again->close(again);
-  assert(cai_config_open_schema(&field, 1U, &again, &error) == CAI_OK);
+  assert(cai_config_open_schema(&field, 1U, NULL, &again, &error) == CAI_OK);
   field.description = NULL;
   assert(again->field_count(again) == 1U);
   assert(again->set(again, "client", "timeout_ms", "123", &error) ==
@@ -409,7 +414,7 @@ int main(int argc, char **argv) {
   field.section = "client";
   field.key = "api_key";
   field.flags = 0U;
-  assert(cai_config_open(&field, 1U, &again, &error) == CAI_OK);
+  assert(cai_config_open(&field, 1U, NULL, &again, &error) == CAI_OK);
   for (i = 0U; i < again->field_count(again); i++) {
     const cai_config_field *metadata = again->field_at(again, i);
     if (strcmp(metadata->section, "client") == 0 &&
@@ -419,22 +424,25 @@ int main(int argc, char **argv) {
   again->close(again);
   field.key = "timeout_ms";
   field.default_value = NULL;
-  assert(cai_config_open_schema(&field, 1U, &again, &error) == CAI_ERR_INVALID);
+  assert(cai_config_open_schema(&field, 1U, NULL, &again, &error) ==
+         CAI_ERR_INVALID);
   reset(&error);
   field.section = "response";
   field.key = "max_output_tokens";
   field.type = CAI_CONFIG_INTEGER;
   field.default_value = "2147483648";
-  assert(cai_config_open_schema(&field, 1U, &again, &error) == CAI_ERR_INVALID);
+  assert(cai_config_open_schema(&field, 1U, NULL, &again, &error) ==
+         CAI_ERR_INVALID);
   reset(&error);
   field.section = "runtime";
   field.key = "event_queue_limit";
   field.flags = CAI_CONFIG_SIGNED;
   field.default_value = "-1";
-  assert(cai_config_open_schema(&field, 1U, &again, &error) == CAI_ERR_INVALID);
+  assert(cai_config_open_schema(&field, 1U, NULL, &again, &error) ==
+         CAI_ERR_INVALID);
   reset(&error);
   field.default_value = NULL;
-  assert(cai_config_open_schema(&field, 1U, &again, &error) == CAI_OK);
+  assert(cai_config_open_schema(&field, 1U, NULL, &again, &error) == CAI_OK);
   assert(again->set(again, "runtime", "event_queue_limit", "-1", &error) ==
          CAI_ERR_INVALID);
   reset(&error);
@@ -444,10 +452,11 @@ int main(int argc, char **argv) {
   field.type = CAI_CONFIG_STRING;
   field.flags = 0U;
   field.choices = "responses|invented";
-  assert(cai_config_open_schema(&field, 1U, &again, &error) == CAI_ERR_INVALID);
+  assert(cai_config_open_schema(&field, 1U, NULL, &again, &error) ==
+         CAI_ERR_INVALID);
   reset(&error);
   field.choices = NULL;
-  assert(cai_config_open_schema(&field, 1U, &again, &error) == CAI_OK);
+  assert(cai_config_open_schema(&field, 1U, NULL, &again, &error) == CAI_OK);
   assert(strcmp(again->field_at(again, 0U)->choices,
                 "responses|chat_completions") == 0);
   assert(again->set(again, "client", "api_protocol", "invented", &error) ==
@@ -455,7 +464,7 @@ int main(int argc, char **argv) {
   reset(&error);
   again->close(again);
   field.choices = "responses";
-  assert(cai_config_open_schema(&field, 1U, &again, &error) == CAI_OK);
+  assert(cai_config_open_schema(&field, 1U, NULL, &again, &error) == CAI_OK);
   assert(again->set(again, "client", "api_protocol", "chat_completions",
                     &error) == CAI_ERR_INVALID);
   reset(&error);
@@ -465,19 +474,21 @@ int main(int argc, char **argv) {
   field.section = "";
   field.key = "config_env_has_precedence";
   field.choices = NULL;
-  assert(cai_config_open_schema(&field, 1U, &again, &error) == CAI_ERR_INVALID);
+  assert(cai_config_open_schema(&field, 1U, NULL, &again, &error) ==
+         CAI_ERR_INVALID);
   reset(&error);
   field.section = "review";
   field.key = "allowed_models";
   field.type = CAI_CONFIG_BOOL;
-  assert(cai_config_open_schema(&field, 1U, &again, &error) == CAI_ERR_INVALID);
+  assert(cai_config_open_schema(&field, 1U, NULL, &again, &error) ==
+         CAI_ERR_INVALID);
   reset(&error);
   field.section = "host";
   field.key = "signed_value";
   field.type = CAI_CONFIG_INTEGER;
   field.flags = CAI_CONFIG_SIGNED;
   field.default_value = "-5";
-  assert(cai_config_open_schema(&field, 1U, &again, &error) == CAI_OK);
+  assert(cai_config_open_schema(&field, 1U, NULL, &again, &error) == CAI_OK);
   assert(again->set(again, "host", "signed_value", "-10", &error) == CAI_OK);
   assert(again->get_integer(again, "host", "signed_value", 0LL) == -10LL);
   assert(again->set(again, "host", "signed_value", "-9223372036854775808",
@@ -500,7 +511,8 @@ int main(int argc, char **argv) {
   again->close(again);
   field.flags = 8U;
   field.default_value = NULL;
-  assert(cai_config_open_schema(&field, 1U, &again, &error) == CAI_ERR_INVALID);
+  assert(cai_config_open_schema(&field, 1U, NULL, &again, &error) ==
+         CAI_ERR_INVALID);
   reset(&error);
   memset(selected_fields, 0, sizeof(selected_fields));
   selected_fields[0].section = "host";
@@ -511,7 +523,8 @@ int main(int argc, char **argv) {
   selected_fields[1].key = "config_env_has_precedence";
   selected_fields[1].type = CAI_CONFIG_BOOL;
   selected_fields[1].default_value = "false";
-  assert(cai_config_open_schema(selected_fields, 2U, &again, &error) == CAI_OK);
+  assert(cai_config_open_schema(selected_fields, 2U, NULL, &again, &error) ==
+         CAI_OK);
   file = tmpfile();
   assert(file != NULL);
   assert(cai_sink_file(file, 0, &sink, &error) == CAI_OK);
@@ -529,7 +542,7 @@ int main(int argc, char **argv) {
   assert(strcmp(again->get(again, "host", "demo"), "value") == 0);
   again->close(again);
   config->close(config);
-  assert(cai_config_open(NULL, 0U, &again, &error) == CAI_OK);
+  assert(cai_config_open(NULL, 0U, NULL, &again, &error) == CAI_OK);
   cai_agent_runtime_config_init(&runtime);
   assert(again->apply_runtime(again, &runtime, &error) == CAI_OK);
   assert(!runtime.disable_web_search && !runtime.disable_chrome &&

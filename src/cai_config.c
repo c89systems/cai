@@ -91,7 +91,7 @@ static const cai_config_field globals[] = {
     {"mcp.*", "timeout_ms", CAI_CONFIG_INTEGER, "30000",
      "Normal MCP tool HTTP request timeout in milliseconds.", NULL, 0U},
     {"", "config_env_has_precedence", CAI_CONFIG_BOOL, "false",
-     "Config [env] replaces existing process variables when true.", NULL, 0U},
+     "Config [env] overrides existing environment values when true.", NULL, 0U},
     {"client", "provider", CAI_CONFIG_STRING, "openai",
      "Provider preset; host supplies auth objects.",
      "chatgpt|openai|openrouter|berget|custom", 0U},
@@ -123,6 +123,8 @@ typedef struct config_impl {
   config_entry *entries;
   size_t count;
   char *origin;
+  char *directory;
+  cai_environment *environment;
   locale_t numeric_locale;
 } config_impl;
 #define IMPL(c) ((config_impl *)(c)->impl)
@@ -162,6 +164,8 @@ void cai_config_close(cai_config *self) {
   impl = IMPL(self);
   if (impl != NULL) {
     entries_cleanup(impl);
+    cai_free_mem(NULL, impl->directory);
+    cai_environment_close(impl->environment);
     for (i = 0U; i < impl->field_count; i++)
       field_cleanup(&impl->fields[i]);
     cai_free_mem(NULL, impl->fields);
@@ -662,52 +666,50 @@ int cai_config_load_file(cai_config *self, const char *path, cai_error *error) {
   FILE *file;
   cai_source *source = NULL;
   struct stat status;
-  char cwd[4096];
   char *absolute = NULL;
+  const char *selected = path;
   size_t length;
   int fd, rc;
   if (self == NULL || path == NULL)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "configuration and filename are required");
-  fd = open(path, O_RDONLY | O_NONBLOCK);
-  if (fd < 0)
-    return config_error(error, path, 0UL, "", NULL,
-                        "cannot open configuration file");
+  if (path[0] != '/') {
+    length = strlen(IMPL(self)->directory) + strlen(path) + 2U;
+    absolute = cai_alloc(NULL, length);
+    if (absolute == NULL)
+      return cai_set_error(error, CAI_ERR_NOMEM,
+                           "resolve configuration filename");
+    snprintf(absolute, length, "%s/%s", IMPL(self)->directory, path);
+    selected = absolute;
+  }
+  fd = open(selected, O_RDONLY | O_NONBLOCK);
+  if (fd < 0) {
+    rc = config_error(error, path, 0UL, "", NULL,
+                      "cannot open configuration file");
+    goto done;
+  }
   if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode)) {
     close(fd);
-    return config_error(error, path, 0UL, "", NULL,
-                        "configuration must be a regular file");
+    rc = config_error(error, path, 0UL, "", NULL,
+                      "configuration must be a regular file");
+    goto done;
   }
   file = fdopen(fd, "rb");
   if (file == NULL) {
     close(fd);
-    return config_error(error, path, 0UL, "", NULL,
-                        "cannot open configuration stream");
+    rc = config_error(error, path, 0UL, "", NULL,
+                      "cannot open configuration stream");
+    goto done;
   }
   rc = cai_source_file(file, 1, &source, error);
   if (rc != CAI_OK)
     fclose(file);
   else {
-    if (path[0] != '/') {
-      if (getcwd(cwd, sizeof(cwd)) == NULL)
-        rc = cai_set_error(error, CAI_ERR_TRANSPORT,
-                           "resolve configuration file directory");
-      else {
-        length = strlen(cwd) + strlen(path) + 2U;
-        absolute = cai_alloc(NULL, length);
-        if (absolute == NULL)
-          rc = cai_set_error(error, CAI_ERR_NOMEM,
-                             "resolve configuration filename");
-        else
-          snprintf(absolute, length, "%s/%s", cwd, path);
-      }
-    }
-    if (rc == CAI_OK)
-      rc = cai_config_load(self, source, absolute != NULL ? absolute : path,
-                           error);
+    rc = cai_config_load(self, source, selected, error);
     cai_source_close(source);
-    cai_free_mem(NULL, absolute);
   }
+done:
+  cai_free_mem(NULL, absolute);
   return rc;
 }
 
@@ -841,7 +843,8 @@ const cai_config_field *cai_config_field_at(const cai_config *self,
              : NULL;
 }
 static int config_open(const cai_config_field *extensions, size_t count,
-                       int sdk_schema, cai_config **out, cai_error *error) {
+                       int sdk_schema, const cai_config_context *context,
+                       cai_config **out, cai_error *error) {
   cai_config *self;
   config_impl *impl;
   cai_client_config client;
@@ -850,6 +853,7 @@ static int config_open(const cai_config_field *extensions, size_t count,
   cai_terminal_tool_config terminal;
   cai_config_field field;
   char text[128];
+  char cwd[4096];
   const char *value;
   const void *record;
   const unsigned char *ptr;
@@ -869,6 +873,35 @@ static int config_open(const cai_config_field *extensions, size_t count,
   memset(self, 0, sizeof(*self));
   memset(impl, 0, sizeof(*impl));
   self->impl = impl;
+  value = context != NULL ? context->directory : NULL;
+  if (value == NULL) {
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+      cai_config_close(self);
+      return cai_set_error(error, CAI_ERR_TRANSPORT,
+                           "capture configuration working directory");
+    }
+    value = cwd;
+  }
+  if (value[0] != '/') {
+    cai_config_close(self);
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "configuration directory must be absolute");
+  }
+  impl->directory = cai_strdup(NULL, value);
+  if (impl->directory == NULL) {
+    cai_config_close(self);
+    return cai_set_error(error, CAI_ERR_NOMEM, "copy configuration directory");
+  }
+  if (context != NULL && context->environment != NULL) {
+    rc = cai_environment_retain(context->environment, error);
+    if (rc == CAI_OK)
+      impl->environment = context->environment;
+  } else
+    rc = cai_environment_open(NULL, &impl->environment, error);
+  if (rc != CAI_OK) {
+    cai_config_close(self);
+    return rc;
+  }
   impl->numeric_locale = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
   if (impl->numeric_locale == (locale_t)0) {
     cai_config_close(self);
@@ -890,6 +923,7 @@ static int config_open(const cai_config_field *extensions, size_t count,
   self->get = cai_config_get;
   self->set = cai_config_set;
   self->apply_environment = cai_config_apply_environment;
+  self->environment = cai_config_environment;
   self->write_template = cai_config_write_template;
   self->create_template_file = cai_config_create_template_file;
   self->apply_client = cai_config_apply_client;
@@ -957,12 +991,60 @@ static int config_open(const cai_config_field *extensions, size_t count,
   return CAI_OK;
 }
 int cai_config_open(const cai_config_field *extensions, size_t count,
-                    cai_config **out, cai_error *error) {
-  return config_open(extensions, count, 1, out, error);
+                    const cai_config_context *context, cai_config **out,
+                    cai_error *error) {
+  return config_open(extensions, count, 1, context, out, error);
 }
 int cai_config_open_schema(const cai_config_field *fields, size_t count,
-                           cai_config **out, cai_error *error) {
-  return config_open(fields, count, 0, out, error);
+                           const cai_config_context *context, cai_config **out,
+                           cai_error *error) {
+  return config_open(fields, count, 0, context, out, error);
+}
+const char *cai_config_directory(const cai_config *self) {
+  return self != NULL ? IMPL(self)->directory : NULL;
+}
+const char *cai_config_getenv(const cai_config *self, const char *name) {
+  const char *captured;
+  if (self == NULL || name == NULL)
+    return NULL;
+  captured = cai_environment_get(IMPL(self)->environment, name);
+  if (captured == NULL ||
+      cai_config_get_bool(self, "", "config_env_has_precedence", 0)) {
+    const char *configured = cai_config_get(self, "env", name);
+    if (configured != NULL)
+      return configured;
+  }
+  return captured;
+}
+int cai_config_environment(const cai_config *self, cai_environment **out,
+                           cai_error *error) {
+  cai_environment_change *changes;
+  const config_impl *impl;
+  size_t i, used = 0U;
+  int override, rc;
+  if (out != NULL)
+    *out = NULL;
+  if (self == NULL || out == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "configuration and environment output are required");
+  impl = IMPL(self);
+  override = cai_config_get_bool(self, "", "config_env_has_precedence", 0);
+  changes = cai_alloc(NULL, (impl->count + 1U) * sizeof(*changes));
+  if (changes == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "prepare configuration environment");
+  for (i = 0U; i < impl->count; ++i) {
+    const config_entry *entry = &impl->entries[i];
+    if (strcmp(entry->section, "env") != 0 ||
+        (!override &&
+         cai_environment_get(impl->environment, entry->key) != NULL))
+      continue;
+    changes[used].name = entry->key;
+    changes[used++].value = entry->values[0];
+  }
+  rc = cai_environment_derive(impl->environment, changes, used, out, error);
+  cai_free_mem(NULL, changes);
+  return rc;
 }
 static int write_literal(cai_sink *sink, const char *text, cai_error *error) {
   return cai_sink_write(sink, text, strlen(text), error);
@@ -1099,7 +1181,6 @@ int cai_config_resolve_path(cai_config *self, const char *section,
   config_entry *entry;
   const cai_config_field *field;
   const char *value, *home, *slash;
-  char cwd[4096];
   char *path;
   size_t length, base;
   if (out == NULL || self == NULL || section == NULL || key == NULL)
@@ -1119,7 +1200,7 @@ int cai_config_resolve_path(cai_config *self, const char *section,
     return CAI_OK;
   }
   if (value[0] == '~' && (value[1] == '/' || value[1] == '\0')) {
-    home = getenv("HOME");
+    home = cai_config_getenv(self, "HOME");
     if (home == NULL || home[0] != '/')
       return config_error(error, IMPL(self)->origin, entry->line, section, key,
                           "HOME must be absolute for ~ paths");
@@ -1134,15 +1215,13 @@ int cai_config_resolve_path(cai_config *self, const char *section,
     if (slash != NULL)
       base = (size_t)(slash - IMPL(self)->origin);
     else {
-      if (getcwd(cwd, sizeof(cwd)) == NULL)
-        return cai_set_error(error, CAI_ERR_TRANSPORT,
-                             "resolve configuration working directory");
-      base = strlen(cwd);
+      base = strlen(IMPL(self)->directory);
     }
     length = base + strlen(value) + 2U;
     path = cai_alloc(NULL, length);
     if (path != NULL) {
-      memcpy(path, slash != NULL ? IMPL(self)->origin : cwd, base);
+      memcpy(path, slash != NULL ? IMPL(self)->origin : IMPL(self)->directory,
+             base);
       path[base] = '/';
       strcpy(path + base + 1U, value);
     }
