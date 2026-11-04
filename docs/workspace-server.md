@@ -38,6 +38,9 @@ and incremental reading, native verified selector resolution and guarded
 instance admission are implemented. Controller/frontend composition,
 automatic startup and the attach
 CLI remain pending. Explicit foreground headless startup is implemented below.
+The next [status projection](workspace-wire-status.md) keeps numeric usage
+values typed and separates semantic updates from frontend elapsed-time ticks.
+That application binding is specified but not yet connected to the socket.
 The executable now also has a tested quiet fork/exec owner handoff and exact
 child watch, described in [workspace process handoff](workspace-process.md).
 It uses the existing CBOR transport and native server lifecycle; the terminal
@@ -506,9 +509,12 @@ Overflow disconnects that subscriber. No payload accumulator is introduced.
 
 Use the [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949.html) data model with
 a deliberately small profile: unsigned and
-negative integers, booleans, null, UTF-8 strings, byte strings, arrays and maps.
-Reject tags, floats and unsupported simple values explicitly. Text validation
-works across input boundaries, including truncated/overlong UTF-8, surrogates
+negative integers, finite binary64 floats, booleans, null, UTF-8 strings, byte
+strings, arrays and maps. Binary64 carries native usage/credit estimates
+without decimal rounding or locale conversion; signed zero and subnormals
+retain their exact bits. Reject half/single precision, NaN, infinity, tags and
+unsupported simple values explicitly. Envelope metadata remains integer-only.
+Text validation works across input boundaries, including truncated/overlong UTF-8, surrogates
 and code points above U+10FFFF. Nesting is bounded. No C-string assumptions for
 byte/text chunks. CBOR negative integers carry the unsigned argument directly,
 so the codec can represent the complete 64-bit CBOR integer domain.

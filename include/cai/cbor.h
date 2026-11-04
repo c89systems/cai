@@ -24,7 +24,10 @@ typedef enum cai_cbor_type {
   CAI_CBOR_BOOL,
   CAI_CBOR_NULL,
   CAI_CBOR_DATA,
-  CAI_CBOR_END
+  CAI_CBOR_END,
+  /** Finite IEEE 754 binary64. argument holds its exact 64 encoded bits;
+   * helpers below convert a native double without changing token layout. */
+  CAI_CBOR_FLOAT64
 } cai_cbor_type;
 
 /** BYTES/TEXT/ARRAY/MAP begin a value. argument is the byte/item/pair count
@@ -36,8 +39,9 @@ typedef enum cai_cbor_type {
  *
  * Text is validated incrementally. A definite text value may split a Unicode
  * scalar between DATA calls, but separate chunks of an indefinite text value
- * must each contain valid UTF-8. Embedded NUL is valid text. Tags, floating
- * point, undefined and other simple values are outside this profile.
+ * must each contain valid UTF-8. Embedded NUL is valid text. Floating values
+ * use finite binary64 only; half/single precision, NaN, infinity, tags,
+ * undefined and other simple values are outside this profile.
  */
 typedef struct cai_cbor_token {
   cai_cbor_type type;
@@ -50,6 +54,13 @@ typedef int (*cai_cbor_token_fn)(void *context, const cai_cbor_token *token,
                                  cai_error *error);
 typedef struct cai_cbor_decoder cai_cbor_decoder;
 typedef struct cai_cbor_encoder cai_cbor_encoder;
+
+/** Convert finite native doubles to/from FLOAT64 tokens. Require a binary64
+ * native double. Invalid/nonfinite values leave the output unchanged; no
+ * allocation, rendering, locale conversion or rounding occurs. */
+int cai_cbor_token_set_float64(cai_cbor_token *, double value, cai_error *);
+int cai_cbor_token_get_float64(const cai_cbor_token *, double *out,
+                               cai_error *);
 
 /** Decode exactly one item. State is fixed-size and heap-owned; strings and
  * containers are not accumulated. feed accepts any fragment boundary and

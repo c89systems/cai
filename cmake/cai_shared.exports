@@ -122,6 +122,8 @@ cai_cbor_encoder_finish
 cai_cbor_encoder_open
 cai_cbor_encoder_reset
 cai_cbor_encoder_write
+cai_cbor_token_get_float64
+cai_cbor_token_set_float64
 cai_chatgpt_auth_access_token
 cai_chatgpt_auth_account_id
 cai_chatgpt_auth_close

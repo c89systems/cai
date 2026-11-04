@@ -1,5 +1,6 @@
 #include "cai_internal.h"
 #include <cai/cbor.h>
+#include <float.h>
 #include <string.h>
 
 typedef struct cbor_frame {
@@ -24,6 +25,38 @@ struct cai_cbor_encoder {
   cbor_state state;
   cai_sink *sink;
 };
+static int finite_bits(uint64_t bits) {
+  return ((bits >> 52U) & UINT64_C(0x7ff)) != UINT64_C(0x7ff);
+}
+int cai_cbor_token_set_float64(cai_cbor_token *out, double value,
+                               cai_error *error) {
+  uint64_t bits = 0U;
+  cai_cbor_token token;
+  if (out == NULL || sizeof(value) != sizeof(bits) || DBL_MANT_DIG != 53 ||
+      DBL_MAX_EXP != 1024)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "Binary64 native double and token output required");
+  memcpy(&bits, &value, sizeof(bits));
+  if (!finite_bits(bits))
+    return cai_set_error(error, CAI_ERR_INVALID, "Finite CBOR float required");
+  memset(&token, 0, sizeof(token));
+  token.type = CAI_CBOR_FLOAT64;
+  token.argument = bits;
+  *out = token;
+  return CAI_OK;
+}
+int cai_cbor_token_get_float64(const cai_cbor_token *token, double *out,
+                               cai_error *error) {
+  if (token == NULL || out == NULL || token->type != CAI_CBOR_FLOAT64 ||
+      token->indefinite || !finite_bits(token->argument) ||
+      sizeof(*out) != sizeof(token->argument) || DBL_MANT_DIG != 53 ||
+      DBL_MAX_EXP != 1024)
+    return cai_set_error(
+        error, CAI_ERR_INVALID,
+        "Finite binary64 token and native double output required");
+  memcpy(out, &token->argument, sizeof(*out));
+  return CAI_OK;
+}
 
 static int fail(cbor_state *state, cai_error *error, int code,
                 const char *message) {
@@ -87,8 +120,10 @@ static int begin(cbor_state *state, const cai_cbor_token *token,
   } else {
     if (token->indefinite ||
         (token->type != CAI_CBOR_UINT && token->type != CAI_CBOR_NEGATIVE &&
-         token->type != CAI_CBOR_BOOL && token->type != CAI_CBOR_NULL) ||
-        (token->type == CAI_CBOR_BOOL && token->argument > 1U))
+         token->type != CAI_CBOR_BOOL && token->type != CAI_CBOR_NULL &&
+         token->type != CAI_CBOR_FLOAT64) ||
+        (token->type == CAI_CBOR_BOOL && token->argument > 1U) ||
+        (token->type == CAI_CBOR_FLOAT64 && !finite_bits(token->argument)))
       return fail(state, error, CAI_ERR_PROTOCOL, "Unsupported CBOR token");
     value_done(state);
   }
@@ -216,14 +251,17 @@ static int header(cai_cbor_decoder *decoder, cai_error *error) {
     if (extra >= 28U && extra != 31U)
       return fail(&decoder->state, error, CAI_ERR_PROTOCOL,
                   "Reserved CBOR additional information");
-    if (major == 6U || (major == 7U && (extra < 20U || extra > 22U)) ||
+    if (major == 6U ||
+        (major == 7U && (extra < 20U || extra > 22U) && extra != 27U) ||
         (extra == 31U && (major < 2U || major > 5U)))
       return fail(&decoder->state, error, CAI_ERR_PROTOCOL,
                   "Unsupported CBOR major type or simple value");
-    token.type = major == 7U ? (extra == 22U ? CAI_CBOR_NULL : CAI_CBOR_BOOL)
+    token.type = major == 7U ? (extra == 27U   ? CAI_CBOR_FLOAT64
+                                : extra == 22U ? CAI_CBOR_NULL
+                                               : CAI_CBOR_BOOL)
                              : (cai_cbor_type)major;
     token.indefinite = extra == 31U;
-    if (major == 7U)
+    if (major == 7U && extra != 27U)
       token.argument = extra == 21U;
     else if (extra < 24U)
       token.argument = extra;
@@ -377,7 +415,12 @@ int cai_cbor_encoder_write(cai_cbor_encoder *encoder,
     rc = begin(&encoder->state, token, error);
     if (rc == CAI_OK) {
       argument = token->argument;
-      if (token->type == CAI_CBOR_BOOL || token->type == CAI_CBOR_NULL)
+      if (token->type == CAI_CBOR_FLOAT64) {
+        bytes[0] = 0xfbU;
+        for (i = 0U; i < 8U; ++i)
+          bytes[8U - i] = (unsigned char)(argument >> (8U * i));
+        length = 9U;
+      } else if (token->type == CAI_CBOR_BOOL || token->type == CAI_CBOR_NULL)
         bytes[0] = token->type == CAI_CBOR_NULL
                        ? 0xf6U
                        : (unsigned char)(0xf4U + argument);

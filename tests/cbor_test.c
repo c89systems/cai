@@ -5,7 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* RFC 8949 Appendix A; floats and tags are deliberately outside our profile. */
+/* RFC 8949 Appendix A and binary64 boundaries. Tags, nonfinite values and
+ * half/single precision are deliberately outside our profile. */
 static const char *vectors[] = {
     "00",
     "01",
@@ -63,6 +64,19 @@ static const char *vectors[] = {
     "1a00010000",
     "1affffffff",
     "1b0000000100000000",
+    "fb0000000000000000",
+    "fb8000000000000000",
+    "fb3ff0000000000000",
+    "fb3ff8000000000000",
+    "fbbff8000000000000",
+    "fb400921fb54442d18",
+    "fb0000000000000001",
+    "fb8000000000000001",
+    "fb000fffffffffffff",
+    "fb0010000000000000",
+    "fb7fefffffffffffff",
+    "fbffefffffffffffff",
+    "a201fb3ff800000000000002fb8000000000000000",
 };
 typedef struct output {
   unsigned char bytes[512];
@@ -185,9 +199,72 @@ static int write_token(cai_cbor_encoder *encoder, cai_cbor_type type,
   token.length = length;
   return cai_cbor_encoder_write(encoder, &token, NULL);
 }
+static void float_values(void) {
+  static const uint64_t bits[] = {
+      UINT64_C(0), UINT64_C(0x8000000000000000), UINT64_C(0x3ff8000000000000),
+      UINT64_C(1), UINT64_C(0x8000000000000001), UINT64_C(0x7fefffffffffffff)};
+  static const uint64_t nonfinite[] = {
+      UINT64_C(0x7ff0000000000000), UINT64_C(0xfff0000000000000),
+      UINT64_C(0x7ff8000000000000), UINT64_C(0x7ff0000000000001)};
+  size_t i;
+  for (i = 0U; i < sizeof(bits) / sizeof(bits[0]); i++) {
+    double original, value = 42.0;
+    cai_cbor_token token;
+    uint64_t result;
+    memcpy(&original, &bits[i], sizeof(original));
+    assert(cai_cbor_token_set_float64(&token, original, NULL) == CAI_OK);
+    assert(token.type == CAI_CBOR_FLOAT64 && token.argument == bits[i]);
+    assert(cai_cbor_token_get_float64(&token, &value, NULL) == CAI_OK);
+    memcpy(&result, &value, sizeof(result));
+    assert(result == bits[i]);
+  }
+  for (i = 0U; i < sizeof(nonfinite) / sizeof(nonfinite[0]); i++) {
+    cai_cbor_token token, before;
+    cai_sink_callbacks callbacks;
+    cai_sink *sink;
+    cai_cbor_encoder *encoder;
+    output out;
+    double bad, unchanged = 42.0;
+    memset(&token, 0, sizeof(token));
+    before = token;
+    memcpy(&bad, &nonfinite[i], sizeof(bad));
+    assert(cai_cbor_token_set_float64(&token, bad, NULL) == CAI_ERR_INVALID);
+    assert(memcmp(&token, &before, sizeof(token)) == 0);
+    token.type = CAI_CBOR_FLOAT64;
+    token.argument = nonfinite[i];
+    assert(cai_cbor_token_get_float64(&token, &unchanged, NULL) ==
+               CAI_ERR_INVALID &&
+           unchanged == 42.0);
+    memset(&out, 0, sizeof(out));
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.write = collect;
+    callbacks.context = &out;
+    assert(cai_sink_from_callbacks(&callbacks, &sink, NULL) == CAI_OK);
+    assert(cai_cbor_encoder_open(sink, &encoder, NULL) == CAI_OK);
+    assert(cai_cbor_encoder_write(encoder, &token, NULL) == CAI_ERR_PROTOCOL &&
+           out.length == 0U);
+    cai_cbor_encoder_close(encoder);
+    cai_sink_close(sink);
+  }
+  {
+    cai_cbor_token token;
+    double value = 42.0;
+    memset(&token, 0, sizeof(token));
+    assert(cai_cbor_token_get_float64(&token, &value, NULL) ==
+               CAI_ERR_INVALID &&
+           value == 42.0);
+    assert(cai_cbor_token_set_float64(NULL, 1.5, NULL) == CAI_ERR_INVALID);
+    assert(cai_cbor_token_set_float64(&token, 1.5, NULL) == CAI_OK);
+    assert(cai_cbor_token_get_float64(&token, &value, NULL) == CAI_OK &&
+           value == 1.5);
+    assert(cai_cbor_token_get_float64(&token, NULL, NULL) == CAI_ERR_INVALID);
+    token.indefinite = 1;
+    assert(cai_cbor_token_get_float64(&token, &value, NULL) == CAI_ERR_INVALID);
+  }
+}
 static void encoder_failures(void) {
   unsigned int test;
-  for (test = 0U; test < 13U; ++test) {
+  for (test = 0U; test < 14U; ++test) {
     cai_sink *sink = NULL;
     cai_sink_callbacks callbacks;
     cai_cbor_encoder *encoder = NULL;
@@ -244,6 +321,15 @@ static void encoder_failures(void) {
              CAI_ERR_CANCELLED);
       assert(write_token(encoder, CAI_CBOR_UINT, 0U, 0, NULL, 0U) ==
              CAI_ERR_CANCELLED);
+    } else if (test == 13U) {
+      cai_cbor_token token;
+      assert(cai_cbor_token_set_float64(&token, 1.5, NULL) == CAI_OK);
+      out.fail_at = 1U;
+      out.failure = CAI_ERR_TRANSPORT;
+      assert(cai_cbor_encoder_write(encoder, &token, NULL) ==
+             CAI_ERR_TRANSPORT);
+      assert(cai_cbor_encoder_write(encoder, &token, NULL) ==
+             CAI_ERR_TRANSPORT);
     } else {
       assert(write_token(encoder, CAI_CBOR_BYTES, 3U, 0, NULL, 0U) == CAI_OK);
       out.fail_at = 2U;
@@ -293,6 +379,8 @@ static void *large_stream(void *unused) {
   stream value;
   size_t i;
   (void)unused;
+  /* Numeric conversion also runs on the platform's default worker stack. */
+  float_values();
   memset(&value, 0, sizeof(value));
   memset(&callbacks, 0, sizeof(callbacks));
   callbacks.write = stream_write;
@@ -480,7 +568,10 @@ int main(void) {
                               "f818",
                               "f90000",
                               "fa00000000",
-                              "fb0000000000000000",
+                              "fb7ff0000000000000",
+                              "fbfff0000000000000",
+                              "fb7ff8000000000000",
+                              "fb7ff0000000000001",
                               "fc",
                               "fd",
                               "fe",

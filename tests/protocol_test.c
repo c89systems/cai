@@ -8,7 +8,8 @@
 
 typedef struct consumer {
   cai_protocol_header expected;
-  size_t headers, commits, tokens, bytes;
+  size_t headers, commits, tokens, bytes, floats;
+  double number;
   int check_header, check_bytes, fail;
 } consumer;
 static int consume(void *context, const cai_protocol_event *event,
@@ -33,6 +34,11 @@ static int consume(void *context, const cai_protocol_event *event,
   else {
     assert(event->token != NULL);
     ++c->tokens;
+    if (event->token->type == CAI_CBOR_FLOAT64) {
+      ++c->floats;
+      assert(cai_cbor_token_get_float64(event->token, &c->number, NULL) ==
+             CAI_OK);
+    }
     if (event->token->type == CAI_CBOR_DATA) {
       if (c->check_bytes) {
         const unsigned char *bytes = event->token->data;
@@ -96,6 +102,40 @@ static void fragments(void) {
   }
   assert(c.headers == 1U && c.bytes == 1U);
   assert(cai_wire_decoder_finish(wire, NULL) == CAI_OK);
+  cai_wire_decoder_close(wire);
+  cai_protocol_decoder_close(protocol);
+}
+static void floating_payload(void) {
+  static const unsigned char number[] = {0xfb, 0x3f, 0xf8, 0, 0, 0, 0, 0, 0};
+  unsigned char bytes[sizeof(null_record) + 8U];
+  consumer c;
+  cai_protocol_decoder *protocol;
+  cai_wire_decoder *wire;
+  size_t i;
+  memcpy(bytes, null_record, sizeof(null_record) - 1U);
+  memcpy(bytes + sizeof(null_record) - 1U, number, sizeof(number));
+  bytes[3] = (unsigned char)(sizeof(bytes) - 4U);
+  memset(&c, 0, sizeof(c));
+  open_decoder(&c, &protocol, &wire);
+  for (i = 0U; i < sizeof(bytes); ++i) {
+    assert(cai_wire_decoder_feed(wire, bytes + i, 1U, NULL) == CAI_OK);
+    assert(c.commits == (i + 1U == sizeof(bytes) ? 1U : 0U));
+  }
+  assert(c.floats == 1U && c.number == 1.5);
+  assert(cai_wire_decoder_finish(wire, NULL) == CAI_OK);
+  cai_wire_decoder_close(wire);
+  cai_protocol_decoder_close(protocol);
+  /* A floating envelope kind remains invalid even when numerically integral. */
+  memcpy(bytes, null_record, 6U);
+  memcpy(bytes + 6U, number, sizeof(number));
+  memcpy(bytes + 6U + sizeof(number), null_record + 7U,
+         sizeof(null_record) - 7U);
+  bytes[3] = (unsigned char)(sizeof(bytes) - 4U);
+  memset(&c, 0, sizeof(c));
+  open_decoder(&c, &protocol, &wire);
+  assert(cai_wire_decoder_feed(wire, bytes, sizeof(bytes), NULL) ==
+         CAI_ERR_PROTOCOL);
+  assert(c.commits == 0U && c.headers == 0U);
   cai_wire_decoder_close(wire);
   cai_protocol_decoder_close(protocol);
 }
@@ -306,6 +346,7 @@ static void socket_stream(void) {
 }
 static void *stream_worker(void *context) {
   (void)context;
+  floating_payload();
   socket_stream();
   return NULL;
 }
