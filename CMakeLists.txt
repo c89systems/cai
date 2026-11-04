@@ -934,7 +934,7 @@ if(CAI_BUILD_APP)
 endif()
 
 if(CAI_BUILD_CLI)
-  add_executable(cai_cli cli/main.c cli/process.c)
+  add_executable(cai_cli cli/main.c cli/process.c cli/bootstrap.c cli/spawn.c)
   set_target_properties(cai_cli PROPERTIES OUTPUT_NAME cai)
   if(CAI_TARGET_ID MATCHES "-linux-musl$")
     set_target_properties(cai_cli PROPERTIES SKIP_BUILD_RPATH ON)

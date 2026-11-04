@@ -72,6 +72,22 @@
     cai_configure_cli_target(cai_cli_geometry_test)
     add_test(NAME cai_cli_geometry COMMAND cai_cli_geometry_test)
     add_executable(cai_cli_headless_client_test tests/headless_client_test.c)
+    add_executable(cai_cli_bootstrap_test tests/cli_bootstrap_test.c
+      cli/bootstrap.c cli/error.c)
+    target_link_libraries(cai_cli_bootstrap_test PRIVATE cai_static)
+    cai_configure_cli_target(cai_cli_bootstrap_test)
+    target_compile_options(cai_cli_bootstrap_test PRIVATE -UNDEBUG)
+    add_test(NAME cai_cli_bootstrap COMMAND cai_cli_bootstrap_test)
+    set_tests_properties(cai_cli_bootstrap PROPERTIES LABELS "unit;local;offline" TIMEOUT 10)
+    add_executable(cai_cli_spawn_test tests/cli_spawn_test.c cli/spawn.c cli/bootstrap.c)
+    target_link_libraries(cai_cli_spawn_test PRIVATE cai_app_static)
+    target_link_options(cai_cli_spawn_test PRIVATE -Wl,--wrap=lc_client_open)
+    cai_configure_cli_target(cai_cli_spawn_test)
+    target_compile_options(cai_cli_spawn_test PRIVATE -UNDEBUG)
+    add_test(NAME cai_cli_spawn COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_spawn_test.sh"
+      "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_cli_spawn_test>")
+    set_tests_properties(cai_cli_spawn PROPERTIES TIMEOUT 30)
     target_link_libraries(cai_cli_headless_client_test PRIVATE cai_app_static)
     target_link_options(cai_cli_headless_client_test PRIVATE -Wl,--wrap=lc_client_open)
     cai_configure_cli_target(cai_cli_headless_client_test)
@@ -746,6 +762,7 @@
     list(FILTER _cai_cli_tests INCLUDE REGEX "^cai_cli_")
     set_tests_properties(${_cai_cli_tests} PROPERTIES LABELS "cli;local;offline"
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>;CAI_TEST_PYTHON=${CAI_TEST_PYTHON};CAI_TEST_JQ=${CAI_TEST_JQ};CAI_TEST_TMUX=${CAI_TEST_TMUX}")
+    set_property(TEST cai_cli_bootstrap APPEND PROPERTY LABELS unit)
     # These cases assert CLI presentation/tool wiring, not stored history.
     # Stateful cases retain real encrypted commit/replay/export coverage.
     set_property(TEST cai_cli_mcp_inventory_responses

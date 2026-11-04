@@ -38,6 +38,10 @@ and incremental reading, native verified selector resolution and guarded
 instance admission are implemented. Controller/frontend composition,
 automatic startup and the attach
 CLI remain pending. Explicit foreground headless startup is implemented below.
+The executable now also has a tested quiet fork/exec owner handoff and exact
+child watch, described in [workspace process handoff](workspace-process.md).
+It uses the existing CBOR transport and native server lifecycle; the terminal
+composition does not yet call it automatically.
 
 The application receiver now also provides `cai_app_start`/`cai_app_join`: an
 asynchronous terminal-free owner using the shared startup, runtime, durable
