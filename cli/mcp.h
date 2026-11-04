@@ -12,6 +12,7 @@ typedef struct cai_cli_mcp {
   cai_mcp_client **clients;
   size_t client_count;
   cai_agent_mcp_options *options;
+  cai_environment *environment;
   pthread_mutex_t lock;
   int lock_initialized;
   int catalog_pending;
@@ -21,6 +22,9 @@ typedef struct cai_cli_mcp {
 /* Config/auth/logger outlive this collection, which outlives every borrowing
  * runtime. Initial registration uses an empty snapshot. Start discovery only
  * after the runtime worker is available; subsequent runtimes reuse the cache.
+ * Configuration definitions remain unchanged while borrowed.
+ * API-key discovery/refresh uses an owned immutable effective config
+ * environment, never later process-global getenv values.
  */
 int cai_cli_mcp_open(cai_cli_mcp *mcp, const cai_config *config,
                      const char *program_name, int enabled,

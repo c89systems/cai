@@ -6051,7 +6051,10 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       if (rc == 1) {
         const char *directory = state->configuration->get(
             state->configuration, "chrome", "socket_directory");
-        rc = cai_cli_private_directory(directory, &error);
+        rc = state->configuration->apply_environment(state->configuration,
+                                                     &error);
+        if (rc == CAI_OK)
+          rc = cai_cli_private_directory(directory, &error);
         if (rc == CAI_OK)
           rc = cai_chrome_native_host_run_at(argv[explicit_mode ? 2 : 1],
                                              directory, state->log->logger,
@@ -6066,6 +6069,12 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   }
   parsed = cai_cli_configure(argc, argv, &state->options, &state->configuration,
                              application, &error);
+  /* Process installation belongs to this legacy synchronous receiver, whose
+   * wrapper owns/restores process resources. Configuration resolution itself
+   * is reusable by an independent controller without mutating its host. */
+  if (parsed > 0 && state->configuration->apply_environment(
+                        state->configuration, &error) != CAI_OK)
+    parsed = -1;
   if (parsed > 0) {
     const char *reason =
         cai_cli_theme_parse(state->options.theme, &state->theme);

@@ -203,7 +203,28 @@ int main(void) {
   load(&app, flags, 2U, 1);
   snprintf(home, sizeof(home), "%s/env-section", original);
   roots(home);
+  equal(getenv("CAI_HOME"), "external-home");
   assert(unsetenv("CAI_HOME") == 0);
+  {
+    char state[8192], runtime[8192];
+    char *body = malloc(32768U);
+    const char *host_state = getenv("XDG_STATE_HOME");
+    const char *host_runtime = getenv("XDG_RUNTIME_DIR");
+    assert(body != NULL);
+    snprintf(state, sizeof(state), "%s/configured-state", original);
+    snprintf(runtime, sizeof(runtime), "%s/configured-run", original);
+    snprintf(body, 32768U,
+             "config_env_has_precedence = true\n[env]\n"
+             "XDG_STATE_HOME = %s\nXDG_RUNTIME_DIR = %s\n",
+             state, runtime);
+    write_ini(selected, body);
+    free(body);
+    load(&app, flags, 2U, 1);
+    under(options.state_dir, state, "cai");
+    under(options.runtime_dir, runtime, "cai");
+    equal(getenv("XDG_STATE_HOME"), host_state);
+    equal(getenv("XDG_RUNTIME_DIR"), host_runtime);
+  }
 
   /* A renamed app uses its own prefix and takes no extra name suffix. */
   app.program_name = "smith";

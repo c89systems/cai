@@ -31,6 +31,10 @@ int cai_cli_environment_prefix(const cai_app_config *app, char out[65],
                                cai_error *error);
 int cai_cli_xdg_path(char *out, size_t size, const char *variable,
                      const char *fallback, const char *name, cai_error *error);
+/* Pure form for a captured/configured environment. */
+int cai_cli_xdg_path_values(char *out, size_t size, const char *xdg,
+                            const char *home, const char *fallback,
+                            const char *name, cai_error *error);
 int cai_cli_private_directory(const char *path, cai_error *error);
 /* Resolve a literal filename against an explicit absolute workspace. Does not
  * expand shell syntax, canonicalize symlinks or change the host directory. */

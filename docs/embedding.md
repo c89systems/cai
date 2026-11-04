@@ -172,7 +172,14 @@ tool configuration after the config is changed or closed. Captured values,
 including empty ones, win unless `config_env_has_precedence=true`.
 The explicit `apply_environment` utility still changes process-global state;
 use the immutable view for independently running controllers. The current
-terminal receiver's wider lifecycle extraction remains pending.
+application configuration resolver does not install `[env]`: it uses the
+effective view for option aliases, path expansion and XDG derivation. The legacy
+synchronous terminal receiver explicitly installs it within its temporary
+process ownership; that wider lifecycle extraction remains pending. MCP
+discovery and later refreshes retain a separate effective environment snapshot,
+so worker credential lookup does not depend on later global changes. Reopening
+the MCP context adopts updated configuration; `/mcp refresh` retains the current
+context's environment and still refreshes provider-managed authentication.
 
 The Unix transport foundation is also independent of libcai_app and terminal
 libraries. `<cai/cbor.h>` decodes fragments into borrowed tokens and writes

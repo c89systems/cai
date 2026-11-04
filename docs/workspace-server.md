@@ -22,6 +22,9 @@ Application workspace selection, retained inputs, export and temporary
 workspaces now use explicit paths without changing/restoring the host cwd.
 The legacy terminal receiver still temporarily mutates environment, locale
 and signals; that remaining process scaffolding has not been cut over.
+Application configuration resolution itself no longer installs `[env]` into
+the process. Its aliases and XDG defaults use the captured/effective view.
+MCP discovery/refresh workers retain their own view for credential lookup.
 The owner-loop workspace host (`workspace_server.h`) now binds those components
 to actual Unix connections, validates greetings incrementally, publishes roles
 and isolates disconnected/slow subscribers. It has no worker or renderer.

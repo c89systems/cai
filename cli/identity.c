@@ -85,12 +85,17 @@ int cai_cli_environment_prefix(const cai_app_config *app, char out[65],
 }
 int cai_cli_xdg_path(char *out, size_t size, const char *variable,
                      const char *fallback, const char *name, cai_error *error) {
-  const char *base = getenv(variable);
+  return cai_cli_xdg_path_values(out, size, getenv(variable), getenv("HOME"),
+                                 fallback, name, error);
+}
+int cai_cli_xdg_path_values(char *out, size_t size, const char *base,
+                            const char *home, const char *fallback,
+                            const char *name, cai_error *error) {
   int n;
   if (base != NULL && base[0] == '/')
     n = snprintf(out, size, "%s/%s", base, name);
   else {
-    base = getenv("HOME");
+    base = home;
     if (base == NULL || base[0] != '/')
       return cai_cli_error(error, CAI_ERR_INVALID,
                            "set HOME or an absolute XDG root");

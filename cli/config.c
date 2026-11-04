@@ -357,8 +357,10 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
                  ? fail(error, NULL, "application home path too long")
                  : CAI_OK;
       } else
-        rc = cai_cli_xdg_path(path, sizeof(path), variables[i], fallbacks[i],
-                              o->program_name, error);
+        rc = cai_cli_xdg_path_values(path, sizeof(path),
+                                     cai_config_getenv(cfg, variables[i]),
+                                     cai_config_getenv(cfg, "HOME"),
+                                     fallbacks[i], o->program_name, error);
       if (rc != CAI_OK)
         return rc;
       v = path;
@@ -384,7 +386,7 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
     const char *v = o->runtime_dir != NULL ? o->runtime_dir
                     : app != NULL          ? app->runtime_directory
                                            : NULL;
-    const char *runtime = getenv("XDG_RUNTIME_DIR");
+    const char *runtime = cai_config_getenv(cfg, "XDG_RUNTIME_DIR");
     const char *chrome = cfg->get(cfg, "chrome", "socket_directory");
     if (v == NULL) {
       if (home != NULL)
@@ -642,13 +644,14 @@ static void optional_string(const cai_config *cfg, const char *section,
   if (value != NULL)
     *out = value[0] != '\0' ? value : NULL;
 }
-/* Config [env] has already been applied. Keep the usual CLI > environment >
- * INI precedence while using the standard parser for validation and storage. */
-static const char *app_environment(const char *prefix, const char *suffix) {
+/* Read effective [env]/captured values without installing them in the host.
+ * Before config construction, NULL reads the bootstrap process environment. */
+static const char *app_environment(const cai_config *cfg, const char *prefix,
+                                   const char *suffix) {
   char name[384];
   if (snprintf(name, sizeof(name), "%s%s", prefix, suffix) >= (int)sizeof(name))
     return NULL;
-  return getenv(name);
+  return cfg != NULL ? cai_config_getenv(cfg, name) : getenv(name);
 }
 static int environment_error(const char *prefix, const char *suffix,
                              cai_error *error) {
@@ -770,7 +773,7 @@ static int tool_environment(cai_config *cfg, const char *prefix,
         {"FOREGROUND", "terminal", "foreground"},
         {"YIELD_TIME_MS", "terminal", "yield_time_ms"}};
     for (i = 0U; i < sizeof(aliases) / sizeof(aliases[0]); i++) {
-      const char *v = app_environment(prefix, aliases[i][0]);
+      const char *v = app_environment(cfg, prefix, aliases[i][0]);
       char home[PATH_MAX];
       if (v != NULL && strcmp(aliases[i][0], "HOME") == 0) {
         if (absolute_path(home, sizeof(home), v, NULL, cfg, error) < 0)
@@ -797,7 +800,7 @@ static int tool_environment(cai_config *cfg, const char *prefix,
     for (j = 0U; key[j] != '\0'; j++)
       if (key[j] >= 'a' && key[j] <= 'z')
         key[j] = (char)(key[j] - 'a' + 'A');
-    v = app_environment(prefix, key);
+    v = app_environment(cfg, prefix, key);
     if (v != NULL && strcmp(key, "PATHS_HOME_DIR") == 0) {
       if (absolute_path(home, sizeof(home), v, NULL, cfg, error) < 0)
         return environment_error(prefix, key, error);
@@ -806,38 +809,41 @@ static int tool_environment(cai_config *cfg, const char *prefix,
     if (v != NULL && cfg->set(cfg, f->section, f->key, v, error) != CAI_OK)
       return -1;
   }
-  if (app_environment(prefix, "BOARD") != NULL &&
+  if (app_environment(cfg, prefix, "BOARD") != NULL &&
       cai_config_set(cfg, "todo", "default_board",
-                     app_environment(prefix, "BOARD"), error) != CAI_OK)
+                     app_environment(cfg, prefix, "BOARD"), error) != CAI_OK)
     return environment_error(prefix, "BOARD", error);
-  if (app_environment(prefix, "MESSAGING") != NULL &&
+  if (app_environment(cfg, prefix, "MESSAGING") != NULL &&
       cai_config_set(cfg, "messaging", "enabled",
-                     app_environment(prefix, "MESSAGING"), error) != CAI_OK)
+                     app_environment(cfg, prefix, "MESSAGING"),
+                     error) != CAI_OK)
     return environment_error(prefix, "MESSAGING", error);
-  if (app_environment(prefix, "MESSAGE_QUEUE") != NULL &&
+  if (app_environment(cfg, prefix, "MESSAGE_QUEUE") != NULL &&
       cai_config_set(cfg, "messaging", "queue_name",
-                     app_environment(prefix, "MESSAGE_QUEUE"), error) != CAI_OK)
+                     app_environment(cfg, prefix, "MESSAGE_QUEUE"),
+                     error) != CAI_OK)
     return environment_error(prefix, "MESSAGE_QUEUE", error);
-  if (app_environment(prefix, "ENABLE_AUTO_ENQUEUE") != NULL &&
+  if (app_environment(cfg, prefix, "ENABLE_AUTO_ENQUEUE") != NULL &&
       cai_config_set(cfg, "messaging", "enable_auto_enqueue",
-                     app_environment(prefix, "ENABLE_AUTO_ENQUEUE"),
+                     app_environment(cfg, prefix, "ENABLE_AUTO_ENQUEUE"),
                      error) != CAI_OK)
     return environment_error(prefix, "ENABLE_AUTO_ENQUEUE", error);
-  if (app_environment(prefix, "MESSAGE_ACK_TIMEOUT_MS") != NULL &&
+  if (app_environment(cfg, prefix, "MESSAGE_ACK_TIMEOUT_MS") != NULL &&
       cai_config_set(cfg, "messaging", "ack_timeout_ms",
-                     app_environment(prefix, "MESSAGE_ACK_TIMEOUT_MS"),
+                     app_environment(cfg, prefix, "MESSAGE_ACK_TIMEOUT_MS"),
                      error) != CAI_OK)
     return environment_error(prefix, "MESSAGE_ACK_TIMEOUT_MS", error);
-  if (app_environment(prefix, "MCP") != NULL &&
-      cai_config_set(cfg, "agent", "mcp", app_environment(prefix, "MCP"),
+  if (app_environment(cfg, prefix, "MCP") != NULL &&
+      cai_config_set(cfg, "agent", "mcp", app_environment(cfg, prefix, "MCP"),
                      error) != CAI_OK)
     return environment_error(prefix, "MCP", error);
-  if (app_environment(prefix, "SERVICE_TIER") != NULL &&
+  if (app_environment(cfg, prefix, "SERVICE_TIER") != NULL &&
       cai_config_set(cfg, "agent", "service_tier",
-                     app_environment(prefix, "SERVICE_TIER"), error) != CAI_OK)
+                     app_environment(cfg, prefix, "SERVICE_TIER"),
+                     error) != CAI_OK)
     return environment_error(prefix, "SERVICE_TIER", error);
   for (i = 0U; i < sizeof(env) / sizeof(env[0]); i++) {
-    const char *value = app_environment(prefix, env[i]);
+    const char *value = app_environment(cfg, prefix, env[i]);
     if (value != NULL &&
         cai_config_set(cfg, sections[i], keys[i], value, error) != CAI_OK)
       return environment_error(prefix, env[i], error);
@@ -873,13 +879,15 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
     return -1;
   snprintf(defaults.default_api_key_env, sizeof(defaults.default_api_key_env),
            "%sAPI_KEY", defaults.environment_prefix);
-  defaults.config_file = app_environment(defaults.environment_prefix, "CONFIG");
+  defaults.config_file =
+      app_environment(cfg, defaults.environment_prefix, "CONFIG");
   defaults.home_dir =
-      app_environment(defaults.environment_prefix, "PATHS_HOME_DIR");
+      app_environment(cfg, defaults.environment_prefix, "PATHS_HOME_DIR");
   if (defaults.home_dir == NULL)
-    defaults.home_dir = app_environment(defaults.environment_prefix, "HOME");
+    defaults.home_dir =
+        app_environment(cfg, defaults.environment_prefix, "HOME");
   defaults.config_dir =
-      app_environment(defaults.environment_prefix, "CONFIG_DIR");
+      app_environment(cfg, defaults.environment_prefix, "CONFIG_DIR");
   rc = cai_cli_read_options(argc, argv, &defaults, &early);
   config_dir_flag = early.config_dir != defaults.config_dir;
   home_flag = early.home_dir != defaults.home_dir;
@@ -1009,11 +1017,9 @@ int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
         cfg->set(cfg, s->section, s->key, s->value, error) != CAI_OK)
       return -1;
   }
-  if (cfg->apply_environment(cfg, error) != CAI_OK)
-    return -1;
   if (tool_environment(cfg, defaults.environment_prefix, error) < 0)
     return -1;
-  if (app_environment(defaults.environment_prefix, "CONFIG_DIR") != NULL &&
+  if (app_environment(cfg, defaults.environment_prefix, "CONFIG_DIR") != NULL &&
       cfg->set(cfg, "paths", "config_dir", config_root, error) != CAI_OK)
     return -1;
   for (i = 0U; application != NULL && i < application->setting_count; i++) {

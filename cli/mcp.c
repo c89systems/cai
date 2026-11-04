@@ -181,7 +181,8 @@ static int server_refresh(cai_mcp_client *client, cai_error *error) {
     rc = cai_cli_error(&server->error, CAI_ERR_INVALID,
                        "MCP endpoint is not configured");
   if (rc == CAI_OK && server->key_env != NULL && server->key_env[0] != '\0') {
-    server->config.api_key = getenv(server->key_env);
+    server->config.api_key =
+        cai_environment_get(server->owner->environment, server->key_env);
     if (server->config.api_key == NULL || server->config.api_key[0] == '\0')
       rc = cai_cli_error(&server->error, CAI_ERR_INVALID,
                          "MCP API-key environment variable is unset");
@@ -292,6 +293,7 @@ void cai_cli_mcp_close(cai_cli_mcp *mcp) {
   free(mcp->servers);
   free(mcp->clients);
   free(mcp->options);
+  cai_environment_close(mcp->environment);
   if (mcp->lock_initialized)
     pthread_mutex_destroy(&mcp->lock);
   memset(mcp, 0, sizeof(*mcp));
@@ -301,11 +303,17 @@ int cai_cli_mcp_open(cai_cli_mcp *mcp, const cai_config *config,
                      cai_chatgpt_auth *chatgpt_auth, pslog_logger *logger,
                      cai_error *error) {
   size_t i, count = cai_config_section_count(config);
-  int configured_chatgpt = 0;
+  int configured_chatgpt = 0, rc;
   memset(mcp, 0, sizeof(*mcp));
-  if (pthread_mutex_init(&mcp->lock, NULL) != 0)
+  rc = cai_config_environment(config, &mcp->environment, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (pthread_mutex_init(&mcp->lock, NULL) != 0) {
+    cai_environment_close(mcp->environment);
+    mcp->environment = NULL;
     return cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "initialize MCP connections");
+  }
   mcp->lock_initialized = 1;
   for (i = 0U; i < count; ++i) {
     const char *section = cai_config_section_at(config, i);
