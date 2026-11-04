@@ -150,7 +150,7 @@ static int message(void *context, const cai_workspace_server_event *event,
                : cai_input_controller_connect(host->input, peer->attachment,
                                               &peer->input, &binding);
     if (rc == CAI_OK) {
-      peer->binding_request = peer->snapshot_request = m->header.request;
+      peer->binding_request = m->header.request;
       peer->binding = 1;
     } else {
       cai_cli_input_wire_message reply;
@@ -178,8 +178,6 @@ static int message(void *context, const cai_workspace_server_event *event,
     scope.conversation = m->header.conversation;
     scope.generation = m->header.generation;
     rc = cai_input_connection_request(peer->input, &scope, &m->request, error);
-    if (rc == CAI_OK && m->request.operation == CAI_INPUT_SYNCHRONIZE)
-      peer->snapshot_request = m->header.request;
     return rc;
   }
 }
@@ -211,6 +209,7 @@ static int output_one(host_peer *peer, cai_error *error) {
   case CAI_INPUT_OBSERVATION_SNAPSHOT_BEGIN:
     m.header.kind = CAI_PROTOCOL_QUEUE_BEGIN;
     m.session = peer->host->session;
+    peer->snapshot_request = peer->binding ? peer->binding_request : 0U;
     m.header.request = peer->snapshot_request;
     break;
   case CAI_INPUT_OBSERVATION_SNAPSHOT_ITEM:
@@ -233,10 +232,12 @@ static int output_one(host_peer *peer, cai_error *error) {
   case CAI_INPUT_OBSERVATION_DISCONNECTED:
     m.header.kind = CAI_PROTOCOL_RESULT;
     m.header.sequence = 0U;
-    m.category =
-        peer->binding ? CAI_CLI_INPUT_BIND_REJECTED : CAI_CLI_INPUT_RESET;
-    m.header.request = peer->binding ? peer->binding_request : 0U;
-    if (peer->binding) {
+    m.category = peer->binding && o->result.code != CAI_OK
+                     ? CAI_CLI_INPUT_BIND_REJECTED
+                     : CAI_CLI_INPUT_RESET;
+    m.header.request =
+        m.category == CAI_CLI_INPUT_BIND_REJECTED ? peer->binding_request : 0U;
+    if (o->result.code != CAI_OK) {
       cai_input_connection_close(peer->input);
       peer->input = NULL;
       peer->binding = 0;

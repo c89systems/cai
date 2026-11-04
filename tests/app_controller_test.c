@@ -2,6 +2,7 @@
 #include "../cli/input_wire.h"
 #include <assert.h>
 #include <cai/app.h>
+#include <cai/app_client.h>
 #include <cai/workspace_client.h>
 #include <libmdf/mdf.h>
 #include <locale.h>
@@ -425,11 +426,12 @@ static void server_state(host *h, size_t count, uint64_t controller) {
 typedef struct wire_view {
   cai_workspace_client *client;
   cai_cli_input_wire_decoder *decoder;
-  unsigned long long conversation, producer, high, view;
+  unsigned long long conversation, producer, high, view, snapshot_request;
   cai_input_result result;
   cai_input_entry entry;
   char session[129];
-  size_t snapshots, rows, expected, results, binding_errors, resets, large_rows;
+  size_t begins, snapshots, rows, expected, results, binding_errors, resets,
+      large_rows;
   int active;
 } wire_view;
 static int wire_event(void *context, const cai_protocol_event *event,
@@ -449,10 +451,12 @@ static int wire_event(void *context, const cai_protocol_event *event,
   case CAI_INPUT_OBSERVATION_SNAPSHOT_BEGIN:
     assert(!v->active && message->session != NULL);
     v->active = 1;
+    ++v->begins;
     v->rows = 0U;
     v->expected = o->state.count;
     v->conversation = o->conversation;
     v->view = o->state.view_revision;
+    v->snapshot_request = message->header.request;
     v->producer = o->producer;
     v->high = o->last_request;
     assert(strlen(message->session) < sizeof(v->session));
@@ -461,7 +465,8 @@ static int wire_event(void *context, const cai_protocol_event *event,
   case CAI_INPUT_OBSERVATION_SNAPSHOT_ITEM:
     assert(v->active && v->rows == o->index &&
            v->conversation == o->conversation &&
-           v->view == o->state.view_revision);
+           v->view == o->state.view_revision &&
+           v->snapshot_request == message->header.request);
     ++v->rows;
     if (strlen(o->entry.text) == CAI_CLI_INPUT_TEXT_MAX)
       ++v->large_rows;
@@ -470,7 +475,8 @@ static int wire_event(void *context, const cai_protocol_event *event,
     break;
   case CAI_INPUT_OBSERVATION_SNAPSHOT_END:
     assert(v->active && v->rows == v->expected &&
-           o->state.count == v->expected && v->view == o->state.view_revision);
+           o->state.count == v->expected && v->view == o->state.view_revision &&
+           v->snapshot_request == message->header.request);
     v->active = 0;
     ++v->snapshots;
     break;
@@ -663,9 +669,17 @@ static void wire_scenario(host *h, wire_view *a, wire_view *b,
   wire_wait(&extra, &extra.binding_errors, 1U);
   assert(extra.result.code == CAI_ERR_INVALID && extra.snapshots == 0U);
   wire_bind(&extra, 0U, NULL);
+  wire_wait(&extra, &extra.begins, 1U);
+  /* The socket cannot have finished twelve large rows in its 64 KiB read
+   * budget. Mutate through the controller while this initial bind is partial.
+   * It must reset/restart, rather than rejecting or reserving a new producer.
+   */
+  wire_request(a, 17U, CAI_INPUT_OFFER, text, 1, wire_generation(a));
+  wire_wait(a, &a->results, ++results);
   wire_wait(&extra, &extra.snapshots, 1U);
-  assert(extra.producer == b->producer + 1U && extra.rows == 12U &&
-         extra.large_rows == 12U);
+  assert(extra.producer == b->producer + 1U && extra.rows == 13U &&
+         extra.large_rows >= 13U && extra.resets != 0U &&
+         extra.binding_errors == 1U);
   /* Close after sending only part of a structurally valid request. Neither
    * its provisional header nor fields may admit text to the queue. */
   {
@@ -688,10 +702,15 @@ static void wire_scenario(host *h, wire_view *a, wire_view *b,
   cai_workspace_client_close(extra.client);
   cai_cli_input_wire_decoder_close(extra.decoder);
   server_state(h, 2U, ~(uint64_t)0);
-  wire_request(a, 17U, CAI_INPUT_SYNCHRONIZE, NULL, 0, wire_generation(a));
+  i = a->begins;
+  wire_request(a, 18U, CAI_INPUT_SYNCHRONIZE, NULL, 0, wire_generation(a));
   wire_wait(a, &a->results, results + 1U);
+  wire_wait(a, &a->begins, i + 1U);
+  /* A second resync cannot relabel rows of the still-open first baseline. */
+  wire_request(a, 19U, CAI_INPUT_SYNCHRONIZE, NULL, 0, wire_generation(a));
+  wire_wait(a, &a->results, results + 2U);
   wire_wait(a, &a->snapshots, 3U);
-  assert(a->rows == 12U && a->result.outcome == CAI_INPUT_ACCEPTED);
+  assert(a->rows == 13U && a->result.outcome == CAI_INPUT_ACCEPTED);
   assert(cai_test_storage_open_count() == storage_opens);
   free(text);
 }
@@ -798,6 +817,155 @@ static void server_fence(host *h, cai_workspace_client *a,
   cai_input_connection_close(h->input);
   h->input = NULL;
 }
+typedef struct typed_view {
+  cai_app_client *client;
+  cai_app_client_state state;
+  cai_input_entry entry;
+  cai_input_result result;
+  size_t roles, snapshots, results, disconnected;
+} typed_view;
+static int typed_event(void *context, const cai_app_client_event *event,
+                       cai_error *error) {
+  typed_view *v = context;
+  const cai_input_observation *o = event->input;
+  (void)error;
+  v->state = *event->state;
+  assert(event->type != CAI_APP_CLIENT_BIND_REJECTED);
+  if (event->type == CAI_APP_CLIENT_CONNECTION) {
+    if (v->state.transport.phase == CAI_WORKSPACE_CONNECTED)
+      ++v->roles;
+    if (v->state.transport.phase == CAI_WORKSPACE_DISCONNECTED)
+      ++v->disconnected;
+  } else if (o->type == CAI_INPUT_OBSERVATION_SNAPSHOT_END)
+    ++v->snapshots;
+  else if (o->type == CAI_INPUT_OBSERVATION_RESULT) {
+    ++v->results;
+    v->result = o->result;
+  } else if (o->type == CAI_INPUT_OBSERVATION_SNAPSHOT_ITEM) {
+    v->entry = o->entry;
+    v->entry.text = NULL;
+  } else if (o->type == CAI_INPUT_OBSERVATION_CHANGE &&
+             o->change.type == CAI_INPUT_UPSERT) {
+    v->entry = o->change.entry;
+    v->entry.text = NULL;
+  }
+  return CAI_OK;
+}
+static void typed_wait(typed_view *v, const size_t *counter, size_t expected) {
+  uint64_t deadline, until = monotonic_ms() + 10000U;
+  struct pollfd fd;
+  while (*counter < expected) {
+    cai_error error;
+    int rc;
+    cai_error_init(&error);
+    rc = cai_app_client_pump(v->client, monotonic_ms(), &error);
+    if (rc != CAI_OK)
+      fprintf(stderr, "typed client failed: %d %s\n", rc,
+              error.message != NULL ? error.message : "no message");
+    assert(rc == CAI_OK);
+    cai_error_cleanup(&error);
+    if (*counter >= expected)
+      break;
+    assert(monotonic_ms() < until);
+    assert(cai_app_client_prepare(v->client, &fd, &deadline, NULL) == CAI_OK &&
+           fd.fd >= 0 && poll(&fd, 1U, 1000) >= 0);
+  }
+  assert(cai_app_client_get_state(v->client, &v->state, NULL) == CAI_OK);
+}
+static void typed_open(typed_view *v, unsigned long long producer,
+                       const char *session) {
+  cai_app_client_config config;
+  memset(v, 0, sizeof(*v));
+  cai_app_client_config_init(&config);
+  config.runtime_directory = getenv("CAI_TEST_SERVER_RUNTIME");
+  config.workspace = getenv("CAI_TEST_CONTROLLER_WORK");
+  config.event = typed_event;
+  config.context = v;
+  assert(cai_app_client_open(&config, monotonic_ms(), &v->client, NULL) ==
+         CAI_OK);
+  typed_wait(v, &v->roles, 1U);
+  assert(cai_app_client_bind(v->client, 1U, 0U, producer, session, NULL) ==
+         CAI_OK);
+  typed_wait(v, &v->snapshots, 1U);
+}
+static void typed_request(typed_view *v, unsigned long long id,
+                          cai_input_operation operation, const char *text,
+                          uint64_t generation) {
+  cai_input_scope scope;
+  cai_input_request r;
+  size_t results = v->results;
+  memset(&r, 0, sizeof(r));
+  scope.conversation = v->state.conversation;
+  scope.generation = generation;
+  r.request_id = id;
+  r.operation = operation;
+  r.text = text;
+  r.enabled = operation == CAI_INPUT_OFFER;
+  r.item_id = v->entry.id;
+  r.item_revision = v->entry.revision;
+  r.edit_token = v->entry.edit_token;
+  assert(cai_app_client_request(v->client, &scope, &r, NULL) == CAI_OK);
+  typed_wait(v, &v->results, results + 1U);
+}
+static void typed_server(int argc, char **argv) {
+  host h;
+  typed_view a, b;
+  cai_app_client_state original;
+  cai_app_status final;
+  unsigned int opens;
+  size_t roles;
+  int code;
+  open_host(&h, "server_typed");
+  assert(cai_app_start_server(h.app, NULL, argc - 1,
+                              (const char *const *)(argv + 1), NULL,
+                              NULL) == CAI_OK);
+  wait_ready(&h);
+  opens = cai_test_storage_open_count();
+  typed_open(&a, 0U, NULL);
+  typed_open(&b, 0U, NULL);
+  original = a.state;
+  assert(a.state.transport.controller == a.state.transport.attachment &&
+         b.state.transport.controller != b.state.transport.attachment);
+  typed_request(&b, 1U, CAI_INPUT_OFFER, "OBSERVER MUST NEVER RUN",
+                b.state.transport.generation);
+  assert(b.result.outcome == CAI_INPUT_REJECTED);
+  typed_request(&a, 1U, CAI_INPUT_OFFER, "Background work finished",
+                a.state.transport.generation);
+  assert(a.result.outcome == CAI_INPUT_ACCEPTED && a.entry.held);
+  typed_request(&a, 2U, CAI_INPUT_BEGIN_EDIT, NULL,
+                a.state.transport.generation);
+  assert(a.result.outcome == CAI_INPUT_ACCEPTED && a.entry.edit_held);
+  cai_app_client_close(a.client);
+  server_state(&h, 1U, 0U);
+  original = a.state;
+  typed_open(&a, original.producer, original.session);
+  assert(a.state.producer == original.producer && a.state.last_request == 2U &&
+         a.state.queue.count == 1U && a.entry.held && !a.entry.edit_held);
+  roles = a.roles;
+  assert(cai_app_client_takeover(a.client, 80U, a.state.transport.generation,
+                                 NULL) == CAI_OK);
+  typed_wait(&a, &a.roles, roles + 1U);
+  assert(a.state.transport.controller == a.state.transport.attachment);
+  typed_request(&a, 1U, CAI_INPUT_OFFER, "Background work finished",
+                original.transport.generation);
+  assert(a.result.outcome == CAI_INPUT_ACCEPTED && a.state.last_request == 2U);
+  typed_request(&a, 3U, CAI_INPUT_APPROVE, NULL, a.state.transport.generation);
+  assert(a.result.outcome == CAI_INPUT_ACCEPTED);
+  wait_count(&h, 1, 0);
+  cai_app_client_close(b.client);
+  server_state(&h, 1U, a.state.transport.attachment);
+  assert(cai_app_client_detach(a.client, NULL) == CAI_OK);
+  typed_wait(&a, &a.disconnected, 1U);
+  assert(cai_app_join(h.app, &code, NULL) == CAI_OK && code == 0);
+  cai_app_status_init(&final);
+  assert(cai_app_get_status(h.app, &final, NULL) == CAI_OK &&
+         final.server.phase == CAI_ATTACHMENT_STOPPING &&
+         !final.server.persist && cai_test_storage_open_count() == opens);
+  cai_app_status_cleanup(&final);
+  cai_app_client_close(a.client);
+  cai_app_close(h.app);
+  pthread_mutex_destroy(&h.lock);
+}
 static void workspace_server(int argc, char **argv, const char *mode) {
   cai_attachment_config lifetime;
   cai_workspace_client_config client_config;
@@ -808,6 +976,10 @@ static void workspace_server(int argc, char **argv, const char *mode) {
   wire_view wa, wb;
   int wire = strcmp(mode, "server_wire") == 0;
   int code, persistent = strcmp(mode, "server_persist") == 0;
+  if (strcmp(mode, "server_typed") == 0) {
+    typed_server(argc, argv);
+    return;
+  }
   open_host(&h, mode);
   memset(&wa, 0, sizeof(wa));
   memset(&wb, 0, sizeof(wb));

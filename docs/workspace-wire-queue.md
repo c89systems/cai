@@ -48,12 +48,20 @@ to their different operations; RESULT.category distinguishes their outcomes.
 
 A snapshot is QUEUE_BEGIN, individually emitted QUEUE_ITEM records in order,
 then QUEUE_END, all at one view revision. There is no combined snapshot frame.
+The initial baseline carries the binding request ID throughout. Subsequent
+baselines carry request zero; their individual SYNCHRONIZE receipts retain the
+input request IDs. A newer resync cannot relabel an already-open baseline.
 Consumers publish their editor mirror only after END. A mutation while the
 producer is reading that baseline invalidates it: reset precedes a new BEGIN.
 Partial snapshots on disconnect are never committed. Changes after END use
 previous_view to detect missing observations. A slow socket gates production
 using bounded transport backlog and descriptor readiness, not polling or
 whole-snapshot buffering; accepted model work remains independent of it.
+This reset/restart also applies before the initial binding's first END; it is
+not a binding rejection. A reset with a nonzero error code terminates only
+that observation binding and permits an explicit rebind. A zero conversation
+reset means the host has unbound the old conversation. Neither case submits a
+draft or selects a replacement producer automatically.
 
 Session switching unbinds old socket input connections before runtime
 destruction. Requests never move to a different conversation. Reattachment
@@ -74,3 +82,7 @@ Focused verification lives in `cai_input_wire` (fragmentation, caps, malformed
 values and completion), `cai_input_snapshot` (bounded production, revision
 restart, isolation/allocation failure), `cai_input_queue` (release/receipt and
 journal recovery), and `cai_app_workspace_server` (real sockets and inference).
+`cai_app_client` additionally checks typed baseline/change validation, callback
+and thread ownership, reset/rebind, partial EOF and consumer cancellation. The
+workspace-server checks use this public client for real inference and producer
+reconnect, and interrupt a large initial snapshot through another attachment.

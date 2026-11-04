@@ -1,3 +1,15 @@
+cai_app_client_bind
+cai_app_client_close
+cai_app_client_config_init
+cai_app_client_detach
+cai_app_client_directory
+cai_app_client_get_state
+cai_app_client_open
+cai_app_client_prepare
+cai_app_client_pump
+cai_app_client_request
+cai_app_client_shutdown
+cai_app_client_takeover
 cai_app_close
 cai_app_config_init
 cai_app_connect_input

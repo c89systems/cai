@@ -70,6 +70,15 @@ records, without changing request IDs or accepted text. New owners release
 orphaned edits before queue selection. Command presentation, replay/live output,
 the headless/autostart executable and terminal client cutover are still pending.
 
+`cai/app_client.h` now provides the application-side typed queue client over
+that socket. It validates incremental baselines and change revisions, delivers
+borrowed rows/receipts, preserves original request scopes and offers explicit
+bind/resume/takeover/shutdown/detach. It never opens a runtime/store or gathers
+a queue snapshot. Its event loop has one descriptor and a handshake deadline,
+without a worker or idle polling. Failed initial binding and interrupted
+baselines do not change the last validated session identity. Socket command,
+status and transcript presentation remain to be connected to the frontend.
+
 ## Confirmed product decisions
 
 - One server process owns each canonical workspace directory. A

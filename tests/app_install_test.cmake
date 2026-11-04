@@ -9,7 +9,7 @@ if(NOT result EQUAL 0)
 endif()
 file(RENAME "${root}/stage" "${root}/relocated")
 set(prefix "${root}/relocated")
-foreach(path include/cai/app.h lib/libcai_app.a lib/pkgconfig/cai-app.pc
+foreach(path include/cai/app.h include/cai/app_client.h lib/libcai_app.a lib/pkgconfig/cai-app.pc
     lib/cmake/cai_app/cai_app-config.cmake share/doc/libcai_app/embedding.md
     share/cai_app/dependencies.json
     share/doc/libcai_app/examples/main.c share/doc/libcai_app/examples/app.lua)
@@ -38,13 +38,17 @@ file(WRITE "${root}/source/main.c" [=[
 #undef main
 #include <assert.h>
 #include <cai/skills.h>
+#include <cai/app_client.h>
 int main(int argc, char **argv) {
   cai_app *app = NULL;
   cai_app_status status;
   cai_error error;
   cai_skill_metadata *metadata = NULL;
+  cai_app_client_config client;
   unsigned long long id;
   cai_error_init(&error);
+  cai_app_client_config_init(&client);
+  assert(client.event == NULL && client.handshake_timeout_ms == 0U);
   assert(cai_skill_metadata_open(NULL, NULL, &metadata, &error) == CAI_ERR_INVALID);
   assert(metadata == NULL);
   cai_error_cleanup(&error);

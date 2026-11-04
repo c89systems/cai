@@ -10,6 +10,10 @@ using the [wire payload contract](workspace-wire-queue.md). Transcript/command
 presentation and the terminal client cutover remain future work in the
 [attachable frontend architecture](frontend-architecture.md). Illustrative
 C shapes below explain responsibilities; installed headers define exact APIs.
+The typed `cai/app_client.h` socket client exposes borrowed incremental queue
+observations without opening storage or materializing a baseline. Its explicit
+bind/resume and original scopes use the same receipts and admission gate as
+in-process connections.
 
 Softline must retain its existing local queue as the constructor default. A
 constructor may instead select an application-supplied remote queue backend.

@@ -265,6 +265,32 @@ without advancing request IDs or replacing accepted text. Recovery releases
 orphaned edits before selecting the queue. Application command presentation and
 transcript streaming remain pending. This API does not fork or install signals.
 
+`<cai/app_client.h>` is the typed socket-side queue interface in libcai_app.
+Open it with explicit runtime/workspace paths and service its single descriptor
+and deadline through `prepare`/`pump`. It creates no worker, runtime, store,
+Softline or libmdf object. Connection callbacks report verified instance,
+attachment and authority generation. After CONNECTED, explicitly `bind` a new
+producer or resume an original producer with its exact session identity. A
+rejected binding never silently creates another producer. Request IDs for
+binding and queue operations are separate.
+
+Input callbacks borrow one validated row or receipt. BEGIN/ITEM are provisional;
+publish a frontend mirror only at END. The client retains baseline metadata,
+not a queue array, and enriches each row with the captured producer/state.
+It rejects mixed epochs, rows, revisions and missing changes. A reset aborts
+the partial baseline. Terminal consumer failures permit an explicit rebind;
+transport loss requires a new connection and instance verification. Last valid
+identity and processed watermark remain available for reconciliation, while
+`ready` becomes false. No pending work is automatically resubmitted. Preserve
+the frontend's higher last-issued request ID as well.
+
+Submit requests with their original scope and ID. The server checks durable
+receipts before authority; this lets an observer or stale generation reconcile
+previously accepted work without authorizing a new mutation. Explicit
+`takeover`, `shutdown` and draining `detach` retain the core lifetime rules.
+This client currently carries input/queue observations, not application status
+or transcript presentation; the terminal frontend cutover remains pending.
+
 An idle controller stays open until STOP. After observing shutdown, call
 `cai_app_join` outside UI/owner callbacks, then close or start the receiver
 again. Join itself does not request STOP. STOP also sets a cancellation signal
