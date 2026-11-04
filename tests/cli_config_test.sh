@@ -176,7 +176,7 @@ cp "$config" "$root/alternate.ini"
 printf '[paths]\nexport_dir = "exports"\n' >>"$root/alternate.ini"
 plan '{"plan":["AlternateDone"]}'
 run --config "$root/alternate.ini" -Nni alternate; ok
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR==1 {print $1}' "$root/stdout")
 run --config "$root/alternate.ini" --export "$id"; ok
 [[ -f "$root/exports/$id/$id.md" ]]

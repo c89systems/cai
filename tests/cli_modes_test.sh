@@ -16,13 +16,13 @@ jq -se 'any(.[]; .lvl == "info" and .role == "user" and .prompt_kind == "normal"
 plan '{"plan":["resumed reply"]}'
 run -ni 'resume task'; ok; [[ $(stdout_text) == 'resumed reply' ]]
 contains "$root/peer/requests.jsonl" 'first task'
-run --list; ok; [[ ! -s "$root/stderr" ]]; cp "$root/stdout" "$root/list"
+run --list-all; ok; [[ ! -s "$root/stderr" ]]; cp "$root/stdout" "$root/list"
 id=$(awk 'NR==1 {print $1}' "$root/list")
 [[ $(awk 'length>80 {print}' "$root/list") == '' ]]
 contains "$root/list" 'first task'
 for level in info debug; do
   export LOG_LEVEL="$level"
-  run -l; ok; cmp "$root/stdout" "$root/list"
+  run -L; ok; cmp "$root/stdout" "$root/list"
   jq -se "any(.[]; .lvl == \"$level\")" "$root/stderr" >/dev/null
   absent "$root/stderr" $'\033'
 done

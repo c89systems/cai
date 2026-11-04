@@ -15,7 +15,7 @@ plan "$(jq -n --argjson chat "$chat" '{chat:$chat,plan:[
   {tool:"read_file",arguments:{path:"input.txt"}},"EXECUTION DONE"]}')"
 run -Nni 'Inspect the input'; ok
 [[ $(stdout_text) == 'EXECUTION DONE' ]]
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR==1 {print $1}' "$root/stdout")
 run --export "$id"; ok
 jsonl=$(head -1 "$root/stdout")
@@ -58,7 +58,7 @@ absent "$root/request" '"kind": "tool.failed"'
 # Import/export preserves the execution timeline without a compatibility shim.
 run --import "$root/original.jsonl"; ok
 imported=$(awk '{print $NF}' "$root/stdout")
-run --list; ok
+run --list-all; ok
 imported=$(awk 'NR==1 {print $1}' "$root/stdout")
 run --export "$imported"; ok
 jsonl=$(head -1 "$root/stdout")
@@ -74,7 +74,7 @@ PATCH
   plan "$(jq -n --rawfile patch "$root/patch" '{plan:[{tool:"apply_patch",arguments:$patch},"PATCH DONE"]}')"
   run -Nni 'Apply the patch'; ok
   [[ $(cat "$work/execution-patch.txt") == 'exact "raw" patch λ' ]]
-  run --list; ok
+  run --list-all; ok
   id=$(awk 'NR==1 {print $1}' "$root/stdout")
   run --export "$id"; ok
   jsonl=$(head -1 "$root/stdout")
@@ -86,7 +86,7 @@ PATCH
   terminal_start -N
   send '/review Inspect the execution fixture\r'; expect 'Fix parser'; expect 'Worked for'
   terminal_close
-  run --list; ok
+  run --list-all; ok
   id=$(awk 'NR==1 {print $1}' "$root/stdout")
   run --export "$id"; ok
   jsonl=$(head -1 "$root/stdout")
@@ -100,7 +100,7 @@ PATCH
   # Bad presentation data must not prevent restoring valid model context.
   jq -c 'if .type=="execution" and (.data|fromjson|.kind=="tool.failed") then .data="{invalid" else . end' "$root/original.jsonl" >"$root/bad.jsonl"
   run --import "$root/bad.jsonl"; ok
-  run --list; ok
+  run --list-all; ok
   id=$(awk 'NR==1 {print $1}' "$root/stdout")
   run --export "$id"; ok
   markdown=$(tail -1 "$root/stdout")
@@ -113,7 +113,7 @@ PATCH
 
   plan '{"plan":[{"output_items":[{"id":"ws_execution","type":"web_search_call","status":"completed","action":{"type":"search","query":"execution catalog"}}],"text":"HOSTED DONE"}]}'
   run -Nni 'Search'; ok
-  run --list; ok
+  run --list-all; ok
   id=$(awk 'NR==1 {print $1}' "$root/stdout")
   run --export "$id"; ok
   jsonl=$(head -1 "$root/stdout")
@@ -124,7 +124,7 @@ fi
 plan "$(jq -n --argjson chat "$chat" '{chat:$chat,plan:[
   {text:"Partial answer",error:"EXECUTION PROVIDER FAILURE",error_code:"execution_failure",error_request_id:"req_execution"}]}')"
 run -Nni 'Fail in the provider'; bad
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR==1 {print $1}' "$root/stdout")
 run --export "$id"; ok
 jsonl=$(head -1 "$root/stdout")

@@ -76,7 +76,7 @@ for mode in cyber_policy cyber_notice http read list outside bounded disabled to
   # empty-report failure. The remaining cases above prove their distinct
   # wire/diagnostic behavior; reopening and exporting again adds no coverage.
   case "$mode" in cyber_policy|bounded|empty) ;; *) continue ;; esac
-  run --list; ok
+  run --list-all; ok
   id=$(awk 'NR==1 {print $1}' "$root/stdout")
   run --export "$id"; ok
   jsonl="$root/data/cai/exports/$id/$id.jsonl"

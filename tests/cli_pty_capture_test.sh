@@ -45,7 +45,7 @@ tail -1 "$root/peer/requests.jsonl" >"$root/request"
 absent "$root/request" PRIVATE_PTY_RESULT
 absent "$root/request" PRIVATE_GAME_FRAME
 terminal_close
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR == 1 {print $1}' "$root/stdout")
 run --export "$id"; ok
 journal="$root/data/cai/exports/$id/$id.jsonl"
@@ -98,7 +98,7 @@ contains "$root/request" PIPE_FRAME_1999
 absent "$root/request" PIPE_DISCARDED_HEAD
 absent "$root/request" PIPE_FRAME_0000
 terminal_close
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR == 1 {print $1}' "$root/stdout")
 run --export "$id"; ok
 journal="$root/data/cai/exports/$id/$id.jsonl"

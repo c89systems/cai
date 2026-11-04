@@ -4,7 +4,7 @@ peer_start
 base+=(--export-dir "$root/exports")
 plan '{"plan":["EXPORT ANSWER"]}'
 run -Nni 'EXPORT PROMPT'; ok
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR==1 {print $1}' "$root/stdout")
 before=$(requests)
 run --export "$id"; ok

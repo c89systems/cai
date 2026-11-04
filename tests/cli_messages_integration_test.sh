@@ -18,7 +18,7 @@ sender_base=("$cli" --insecure -p custom --endpoint "$sender_endpoint" -m gpt-5.
 plan '{"plan":["RECEIVER READY"]}'
 run -Nni 'receiver setup'; ok
 jq -e 'all(.tools[]?; .name != "agent_message")' "$root/peer/requests.jsonl" >/dev/null
-run --list; ok
+run --list-all; ok
 receiver=$(awk 'NF {print $1; exit}' "$root/stdout")
 [[ -n "$receiver" ]]
 send_message() {
@@ -71,7 +71,7 @@ contains "$root/request" 'External hello one edited'
 contains "$root/request" '[Agent message '
 contains "$root/request" 'receiver setup'
 json "$root/request" '.model == "gpt-6-luna" and .reasoning.effort == "high" and any(.tools[]?; .name == "agent_message")'
-run --list; ok
+run --list-all; ok
 [[ $(awk 'NF {print $1; exit}' "$root/stdout") == "$receiver" ]]
 # An approved message waits for the current turn, then precedes automatic
 # goal continuation. It must not wait for the entire goal to finish.

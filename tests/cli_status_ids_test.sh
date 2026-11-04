@@ -21,7 +21,7 @@ initial=$(current_session_id)
 expect_log "$initial"
 send '/status\r'; expect 'Session ID'; expect 'Last response ID'; expect 'Not available'; expect "$logdir/$initial.log"; expect 'Use /tools'
 prompt 'first response' 'ID FIRST'
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR==1 {print $1}' "$root/stdout")
 run --export "$id"; ok
 exported="$root/data/cai/exports/$id/$id.jsonl"

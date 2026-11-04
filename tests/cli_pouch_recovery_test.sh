@@ -4,7 +4,7 @@ source "$(dirname "$0")/cli_test_common.sh"
 peer_start
 plan '{"plan":["DURABLE CONVERSATION ANSWER"]}'
 run -Nni 'durable conversation prompt'; ok
-run --list; ok
+run --list-all; ok
 cp "$root/stdout" "$root/list"
 id=$(awk 'NR == 1 {print $1}' "$root/list")
 [[ -n "$id" ]]
@@ -18,12 +18,12 @@ for mode in missing empty malformed; do
     empty) : >"$manifest" ;;
     malformed) printf 'interrupted derived index\n' >"$manifest" ;;
   esac
-  run --list; ok
+  run --list-all; ok
   cmp "$root/stdout" "$root/list"
   cmp "$key" "$root/original-key"
   [[ -s "$manifest" ]]
   # Recovery must install a readable index; the warning must not recur.
-  run --list; ok
+  run --list-all; ok
   cmp "$root/stdout" "$root/list"
   absent "$root/stderr" cache.load.index.error
 done
@@ -73,7 +73,7 @@ terminal_start
 send '/resume\r'; expect "$id"
 terminal_close
 [[ $(requests) == "$count" ]]
-run --list; ok
+run --list-all; ok
 absent "$root/stderr" cache.load.index.error
 cmp "$key" "$root/original-key"
 # Auto-resume reads the workspace lookup directly too. Repair its derived

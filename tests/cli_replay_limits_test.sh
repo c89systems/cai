@@ -4,7 +4,7 @@ fixture=${1:?pouch fixture executable}
 peer_start
 plan '{"plan":["ORIGINAL DURABLE ANSWER"]}'
 run -Nni 'original durable prompt'; ok
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR == 1 {print $1}' "$root/stdout")
 "$fixture" --oversized-replay-event "$id" "$work"
 # Oversized input and shell-result events are omitted, while the surrounding

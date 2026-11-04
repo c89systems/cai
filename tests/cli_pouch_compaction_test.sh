@@ -6,7 +6,7 @@ peer_start
 base+=(--disable-compression)
 plan '{"plan":["DURABLE COMPACTION ANSWER"]}'
 run -Nni 'durable compaction prompt'; ok
-run --list; ok
+run --list-all; ok
 cp "$root/stdout" "$root/list"
 id=$(awk 'NR == 1 {print $1}' "$root/list")
 [[ -n "$id" ]]
@@ -17,7 +17,7 @@ cp "$root/state/cai/pouch.key" "$root/original-key"
 # Retain real background/default-stack behavior while reducing segment size
 # and disabling I/O throttling in this disposable fixture only.
 "$helper" "$root/state"
-run --list; ok
+run --list-all; ok
 cmp "$root/stdout" "$root/list"
 run --export "$id"; ok
 # Export initialization has its own current timestamp; stored event timestamps

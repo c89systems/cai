@@ -20,7 +20,7 @@ json "$root/peer/requests.jsonl" '.model == "smith-model"'
 contains "$root/stdout" 'NAMED APP REPLY'
 contains "$root/peer/requests.jsonl" SMITH_GLOBAL_INSTRUCTIONS_MARKER
 contains "$root/peer/requests.jsonl" 'Named application skill marker'
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR == 1 {print $1}' "$root/stdout")
 [[ -n "$id" && -f "$root/config/smith/config.ini" && -f "$root/state/smith/pouch.key" ]]
 run --export "$id"; ok
@@ -48,7 +48,7 @@ contains "$root/request" VECTIS_GLOBAL_INSTRUCTIONS_MARKER
 absent "$root/request" SMITH_GLOBAL_INSTRUCTIONS_MARKER
 [[ -f "$root/config/vectis/cai.ini" && -f "$root/state/vectis/cai/pouch.key" ]]
 contains "$root/config/vectis/cai.ini" "$root/config/vectis/instructions/AGENTS.md"
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR == 1 {print $1}' "$root/stdout")
 run --export "$id"; ok
 [[ -s "$root/data/vectis/cai/exports/$id/$id.md" ]]
@@ -72,7 +72,7 @@ base+=(--state-dir "$root/flags/state" --cache-dir "$root/flags/cache"
 plan '{"plan":["FLAG OVERRIDES"]}'
 run -Nni 'forwarded roots'; ok
 [[ -f "$root/flags/key" && -d "$root/flags/state/pouch" && -d "$root/flags/clipboard" ]]
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR == 1 {print $1}' "$root/stdout")
 run --export "$id"; ok
 [[ -s "$root/flags/data/exports/$id/$id.md" ]]

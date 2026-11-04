@@ -8,7 +8,7 @@ peer_start
 export LOG_LEVEL=error
 plan '{"plan":["REPLAY READY"]}'
 run -Nni STARTUP_USER; ok
-run --list; ok
+run --list-all; ok
 session=$(awk 'NF {print $1; exit}' "$root/stdout")
 unset TMUX TMUX_PANE
 cd "$root"

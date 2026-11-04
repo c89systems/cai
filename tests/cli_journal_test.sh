@@ -7,7 +7,7 @@ peer_start
 # provider call is a local fixture response with no delay or real inference.
 plan "$(jq -nc '{plan:[("FIRST-CONTEXT-λ " + ("abcdefgh" * 24576))]}')"
 run -Nni 'FIRST JOURNAL PROMPT'; ok
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR==1 {print $1}' "$root/stdout")
 grep -qx 'compression=zlib' "$root/state/cai/pouch/manifest"
 for n in 1 2 3; do
@@ -61,7 +61,7 @@ run --config "$root/storage.ini" --no-disable-compression --state-dir "$root/cli
 grep -qx 'compression=zlib' "$root/cli-state/pouch/manifest"
 run --dump-config; ok; contains "$root/stdout" '# disable_compression = false'
 # Bad imports cannot become resumable/listable conversations.
-run --list; ok; cp "$root/stdout" "$root/list-before"
+run --list-all; ok; cp "$root/stdout" "$root/list-before"
 for variant in truncated duplicate revision object_data; do
   if [[ "$variant" == truncated ]]; then
     head -c -9 "$root/native.jsonl" >"$root/bad.jsonl"
@@ -73,5 +73,5 @@ for variant in truncated duplicate revision object_data; do
     jq -c 'if .sequence==1 then .data={unexpected:true} else . end' "$root/native.jsonl" >"$root/bad.jsonl"
   fi
   run --import "$root/bad.jsonl"; bad
-  run --list; ok; cmp "$root/stdout" "$root/list-before"
+  run --list-all; ok; cmp "$root/stdout" "$root/list-before"
 done

@@ -11,7 +11,7 @@ chat=false
 [[ "$protocol" != chat_completions ]] || chat=true
 plan "$(jq -n --argjson chat "$chat" '{chat:$chat,plan:["PARENT REPLY BEFORE REVIEW"]}')"
 run -Nni 'Parent prompt before review'; ok
-run --list; ok
+run --list-all; ok
 id=$(awk 'NR==1 {print $1}' "$root/stdout")
 report=$(jq -c '.overall_explanation = (("Review chunk λ. " * 320) + "REVIEW END MARKER")' "$support/fixtures/review.json")
 printf 'review input\n' >"$work/input.txt"
@@ -89,7 +89,7 @@ elif [[ "${2:-}" != binary ]]; then
   terminal_start -N
   send 'Delegate this task\r'; expect 'PARENT AFTER WORKER'; expect 'Worked for'
   terminal_close
-  run --list; ok
+  run --list-all; ok
   worker_id=$(awk 'NR==1 {print $1}' "$root/stdout")
   terminal_start --resume "$worker_id"
   expect 'WORKER REPLAY BODY'; expect 'PARENT AFTER WORKER'; expect 'Subagent'

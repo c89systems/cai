@@ -10,7 +10,7 @@ done
 run --replay-turns; bad
 plan '{"plan":["ANSWER00 PARTA PARTB"]}'
 run -Nni PROMPT00; ok
-run --list; ok
+run --list-all; ok
 original=$(awk 'NR == 1 {print $1}' "$root/stdout")
 if [[ "$scope" == host ]]; then
   export CAI_TEST_APP_REPLAY_PATH="$root/replay-events"
