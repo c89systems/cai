@@ -64,7 +64,7 @@
     # Compile the reusable presenter without application/store objects. This
     # fixture proves its link boundary while observing actual owner-side I/O.
     add_executable(cai_cli_geometry_test tests/cli_geometry_test.c
-      cli/softline_presenter.c cli/literal.c cli/reasoning.c cli/theme.c cli/error.c)
+      cli/softline_presenter.c cli/transcript_presenter.c cli/literal.c cli/reasoning.c cli/theme.c cli/error.c)
     target_link_options(cai_cli_geometry_test PRIVATE -Wl,--wrap=ioctl
       -Wl,--wrap=sl_output_stream_reconcile -Wl,--wrap=sl_output_stream_write)
     target_link_libraries(cai_cli_geometry_test PRIVATE cai_static
@@ -89,7 +89,8 @@
       "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_cli_spawn_test>")
     set_tests_properties(cai_cli_spawn PROPERTIES TIMEOUT 30)
     target_link_libraries(cai_cli_headless_client_test PRIVATE cai_app_static)
-    target_link_options(cai_cli_headless_client_test PRIVATE -Wl,--wrap=lc_client_open)
+    target_link_options(cai_cli_headless_client_test PRIVATE -Wl,--wrap=lc_client_open
+      -Wl,--wrap=sl_output_stream_write)
     cai_configure_cli_target(cai_cli_headless_client_test)
     target_compile_options(cai_cli_headless_client_test PRIVATE -UNDEBUG)
     add_test(NAME cai_cli_headless COMMAND bash

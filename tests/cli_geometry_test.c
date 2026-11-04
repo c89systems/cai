@@ -4,6 +4,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #include "../cli/softline_presenter.h"
+#include "../cli/transcript_presenter.h"
 #include <pthread.h>
 #include <softline/softline.h>
 #include <stdarg.h>
@@ -166,6 +167,282 @@ static int prompt_cases(void) {
   free(state);
   return 0;
 }
+
+/** Socket fragmentation must not alter literal text, wrapping or prompt
+ * markers. Exercise real libmdf output, not the adapter's internal counters. */
+static int streamed_input_cases(void) {
+  static const char text[] =
+      "Literal **stars** _path_ `code` [name](url) <tag> &amp; \\path\n"
+      "café λ 🚀 \xe2\xc3\xa9 end\n\nlast \033[2J \xc2\x9b invalid \xff "
+      "\xe2\x82";
+  static const char words[] = "a short word **literal** café 🚀 ";
+  cai_cli_presenter *state = calloc(1U, sizeof(*state));
+  sl_t *editor = sl_create();
+  char reference[sizeof(capture)];
+  size_t split, i, before;
+  int command;
+  CHECK(state != NULL && editor != NULL);
+  state->sl = editor;
+  state->interactive = 1;
+  state->width = 80;
+  /* Unknown original time suppresses the wall clock, making native/socket
+   * comparisons stable even across minute boundaries. */
+  state->presentation_event = 1;
+  CHECK(cai_cli_theme_parse("plain", &state->theme) == NULL);
+  state->render_theme = state->theme;
+  CHECK(sl_set_buffer(editor, "Do not submit this draft") == SL_OK);
+  capturing = 1;
+  for (command = 0; command <= 1; ++command) {
+    captured = 0U;
+    capture[0] = '\0';
+    state->feed_breaks = state->block_spacing_pending = 0;
+    CHECK(cai_cli_presenter_input(state, text, command) == 0);
+    memcpy(reference, capture, captured + 1U);
+    for (split = 0U; split <= strlen(text); ++split) {
+      captured = 0U;
+      capture[0] = '\0';
+      state->feed_breaks = state->block_spacing_pending = 0;
+      CHECK(cai_cli_presenter_input_begin(state, command) == 0);
+      CHECK(cai_cli_presenter_input_write(state, text, split) == 0);
+      CHECK(cai_cli_presenter_input_write(state, text + split,
+                                          strlen(text) - split) == 0);
+      CHECK(cai_cli_presenter_input_end(state) == 0);
+      CHECK(strcmp(capture, reference) == 0);
+    }
+    captured = 0U;
+    capture[0] = '\0';
+    state->feed_breaks = state->block_spacing_pending = 0;
+    CHECK(cai_cli_presenter_input_begin(state, command) == 0);
+    for (i = 0U; i < strlen(text); ++i)
+      CHECK(cai_cli_presenter_input_write(state, text + i, 1U) == 0);
+    CHECK(cai_cli_presenter_input_end(state) == 0);
+    CHECK(strcmp(capture, reference) == 0);
+    before = captured;
+    CHECK(cai_cli_presenter_input_begin(state, command) == 0);
+    CHECK(cai_cli_presenter_input_write(state, NULL, 0U) == 0);
+    CHECK(cai_cli_presenter_input_end(state) == 0 && captured == before);
+    CHECK(cai_cli_presenter_input_begin(state, command) == 0);
+    CHECK(cai_cli_presenter_input_write(state, "discarded suffix", 16U) == 0);
+    /* A command may already have separated its marker from the preceding
+     * block. Aborting must not emit the retained literal suffix. */
+    before = captured;
+    CHECK(cai_cli_presenter_input_begin(state, command) == -1);
+    CHECK(cai_cli_presenter_text(state, "must not interleave", 19U) == -1);
+    CHECK(cai_cli_presenter_reasoning_body(state, "waiting", 7U) == -1);
+    CHECK(cai_cli_presenter_set_theme_scope(state, 1, NULL) == CAI_ERR_INVALID);
+    cai_cli_presenter_input_abort(state);
+    CHECK(captured == before);
+    CHECK(cai_cli_presenter_input(state, "after abort", command) == 0);
+    CHECK(strstr(capture, "discarded suffix") == NULL &&
+          strstr(capture, "after abort") != NULL);
+    CHECK(cai_cli_presenter_input_begin(state, command) == 0);
+    write_error = 1;
+    CHECK(cai_cli_presenter_input_write(state, words, sizeof(words) - 1U) ==
+              -1 ||
+          cai_cli_presenter_input_end(state) == -1);
+    write_error = 0;
+    before = emitted;
+    CHECK(cai_cli_presenter_input_write(state, words, sizeof(words) - 1U) ==
+              -1 &&
+          cai_cli_presenter_input_end(state) == -1 && emitted == before);
+    cai_cli_presenter_input_abort(state);
+    CHECK(cai_cli_presenter_input(state, "after failure", command) == 0);
+  }
+  /* Generate a multi-megabyte logical prompt without ever holding it in CAI.
+   * Ordinary words must reach Softline before the producer/field ends. This
+   * does not claim to cap the pinned libmdf's unbroken-word decision buffer. */
+  capturing = 0;
+  CHECK(cai_cli_presenter_input_begin(state, 0) == 0);
+  before = emitted;
+  for (i = 0U; i < 100000U; ++i) {
+    CHECK(cai_cli_presenter_input_write(state, words, sizeof(words) - 1U) == 0);
+    if (i == 100U)
+      CHECK(emitted > before + 1000U);
+  }
+  CHECK(emitted > before + 1000000U);
+  CHECK(cai_cli_presenter_input_end(state) == 0);
+  CHECK(strcmp(sl_buffer(editor), "Do not submit this draft") == 0);
+  cai_cli_presenter_close(state);
+  sl_destroy(editor);
+  free(state);
+  return 0;
+}
+
+/** Deliver the same decoded shapes as the application socket client. Only
+ * BEGIN carries the original event timestamp on the wire. */
+static int transcript_record(cai_cli_transcript_presenter *p, const char *type,
+                             const void *data, size_t length, size_t chunk,
+                             uint64_t sequence, uint64_t timestamp) {
+  cai_transcript_event event;
+  size_t at;
+  memset(&event, 0, sizeof(event));
+  event.kind = CAI_TRANSCRIPT_EVENT_BEGIN;
+  event.type = type;
+  event.stream = 1U;
+  event.sequence = sequence;
+  event.has_data = data != NULL;
+  event.timestamp_ns = timestamp;
+  if (cai_cli_transcript_presenter_event(p, &event, NULL) != CAI_OK)
+    return -1;
+  event.timestamp_ns = 0U;
+  for (at = 0U; at < length;) {
+    event.kind = CAI_TRANSCRIPT_DATA;
+    event.offset = at;
+    event.length = length - at < chunk ? length - at : chunk;
+    event.data = (const char *)data + at;
+    if (cai_cli_transcript_presenter_event(p, &event, NULL) != CAI_OK)
+      return -1;
+    at += event.length;
+  }
+  event.kind = CAI_TRANSCRIPT_EVENT_END;
+  event.offset = length;
+  event.length = 0U;
+  event.data = NULL;
+  return cai_cli_transcript_presenter_event(p, &event, NULL) == CAI_OK ? 0 : -1;
+}
+
+/** Verify accepted-input provenance stripping and Markdown continuity across
+ * replay/live spans with real renderers and no store/controller link. */
+static int transcript_cases(void) {
+  static const char text[] = "literal **stars** café 🚀\nnext line";
+  static const char prefix[] = "L\n7\nsession\n18446744073709551615\n1\n";
+  static const char *const invalid[] = {
+      "",
+      "X\n1\ns\n1\n0\nprompt",
+      "L!1\ns\n1\n0\nprompt",
+      "L\n0\n",
+      "L\n129\n",
+      "L\n18446744073709551616\n",
+      "L\n1\ns!1\n0\nprompt",
+      "L\n1\ns\n0\n0\nprompt",
+      "L\n1\ns\n1\n3\nprompt",
+      "L\n1\ns\n1\n1!prompt",
+      "L\n1\ns\n1\n1\n",
+      "C\n1\ns\n18446744073709551616\n1\nprompt"};
+  cai_cli_presenter *ui = calloc(1U, sizeof(*ui));
+  cai_cli_transcript_presenter *p = NULL;
+  sl_t *editor = sl_create();
+  cai_transcript_event event;
+  char delivery_text[sizeof(prefix) + sizeof(text)];
+  char reference[sizeof(capture)];
+  size_t i, before;
+  CHECK(ui != NULL && editor != NULL);
+  ui->sl = editor;
+  ui->interactive = 1;
+  ui->presentation_event = 1;
+  CHECK(cai_cli_theme_parse("plain", &ui->theme) == NULL);
+  ui->render_theme = ui->theme;
+  CHECK(cai_cli_presenter_renderer_create(ui, &ui->render_theme, &ui->renderer,
+                                          NULL) == CAI_OK);
+  CHECK(cai_cli_transcript_presenter_open(ui, &p, NULL) == CAI_OK);
+  CHECK(sl_set_buffer(editor, "Unsent draft") == SL_OK);
+  snprintf(delivery_text, sizeof(delivery_text), "%s%s", prefix, text);
+  capturing = 1;
+  captured = 0U;
+  capture[0] = '\0';
+  CHECK(cai_cli_presenter_prompt(ui, text) == 0);
+  memcpy(reference, capture, captured + 1U);
+  for (i = 1U; i <= strlen(delivery_text); ++i) {
+    captured = 0U;
+    capture[0] = '\0';
+    ui->feed_breaks = ui->block_spacing_pending = 0;
+    CHECK(transcript_record(p, "input_queue_delivery", delivery_text,
+                            strlen(delivery_text), i, i, 0U) == 0);
+    CHECK(strcmp(capture, reference) == 0);
+  }
+  /* Admission metadata and encoded tool output must not escape through this
+   * adapter. The tool presenter consumes the separate typed execution path. */
+  before = captured;
+  CHECK(transcript_record(p, "input_queue", "not a delivered prompt", 22U, 1U,
+                          1000U, 0U) == 0);
+  CHECK(transcript_record(p, "execution", "{\"data\":\"not raw output\"}", 25U,
+                          1U, 1001U, 0U) == 0);
+  CHECK(captured == before);
+  for (i = 0U; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+    CHECK(transcript_record(p, "input_queue_delivery", invalid[i],
+                            strlen(invalid[i]), 1U, 2000U + i, 0U) == -1);
+    CHECK(transcript_record(p, "turn_submitted", "held", 4U, 1U, 3000U + i,
+                            0U) == -1);
+    cai_cli_transcript_presenter_reset(p);
+  }
+  captured = 0U;
+  capture[0] = '\0';
+  ui->feed_breaks = ui->block_spacing_pending = 0;
+  CHECK(cai_cli_presenter_text(ui, "A **bold** café answer.\n", 25U) == 0);
+  CHECK(cai_cli_presenter_finish_response(ui) == 0);
+  memcpy(reference, capture, captured + 1U);
+  captured = 0U;
+  capture[0] = '\0';
+  ui->feed_breaks = ui->block_spacing_pending = 0;
+  CHECK(transcript_record(p, "assistant_text_delta", "A **bo", 6U, 1U, 4000U,
+                          0U) == 0);
+  memset(&event, 0, sizeof(event));
+  event.kind = CAI_TRANSCRIPT_REPLAY_END;
+  event.stream = 1U;
+  CHECK(cai_cli_transcript_presenter_event(p, &event, NULL) == CAI_OK);
+  CHECK(transcript_record(p, "assistant_text_delta", "ld** café answer.\n", 19U,
+                          1U, 4001U, 0U) == 0);
+  CHECK(transcript_record(p, "assistant_text_end", NULL, 0U, 1U, 4002U, 0U) ==
+        0);
+  CHECK(strcmp(capture, reference) == 0);
+  CHECK(transcript_record(p, "reasoning_summary_started", NULL, 0U, 1U, 4003U,
+                          0U) == 0);
+  CHECK(transcript_record(p, "reasoning_summary", "Private title\n\nThinking ",
+                          24U, 1U, 4004U, 0U) == 0);
+  CHECK(transcript_record(p, "reasoning_summary", "**carefully**.\n", 15U, 1U,
+                          4005U, 0U) == 0);
+  CHECK(transcript_record(p, "assistant_text_end", NULL, 0U, 1U, 4006U, 0U) ==
+        0);
+  CHECK(strstr(capture, "  > Thinking carefully.") != NULL &&
+        strstr(capture, "Private title") == NULL);
+  /* A provisional prompt must not flush on disconnect. Neither malformed
+   * offsets nor resets acknowledge a cursor or alter the local draft. */
+  memset(&event, 0, sizeof(event));
+  event.kind = CAI_TRANSCRIPT_EVENT_BEGIN;
+  event.stream = 1U;
+  event.sequence = 5000U;
+  event.type = "turn_submitted";
+  event.has_data = 1;
+  CHECK(cai_cli_transcript_presenter_event(p, &event, NULL) == CAI_OK);
+  event.kind = CAI_TRANSCRIPT_DATA;
+  event.data = "unfinished prompt";
+  event.length = 17U;
+  CHECK(cai_cli_transcript_presenter_event(p, &event, NULL) == CAI_OK);
+  before = emitted;
+  event.offset = 2U;
+  CHECK(cai_cli_transcript_presenter_event(p, &event, NULL) ==
+        CAI_ERR_PROTOCOL);
+  cai_cli_transcript_presenter_reset(p);
+  CHECK(emitted == before && strstr(capture, "unfinished prompt") == NULL);
+  CHECK(transcript_record(p, "turn_submitted", "Recovered", 9U, 1U, 5001U,
+                          0U) == 0);
+  /* DATA/END lack a wire timestamp; the retained BEGIN must supply the DTG. */
+  captured = 0U;
+  capture[0] = '\0';
+  ui->feed_breaks = ui->block_spacing_pending = 0;
+  ui->utc = 1;
+  ui->presentation_timestamp_ns = 1609459200000000000ULL;
+  CHECK(cai_cli_presenter_text(ui, "dated", 5U) == 0);
+  CHECK(cai_cli_presenter_finish_response(ui) == 0);
+  memcpy(reference, capture, captured + 1U);
+  captured = 0U;
+  capture[0] = '\0';
+  ui->feed_breaks = ui->block_spacing_pending = 0;
+  ui->presentation_timestamp_ns = 0U;
+  CHECK(transcript_record(p, "assistant_text_delta", "dated", 5U, 1U, 6000U,
+                          1609459200000000000ULL) == 0);
+  CHECK(transcript_record(p, "assistant_text_end", NULL, 0U, 1U, 6001U, 0U) ==
+        0);
+  CHECK(strcmp(capture, reference) == 0);
+  CHECK(ui->presentation_timestamp_ns == 0U && ui->presentation_event == 1);
+  CHECK(strcmp(sl_buffer(editor), "Unsent draft") == 0);
+  cai_cli_transcript_presenter_close(p);
+  cai_cli_presenter_close(ui);
+  sl_destroy(editor);
+  free(ui);
+  capturing = 0;
+  return 0;
+}
 /* Real libmdf/Softline resources, independently of libcai_app and storage.
  * The link intentionally contains no controller/session/Pouch objects. */
 static int presenter_lifecycle(void) {
@@ -212,6 +489,10 @@ static void *run(void *context) {
   *result = geometry_cases();
   if (*result == 0)
     *result = prompt_cases();
+  if (*result == 0)
+    *result = streamed_input_cases();
+  if (*result == 0)
+    *result = transcript_cases();
   if (*result == 0)
     *result = presenter_lifecycle();
   return NULL;

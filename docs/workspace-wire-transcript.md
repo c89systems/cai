@@ -101,10 +101,25 @@ Partial/replaced streams
 produce no typed chunk. Subscription replacement inside either callback cannot
 overwrite the new stream's cursor, or shorten a borrowed callback lifetime.
 
+The shared terminal presenter now has a span consumer for accepted parent
+inputs, assistant Markdown and reasoning. It strips the bounded
+`input_queue_delivery` provenance header incrementally, displaying the actual
+delivery rather than queue-admission JSON. Native strings and socket fragments
+share one literal rendering path. BEGIN's original timestamp is retained across
+DATA/END, which carry no timestamp themselves. Markdown can continue across the
+replay/live watermark without an artificial finish. Reset abandons pending
+renderer documents and leaves the local draft alone. Pending Markdown words
+can span authenticated delta records, so a reset view needs replay from a
+document boundary; the raw transport cursor alone does not capture renderer
+state. The complete frontend's reconnect policy remains part of the cutover.
+Typed execution/tool
+records use their separate presentation path; encoded JSON is never dumped by
+the raw span consumer.
+
 This delivery provides explicit native position cursors. Default last-ten-turn
-selection, final visibility filtering, command presentation and
-the terminal adapter remain subsequent parts of the cutover. Do not treat the
-current raw subscription as the final user-facing replay policy.
+selection, final visibility filtering, typed tool/command presentation and the
+complete terminal attachment loop remain subsequent parts of the cutover. Do
+not treat the current raw subscription as the final user-facing replay policy.
 
 Verification: `cai_transcript_wire` exercises all shapes, bytewise fragmentation,
 binary data, signed offsets, caps, malformed values and incomplete completion;
@@ -115,3 +130,9 @@ shutdown and one-SDK-client reuse. `cai_cli_atomic_trim` covers notifications on
 successful and uncertain publication, without notifications on rejected cuts.
 `cai_app_workspace_server` uses actual Unix sockets and fixture inference for
 typed replay, observer resume, live output, cancellation and last-client stop.
+`cai_cli_geometry` proves fragmentation-invariant literal output, Unicode/control
+repair, interruption, incremental output before a multi-megabyte producer ends,
+delivery-header validation and replay/live Markdown continuity. Its presenter
+link has no application/storage objects. `cai_cli_headless` additionally renders
+live and restarted replay from the actual executable's Unix socket, and aborts
+if its frontend attempts to open a storage client.

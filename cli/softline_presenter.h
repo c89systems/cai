@@ -1,5 +1,6 @@
 #ifndef CAI_CLI_SOFTLINE_PRESENTER_H
 #define CAI_CLI_SOFTLINE_PRESENTER_H
+#include "literal.h"
 #include "reasoning.h"
 #include "theme.h"
 #include <cai/display.h>
@@ -38,6 +39,8 @@ typedef struct cai_cli_presenter {
   int command_input;
   int command_output;
   int tool_result_body;
+  cai_cli_literal input_literal;
+  int input_open, input_started, input_command, input_failed;
   int sink_failed;
   mdf_status renderer_error;
   unsigned long long presentation_timestamp_ns;
@@ -72,6 +75,21 @@ int cai_cli_presenter_tool_markdown(void *context, const char *text,
                                     size_t length);
 int cai_cli_presenter_input(cai_cli_presenter *state, const char *text,
                             int command);
+/** Open one literal prompt/command field. No output or allocation until data
+ * arrives. The caller sets the original timestamp before begin and keeps it
+ * through end. Do not interleave documents or theme changes inside a field. */
+int cai_cli_presenter_input_begin(cai_cli_presenter *, int command);
+/** Arbitrary socket spans, including split UTF-8/escapes. Retains only the
+ * literal adapter's bounded carry; Softline never sees a synthetic separator.
+ * Partial feed is provisional until its transcript END. Sink failure sticks
+ * until abort; an empty field produces no blank row. */
+int cai_cli_presenter_input_write(cai_cli_presenter *, const void *, size_t);
+/** Finish only at the actual field boundary. Does not change the editor's
+ * draft, queue or history. Native complete-string input uses the same path. */
+int cai_cli_presenter_input_end(cai_cli_presenter *);
+/** Drop an unfinished/failed field after disconnect without emitting its
+ * buffered suffix. Already displayed bytes cannot be retracted. */
+void cai_cli_presenter_input_abort(cai_cli_presenter *);
 int cai_cli_presenter_prompt(cai_cli_presenter *state, const char *text);
 int cai_cli_presenter_notice(void *context, const char *text);
 void cai_cli_presenter_theme_for_scope(const cai_cli_presenter *state,

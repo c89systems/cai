@@ -2,69 +2,131 @@
 #include "../src/cai_utf8.h"
 #include <string.h>
 
-static int literal_token(mdf *renderer, int kind, const char *data,
+static int literal_token(cai_cli_literal *state, int kind, const char *data,
                          size_t length) {
   mdf_token token;
   memset(&token, 0, sizeof(token));
   token.type = (mdf_token_type)kind;
   token.text = data;
   token.len = length;
-  return renderer->write_token(renderer, &token) == MDF_OK ? 0 : -1;
+  if (state->renderer->write_token(state->renderer, &token) != MDF_OK) {
+    state->failed = 1;
+    return -1;
+  }
+  return 0;
 }
-int cai_cli_literal_write(mdf *renderer, const char *text) {
-  char chunk[256];
-  size_t used = 0U;
-  size_t offset;
-  size_t length = strlen(text);
-  for (offset = 0U; offset < length; offset++) {
-    unsigned char ch = (unsigned char)text[offset];
-    if (ch >= 128U || ch == '\n' || used + 5U > sizeof(chunk)) {
-      if (used != 0U &&
-          literal_token(renderer, MDF_TOKEN_TEXT, chunk, used) != 0)
+
+static int literal_flush(cai_cli_literal *state) {
+  if (state->used != 0U &&
+      literal_token(state, MDF_TOKEN_TEXT, state->chunk, state->used) != 0)
+    return -1;
+  state->used = 0U;
+  return 0;
+}
+
+/** Escape complete ASCII units together: libmdf recognizes inline escapes
+ * even inside manual TEXT tokens. Network fragmentation must not split them. */
+static int literal_ascii(cai_cli_literal *state, unsigned char ch) {
+  if ((ch == '\n' || state->used + 5U > sizeof(state->chunk)) &&
+      literal_flush(state) != 0)
+    return -1;
+  if (ch == '\n')
+    return literal_token(state, MDF_TOKEN_NEWLINE, NULL, 0U);
+  if (ch == '&') {
+    memcpy(state->chunk + state->used, "&amp;", 5U);
+    state->used += 5U;
+  } else {
+    if (ch != 0U && strchr("\\`*_{}[]()#+-.!<>|", (int)ch) != NULL)
+      state->chunk[state->used++] = '\\';
+    state->chunk[state->used++] = ch < 32U || ch == 127U ? ' ' : (char)ch;
+  }
+  return 0;
+}
+
+/** At most four bytes await a Unicode decision. Invalid leading bytes consume
+ * one byte so a later valid character is not swallowed by a malformed prefix.
+ */
+static int literal_runes(cai_cli_literal *state, int ending) {
+  while (state->pending != 0U) {
+    unsigned char ch = state->rune[0];
+    char rune[4];
+    size_t need = ch >= 0xc2U && ch < 0xe0U    ? 2U
+                  : ch >= 0xe0U && ch < 0xf0U  ? 3U
+                  : ch >= 0xf0U && ch <= 0xf4U ? 4U
+                                               : 1U;
+    size_t consumed;
+    if (!ending && state->pending < need)
+      break;
+    if (need > state->pending)
+      need = state->pending;
+    memcpy(rune, state->rune, need);
+    cai_utf8_repair_text(rune, need);
+    consumed = rune[0] == '?' ? 1U : need;
+    if (ch < 128U) {
+      if (literal_ascii(state, ch) != 0)
         return -1;
-      used = 0U;
-    }
-    if (ch == '\n') {
-      if (literal_token(renderer, MDF_TOKEN_NEWLINE, NULL, 0U) != 0)
+    } else {
+      if (literal_flush(state) != 0)
         return -1;
-    } else if (ch >= 128U) {
-      char rune[4];
-      size_t need = ch >= 0xc2U && ch < 0xe0U    ? 2U
-                    : ch >= 0xe0U && ch < 0xf0U  ? 3U
-                    : ch >= 0xf0U && ch <= 0xf4U ? 4U
-                                                 : 1U;
-      if (need > length - offset)
-        need = length - offset;
-      memcpy(rune, text + offset, need);
-      cai_utf8_repair_text(rune, need);
-      if (rune[0] == '?')
-        need = 1U;
       /* C1 controls are valid UTF-8 but invalid terminal feed contents. */
       if (need == 2U && (unsigned char)rune[0] == 0xc2U &&
           (unsigned char)rune[1] < 0xa0U) {
-        if (literal_token(renderer, MDF_TOKEN_TEXT, " ", 1U) != 0)
+        if (literal_token(state, MDF_TOKEN_TEXT, " ", 1U) != 0)
           return -1;
-        offset++;
-        continue;
-      }
-      /* Keep UTF-8 separate from escape pairs: ANSI OFF may filter tokens
-       * into smaller writes, while inline escapes require one token. */
-      if (literal_token(renderer, MDF_TOKEN_TEXT, rune, need) != 0)
+      } else if (literal_token(state, MDF_TOKEN_TEXT, rune, consumed) != 0)
         return -1;
-      offset += need - 1U;
-    } else if (ch == '&') {
-      memcpy(chunk + used, "&amp;", 5U);
-      used += 5U;
+    }
+    state->pending -= consumed;
+    memmove(state->rune, state->rune + consumed, state->pending);
+  }
+  return 0;
+}
+
+void cai_cli_literal_init(cai_cli_literal *state, mdf *renderer) {
+  memset(state, 0, sizeof(*state));
+  state->renderer = renderer;
+}
+
+int cai_cli_literal_feed(cai_cli_literal *state, const void *bytes,
+                         size_t length) {
+  const unsigned char *data = bytes;
+  size_t i;
+  if (state == NULL || state->renderer == NULL || state->finished ||
+      state->failed)
+    return -1;
+  if (bytes == NULL && length != 0U) {
+    state->failed = 1;
+    return -1;
+  }
+  for (i = 0U; i < length; ++i) {
+    if (state->pending == 0U && data[i] < 128U) {
+      if (literal_ascii(state, data[i]) != 0)
+        return -1;
     } else {
-      /* TEXT tokens bypass block parsing but still recognize inline markup. */
-      if (strchr("\\`*_{}[]()#+-.!<>|", (int)ch) != NULL)
-        chunk[used++] = '\\';
-      chunk[used++] = ch < 32U || ch == 127U ? ' ' : (char)ch;
+      state->rune[state->pending++] = data[i];
+      if (literal_runes(state, 0) != 0)
+        return -1;
     }
   }
-  if (used != 0U && literal_token(renderer, MDF_TOKEN_TEXT, chunk, used) != 0)
-    return -1;
   return 0;
+}
+
+int cai_cli_literal_finish(cai_cli_literal *state) {
+  if (state == NULL || state->renderer == NULL || state->finished ||
+      state->failed)
+    return -1;
+  if (literal_runes(state, 1) != 0 || literal_flush(state) != 0)
+    return -1;
+  state->finished = 1;
+  return 0;
+}
+
+int cai_cli_literal_write(mdf *renderer, const char *text) {
+  cai_cli_literal state;
+  cai_cli_literal_init(&state, renderer);
+  if (cai_cli_literal_feed(&state, text, strlen(text)) != 0)
+    return -1;
+  return cai_cli_literal_finish(&state);
 }
 
 int cai_cli_literal_render(mdf *renderer, const char *text) {

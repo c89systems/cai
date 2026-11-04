@@ -372,6 +372,8 @@ static int cai_cli_presenter_reasoning_markdown(void *context, const char *data,
 int cai_cli_presenter_reasoning_body(void *context, const char *data,
                                      size_t length) {
   cai_cli_presenter *state = context;
+  if (state->input_open)
+    return -1;
   if (length == 0U)
     return 0;
   if (cai_cli_presenter_finish_response(state) != 0 ||
@@ -393,6 +395,8 @@ int cai_cli_presenter_reasoning_body(void *context, const char *data,
 
 int cai_cli_presenter_text(cai_cli_presenter *state, const char *data,
                            size_t length) {
+  if (state->input_open)
+    return -1;
   if (length == 0U)
     return 0;
   if (cai_cli_presenter_finish_reasoning(state) != 0) {
@@ -502,9 +506,7 @@ static int cai_cli_presenter_prompt_token(cai_cli_presenter *state,
  * TEXT path with write_literal when that public libmdf method is released.
  * Word-based emission is intentional: socket spans must not force wrapping
  * decisions or quote boundaries, or accumulate into a whole prompt here. */
-static int cai_cli_presenter_prompt_render(cai_cli_presenter *state,
-                                           const char *text) {
-  int rc;
+static int cai_cli_presenter_prompt_prepare(cai_cli_presenter *state) {
   if (cai_cli_presenter_finish_response(state) != 0 ||
       cai_cli_presenter_finish_reasoning(state) != 0 ||
       cai_cli_presenter_reconcile_output(state) != 0 ||
@@ -514,30 +516,11 @@ static int cai_cli_presenter_prompt_render(cai_cli_presenter *state,
       cai_cli_presenter_renderer_create(
           state, &state->render_theme, &state->prompt_renderer, NULL) != CAI_OK)
     return -1;
-  if (text[0] == '\0')
-    return 0;
   state->block_spacing_pending = 1;
-  rc = cai_cli_presenter_prompt_token(state, MDF_TOKEN_BLOCKQUOTE_START);
-  if (rc == 0)
-    rc = cai_cli_literal_write(state->prompt_renderer, text);
-  if (rc == 0)
-    rc = cai_cli_presenter_prompt_token(state, MDF_TOKEN_BLOCKQUOTE_END);
-  if (rc == 0)
-    rc = cai_cli_presenter_mdf_status(
-        state, state->prompt_renderer->finish(state->prompt_renderer));
-  if (rc != 0)
-    (void)mdf_reset(state->prompt_renderer);
-  state->block_spacing_pending = 1;
-  return rc;
+  return cai_cli_presenter_prompt_token(state, MDF_TOKEN_BLOCKQUOTE_START);
 }
 
-int cai_cli_presenter_input(cai_cli_presenter *state, const char *text,
-                            int command) {
-  int rc;
-  if (state->batch)
-    return 0;
-  if (!command)
-    return cai_cli_presenter_prompt_render(state, text);
+static int cai_cli_presenter_command_prepare(cai_cli_presenter *state) {
   if (cai_cli_presenter_finish_response(state) != 0 ||
       cai_cli_presenter_finish_reasoning(state) != 0 ||
       cai_cli_presenter_reconcile_output(state) != 0 ||
@@ -556,7 +539,88 @@ int cai_cli_presenter_input(cai_cli_presenter *state, const char *text,
   state->command_input = 1;
   state->row_line_start = 1;
   state->row_ansi = 0;
-  rc = cai_cli_literal_render(state->notice_renderer, text);
+  return 0;
+}
+
+int cai_cli_presenter_input_begin(cai_cli_presenter *state, int command) {
+  if (state->input_open)
+    return -1;
+  state->input_open = 1;
+  state->input_started = state->input_failed = 0;
+  state->input_command = command != 0;
+  return 0;
+}
+
+int cai_cli_presenter_input_write(cai_cli_presenter *state, const void *bytes,
+                                  size_t length) {
+  int rc;
+  if (!state->input_open || state->input_failed)
+    return -1;
+  if (bytes == NULL && length != 0U) {
+    state->input_failed = 1;
+    return -1;
+  }
+  if (state->batch || length == 0U)
+    return 0;
+  if (!state->input_started) {
+    rc = state->input_command ? cai_cli_presenter_command_prepare(state)
+                              : cai_cli_presenter_prompt_prepare(state);
+    if (rc != 0) {
+      state->input_failed = 1;
+      return -1;
+    }
+    cai_cli_literal_init(&state->input_literal, state->input_command
+                                                    ? state->notice_renderer
+                                                    : state->prompt_renderer);
+    state->input_started = 1;
+  }
+  rc = cai_cli_literal_feed(&state->input_literal, bytes, length);
+  if (rc != 0)
+    state->input_failed = 1;
+  return rc;
+}
+
+void cai_cli_presenter_input_abort(cai_cli_presenter *state) {
+  if (!state->input_open)
+    return;
+  if (state->input_started || state->input_failed) {
+    mdf *renderer =
+        state->input_command ? state->notice_renderer : state->prompt_renderer;
+    if (renderer != NULL)
+      (void)mdf_reset(renderer);
+    state->notice_open = state->command_input = 0;
+    state->block_spacing_pending = 1;
+  }
+  memset(&state->input_literal, 0, sizeof(state->input_literal));
+  state->input_open = state->input_started = state->input_failed = 0;
+}
+
+int cai_cli_presenter_input_end(cai_cli_presenter *state) {
+  int rc;
+  if (!state->input_open || state->input_failed)
+    return -1;
+  if (!state->input_started) {
+    state->input_open = 0;
+    return 0;
+  }
+  rc = cai_cli_literal_finish(&state->input_literal);
+  if (!state->input_command) {
+    if (rc == 0)
+      rc = cai_cli_presenter_prompt_token(state, MDF_TOKEN_BLOCKQUOTE_END);
+    if (rc == 0)
+      rc = cai_cli_presenter_mdf_status(
+          state, state->prompt_renderer->finish(state->prompt_renderer));
+    if (rc != 0) {
+      state->input_failed = 1;
+      return -1;
+    }
+    state->input_open = state->input_started = 0;
+    state->block_spacing_pending = 1;
+    return 0;
+  }
+  if (rc == 0)
+    rc = cai_cli_presenter_mdf_status(
+        state, state->notice_renderer->finish(state->notice_renderer));
   state->notice_open = 0;
   state->command_input = 0;
   if (state->interactive && !state->theme.ascii && getenv("NO_COLOR") == NULL &&
@@ -568,6 +632,24 @@ int cai_cli_presenter_input(cai_cli_presenter *state, const char *text,
     rc = cai_cli_presenter_sink(state, "\n", 1U);
   if (rc == 0)
     state->block_spacing_pending = 1;
+  if (rc != 0) {
+    state->input_failed = 1;
+    return -1;
+  }
+  state->input_open = state->input_started = 0;
+  return rc;
+}
+
+int cai_cli_presenter_input(cai_cli_presenter *state, const char *text,
+                            int command) {
+  int rc = cai_cli_presenter_input_begin(state, command);
+  if (rc != 0)
+    return rc;
+  rc = cai_cli_presenter_input_write(state, text, strlen(text));
+  if (rc == 0)
+    rc = cai_cli_presenter_input_end(state);
+  if (rc != 0)
+    cai_cli_presenter_input_abort(state);
   return rc;
 }
 
@@ -578,6 +660,8 @@ int cai_cli_presenter_prompt(cai_cli_presenter *state, const char *text) {
 int cai_cli_presenter_notice(void *context, const char *text) {
   cai_cli_presenter *state = (cai_cli_presenter *)context;
   int rc;
+  if (state->input_open)
+    return -1;
   if (cai_cli_presenter_finish_response(state) != 0 ||
       cai_cli_presenter_finish_reasoning(state) != 0 ||
       cai_cli_presenter_geometry(state) != 0)
@@ -622,6 +706,9 @@ int cai_cli_presenter_set_theme_scope(cai_cli_presenter *state, int scope,
   cai_cli_theme selected;
   mdf *renderer = NULL;
   int changed, rc;
+  if (state->input_open)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "theme change requires a complete input field");
   cai_cli_presenter_theme_for_scope(state, &state->theme, scope, &selected);
   changed =
       selected.ascii != state->render_theme.ascii ||
@@ -670,6 +757,9 @@ int cai_cli_presenter_set_theme(cai_cli_presenter *state,
   cai_cli_theme selected = *theme, effective;
   mdf *renderer = NULL;
   int rc;
+  if (state->input_open)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "theme change requires a complete input field");
   /* The caller selects a presentation seam. Finish open blocks before
    * replacing renderer/theme state; no model or queue policy belongs here. */
   cai_cli_presenter_theme_for_scope(state, &selected, state->theme_scope,
@@ -716,6 +806,7 @@ int cai_cli_presenter_set_theme(cai_cli_presenter *state,
 void cai_cli_presenter_close(cai_cli_presenter *state) {
   if (state == NULL)
     return;
+  cai_cli_presenter_input_abort(state);
   (void)cai_cli_presenter_finish_response(state);
   (void)cai_cli_presenter_finish_reasoning(state);
   if (state->renderer != NULL)

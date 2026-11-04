@@ -155,15 +155,22 @@ terminal discovery/attachment remains pending.
 The existing terminal path now shares a frontend-owned Softline/libmdf presenter
 for documents, tool styling, timestamps, prompt markers, geometry and theme
 switching. Its standalone link has no application or Pouch objects. The socket
-adapter will use this same presenter; it does not yet consume socket spans or
-replace the synchronous terminal lifecycle. Frontend status/command application,
-final replay selection and CLI process composition remain pending.
+transcript adapter now feeds accepted parent prompts, assistant Markdown and
+reasoning into this same presenter incrementally. It retains only a bounded
+delivery header, literal escape chunk and incomplete UTF-8 character, rather
+than collecting whole prompts. The actual standalone headless server is tested
+with this renderer for live delivery and replay after restart, without opening
+stores in the frontend. Typed tool/command presentation, frontend status/command
+application, final replay selection and CLI process composition remain pending;
+the synchronous terminal lifecycle has not yet been replaced.
 
-Submitted prompts belong to the libmdf feed. The current native terminal path
-supplies an already available accepted string; the presenter uses public
-blockquote and escaped text tokens to render it. Libmdf owns quote layout,
-wrapping, margins and theme colors. Softline receives rendered bytes and owns
-the editor and queue.
+Submitted prompts belong to the libmdf feed. Complete native inputs and
+arbitrarily fragmented socket spans now use the same literal adapter inside
+public blockquote/text tokens. It carries UTF-8 and complete inline escape units
+across spans; only source newlines and the actual input end close semantic
+boundaries. Interrupted fields discard their unprinted suffix. Libmdf owns
+quote layout, wrapping, margins and theme colors. Softline receives rendered
+bytes and owns the editor and queue.
 
 The selected remote prompt path is libmdf's forthcoming `write_literal` method
 inside its blockquote context. User prompts remain literal; thinking uses the

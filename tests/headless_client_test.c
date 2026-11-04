@@ -1,6 +1,7 @@
 /* Drives the actual standalone server through installed public client APIs.
  * No runtime/store is allowed in this frontend process. */
 #define _POSIX_C_SOURCE 200809L
+#include "../cli/transcript_presenter.h"
 #include <assert.h>
 #include <cai/app_client.h>
 #include <cai/workspace_discovery.h>
@@ -11,6 +12,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+static char rendered[4096];
+static size_t rendered_length;
+int __wrap_sl_output_stream_write(sl_t *, const char *, size_t);
+int __wrap_sl_output_stream_write(sl_t *editor, const char *bytes,
+                                  size_t length) {
+  (void)editor;
+  assert(length < sizeof(rendered) - rendered_length);
+  memcpy(rendered + rendered_length, bytes, length);
+  rendered_length += length;
+  rendered[rendered_length] = '\0';
+  return SL_OK;
+}
 int __wrap_lc_client_open(const lc_client_config *, lc_client **, lc_error *);
 int __wrap_lc_client_open(const lc_client_config *config, lc_client **out,
                           lc_error *error) {
@@ -27,7 +40,9 @@ typedef struct view {
   size_t matched;
   size_t statuses;
   size_t execution_chunks;
-  int reading, found, done, finished, accepted, closing;
+  int reading, found, done, finished, accepted, closing, replayed;
+  cai_cli_presenter presenter;
+  cai_cli_transcript_presenter *presentation;
 } view;
 static uint64_t now_ms(void) {
   struct timespec clock;
@@ -62,7 +77,13 @@ static int transcript(void *context, const cai_transcript_event *e,
   const char *bytes = e->data;
   size_t i;
   const char *wanted;
-  (void)error;
+  if (v->presentation != NULL) {
+    int rc = cai_cli_transcript_presenter_event(v->presentation, e, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
+  if (e->kind == CAI_TRANSCRIPT_REPLAY_END)
+    v->replayed = 1;
   if (e->kind == CAI_TRANSCRIPT_ERROR)
     assert(v->closing);
   if (e->kind == CAI_TRANSCRIPT_EVENT_BEGIN) {
@@ -202,9 +223,10 @@ static void identify(const char *runtime, const char *workspace,
 }
 int main(int argc, char **argv) {
   cai_app_client_config config;
+  sl_t *editor = NULL;
   view *v = calloc(1U, sizeof(*v));
   unsigned char expected[16];
-  int shutdown, work, abrupt, ephemeral;
+  int shutdown, work, abrupt, ephemeral, render;
   assert(argc == 4 && v != NULL);
   if (strcmp(argv[3], "probe") == 0 || strcmp(argv[3], "named") == 0) {
     identify(argv[1], argv[2],
@@ -214,10 +236,24 @@ int main(int argc, char **argv) {
   }
   shutdown = strcmp(argv[3], "shutdown") == 0;
   work = strcmp(argv[3], "work") == 0;
+  render = strcmp(argv[3], "render") == 0;
   abrupt = strcmp(argv[3], "abrupt") == 0;
   ephemeral = strcmp(argv[3], "ephemeral") == 0;
-  assert(shutdown || work || abrupt || ephemeral ||
+  assert(shutdown || work || render || abrupt || ephemeral ||
          strcmp(argv[3], "inspect") == 0);
+  if (work || render) {
+    editor = sl_create();
+    assert(editor != NULL);
+    v->presenter.sl = editor;
+    v->presenter.interactive = 1;
+    assert(cai_cli_theme_parse("plain", &v->presenter.theme) == NULL);
+    v->presenter.render_theme = v->presenter.theme;
+    assert(cai_cli_presenter_renderer_create(
+               &v->presenter, &v->presenter.render_theme,
+               &v->presenter.renderer, NULL) == CAI_OK);
+    assert(cai_cli_transcript_presenter_open(&v->presenter, &v->presentation,
+                                             NULL) == CAI_OK);
+  }
   cai_error_init(&v->error);
   cai_app_client_config_init(&config);
   config.runtime_directory = argv[1];
@@ -251,23 +287,34 @@ int main(int argc, char **argv) {
       step(v);
     assert(v->state.session[0] != '\0');
     printf("%s\n", v->state.session);
-    if (work) {
+    if (work || render) {
       cai_input_request request;
       cai_input_scope scope;
       assert(cai_app_client_subscribe(v->client, 1U, v->state.conversation,
                                       v->state.session, NULL, 0U, 0U,
                                       &v->error) == CAI_OK);
-      memset(&request, 0, sizeof(request));
-      request.operation = CAI_INPUT_OFFER;
-      request.request_id = 1U;
-      request.text = "Do the headless fixture task";
-      scope.conversation = v->state.conversation;
-      scope.generation = v->state.transport.generation;
-      assert(cai_app_client_request(v->client, &scope, &request, &v->error) ==
-             CAI_OK);
-      while (!v->done || !v->finished || !v->accepted)
+      while (!v->replayed)
         step(v);
-      assert(v->execution_chunks != 0U);
+      if (work) {
+        memset(&request, 0, sizeof(request));
+        request.operation = CAI_INPUT_OFFER;
+        request.request_id = 1U;
+        request.text = "Do the headless fixture task";
+        scope.conversation = v->state.conversation;
+        scope.generation = v->state.transport.generation;
+        assert(cai_app_client_request(v->client, &scope, &request, &v->error) ==
+               CAI_OK);
+        while (!v->done || !v->finished || !v->accepted)
+          step(v);
+        assert(v->execution_chunks != 0U);
+      }
+      if (strstr(rendered, "  > Do the headless fixture task") == NULL ||
+          strstr(rendered, "  HEADLESS ANSWER") == NULL)
+        fprintf(stderr, "Rendered headless transcript:\n%s\n", rendered);
+      assert(strstr(rendered, "  > Do the headless fixture task") != NULL &&
+             strstr(rendered, "  HEADLESS ANSWER") != NULL &&
+             strstr(rendered, "input_queue_delivery") == NULL &&
+             strstr(rendered, "turn.completed") == NULL);
     }
     v->closing = 1;
     if (!abrupt)
@@ -277,6 +324,9 @@ int main(int argc, char **argv) {
     while (v->state.transport.phase != CAI_WORKSPACE_DISCONNECTED)
       step(v);
   cai_app_client_close(v->client);
+  cai_cli_transcript_presenter_close(v->presentation);
+  cai_cli_presenter_close(&v->presenter);
+  sl_destroy(editor);
   cai_error_cleanup(&v->error);
   free(v);
   return 0;

@@ -68,6 +68,8 @@ jq -se 'any(.[]; .lvl == "error")' "$root/duplicate.log" >/dev/null
 # transcript. Its process aborts if it attempts to open an SDK storage client.
 [[ $("$client" "$runtime_root" "$work" work) == "$id" ]]
 [[ $(requests) == 2 && $(inspect) == "$id" ]]
+[[ $("$client" "$runtime_root" "$work" render) == "$id" ]]
+[[ $(requests) == 2 ]]
 jq -se 'any(.[] | .input[]? | select(.type == "function_call_output") | .output | fromjson; .signal == 15)' "$root/peer/requests.jsonl" >/dev/null
 "$client" "$runtime_root" "$work" shutdown
 stop_server
@@ -78,6 +80,10 @@ for signal in TERM INT HUP QUIT; do
   start_server --headless
   "$client" "$runtime_root" "$work" probe
   [[ $(inspect) == "$id" && $(requests) == 2 ]]
+  if [[ $signal == TERM ]]; then
+    [[ $("$client" "$runtime_root" "$work" render) == "$id" ]]
+    [[ $(requests) == 2 ]]
+  fi
   kill -s "$signal" "$server_pid"
   stop_server
   jq -se 'any(.[]; .event == "workspace_stopped" and .signal > 0)' "$root/server.log" >/dev/null
