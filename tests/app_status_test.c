@@ -28,6 +28,9 @@ static void same_snapshot(const cai_app_status *a, const cai_app_status *b) {
   assert(a->outcome == b->outcome && a->state == b->state);
   assert(a->control_id == b->control_id);
   assert(a->error.code == b->error.code);
+  assert(strcmp(a->log_path, b->log_path) == 0);
+  assert(memcmp(a->server_instance, b->server_instance,
+                sizeof(a->server_instance)) == 0);
   assert(a->pending.present == b->pending.present);
   assert(strcmp(a->session_id, b->session_id) == 0);
   assert(strcmp(a->effective.model, b->effective.model) == 0);
@@ -133,6 +136,8 @@ int main(int argc, char **argv) {
   pthread_t thread;
   unsigned int mode;
   int deny_allocations = 0;
+  cai_attachment_state server;
+  unsigned char instance[CAI_WORKSPACE_INSTANCE_BYTES];
   assert(argc == 2);
   memset(&test, 0, sizeof(test));
   memset(&store, 0, sizeof(store));
@@ -145,6 +150,14 @@ int main(int argc, char **argv) {
   cai_app_config_init(&app);
   assert(cai_app_bridge_open(&test.bridge, &app, &error) == CAI_OK);
   cai_app_bridge_begin(test.bridge);
+  memset(&server, 0, sizeof(server));
+  memset(instance, 42, sizeof(instance));
+  server.phase = CAI_ATTACHMENT_STARTING;
+  cai_app_bridge_server(test.bridge, &server, instance);
+  assert(cai_app_bridge_log(test.bridge, "/private/startup.log", &error) ==
+         CAI_OK);
+  assert(cai_app_bridge_log(test.bridge, "/private/startup.log", &error) ==
+         CAI_OK);
   cai_client_config_init(&config);
   config.allocator.malloc_fn = allocate;
   config.allocator.realloc_fn = resize;
@@ -168,6 +181,15 @@ int main(int argc, char **argv) {
   assert(cai_agent_runtime_open(client, &runtime, &test.runtime, &error) ==
          CAI_OK);
   assert(cai_app_bridge_publish(test.bridge, test.runtime, &error) == CAI_OK);
+  cai_app_status_init(&after);
+  assert(cai_app_bridge_status(test.bridge, &after, &error) == CAI_OK);
+  assert(after.has_server &&
+         memcmp(after.server_instance, instance, sizeof(instance)) == 0);
+  assert(strcmp(after.log_path, "/private/startup.log") == 0);
+  assert(cai_app_bridge_log(test.bridge, "/private/session.log", &error) ==
+         CAI_OK);
+  assert(strcmp(after.log_path, "/private/startup.log") == 0);
+  cai_app_status_cleanup(&after);
   for (mode = 0U; mode < 2U; mode++) {
     assert(cai_app_bridge_status(test.bridge, &test.before, &error) == CAI_OK);
     memset(&change, 0, sizeof(change));

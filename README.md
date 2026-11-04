@@ -157,6 +157,14 @@ cleanly. Native clients use `cai/app_client.h`; the terminal attach/autostart
 cutover remains in progress. See the [workspace specification](docs/workspace-server.md)
 for the implemented boundaries and remaining work.
 
+Workspace servers normally stop after their last client disconnects.
+`--headless` selects persistence as its default; `[server] persist`,
+`CAI_SERVER_PERSIST`, and `--persist` / `--no-persist` override that default
+in the usual configuration order. These settings affect a newly started owner.
+Native owners without a supplied logger write session log files and publish
+their full path and server instance in `cai_app_status`. A supplied logger
+retains its own output policy and has no inferred log path.
+
 `--workspace-name NAME` assigns a unique discovery name to a server at startup.
 It also accepts `[server] workspace_name` or `CAI_WORKSPACE_NAME` (application
 prefixes apply). Empty is the default. Private runtime-directory metadata

@@ -31,6 +31,9 @@ typedef struct cli_field {
 #define B(s, k, m, d)                                                          \
   {s, k, offsetof(cai_cli_options, m), CAI_CONFIG_BOOL, 0U, NULL, d}
 static const cli_field fields[] = {
+    B("server", "persist", server_persist,
+      "Keep a workspace owner after its last client leaves. Default false; "
+      "--headless selects true unless explicitly overridden."),
     S("server", "workspace_name", workspace_name, 0U,
       "Optional unique workspace-server discovery name; empty uses path/ID "
       "only."),
@@ -1056,6 +1059,11 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
       return -1;
   }
   /* Host environment entries participate in the normal explicit env policy. */
+  if (early.headless) {
+    defaults.server_persist = 1;
+    if (cfg->set_default(cfg, "server", "persist", "true", error) != CAI_OK)
+      return -1;
+  }
   for (i = 0U; application != NULL && i < application->setting_count; i++) {
     const cai_app_setting *s = &application->settings[i];
     if ((strcmp(s->section, "env") == 0 || s->section[0] == '\0') &&

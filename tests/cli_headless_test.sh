@@ -19,12 +19,15 @@ headless_cleanup() {
 }
 trap headless_cleanup EXIT
 export LOG_LEVEL=info
-start_server() {
+start_server_with_persistence() {
+  local persistent=$1
+  shift
   "${base[@]}" --runtime-dir "$runtime_root" "$@" </dev/null >"$root/server.out" 2>"$root/server.log" & server_pid=$!
   wait_for has "$root/server.log" 'Workspace server ready'
   [[ ! -s "$root/server.out" ]]
-  jq -se 'any(.[]; .event == "workspace_ready" and .persistent == true)' "$root/server.log" >/dev/null
+  jq -se --argjson persistent "$persistent" 'any(.[]; .event == "workspace_ready" and .persistent == $persistent)' "$root/server.log" >/dev/null
 }
+start_server() { start_server_with_persistence true "$@"; }
 stop_server() {
   wait "$server_pid"
   server_pid=
@@ -99,6 +102,23 @@ kill -TERM "$server_pid"
 stop_server
 [[ $(requests) == 2 ]]
 
+# Headless selects persistence as a default, while explicit INI/environment/
+# argv settings can make it temporary. Last detach must then stop the owner.
+printf '[server]\npersist=false\n' >"$root/persistence.ini"
+cp "$root/persistence.ini" "$root/persistence.original"
+for source in flag file environment precedence; do
+  case "$source" in
+    flag) start_server_with_persistence false --headless --no-persist ;;
+    file) start_server_with_persistence false --headless --config "$root/persistence.ini" ;;
+    environment) CAI_SERVER_PERSIST=false start_server_with_persistence false --headless ;;
+    precedence) CAI_SERVER_PERSIST=true start_server_with_persistence false --headless --config "$root/persistence.ini" --no-persist ;;
+  esac
+  [[ $("$client" "$runtime_root" "$work" ephemeral) == "$id" ]]
+  stop_server
+done
+cmp "$root/persistence.original" "$root/persistence.ini"
+[[ $(requests) == 2 ]]
+
 # Invalid startup and incompatible utility/batch modes do not leave an owner
 # or perform the utility. Help/version remain ordinary output-only invocations.
 printf '[ui]\nreplay_turns=-2\n' >"$root/invalid.ini"
@@ -114,6 +134,8 @@ run -x --help; ok
 contains "$root/stdout" '--headless'
 run --headless --version; ok
 [[ ! -s "$root/stderr" ]]
+run --headless --dump-config; ok
+contains "$root/stdout" '# persist = false'
 
 # A command blocked inside a foreground tool must receive cancellation. Its
 # INT/TERM trap proves delivery before teardown; SIGKILL would not create this

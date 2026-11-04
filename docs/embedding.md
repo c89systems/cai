@@ -248,16 +248,25 @@ restored frontend actions stay queued. Socket command presentation
 and the Softline client cutover are still pending.
 
 `cai_app_start_server` starts this same owner with a canonical workspace
-listener in the effective `paths.runtime_dir`. Its copied
-`cai_attachment_config` defaults to nonpersistent: the last graceful or abrupt
+listener in the effective `paths.runtime_dir`. An explicit
+`cai_attachment_config` is copied and overrides startup settings. With NULL,
+the lifetime uses `[server] persist` (normally false), the application-prefixed
+`SERVER_PERSIST` environment setting, and `--persist` / `--no-persist` in normal
+configuration precedence. The default first-attachment grace period still
+applies. For a nonpersistent owner, the last graceful or abrupt
 detach cancels active work and closes the runtime/stores before endpoint
 ownership is released. Observers count as attachments, and vacant control
 requires their explicit takeover. Set `persist` to continue after all clients
 disconnect. Explicit socket shutdown and native STOP end either lifetime.
 Read `has_server` and `server` in application status for phase, attachment count,
-generation, controlling identity and final shutdown reason. The same status
-wakeup covers these changes; the owner does not poll while idle. Socket
-handshake, role, lifetime, model input and queue operations are implemented.
+generation, controlling identity and final shutdown reason. `server_instance`
+is the same identity published in the socket handshake. Without a supplied
+logger, a native owner writes to the configured log directory and publishes
+the full startup/session `log_path`; it does not collect frontend log notices.
+A borrowed host logger keeps its output policy and leaves `log_path` NULL.
+Status copies own their path, and the final snapshot retains it after shutdown.
+The same status wakeup covers these changes; the owner does not poll while
+idle. Socket handshake, role, lifetime, model input and queue operations are implemented.
 The [queue payload contract](workspace-wire-queue.md) binds original producer
 receipts and authority generations to real Unix connections. Snapshots use
 begin/item/end observations; the producer never builds a complete queue value.
@@ -268,11 +277,13 @@ orphaned edits before selecting the queue. Application command presentation
 remains pending. This API does not fork or install signals.
 
 `cai -x` / `cai --headless` is the standalone process composition of this API,
-with `persist = true`, default JSON logging to stderr and automatic color.
+with a default of `persist = true`, JSON logging to stderr and automatic color.
+An explicit INI, environment or flag setting can override persistence;
+`cai --headless --no-persist` stops after the last client disconnects.
 SIGINT, SIGTERM, SIGHUP and SIGQUIT request native STOP and join the owner;
 stdin and terminal rendering are unused. Readiness and termination have
 structured `workspace_ready` / `workspace_stopped` records. A disconnected
-frontend leaves this explicit server running. Native embedding uses
+frontend leaves a persistent server running. Native embedding uses
 `cai_app_start_server` and the host's own lifecycle/logger, rather than passing
 the executable-only `--headless` mode to the synchronous terminal `run`.
 The current application SDK still links Softline/libmdf; separating optional

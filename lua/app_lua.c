@@ -553,6 +553,7 @@ static int push_status(lua_State *L) {
   integer_field(L, "state", s->state);
   integer_field(L, "exit_code", s->exit_code);
   text_field(L, "session_id", s->session_id);
+  text_field(L, "log_path", s->log_path);
   push_settings(L, &s->effective);
   lua_setfield(L, -2, "effective");
   push_settings(L, &s->pending);

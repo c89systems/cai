@@ -287,6 +287,22 @@ int main(int argc, char **argv) {
   CHECK(strstr(observed.text[0], "13 additional notices") != NULL);
   CHECK(cai_cli_log_close(&log) == 0);
 
+  /* A backend writes the same session files without collecting a local
+   * frontend notice queue or retaining per-line parsing state. */
+  CHECK(cai_cli_log_open(&log, PSLOG_LEVEL_TRACE, 1, &error) == CAI_OK);
+  CHECK(cai_cli_log_file_at(&log, root, 0, &error) == CAI_OK);
+  CHECK(cai_cli_log_session(&log, "backend", &error) == CAI_OK);
+  for (i = 0U; i < 100U; i++)
+    log.logger->warn(log.logger, "backend warning", NULL, 0U);
+  memset(&observed, 0, sizeof(observed));
+  CHECK(cai_cli_log_notices(&log, collect, &observed) == 0 &&
+        observed.count == 0U);
+  record = read_log(log.path);
+  CHECK(record != NULL && strstr(record, "backend warning") != NULL);
+  free(record);
+  CHECK(log.wakeup_fd == -1 && log.prefix_length == 0U);
+  CHECK(cai_cli_log_close(&log) == 0);
+
   CHECK(setenv("LOG_MODE", "console", 1) == 0);
   CHECK(setenv("LOG_NO_COLOR", "false", 1) == 0);
   CHECK(setenv("LOG_FORCE_COLOR", "true", 1) == 0);

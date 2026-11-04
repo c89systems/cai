@@ -29,6 +29,7 @@ void cai_app_status_cleanup(cai_app_status *s) {
   if (s == NULL)
     return;
   free_string(s->session_id);
+  free_string(s->log_path);
   free_string(s->effective.model);
   free_string(s->effective.reasoning_effort);
   free_string(s->effective.reasoning_summary);
@@ -69,6 +70,7 @@ static int status_copy(cai_app_status *to, const cai_app_status *from,
                        cai_error *error) {
   cai_app_status copy = *from;
   copy.session_id = NULL;
+  copy.log_path = NULL;
   memset(&copy.effective, 0, sizeof(copy.effective));
   memset(&copy.pending, 0, sizeof(copy.pending));
   copy.goal.objective = copy.goal.status = NULL;
@@ -78,6 +80,7 @@ static int status_copy(cai_app_status *to, const cai_app_status *from,
   if (from->field != NULL && (copy.field = strdup(from->field)) == NULL)       \
   goto fail
   COPY_STRING(session_id);
+  COPY_STRING(log_path);
   COPY_STRING(effective.model);
   COPY_STRING(effective.reasoning_effort);
   COPY_STRING(effective.reasoning_summary);
@@ -289,9 +292,10 @@ void cai_app_bridge_bind_input(cai_app_bridge *b, cai_input_controller *input) {
   }
   pthread_mutex_unlock(&b->lock);
 }
-void cai_app_bridge_server(cai_app_bridge *b,
-                           const cai_attachment_state *server) {
-  if (b == NULL || server == NULL)
+void cai_app_bridge_server(
+    cai_app_bridge *b, const cai_attachment_state *server,
+    const unsigned char instance[CAI_WORKSPACE_INSTANCE_BYTES]) {
+  if (b == NULL || server == NULL || instance == NULL)
     return;
   pthread_mutex_lock(&b->lock);
   if (!b->status.has_server || b->status.server.phase != server->phase ||
@@ -299,12 +303,38 @@ void cai_app_bridge_server(cai_app_bridge *b,
       b->status.server.count != server->count ||
       b->status.server.controller != server->controller ||
       b->status.server.generation != server->generation ||
-      b->status.server.deadline_ms != server->deadline_ms) {
+      b->status.server.deadline_ms != server->deadline_ms ||
+      memcmp(b->status.server_instance, instance,
+             sizeof(b->status.server_instance))) {
     b->status.has_server = 1;
     b->status.server = *server;
+    memcpy(b->status.server_instance, instance,
+           sizeof(b->status.server_instance));
     status_wake(b);
   }
   pthread_mutex_unlock(&b->lock);
+}
+int cai_app_bridge_log(cai_app_bridge *b, const char *path, cai_error *error) {
+  char *copy = NULL;
+  if (b == NULL)
+    return CAI_OK;
+  if (path && !*path)
+    path = NULL;
+  pthread_mutex_lock(&b->lock);
+  if ((!path && !b->status.log_path) ||
+      (path && b->status.log_path && !strcmp(path, b->status.log_path))) {
+    pthread_mutex_unlock(&b->lock);
+    return CAI_OK;
+  }
+  if (path && (copy = strdup(path)) == NULL) {
+    pthread_mutex_unlock(&b->lock);
+    return cai_cli_error(error, CAI_ERR_NOMEM, "copy application log path");
+  }
+  free_string(b->status.log_path);
+  b->status.log_path = copy;
+  status_wake(b);
+  pthread_mutex_unlock(&b->lock);
+  return CAI_OK;
 }
 int cai_app_bridge_input(cai_app_bridge *b, uint64_t attachment,
                          unsigned long long conversation,
@@ -367,6 +397,10 @@ int cai_app_bridge_publish(cai_app_bridge *b, cai_agent_runtime *runtime,
     copy.runtime_ready = 1;
     copy.has_server = b->status.has_server;
     copy.server = b->status.server;
+    memcpy(copy.server_instance, b->status.server_instance,
+           sizeof(copy.server_instance));
+    copy.log_path = b->status.log_path;
+    b->status.log_path = NULL;
     copy.outcome = b->status.outcome;
     copy.control_id = b->status.control_id;
     copy.control_status = b->status.control_status;

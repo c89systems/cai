@@ -360,7 +360,7 @@ static int log_write(void *context, const char *data, size_t count,
     *written = 0U;
   } else {
     *written = (size_t)n;
-    for (i = 0U; i < *written; i++) {
+    for (i = 0U; log->wakeup_fd >= 0 && i < *written; i++) {
       if (data[i] == '\n') {
         log->prefix[log->prefix_length] = '\0';
         notice(log);
@@ -431,6 +431,10 @@ int cai_cli_log_interactive(cai_cli_log *log, cai_error *error) {
 }
 int cai_cli_log_interactive_at(cai_cli_log *log, const char *directory,
                                cai_error *error) {
+  return cai_cli_log_file_at(log, directory, 1, error);
+}
+int cai_cli_log_file_at(cai_cli_log *log, const char *directory,
+                        int capture_notices, cai_error *error) {
   int rc;
   if (log->borrowed)
     return CAI_OK;
@@ -455,10 +459,12 @@ int cai_cli_log_interactive_at(cai_cli_log *log, const char *directory,
       fcntl(log->fd, F_SETFL, O_APPEND) != 0)
     return cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "protect startup log descriptor");
-  log->wakeup_fd = eventfd(0U, EFD_CLOEXEC | EFD_NONBLOCK);
-  if (log->wakeup_fd < 0)
-    return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                         "create logging wakeup descriptor");
+  if (capture_notices) {
+    log->wakeup_fd = eventfd(0U, EFD_CLOEXEC | EFD_NONBLOCK);
+    if (log->wakeup_fd < 0)
+      return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                           "create logging wakeup descriptor");
+  }
   return CAI_OK;
 }
 

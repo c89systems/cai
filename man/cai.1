@@ -29,13 +29,21 @@ to start a new session.
 .SH OPTIONS
 .TP
 .BR \-x , " " \-\-headless
-Start this workspace's persistent server in the foreground, without a terminal
-frontend. JSON logs use stderr and automatic color by default; normal LOG_
+Start this workspace's server in the foreground, with persistence enabled by
+default and without a terminal frontend. JSON logs use stderr and automatic color; normal LOG_
 overrides apply. SIGINT, SIGTERM, SIGHUP and SIGQUIT request orderly shutdown.
-Standard input is unused. Client departure leaves this explicit server running;
+Standard input is unused. Client departure leaves a persistent server running;
 an explicit socket shutdown also stops it. Duplicate ownership fails without
 opening another runtime. The terminal attach/autostart cutover remains in progress.
 Native embedding uses cai_app_start_server, not this executable process mode.
+.TP
+.BR \-\-persist , " " \-\-no-persist
+Keep a workspace server after its last client disconnects, or stop it on last
+detach. The normal default is false; --headless defaults to true. Explicit
+[server] persist, the application-prefixed SERVER_PERSIST environment variable
+(CAI_SERVER_PERSIST by default), and these flags override that default in normal
+configuration order. An attaching client does not change the existing owner's
+lifetime. An explicit native cai_attachment_config overrides startup settings.
 .TP
 .BI \-\-workspace-name " NAME"
 Assign a unique discovery name when starting a workspace server. Also accepts

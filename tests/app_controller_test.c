@@ -189,7 +189,8 @@ static void wait_ready(host *h) {
   cai_app_status_init(&s);
   for (ticks = 0U; ticks < 10000U; ++ticks) {
     assert(cai_app_observe_status(h->app, &s, NULL) == CAI_OK);
-    if (s.runtime_ready)
+    if (s.runtime_ready &&
+        (!s.has_server || s.server.phase == CAI_ATTACHMENT_READY))
       break;
     if (!s.running)
       fprintf(stderr, "controller startup failed: code=%d %s (%s)\n",
@@ -1060,7 +1061,8 @@ static void workspace_server(int argc, char **argv, const char *mode) {
   host h;
   wire_view wa, wb;
   int wire = strcmp(mode, "server_wire") == 0;
-  int code, persistent = strcmp(mode, "server_persist") == 0;
+  int code, persistent = strcmp(mode, "server_persist") == 0 ||
+                         strcmp(mode, "server_config_persist") == 0;
   if (strcmp(mode, "server_typed") == 0) {
     typed_server(argc, argv);
     return;
@@ -1077,15 +1079,21 @@ static void workspace_server(int argc, char **argv, const char *mode) {
   lifetime.persist = persistent;
   if (strcmp(mode, "server_grace") == 0)
     lifetime.first_attachment_timeout_ms = 50U;
-  assert(cai_app_start_server(
-             h.app, NULL, argc - 1, (const char *const *)(argv + 1),
-             strcmp(mode, "server_lifetime") == 0 ? NULL : &lifetime,
-             NULL) == CAI_OK);
+  assert(cai_app_start_server(h.app, NULL, argc - 1,
+                              (const char *const *)(argv + 1),
+                              strcmp(mode, "server_lifetime") == 0 ||
+                                      strcmp(mode, "server_config_persist") == 0
+                                  ? NULL
+                                  : &lifetime,
+                              NULL) == CAI_OK);
   if (strcmp(mode, "server_grace") != 0) {
     wait_ready(&h);
     assert(cai_app_get_status(h.app, &status, NULL) == CAI_OK &&
            status.has_server && status.server.phase == CAI_ATTACHMENT_READY &&
            status.server.persist == persistent);
+    assert(status.log_path && status.log_path[0] == '/' &&
+           strstr(status.log_path, status.session_id) &&
+           access(status.log_path, F_OK) == 0);
     cai_workspace_client_config_init(&client_config);
     client_config.runtime_directory = getenv("CAI_TEST_SERVER_RUNTIME");
     client_config.workspace = getenv("CAI_TEST_CONTROLLER_WORK");
@@ -1100,6 +1108,8 @@ static void workspace_server(int argc, char **argv, const char *mode) {
     assert(cai_workspace_client_get_state(a, &connection, NULL) == CAI_OK &&
            connection.persist == persistent &&
            connection.controller == connection.attachment);
+    assert(memcmp(status.server_instance, connection.instance,
+                  sizeof(connection.instance)) == 0);
     if (wire)
       client_config.context = &wb;
     assert(cai_workspace_client_open(&client_config, monotonic_ms(), &b,

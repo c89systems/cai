@@ -157,7 +157,6 @@ int cai_cli_headless_run(const cai_app_config *base, int argc,
   cai_app_config config = *base;
   cai_app *app = NULL;
   cai_app_status *status = calloc(1U, sizeof(*status));
-  cai_attachment_config lifetime;
   process_signals signals;
   pslog_config logging;
   pslog_logger *logger;
@@ -182,10 +181,8 @@ int cai_cli_headless_run(const cai_app_config *base, int argc,
   rc = signals_open(&signals, error);
   if (rc == CAI_OK)
     rc = cai_app_open(&config, &app, error);
-  cai_attachment_config_init(&lifetime);
-  lifetime.persist = 1;
   if (rc == CAI_OK) {
-    rc = cai_app_start_server(app, NULL, argc, argv, &lifetime, error);
+    rc = cai_app_start_server(app, NULL, argc, argv, NULL, error);
     started = rc == CAI_OK;
   }
   if (rc == CAI_OK)

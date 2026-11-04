@@ -4,6 +4,7 @@
 #include <cai/attachment.h>
 #include <cai/config.h>
 #include <cai/input_controller.h>
+#include <cai/protocol.h>
 #include <cai/tools/todo.h>
 
 #ifdef __cplusplus
@@ -53,10 +54,14 @@ typedef struct cai_app_status {
    * retains STOPPING and its reason after the endpoint has closed. */
   int has_server;
   cai_attachment_state server;
+  unsigned char server_instance[CAI_WORKSPACE_INSTANCE_BYTES];
   cai_app_outcome outcome;
   int exit_code;
   cai_agent_run_state state;
   const char *session_id;
+  /** Full path of CAI's owned session/startup log, if present. Explicit host
+   * loggers retain their own output policy and have no inferred path. */
+  const char *log_path;
   cai_agent_runtime_settings effective;
   cai_agent_runtime_settings pending;
   cai_agent_goal_snapshot goal;
@@ -285,15 +290,16 @@ int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
                   const char *const *argv, cai_error *error);
 /** Start the same terminal-free owner with a workspace socket listener.
  * Uses the canonical selected workspace and effective paths.runtime_dir.
- * lifetime is copied; NULL uses persist=false and the normal first-attach
- * grace period. Last detach stops a nonpersistent backend, including active
- * work. A persistent owner runs until explicit shutdown or native STOP.
- * No fork, signal handler, terminal, or second runtime/store is created.
- * Socket identity, role, lifetime, model input and queue operations are bound.
- * Transcript subscriptions and queue payloads use the typed app_client.h
- * binding. Application command presentation remains pending; native controls
- * remain available. The executable owns --headless process logging/signals;
- * native hosts call this API with an explicit lifetime instead of passing that
+ * An explicit lifetime is copied and overrides startup configuration. NULL
+ * uses [server] persist (default false; --headless defaults true) and the
+ * normal first-attach grace period. Last detach stops a nonpersistent backend,
+ * including active work. A persistent owner runs until explicit shutdown or
+ * native STOP. No fork, signal handler, terminal, or second runtime/store is
+ * created. Socket identity, role, lifetime, model input and queue operations
+ * are bound. Transcript subscriptions and queue payloads use the typed
+ * app_client.h binding. Application command presentation remains pending;
+ * native controls remain available. The executable owns --headless process
+ * logging/signals; native hosts call this API instead of passing that
  * process-mode flag to the synchronous terminal run.
  * Start success is asynchronous; observe status for readiness or failure.
  */

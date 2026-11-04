@@ -153,6 +153,10 @@ static int cli_read_options(int argc, char *const *argv,
       options->headless = 1;
       continue;
     }
+    if (strcmp(flag, "--persist") == 0 || strcmp(flag, "--no-persist") == 0) {
+      options->server_persist = strcmp(flag, "--persist") == 0;
+      continue;
+    }
     if (strcmp(flag, "--yes") == 0 || strcmp(flag, "--force") == 0 ||
         strcmp(flag, "-y") == 0) {
       options->force = 1;

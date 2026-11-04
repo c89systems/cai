@@ -36,8 +36,10 @@ int cai_app_bridge_observe(cai_app_bridge *bridge, cai_app_status *out,
                            cai_error *error);
 void cai_app_bridge_bind_input(cai_app_bridge *bridge,
                                cai_input_controller *input);
-void cai_app_bridge_server(cai_app_bridge *bridge,
-                           const cai_attachment_state *server);
+void cai_app_bridge_server(
+    cai_app_bridge *bridge, const cai_attachment_state *server,
+    const unsigned char instance[CAI_WORKSPACE_INSTANCE_BYTES]);
+int cai_app_bridge_log(cai_app_bridge *, const char *path, cai_error *);
 int cai_app_bridge_input(cai_app_bridge *bridge, uint64_t attachment,
                          unsigned long long conversation,
                          unsigned long long producer,
@@ -61,7 +63,8 @@ int cai_cli_app_controller_run(int argc, char **argv,
                                const cai_app_config *application,
                                cai_app_bridge *bridge,
                                const cai_config_context *context,
-                               const cai_attachment_config *server);
+                               const cai_attachment_config *server,
+                               int lifetime_explicit);
 int cai_cli_app_main(int argc, char **argv, const cai_app_config *application);
 size_t cai_cli_help_count(void);
 const cai_app_option *cai_cli_help_at(size_t index);

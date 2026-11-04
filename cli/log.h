@@ -44,6 +44,10 @@ int cai_cli_log_open_with_logger(cai_cli_log *log, pslog_level default_level,
                                  cai_error *error);
 int cai_cli_log_interactive_at(cai_cli_log *log, const char *directory,
                                cai_error *error);
+/* Open the ordinary session-file sink, optionally projecting warning/error
+ * notices for a local frontend. A backend needs no notice queue/wakeup FD. */
+int cai_cli_log_file_at(cai_cli_log *log, const char *directory,
+                        int capture_notices, cai_error *error);
 int cai_cli_log_interactive(cai_cli_log *log, cai_error *error);
 int cai_cli_log_session(cai_cli_log *log, const char *id, cai_error *error);
 int cai_cli_log_notices(cai_cli_log *log, int (*visit)(void *, const char *),

@@ -181,7 +181,7 @@ int main(int argc, char **argv) {
   cai_app_client_config config;
   view *v = calloc(1U, sizeof(*v));
   unsigned char expected[16];
-  int shutdown, work, abrupt;
+  int shutdown, work, abrupt, ephemeral;
   assert(argc == 4 && v != NULL);
   if (strcmp(argv[3], "probe") == 0 || strcmp(argv[3], "named") == 0) {
     identify(argv[1], argv[2],
@@ -192,7 +192,9 @@ int main(int argc, char **argv) {
   shutdown = strcmp(argv[3], "shutdown") == 0;
   work = strcmp(argv[3], "work") == 0;
   abrupt = strcmp(argv[3], "abrupt") == 0;
-  assert(shutdown || work || abrupt || strcmp(argv[3], "inspect") == 0);
+  ephemeral = strcmp(argv[3], "ephemeral") == 0;
+  assert(shutdown || work || abrupt || ephemeral ||
+         strcmp(argv[3], "inspect") == 0);
   cai_error_init(&v->error);
   cai_app_client_config_init(&config);
   config.runtime_directory = argv[1];
@@ -209,7 +211,7 @@ int main(int argc, char **argv) {
   while (v->state.transport.phase != CAI_WORKSPACE_CONNECTED ||
          v->state.transport.generation == 0U)
     step(v);
-  assert(v->state.transport.persist &&
+  assert(v->state.transport.persist == !ephemeral &&
          v->state.transport.controller == v->state.transport.attachment);
   if (shutdown) {
     assert(cai_app_client_shutdown(v->client, 1U, v->state.transport.generation,

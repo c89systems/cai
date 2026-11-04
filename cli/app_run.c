@@ -221,6 +221,13 @@ static cai_cli_presenter *cli_presenter(void *context) {
 static pslog_logger *cli_logger(const cli_state *state) {
   return state->log != NULL ? state->log->logger : NULL;
 }
+static int cli_session_log(cli_state *state, const char *id, cai_error *error) {
+  int rc = cai_cli_log_session(state->log, id, error);
+  if (rc == CAI_OK)
+    rc = cai_app_bridge_log(
+        state->bridge, state->log->fd >= 0 ? state->log->path : NULL, error);
+  return rc;
+}
 
 static int cli_advance_automation(cli_state *state, cai_error *error);
 static int cli_messages_process(cli_state *state, int at_boundary,
@@ -2483,7 +2490,7 @@ static int cli_prompt_configure(cli_state *state, cai_error *error) {
 
 static int cli_replay_begin(void *context, const char *id, cai_error *error) {
   cli_state *state = context;
-  int rc = cai_cli_log_session(state->log, id, error);
+  int rc = cli_session_log(state, id, error);
   if (rc == CAI_OK && cli_sandbox_notice(state) != 0)
     rc =
         cai_cli_error(error, CAI_ERR_TRANSPORT, "render startup policy notice");
@@ -2805,8 +2812,8 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
       state->has_message_watch = 1;
     }
   }
-  rc = cai_cli_log_session(state->log,
-                           cai_agent_runtime_session_id(state->runtime), error);
+  rc = cli_session_log(state, cai_agent_runtime_session_id(state->runtime),
+                       error);
   if (rc == CAI_OK && state->interactive)
     rc = cli_prompt_configure(state, error);
   if (rc != CAI_OK)
@@ -5560,7 +5567,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
                              const cai_app_config *application,
                              cai_app_bridge *bridge,
                              const cai_config_context *startup,
-                             const cai_attachment_config *server) {
+                             const cai_attachment_config *server,
+                             int lifetime_explicit) {
   cai_client_config client_config;
   cai_chatgpt_auth_config auth_config;
   cai_cli_pouch *auth_store = NULL;
@@ -5718,7 +5726,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       state->options.install_skill != NULL || state->options.message != NULL;
   default_log_level = utility_mode ? PSLOG_LEVEL_WARN : PSLOG_LEVEL_TRACE;
   if (cai_cli_log_new(&state->log, default_log_level,
-                      !state->batch && !utility_mode && !state->controller,
+                      !state->batch && !utility_mode &&
+                          (!state->controller || server != NULL),
                       application != NULL ? application->logger : NULL,
                       &error) != CAI_OK)
     goto cleanup;
@@ -5731,9 +5740,12 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     goto cleanup;
   }
   if (server != NULL) {
+    cai_attachment_config selected = *server;
+    if (!lifetime_explicit)
+      selected.persist = state->options.server_persist;
     rc = cai_cli_workspace_host_open(
         state->options.runtime_dir, state->workspace,
-        state->options.workspace_name, server,
+        state->options.workspace_name, &selected,
         application != NULL ? &application->input : NULL, state->bridge,
         cli_logger(state), &state->workspace_host, &error);
     if (rc != CAI_OK) {
@@ -5763,10 +5775,15 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     result = cai_cli_install_skill(&state->options, state->log->logger);
     goto cleanup;
   }
-  if (!state->batch && !utility_mode && !state->controller) {
-    rc = cai_cli_log_interactive_at(state->log, state->options.log_dir, &error);
+  if (!state->batch && !utility_mode &&
+      (!state->controller || server != NULL)) {
+    rc = cai_cli_log_file_at(state->log, state->options.log_dir,
+                             !state->controller, &error);
+    if (rc == CAI_OK)
+      rc = cai_app_bridge_log(
+          state->bridge, state->log->fd >= 0 ? state->log->path : NULL, &error);
     if (rc != CAI_OK) {
-      cli_print_error(state, "open interactive log", &error);
+      cli_print_error(state, "open session log", &error);
       goto cleanup;
     }
   }
@@ -6554,11 +6571,10 @@ cleanup:
  * stack budget. Its owner outlives every runtime, lease service and UI
  * callback.
  */
-static int cli_app_receive(int argc, char **argv,
-                           const cai_app_config *application,
-                           cai_app_bridge *bridge,
-                           const cai_config_context *startup,
-                           const cai_attachment_config *server) {
+static int
+cli_app_receive(int argc, char **argv, const cai_app_config *application,
+                cai_app_bridge *bridge, const cai_config_context *startup,
+                const cai_attachment_config *server, int lifetime_explicit) {
   cli_state *state = calloc(1U, sizeof(*state));
   int code;
   if (state == NULL) {
@@ -6570,20 +6586,22 @@ static int cli_app_receive(int argc, char **argv,
     return 1;
   }
   code = cli_app_run_state(state, argc, argv, application, bridge, startup,
-                           server);
+                           server, lifetime_explicit);
   free(state);
   return code;
 }
 int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
                     cai_app_bridge *bridge) {
-  return cli_app_receive(argc, argv, application, bridge, NULL, NULL);
+  return cli_app_receive(argc, argv, application, bridge, NULL, NULL, 0);
 }
 int cai_cli_app_controller_run(int argc, char **argv,
                                const cai_app_config *application,
                                cai_app_bridge *bridge,
                                const cai_config_context *startup,
-                               const cai_attachment_config *server) {
-  return cli_app_receive(argc, argv, application, bridge, startup, server);
+                               const cai_attachment_config *server,
+                               int lifetime_explicit) {
+  return cli_app_receive(argc, argv, application, bridge, startup, server,
+                         lifetime_explicit);
 }
 
 int cai_cli_app_main(int argc, char **argv, const cai_app_config *application) {

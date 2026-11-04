@@ -164,7 +164,8 @@ static int publish(cai_cli_workspace_host *host, cai_error *error) {
   cai_attachment_state snapshot;
   int rc = cai_workspace_server_get_state(host->server, &snapshot, error);
   if (rc == CAI_OK)
-    cai_app_bridge_server(host->bridge, &snapshot);
+    cai_app_bridge_server(host->bridge, &snapshot,
+                          cai_workspace_server_instance(host->server));
   return rc;
 }
 static int authorize(void *context, uint64_t attachment, uint64_t generation,
@@ -598,7 +599,8 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
   if (rc == CAI_OK)
     rc = cai_workspace_server_get_state(host->server, &snapshot, error);
   if (rc == CAI_OK) {
-    cai_app_bridge_server(host->bridge, &snapshot);
+    cai_app_bridge_server(host->bridge, &snapshot,
+                          cai_workspace_server_instance(host->server));
     *stopping = snapshot.phase == CAI_ATTACHMENT_STOPPING;
   }
   return rc;

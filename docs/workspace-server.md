@@ -65,6 +65,12 @@ attachment cancels active work, closes stores and releases the endpoint. An
 observer still counts as attached; it must explicitly take over vacant control.
 Persistent owners continue work with no clients and accept later attachments.
 Status snapshots retain the server phase, role, generation and shutdown reason.
+They also publish the handshake's server-instance identity and the full owned
+startup/session log path. Native owners without a host logger write files in
+the configured log directory without collecting frontend notices. A borrowed
+host logger retains its output policy and has no inferred path. Explicit native
+lifetime configuration overrides startup settings; NULL uses resolved
+`[server] persist` and the default first-attachment grace period.
 This binding is exercised against real Unix clients. Socket input/queue
 requests now use the [typed payload contract](workspace-wire-queue.md), admitting
 model input through the same backend producers and receipts. Snapshot production
@@ -75,7 +81,7 @@ orphaned edits before queue selection. Command presentation, automatic process
 startup and the terminal client cutover are still pending.
 
 The executable now implements `-x` / `--headless` over this public lifecycle.
-It starts a persistent workspace owner with no terminal frontend, emits JSON
+It defaults to a persistent workspace owner with no terminal frontend, emits JSON
 through libpslog to stderr by default, and uses automatic color detection.
 Process-environment `LOG_` overrides retain their normal meaning. A `workspace_ready` record is
 emitted only after runtime restoration and listener readiness; the final
@@ -338,7 +344,7 @@ a second owner or mutate config.ini.
 
 | Invocation/action | Behavior |
 | --- | --- |
-| `cai -x`, `cai --headless` | Start this workspace server in the foreground, without a terminal frontend, with persistence enabled automatically. Fail clearly if already served. Log JSON through libpslog to stdout/stderr with normal automatic color detection. |
+| `cai -x`, `cai --headless` | Start this workspace server in the foreground, without a terminal frontend, with persistence enabled by default. Fail clearly if already served. Log JSON through libpslog to stdout/stderr with normal automatic color detection. |
 | `cai` | Discover and attach. If absent, launch a quiet server by exec of this executable, then attach after an explicit READY handshake. Server logs use the normal file policy, with no inherited terminal stdout/stderr. |
 | `cai -s SELECTOR` | Attach to an already-running workspace by name, path or stable ID. A name never invents a new directory or starts in the client's cwd. |
 | `--workspace-name NAME` | Assign the workspace discovery name when starting its server. |
@@ -356,9 +362,11 @@ client waits for its own acknowledged work, reports its outcome and detaches;
 it must not confuse unrelated ongoing work with completion of its submission.
 
 `[server] persist = false` is the normal configuration default, also available
-as the application's `SERVER_PERSIST` environment setting and `--persist`.
-Headless startup enables persistence rather than exiting before its first
-client arrives. An attaching client never changes an existing server's
+as the application's `SERVER_PERSIST` environment setting (`CAI_SERVER_PERSIST`
+for cai) and `--persist` / `--no-persist`. Headless startup defaults to
+persistence; explicit INI, environment and argv settings take precedence in
+that order. The generated template keeps the normal false default.
+An attaching client never changes an existing server's
 persistence implicitly. Explicit server shutdown remains available in either
 mode. Count all attached clients, including observers, for last-client lifetime.
 
