@@ -24,7 +24,9 @@ typedef struct cai_input_controller_config {
   void *authorize_context;
 } cai_input_controller_config;
 typedef enum cai_input_observation_type {
-  CAI_INPUT_OBSERVATION_SNAPSHOT = 0,
+  CAI_INPUT_OBSERVATION_SNAPSHOT_BEGIN = 0,
+  CAI_INPUT_OBSERVATION_SNAPSHOT_ITEM,
+  CAI_INPUT_OBSERVATION_SNAPSHOT_END,
   CAI_INPUT_OBSERVATION_CHANGE,
   CAI_INPUT_OBSERVATION_RESULT,
   CAI_INPUT_OBSERVATION_DISCONNECTED
@@ -40,8 +42,13 @@ typedef struct cai_input_observation {
   cai_input_state state;
   cai_input_change change;
   cai_input_result result;
-  cai_input_entry *entries;
-  size_t count;
+  /** Snapshot items arrive individually between BEGIN and END, with a common
+   * conversation/view revision. No complete snapshot is built by the producer.
+   * DISCONNECTED invalidates an unfinished baseline; a later BEGIN restarts
+   * it. A consumer publishes only after END. Its bounded frontend mirror is
+   * explicit consumer state, not a transport accumulator. */
+  cai_input_entry entry;
+  size_t index;
 } cai_input_observation;
 /** Create on the controller owner thread. No worker, terminal, HTTP or storage
  * dependency. The application schedules pump from its owner event loop. */
@@ -58,6 +65,10 @@ void cai_input_controller_close(cai_input_controller *controller);
  * runtime still disables admission immediately. Deselect before shutdown. */
 int cai_input_controller_select(cai_input_controller *controller,
                                 cai_input_queue *queue, cai_error *error);
+/** Copy the selected conversation epoch without reserving a producer.
+ * Thread-safe; unavailable while deselected or closed. */
+int cai_input_controller_conversation(cai_input_controller *,
+                                      unsigned long long *out, cai_error *);
 /** Thread-safe frontend attachment. Initial snapshot arrives after pump. */
 int cai_input_controller_connect(cai_input_controller *controller,
                                  uint64_t attachment,
@@ -76,6 +87,17 @@ int cai_input_controller_resume(cai_input_controller *controller,
                                 cai_input_connection **out, cai_error *error);
 /** Thread-safe observation detach; never stops/clears accepted work. */
 void cai_input_connection_close(cai_input_connection *connection);
+/** Owner-only transport cleanup: durably release this producer's edit holds
+ * without advancing its request IDs or submitting its local draft. Call
+ * outside socket callbacks, before close/deselect/runtime destruction.
+ * No-op if no producer was bound; journal failure is returned, never hidden. */
+int cai_input_connection_release_edits(cai_input_connection *, cai_error *);
+/** Owner-only authority cleanup for all producer connections belonging to one
+ * authenticated attachment. Uses durable releases, without changing receipts
+ * or closing caller-owned handles. Run after authority is revoked, before
+ * admitting requests under the new generation. */
+int cai_input_controller_release_edits(cai_input_controller *,
+                                       uint64_t attachment, cai_error *);
 /** Copy and signal only. Success means transport handoff, not acceptance.
  * scope is copied from the frontend's latest snapshot/role. Conversation zero
  * is valid only for initial SYNCHRONIZE. Request IDs never repeat on one

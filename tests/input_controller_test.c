@@ -21,12 +21,12 @@ static void drain(frontend *client) {
     if (observation->type == CAI_INPUT_OBSERVATION_RESULT) {
       ++client->results;
       client->result = observation->result;
-    } else if (observation->type == CAI_INPUT_OBSERVATION_SNAPSHOT) {
+    } else if (observation->type == CAI_INPUT_OBSERVATION_SNAPSHOT_END) {
       ++client->snapshots;
       client->conversation = observation->conversation;
     } else if (observation->type == CAI_INPUT_OBSERVATION_DISCONNECTED)
       ++client->disconnected;
-    else {
+    else if (observation->type == CAI_INPUT_OBSERVATION_CHANGE) {
       ++client->changes;
       if (observation->change.type == CAI_INPUT_UPSERT) {
         client->item = observation->change.entry.id;
@@ -97,7 +97,7 @@ static void *concurrent_frontend(void *context) {
         assert(cai_input_connection_poll(connection, &event, NULL) == CAI_OK);
         if (event == NULL)
           break;
-        if (event->type == CAI_INPUT_OBSERVATION_SNAPSHOT)
+        if (event->type == CAI_INPUT_OBSERVATION_SNAPSHOT_END)
           conversation = event->conversation;
         if (event->type == CAI_INPUT_OBSERVATION_RESULT &&
             event->result.request_id == request.request_id) {
@@ -268,6 +268,11 @@ int main(void) {
          CAI_OK);
   assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
   drain(&a);
+  for (i = 0U; a.snapshots == 0U && i < 128U; ++i) {
+    assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
+    drain(&a);
+  }
+  assert(a.snapshots == 1U);
   assert(send(&a, CAI_INPUT_OFFER, "survives frontend detach") == CAI_OK);
   cai_input_connection_close(a.connection);
   a.connection = NULL;

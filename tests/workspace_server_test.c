@@ -90,6 +90,8 @@ static int host_event(void *context, const cai_workspace_server_event *event,
     ++state->errors;
   }
   if (event->type == CAI_WORKSPACE_MESSAGE) {
+    assert(cai_workspace_server_disconnect(state->server, event->attachment,
+                                           NULL) == CAI_ERR_INVALID);
     if (event->message->type == CAI_PROTOCOL_PAYLOAD)
       ++state->tokens;
     if (event->message->type == CAI_PROTOCOL_COMPLETE) {
@@ -455,6 +457,67 @@ static void transport_failures(const char *runtime, const char *workspace) {
   cai_workspace_endpoint_close(endpoint);
   cai_workspace_server_close(state.server);
 }
+static void producer_backlog(const char *runtime, const char *workspace) {
+  cai_workspace_server_config config;
+  cai_workspace_endpoint *endpoint;
+  host state;
+  test_client a, b;
+  cai_protocol_header header;
+  size_t pending;
+  memset(&state, 0, sizeof(state));
+  cai_workspace_server_config_init(&config);
+  config.runtime_directory = runtime;
+  config.workspace = workspace;
+  config.lifetime.persist = 1;
+  config.event = host_event;
+  config.context = &state;
+  assert(cai_workspace_server_open(&config, &state.server, NULL) == CAI_OK);
+  assert(cai_workspace_server_ready(state.server, 1U, NULL) == CAI_OK);
+  assert(cai_workspace_endpoint_open(runtime, workspace, &endpoint, NULL) ==
+         CAI_OK);
+  connect_client(endpoint, &a);
+  greeting(&a, workspace, CAI_WORKSPACE_SCHEMA);
+  exchange(&state, &a, 2U);
+  connect_client(endpoint, &b);
+  greeting(&b, workspace, CAI_WORKSPACE_SCHEMA);
+  exchange(&state, &b, 3U);
+  assert(cai_workspace_server_pending(state.server, a.attachment, &pending,
+                                      NULL) == CAI_OK &&
+         pending == 0U);
+  assert(cai_workspace_server_pending(state.server, 0U, &pending, NULL) ==
+         CAI_ERR_INVALID);
+  assert(cai_workspace_server_pending(state.server, a.attachment, NULL, NULL) ==
+         CAI_ERR_INVALID);
+  memset(&header, 0, sizeof(header));
+  header.kind = CAI_PROTOCOL_STREAM_CHUNK;
+  assert(cai_workspace_server_begin(state.server, a.attachment, &header, 4U,
+                                    NULL) == CAI_OK);
+  assert(cai_workspace_server_pending(state.server, a.attachment, &pending,
+                                      NULL) == CAI_OK &&
+         pending > 0U);
+  /* Abort one unfinished subscriber frame outside dispatch. Authority must
+   * already be revoked before the application next admits any work. */
+  assert(cai_workspace_server_disconnect(state.server, a.attachment, NULL) ==
+         CAI_OK);
+  assert(snapshot(&state).count == 1U && snapshot(&state).controller == 0U &&
+         snapshot(&state).phase == CAI_ATTACHMENT_READY);
+  assert(cai_workspace_server_authorize(state.server, a.attachment,
+                                        a.generation, NULL) == CAI_ERR_INVALID);
+  assert(cai_workspace_server_pending(state.server, a.attachment, &pending,
+                                      NULL) == CAI_ERR_INVALID);
+  assert(cai_workspace_server_disconnect(state.server, a.attachment, NULL) ==
+         CAI_ERR_INVALID);
+  exchange(&state, &b, 4U);
+  assert(b.controller == 0U && b.generation > a.generation);
+  assert(cai_workspace_server_disconnect(state.server, b.attachment, NULL) ==
+             CAI_OK &&
+         snapshot(&state).count == 0U &&
+         snapshot(&state).phase == CAI_ATTACHMENT_READY);
+  close_client(&a);
+  close_client(&b);
+  cai_workspace_endpoint_close(endpoint);
+  cai_workspace_server_close(state.server);
+}
 static void *worker(void *unused) {
   char root[] = "/tmp/cai-host-XXXXXX", runtime[128], workspace[128], path[256];
   DIR *dir;
@@ -468,6 +531,7 @@ static void *worker(void *unused) {
   run(runtime, workspace, 1);
   failures(runtime, workspace);
   transport_failures(runtime, workspace);
+  producer_backlog(runtime, workspace);
   dir = opendir(runtime);
   assert(dir != NULL);
   while ((entry = readdir(dir)) != NULL) {

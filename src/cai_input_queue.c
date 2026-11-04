@@ -696,6 +696,79 @@ void cai_input_queue_config_init(cai_input_queue_config *config) {
   if (config != NULL)
     memset(config, 0, sizeof(*config));
 }
+static int has_edits(cai_input_queue *queue, unsigned long long client) {
+  input_node *node;
+  for (node = queue->head; node != NULL; node = node->next)
+    if (node->value.edit_held && node->value.edit_owner == client)
+      return 1;
+  return 0;
+}
+static void release_edits(cai_input_queue *queue,
+                          const cai_input_record *record, int live) {
+  input_node *node;
+  size_t index;
+  queue->revision = record->after_revision;
+  for (node = queue->head, index = 0U; node != NULL; node = node->next, ++index)
+    if (node->value.edit_held && node->value.edit_owner == record->client_id) {
+      node->value.edit_held = 0;
+      node->value.edit_owner = node->value.edit_token = 0U;
+      node->value.revision = queue->revision;
+      emit_change(queue, CAI_INPUT_UPSERT, index, node, record, live);
+    }
+  emit_change(queue, CAI_INPUT_STATE, 0U, NULL, record, live);
+}
+static int release_client(cai_input_queue *queue, unsigned long long client,
+                          cai_error *error) {
+  cai_input_record record;
+  int rc;
+  rc = queue_valid(queue, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (!has_edits(queue, client))
+    return CAI_OK;
+  if (queue->uncertain)
+    return cai_set_error(error, CAI_ERR_TRANSPORT,
+                         "input queue requires recovery before edit release");
+  if (queue->revision == ~(unsigned long long)0)
+    return cai_set_error(error, CAI_ERR_LIMIT,
+                         "input queue revision exhausted");
+  rc = reserve_changes(queue, error);
+  if (rc != CAI_OK)
+    return rc;
+  memset(&record, 0, sizeof(record));
+  record.type = CAI_INPUT_RECORD_RELEASE;
+  record.client_id = client;
+  record.before_revision = queue->revision;
+  record.after_revision = queue->revision + 1U;
+  rc = persist(queue, &record, NULL, error);
+  if (rc == CAI_OK)
+    release_edits(queue, &record, 1);
+  return rc;
+}
+int cai_input_queue_client_release_edits(cai_input_queue_client *client,
+                                         cai_error *error) {
+  if (client == NULL || !client->attached)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "attached input producer required");
+  return release_client(client->queue, client->id, error);
+}
+int cai_input_queue_release_orphans(cai_input_queue *queue, cai_error *error) {
+  input_node *node;
+  int rc = queue_valid(queue, error);
+  if (rc != CAI_OK)
+    return rc;
+  for (;;) {
+    for (node = queue->head; node != NULL; node = node->next)
+      if (node->value.edit_held &&
+          !client_attached(queue, node->value.edit_owner))
+        break;
+    if (node == NULL)
+      return CAI_OK;
+    rc = release_client(queue, node->value.edit_owner, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
+}
 int cai_input_queue_open(const cai_input_queue_config *config,
                          cai_input_queue **out, cai_error *error) {
   cai_input_queue *queue;
@@ -1190,6 +1263,15 @@ int cai_input_queue_restore(cai_input_queue *queue,
                            "invalid input queue claim record");
     queue->revision = record->after_revision;
     remove_node(queue, node, previous, index, record, 0, NULL);
+  } else if (record->type == CAI_INPUT_RECORD_RELEASE) {
+    if (record->client_id == 0U || record->client_id > queue->client_serial ||
+        record->request.request_id != 0U || record->request.text != NULL ||
+        queue->revision == ~(unsigned long long)0 ||
+        record->after_revision != queue->revision + 1U ||
+        !has_edits(queue, record->client_id))
+      return cai_set_error(error, CAI_ERR_PROTOCOL,
+                           "invalid input edit release record");
+    release_edits(queue, record, 0);
   } else if (record->type == CAI_INPUT_RECORD_REQUEST) {
     if (record->client_id == 0U || record->client_id > queue->client_serial ||
         record->request.request_id == 0U ||

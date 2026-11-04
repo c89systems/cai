@@ -1,12 +1,14 @@
 # Local and backend-backed input queues
 
-Status: implemented in-process queue boundary, 2026-11-03. Public core headers
+Status: implemented queue authority and socket input binding, 2026-11-04. Public core headers
 `input_queue.h` and `input_controller.h`, the Lua runtime attachment and
 `cli/input_adapter.c` implement the authority and Softline bridge described
 here. Each conversation journals its own queue. The terminal-free application
 owner exposes in-process input connect/resume, owned observations and status
-wakeups. Socket application binding and the terminal client cutover remain
-future work in the [attachable frontend architecture](frontend-architecture.md). Illustrative
+wakeups. Workspace sockets now carry input requests and queue observations
+using the [wire payload contract](workspace-wire-queue.md). Transcript/command
+presentation and the terminal client cutover remain future work in the
+[attachable frontend architecture](frontend-architecture.md). Illustrative
 C shapes below explain responsibilities; installed headers define exact APIs.
 
 Softline must retain its existing local queue as the constructor default. A
@@ -162,6 +164,12 @@ The update methods copy borrowed fields, preserve native edit state and do not
 invoke the outbound request callback again.
 
 An initial bounded queue snapshot and its queue revision establish the mirror.
+The producer emits BEGIN, one ITEM at a time, then END, with bounded receiver
+credit. It does not allocate a full queue array. A mid-baseline mutation resets
+the incomplete snapshot and starts a new revision; only END publishes the
+frontend's explicit editor mirror. Allocation failure fences the affected
+observation connection with a reserved terminal notice, preserving accepted
+work and other consumers.
 Subsequent deltas include the preceding/current revision so a gap is detectable.
 A gap requests explicit snapshot resynchronization. Do not enumerate/refill the
 whole queue on every update or retain a second unbounded response backlog.

@@ -922,7 +922,7 @@ if(CAI_BUILD_APP)
   find_package(lockdc CONFIG REQUIRED COMPONENTS static)
   # The product and fixture entrypoints share these exact sources/options.
   # Compile them once per configuration; keep fixture substitutions in main.
-  add_library(cai_cli_support OBJECT cli/identity.c cli/app_control.c cli/workspace_host.c cli/commands.c cli/completion.c cli/input_adapter.c cli/options.c cli/help.c cli/config.c cli/runtime_options.c cli/mcp.c cli/skills.c cli/status.c cli/reasoning.c cli/literal.c cli/shell.c cli/login.c
+  add_library(cai_cli_support OBJECT cli/identity.c cli/app_control.c cli/workspace_host.c cli/input_wire.c cli/commands.c cli/completion.c cli/input_adapter.c cli/options.c cli/help.c cli/config.c cli/runtime_options.c cli/mcp.c cli/skills.c cli/status.c cli/reasoning.c cli/literal.c cli/shell.c cli/login.c
     cli/review_report.c cli/pouch.c cli/pouch_stream.c cli/quota_refresh.c cli/session_commands.c
     cli/log.c cli/response.c cli/messages.c cli/message_names.c cli/todo.c cli/theme.c cli/stores.c cli/temp.c cli/replay.c cli/replay_tools.c cli/tool_result.c)
   target_link_libraries(cai_cli_support PUBLIC cai_static
@@ -961,6 +961,7 @@ if(CAI_BUILD_CLI)
       "${CMAKE_CURRENT_SOURCE_DIR}/docs/chrome.md"
       "${CMAKE_CURRENT_SOURCE_DIR}/docs/embedding.md"
       "${CMAKE_CURRENT_SOURCE_DIR}/docs/workspace-server.md"
+      "${CMAKE_CURRENT_SOURCE_DIR}/docs/workspace-wire-queue.md"
       "${CMAKE_CURRENT_SOURCE_DIR}/docs/plugins.md"
       "${CMAKE_CURRENT_SOURCE_DIR}/docs/agent-messaging.md"
       "${CMAKE_CURRENT_SOURCE_DIR}/docs/kanban.md"
@@ -1094,6 +1095,16 @@ if(CAI_BUILD_TESTS)
   target_compile_options(cai_input_reconnect_test PRIVATE -UNDEBUG)
   add_test(NAME cai_input_reconnect COMMAND cai_input_reconnect_test)
   set_tests_properties(cai_input_reconnect PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
+  add_executable(cai_input_snapshot_test tests/input_snapshot_test.c)
+  target_link_libraries(cai_input_snapshot_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_input_snapshot_test)
+  if(_cai_internal_link_target STREQUAL "cai_static")
+    target_compile_definitions(cai_input_snapshot_test PRIVATE CAI_TEST_ALLOCATION_FAILURE=1)
+    target_link_options(cai_input_snapshot_test PRIVATE "-Wl,--wrap=malloc")
+  endif()
+  target_compile_options(cai_input_snapshot_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_input_snapshot COMMAND cai_input_snapshot_test)
+  set_tests_properties(cai_input_snapshot PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   target_link_libraries(cai_input_controller_test PRIVATE ${_cai_internal_link_target})
   cai_configure_cli_target(cai_input_controller_test)
   target_compile_options(cai_input_controller_test PRIVATE -UNDEBUG)
@@ -1625,6 +1636,7 @@ if(CAI_INSTALL)
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/chrome.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/embedding.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/workspace-server.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/workspace-wire-queue.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/plugins.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/agent-messaging.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/kanban.md"

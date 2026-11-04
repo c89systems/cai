@@ -3358,6 +3358,10 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
   if (rc == CAI_OK)
     rc = cli_set_theme_scope(state, 0, error);
   if (rc == CAI_OK)
+    rc = cai_cli_workspace_host_input(
+        state->workspace_host, state->input_controller,
+        cai_agent_runtime_session_id(state->runtime), error);
+  if (rc == CAI_OK)
     rc = cai_cli_workspace_host_ready(state->workspace_host, error);
   if (rc == CAI_OK) {
     cai_app_bridge_bind_input(state->bridge, state->input_admin != NULL
@@ -3384,8 +3388,12 @@ static int cli_prepare_clipboard(cli_state *state, cai_error *error) {
   return CAI_OK;
 }
 
-static void cli_close_runtime(cli_state *state) {
+static int cli_close_runtime(cli_state *state, cai_error *error) {
+  int rc;
   cai_app_bridge_bind_input(state->bridge, NULL);
+  rc = cai_cli_workspace_host_input(state->workspace_host, NULL, NULL, error);
+  if (rc != CAI_OK)
+    state->exit_requested = 1;
   if (state->input_controller != NULL)
     (void)cai_input_controller_select(state->input_controller, NULL, NULL);
   cai_input_queue_client_close(state->input_admin);
@@ -3442,6 +3450,7 @@ static void cli_close_runtime(cli_state *state) {
   cai_cli_pouch_end_use(&state->pouch);
   state->goal_starts_pending = 0U;
   cai_cli_reasoning_reset(&state->reasoning);
+  return rc;
 }
 
 static int cli_list_write(void *context, const void *bytes, size_t count,
@@ -3647,13 +3656,23 @@ static int cli_set_messaging(cli_state *state, int enabled, cai_error *error) {
     return rc;
   }
   state->suppress_replay = 1;
-  cli_close_runtime(state);
+  rc = cli_close_runtime(state, error);
+  if (rc != CAI_OK) {
+    state->suppress_replay = 0;
+    free(id);
+    return rc;
+  }
   state->options.messaging = enabled;
   rc = cli_open_runtime(state, id, 0, error);
   if (rc != CAI_OK) {
     cai_error recovery;
     cai_error_init(&recovery);
-    cli_close_runtime(state);
+    if (cli_close_runtime(state, &recovery) != CAI_OK) {
+      cai_error_cleanup(&recovery);
+      free(id);
+      state->suppress_replay = 0;
+      return rc;
+    }
     state->options.messaging = !enabled;
     if (cli_open_runtime(state, id, 0, &recovery) != CAI_OK) {
       state->exit_requested = 1;
@@ -3685,7 +3704,9 @@ static int cli_switch_session(cli_state *state, const char *id, int new_session,
   rc = cai_cli_messages_flush_decisions(state->messages, state->input, error);
   if (rc != CAI_OK)
     return rc;
-  cli_close_runtime(state);
+  rc = cli_close_runtime(state, error);
+  if (rc != CAI_OK)
+    return rc;
   state->awaiting_turn = 0;
   state->automation_done = 1;
   state->automation_failed = 0;
@@ -4039,7 +4060,7 @@ static int cli_host_process(cli_state *state, cai_error *error) {
 /* Level-triggered runtime, input, store and socket readiness share one owner
  * loop. Idle servers wait indefinitely except for an actual host deadline. */
 static int cli_pump(cli_state *state, long timeout, cai_error *error) {
-  struct pollfd descriptors[5U + CAI_WORKSPACE_SERVER_FDS];
+  struct pollfd descriptors[5U + CAI_CLI_WORKSPACE_HOST_FDS];
   size_t server_count = 0U;
   int fd, rc, stopping;
   rc = cai_cli_pouch_ownership_check(&state->pouch, error);
@@ -4064,8 +4085,8 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
     descriptors[0].events = descriptors[1].events = descriptors[2].events =
         descriptors[3].events = descriptors[4].events = POLLIN;
     rc = cai_cli_workspace_host_prepare(state->workspace_host, descriptors + 5U,
-                                        CAI_WORKSPACE_SERVER_FDS, &server_count,
-                                        &timeout, error);
+                                        CAI_CLI_WORKSPACE_HOST_FDS,
+                                        &server_count, &timeout, error);
     if (rc != CAI_OK)
       return rc;
     do {
@@ -6244,7 +6265,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     rc = cai_cli_workspace_host_open(
         state->options.runtime_dir, state->workspace, server,
         application != NULL ? &application->input : NULL, state->bridge,
-        &state->workspace_host, &error);
+        cli_logger(state), &state->workspace_host, &error);
     if (rc != CAI_OK) {
       cli_print_error(state, "open workspace server", &error);
       goto cleanup;
@@ -6955,9 +6976,15 @@ cleanup:
     cai_error_cleanup(&final_error);
   }
   cai_cli_response_close(&state->final_response);
-  if (state->runtime != NULL)
-    cli_close_runtime(state);
-  else {
+  if (state->runtime != NULL) {
+    cai_error close_error;
+    cai_error_init(&close_error);
+    if (cli_close_runtime(state, &close_error) != CAI_OK) {
+      cli_print_error(state, "close conversation", &close_error);
+      result = 1;
+    }
+    cai_error_cleanup(&close_error);
+  } else {
     cai_cli_messages_close(state->messages);
     state->messages = NULL;
   }

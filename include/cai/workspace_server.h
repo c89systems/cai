@@ -78,6 +78,15 @@ int cai_workspace_server_authorize(cai_workspace_server *server,
 /** Mark irreversible STOPPING. The host still owns cancelling/joining its
  * runtime, closing stores and finally releasing this server. */
 int cai_workspace_server_stop(cai_workspace_server *server, cai_error *error);
+/** Current bounded output backlog for a live attachment. Use it to gate
+ * additional producer work; readiness still comes from prepare(). */
+int cai_workspace_server_pending(cai_workspace_server *, uint64_t attachment,
+                                 size_t *out, cai_error *);
+/** Owner-only immediate detach outside pump callbacks. Revokes authority
+ * before returning and broadcasts the resulting role. No runtime is stopped
+ * here; the application observes the ordinary last-client lifetime. */
+int cai_workspace_server_disconnect(cai_workspace_server *, uint64_t attachment,
+                                    cai_error *);
 /** Stream one output record to a connected attachment. begin replaces the
  * attachment/generation metadata with server-owned values. Known bounded
  * payload sizes must come from fields/chunks, never a sizing serialization.

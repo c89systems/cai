@@ -215,7 +215,7 @@ static void drain(client *c) {
     assert(cai_input_connection_poll(c->connection, &event, NULL) == CAI_OK);
     if (event == NULL)
       break;
-    if (event->type == CAI_INPUT_OBSERVATION_SNAPSHOT)
+    if (event->type == CAI_INPUT_OBSERVATION_SNAPSHOT_END)
       c->scope.conversation = event->conversation;
     if (event->type == CAI_INPUT_OBSERVATION_RESULT)
       c->result = event->result;

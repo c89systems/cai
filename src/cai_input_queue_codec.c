@@ -169,8 +169,8 @@ int cai_input_record_parse(const char *json, cai_input_record *out,
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "parse input queue transition", local.message);
   }
-  if (doc.type < CAI_INPUT_RECORD_CLIENT || doc.type > CAI_INPUT_RECORD_CLAIM ||
-      doc.operation < CAI_INPUT_OFFER ||
+  if (doc.type < CAI_INPUT_RECORD_CLIENT ||
+      doc.type > CAI_INPUT_RECORD_RELEASE || doc.operation < CAI_INPUT_OFFER ||
       doc.operation > CAI_INPUT_FORGET_ORIGIN ||
       doc.intent < CAI_INPUT_QUEUED || doc.intent > CAI_INPUT_STEERING ||
       doc.policy_intent < CAI_INPUT_QUEUED ||

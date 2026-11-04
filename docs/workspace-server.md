@@ -49,7 +49,7 @@ the active queue without opening a runtime or store. Their owned observations
 include the producer identity and processed request watermark. Attachment
 admission runs on the controller owner with the authenticated identity and
 original authority generation; trusted native `control()` is a separate host
-surface. Remote command presentation, socket application binding and Lua
+surface. Remote command presentation, transcript streaming and Lua
 asynchronous observations remain pending. The terminal-free owner rejects new
 slash/! input explicitly and leaves restored frontend actions queued.
 
@@ -61,8 +61,13 @@ attachment cancels active work, closes stores and releases the endpoint. An
 observer still counts as attached; it must explicitly take over vacant control.
 Persistent owners continue work with no clients and accept later attachments.
 Status snapshots retain the server phase, role, generation and shutdown reason.
-This lifecycle binding is exercised against real Unix clients. Application
-socket requests and replay/live output remain unbound and fail explicitly;
+This binding is exercised against real Unix clients. Socket input/queue
+requests now use the [typed payload contract](workspace-wire-queue.md), admitting
+model input through the same backend producers and receipts. Snapshot production
+is incremental and credit-bound; it never copies a whole pending queue.
+Disconnect/takeover releases editor holds through durable controller-origin
+records, without changing request IDs or accepted text. New owners release
+orphaned edits before queue selection. Command presentation, replay/live output,
 the headless/autostart executable and terminal client cutover are still pending.
 
 ## Confirmed product decisions

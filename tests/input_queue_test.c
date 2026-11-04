@@ -1,5 +1,6 @@
 #include "../src/cai_input_queue_codec.h"
 #include <assert.h>
+#include <cai/input_controller.h>
 #include <cai/input_queue.h>
 #include <stdlib.h>
 #include <string.h>
@@ -748,6 +749,111 @@ static void checkpoint_restore(queue_fixture *fixture) {
   cai_error_cleanup(&error);
   clear(fixture);
 }
+static void disconnect_release(queue_fixture *fixture) {
+  cai_input_entry item, other;
+  cai_input_record corrupt;
+  cai_input_state before;
+  cai_input_controller *controller;
+  unsigned long long high, first_id, second_id;
+  size_t records, i;
+  open_queue(fixture, 0U, 0U);
+  clients(fixture);
+  first_id = cai_input_queue_client_id(fixture->clients[0]);
+  second_id = cai_input_queue_client_id(fixture->clients[1]);
+  for (i = 0U; i < 3U; ++i)
+    assert(send(fixture, i == 2U ? 1U : 0U, CAI_INPUT_OFFER,
+                i == 2U ? "other editor" : "accepted original", NULL,
+                CAI_INPUT_QUEUED, i == 0U)
+               .outcome == CAI_INPUT_ACCEPTED);
+  for (i = 0U; i < 3U; ++i) {
+    size_t client = i == 2U ? 1U : 0U;
+    item = entry(fixture, client, i);
+    assert(send(fixture, client, CAI_INPUT_BEGIN_EDIT, NULL, &item,
+                CAI_INPUT_QUEUED, 0)
+               .outcome == CAI_INPUT_ACCEPTED);
+  }
+  assert(send(fixture, 1U, CAI_INPUT_STOP, NULL, NULL, CAI_INPUT_QUEUED, 0)
+             .outcome == CAI_INPUT_ACCEPTED);
+  before = state(fixture);
+  high = cai_input_queue_client_last_request(fixture->clients[0]);
+  other = entry(fixture, 1U, 2U);
+  records = fixture->count;
+  assert(cai_input_queue_client_release_edits(fixture->clients[0], NULL) ==
+         CAI_OK);
+  assert(fixture->count == records + 1U &&
+         state(fixture).revision == before.revision + 1U &&
+         cai_input_queue_client_last_request(fixture->clients[0]) == high);
+  assert(fixture->records[records].type == CAI_INPUT_RECORD_RELEASE &&
+         fixture->records[records].request.request_id == 0U &&
+         fixture->records[records].request.text == NULL);
+  for (i = 0U; i < 2U; ++i) {
+    item = entry(fixture, 0U, i);
+    assert(!item.edit_held && item.edit_owner == 0U && item.edit_token == 0U &&
+           item.held == (i == 0U) && item.stopped &&
+           strcmp(item.text, "accepted original") == 0);
+  }
+  item = entry(fixture, 1U, 2U);
+  assert(item.edit_held && item.edit_token == other.edit_token &&
+         item.revision == other.revision);
+  records = fixture->count;
+  assert(cai_input_queue_client_release_edits(fixture->clients[0], NULL) ==
+             CAI_OK &&
+         fixture->count == records);
+  /* A failed release fences mutation, and does not invent a receipt ID. */
+  item = entry(fixture, 0U, 0U);
+  assert(
+      send(fixture, 0U, CAI_INPUT_BEGIN_EDIT, NULL, &item, CAI_INPUT_QUEUED, 0)
+          .outcome == CAI_INPUT_ACCEPTED);
+  high = cai_input_queue_client_last_request(fixture->clients[0]);
+  fixture->fail = 1;
+  assert(cai_input_queue_client_release_edits(fixture->clients[0], NULL) ==
+             CAI_ERR_TRANSPORT &&
+         state(fixture).uncertain && entry(fixture, 0U, 0U).edit_held);
+  fixture->fail = 0;
+  assert(cai_input_queue_confirm_absent(fixture->queue, NULL) == CAI_OK);
+  assert(cai_input_queue_client_last_request(fixture->clients[0]) == high);
+  fixture->fail = 2;
+  assert(cai_input_queue_client_release_edits(fixture->clients[0], NULL) ==
+             CAI_ERR_TRANSPORT &&
+         state(fixture).uncertain && entry(fixture, 0U, 0U).edit_held);
+  fixture->fail = 0;
+  records = fixture->count;
+  assert(cai_input_queue_restore(fixture->queue,
+                                 &fixture->records[records - 1U], records,
+                                 NULL) == CAI_OK &&
+         !state(fixture).uncertain && !entry(fixture, 0U, 0U).edit_held &&
+         cai_input_queue_client_last_request(fixture->clients[0]) == high);
+  corrupt = fixture->records[records - 1U];
+  corrupt.before_revision = state(fixture).revision;
+  corrupt.after_revision = corrupt.before_revision + 1U;
+  corrupt.client_id = second_id;
+  corrupt.request.request_id = 999U;
+  assert(cai_input_queue_restore(fixture->queue, &corrupt, 0U, NULL) ==
+             CAI_ERR_PROTOCOL &&
+         entry(fixture, 1U, 2U).edit_held);
+  close_queue(fixture);
+  open_queue(fixture, 0U, 0U);
+  for (i = 0U; i < records; ++i)
+    assert(cai_input_queue_restore(fixture->queue, &fixture->records[i], i + 1U,
+                                   NULL) == CAI_OK);
+  /* Controller recovery releases the remaining crashed editor before READY. */
+  assert(cai_input_controller_open(NULL, &controller, NULL) == CAI_OK);
+  assert(cai_input_controller_select(controller, fixture->queue, NULL) ==
+             CAI_OK &&
+         fixture->count == records + 1U &&
+         fixture->records[records].type == CAI_INPUT_RECORD_RELEASE &&
+         fixture->records[records].client_id == second_id);
+  assert(cai_input_queue_client_resume(fixture->queue, first_id,
+                                       &fixture->clients[0], NULL) == CAI_OK);
+  assert(cai_input_queue_client_resume(fixture->queue, second_id,
+                                       &fixture->clients[1], NULL) == CAI_OK);
+  item = entry(fixture, 1U, 2U);
+  assert(!item.edit_held && !item.held && item.stopped &&
+         strcmp(item.text, "other editor") == 0);
+  assert(cai_input_queue_client_last_request(fixture->clients[0]) == high);
+  cai_input_controller_close(controller);
+  clear(fixture);
+}
 static void delivery_projection(void) {
   cai_agent_session_event event, projected;
   cai_input_delivery delivery;
@@ -805,6 +911,7 @@ int main(void) {
   held_recovery(fixture);
   uncertain_appends(fixture);
   lanes_and_stop(fixture);
+  disconnect_release(fixture);
   free(fixture);
   return 0;
 }

@@ -59,6 +59,7 @@ files=(
   docs/model-metadata.md
   docs/embedding.md
   docs/workspace-server.md
+  docs/workspace-wire-queue.md
   docs/agent-messaging.md
   docs/kanban.md
   docs/journal.md

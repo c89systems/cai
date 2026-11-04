@@ -100,7 +100,9 @@ typedef struct cai_input_policy {
 typedef enum cai_input_record_type {
   CAI_INPUT_RECORD_CLIENT = 0,
   CAI_INPUT_RECORD_REQUEST,
-  CAI_INPUT_RECORD_CLAIM
+  CAI_INPUT_RECORD_CLAIM,
+  /** Controller-origin disconnect cleanup; no frontend request identity. */
+  CAI_INPUT_RECORD_RELEASE
 } cai_input_record_type;
 /** One incremental durable transition, never a whole-queue snapshot. Text and
  * request pointers are borrowed through persist(). The callback must append
@@ -187,6 +189,10 @@ int cai_input_queue_client_resume(cai_input_queue *queue, unsigned long long id,
 /** Detaches observations; accepted entries and edit holds remain. The logical
  * producer's bounded receipts may be resumed independently of this handle. */
 void cai_input_queue_client_close(cai_input_queue_client *client);
+/** Owner-only durable release of this client's edit holds. Retains all text,
+ * approval/stopped state and receipt IDs. It never reserves an internal
+ * frontend request ID. No journal append when no holds belong to the client. */
+int cai_input_queue_client_release_edits(cai_input_queue_client *, cai_error *);
 unsigned long long
 cai_input_queue_client_id(const cai_input_queue_client *client);
 /** Highest processed request ID known to this producer. On reconnect, keep

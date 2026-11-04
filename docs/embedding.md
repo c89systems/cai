@@ -242,8 +242,8 @@ reported through final status/error. Native event/replay callbacks continue to
 receive the borrowed semantic stream. The typed control API accepts prompts,
 steering, goal operations, cancellation and STOP. Slash/! commands require the
 frontend presentation layer and are rejected on this terminal-free surface;
-restored frontend actions stay queued. Socket application bindings and the
-Softline client cutover are still pending.
+restored frontend actions stay queued. Socket command/transcript presentation
+and the Softline client cutover are still pending.
 
 `cai_app_start_server` starts this same owner with a canonical workspace
 listener in the effective `paths.runtime_dir`. Its copied
@@ -255,8 +255,15 @@ disconnect. Explicit socket shutdown and native STOP end either lifetime.
 Read `has_server` and `server` in application status for phase, attachment count,
 generation, controlling identity and final shutdown reason. The same status
 wakeup covers these changes; the owner does not poll while idle. Socket
-handshake/role/lifetime are implemented; application wire actions/replay are not
-yet connected and fail explicitly. This API does not fork or install signals.
+handshake, role, lifetime, model input and queue operations are implemented.
+The [queue payload contract](workspace-wire-queue.md) binds original producer
+receipts and authority generations to real Unix connections. Snapshots use
+begin/item/end observations; the producer never builds a complete queue value.
+The Softline adapter constructs its explicit bounded editor mirror and publishes
+it only at the validated end. Disconnect/takeover releases edits durably,
+without advancing request IDs or replacing accepted text. Recovery releases
+orphaned edits before selecting the queue. Application command presentation and
+transcript streaming remain pending. This API does not fork or install signals.
 
 An idle controller stays open until STOP. After observing shutdown, call
 `cai_app_join` outside UI/owner callbacks, then close or start the receiver

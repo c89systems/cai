@@ -289,8 +289,10 @@ int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
  * grace period. Last detach stops a nonpersistent backend, including active
  * work. A persistent owner runs until explicit shutdown or native STOP.
  * No fork, signal handler, terminal, or second runtime/store is created.
- * Socket identity/role and lifetime are available now; application wire
- * actions/replay are not yet bound. Use native control/input for those.
+ * Socket identity, role, lifetime, model input and queue operations are bound.
+ * Application command presentation and transcript streaming are not yet bound;
+ * use native observers/control for those. Queue payloads are documented in
+ * docs/workspace-wire-queue.md.
  * Start success is asynchronous; observe status for readiness or failure.
  */
 int cai_app_start_server(cai_app *self, const cai_config_context *context,

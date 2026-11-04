@@ -10,7 +10,26 @@ struct cai_cli_input_adapter {
   sl_watch_id_t watch;
   unsigned long long conversation, view;
   char revision[96];
+  /* Explicit bounded editor mirror under construction. The producer/transport
+   * sends one row at a time; Softline publishes its snapshot atomically. */
+  cai_input_entry *snapshot;
+  cai_input_state snapshot_state;
+  unsigned long long snapshot_conversation;
+  size_t snapshot_count;
+  int snapshot_active;
 };
+static void snapshot_clear(cai_cli_input_adapter *adapter) {
+  size_t i;
+  for (i = 0U; i < adapter->snapshot_count; ++i) {
+    void *text;
+    memcpy(&text, &adapter->snapshot[i].text, sizeof(text));
+    free(text);
+  }
+  free(adapter->snapshot);
+  adapter->snapshot = NULL;
+  adapter->snapshot_count = 0U;
+  adapter->snapshot_active = 0;
+}
 static int decimal(const char **text, unsigned long long *out) {
   const char *at = *text;
   unsigned long long value = 0U, maximum = ~(unsigned long long)0;
@@ -74,6 +93,7 @@ static void detach(void *context) {
   adapter->editor = NULL;
   cai_input_connection_close(adapter->connection);
   adapter->connection = NULL;
+  snapshot_clear(adapter);
 }
 static const sl_queue_backend_t callbacks = {
     request, detach, (1UL << (SL_QUEUE_RESOLVE + 1)) - 1UL, 0U};
@@ -145,6 +165,52 @@ static int receive_one(cai_cli_input_adapter *adapter,
   char revision[96], item[48];
   size_t i;
   int rc;
+  if (observation->type == CAI_INPUT_OBSERVATION_SNAPSHOT_BEGIN) {
+    snapshot_clear(adapter);
+    if (observation->state.count > 128U)
+      return cai_cli_error(error, CAI_ERR_LIMIT,
+                           "editor queue exceeds 128 entries");
+    if (observation->state.count != 0U) {
+      adapter->snapshot =
+          calloc(observation->state.count, sizeof(*adapter->snapshot));
+      if (adapter->snapshot == NULL)
+        return cai_cli_error(error, CAI_ERR_NOMEM,
+                             "prepare editor queue mirror");
+    }
+    adapter->snapshot_state = observation->state;
+    adapter->snapshot_conversation = observation->conversation;
+    adapter->snapshot_active = 1;
+    return CAI_OK;
+  }
+  if (observation->type == CAI_INPUT_OBSERVATION_SNAPSHOT_ITEM ||
+      observation->type == CAI_INPUT_OBSERVATION_SNAPSHOT_END) {
+    if (!adapter->snapshot_active ||
+        observation->conversation != adapter->snapshot_conversation ||
+        observation->state.view_revision !=
+            adapter->snapshot_state.view_revision ||
+        observation->state.count != adapter->snapshot_state.count ||
+        observation->index != adapter->snapshot_count)
+      return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                           "editor snapshot sequence mismatch");
+    if (observation->type == CAI_INPUT_OBSERVATION_SNAPSHOT_ITEM) {
+      char *text;
+      if (adapter->snapshot_count >= adapter->snapshot_state.count ||
+          observation->entry.text == NULL)
+        return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                             "editor snapshot item is invalid");
+      text = strdup(observation->entry.text);
+      if (text == NULL)
+        return cai_cli_error(error, CAI_ERR_NOMEM, "retain editor queue entry");
+      adapter->snapshot[adapter->snapshot_count] = observation->entry;
+      adapter->snapshot[adapter->snapshot_count++].text = text;
+      return CAI_OK;
+    }
+    if (adapter->snapshot_count != adapter->snapshot_state.count)
+      return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                           "editor snapshot ended early");
+  }
+  if (observation->type == CAI_INPUT_OBSERVATION_DISCONNECTED)
+    snapshot_clear(adapter);
   if (observation->type == CAI_INPUT_OBSERVATION_RESULT) {
     sl_queue_result_t result;
     char item_revision[48], token[48];
@@ -180,9 +246,9 @@ static int receive_one(cai_cli_input_adapter *adapter,
       change.total_count = state->count;
       change.stopped = state->stopped;
       change.auto_approval = state->auto_approval;
-      if (observation->type == CAI_INPUT_OBSERVATION_SNAPSHOT) {
+      if (observation->type == CAI_INPUT_OBSERVATION_SNAPSHOT_END) {
         change.kind = SL_QUEUE_SNAPSHOT;
-        change.count = observation->count;
+        change.count = adapter->snapshot_count;
         if (change.count != 0U) {
           owned = calloc(change.count, sizeof(*owned));
           entries = calloc(change.count, sizeof(*entries));
@@ -193,7 +259,7 @@ static int receive_one(cai_cli_input_adapter *adapter,
                                  "copy frontend queue snapshot");
           }
           for (i = 0U; i < change.count; ++i) {
-            entry_copy(&owned[i], &observation->entries[i],
+            entry_copy(&owned[i], &adapter->snapshot[i],
                        observation->conversation);
             entries[i] = owned[i].entry;
           }
@@ -225,6 +291,8 @@ static int receive_one(cai_cli_input_adapter *adapter,
     rc = sl_queue_backend_update(adapter->editor, &change);
     free(entries);
     free(owned);
+    if (observation->type == CAI_INPUT_OBSERVATION_SNAPSHOT_END)
+      snapshot_clear(adapter);
     if (rc == SL_OK && change.kind != SL_QUEUE_DISCONNECTED) {
       adapter->conversation = observation->conversation;
       adapter->view = observation->state.view_revision;
@@ -294,5 +362,6 @@ void cai_cli_input_adapter_close(cai_cli_input_adapter *adapter) {
     return;
   if (adapter->connection != NULL)
     cai_input_connection_close(adapter->connection);
+  snapshot_clear(adapter);
   free(adapter);
 }

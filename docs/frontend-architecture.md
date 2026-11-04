@@ -21,11 +21,13 @@ The 2026-11-04 implementation now includes a terminal-free application owner
 through `cai_app_start`/`cai_app_join`, with explicit startup context, durable
 input, native event/replay observations and a coalescing status wakeup. Its
 startup and runtime code is shared with the synchronous receiver; the latter's
-terminal loop has not yet been replaced by a client composition. Socket
-application binding, remote command presentation, Softline client lifecycle
+terminal loop has not yet been replaced by a client composition. Remote command
+presentation, transcript streaming, Softline client lifecycle
 and asynchronous Lua observations remain part of the cutover, not completed
 features. `cai_app_start_server` now binds socket ownership, handshake, roles and
-last-client/persistent lifetime to that same owner; application socket actions
+last-client/persistent lifetime to that same owner. Socket input/queue binding
+now shares its durable producers, receipts and generation checks; queue
+snapshots are incremental begin/item/end observations. Command presentation
 and replay/live output remain pending. See the current public `app.h` contracts
 and workspace specification.
 

@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "../cli/input_wire.h"
 #include <assert.h>
 #include <cai/app.h>
 #include <cai/workspace_client.h>
@@ -268,7 +269,7 @@ static cai_input_observation *input_wait(host *h,
 static void input_start(host *h) {
   cai_input_observation *value;
   assert(cai_app_connect_input(h->app, 42U, &h->input, NULL) == CAI_OK);
-  value = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT, 0U);
+  value = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT_END, 0U);
   h->conversation = value->conversation;
   assert(h->conversation != 0U && value->producer != 0U &&
          value->last_request == 0U);
@@ -288,7 +289,7 @@ static void input_reconnect(host *h) {
   h->input = NULL;
   assert(cai_app_resume_input(h->app, 84U, h->conversation, producer, &h->input,
                               NULL) == CAI_OK);
-  value = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT, 0U);
+  value = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT_END, 0U);
   assert(value->producer == producer && value->last_request >= 1U);
   cai_input_observation_close(value);
   input_offer(h, 1U, "THIS DUPLICATE MUST NEVER RUN", CAI_INPUT_QUEUED);
@@ -304,7 +305,7 @@ static void input_reconnect(host *h) {
   h->input = NULL;
   assert(cai_app_resume_input(h->app, 42U, h->conversation, producer, &h->input,
                               NULL) == CAI_OK);
-  value = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT, 0U);
+  value = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT_END, 0U);
   assert(value->last_request == 3U);
   cai_input_observation_close(value);
   input_offer(h, 4U, "/status", CAI_INPUT_STEERING);
@@ -421,14 +422,289 @@ static void server_state(host *h, size_t count, uint64_t controller) {
   }
   cai_app_status_cleanup(&status);
 }
-static void socket_control(cai_workspace_client *client, int own) {
+typedef struct wire_view {
+  cai_workspace_client *client;
+  cai_cli_input_wire_decoder *decoder;
+  unsigned long long conversation, producer, high, view;
+  cai_input_result result;
+  cai_input_entry entry;
+  char session[129];
+  size_t snapshots, rows, expected, results, binding_errors, resets, large_rows;
+  int active;
+} wire_view;
+static int wire_event(void *context, const cai_protocol_event *event,
+                      cai_error *error) {
+  wire_view *v = context;
+  const cai_cli_input_wire_message *message;
+  const cai_input_observation *o;
+  int rc;
+  if (event->header->kind == CAI_PROTOCOL_WELCOME ||
+      event->header->kind == CAI_PROTOCOL_ROLE)
+    return CAI_OK;
+  rc = cai_cli_input_wire_decode(v->decoder, event, &message, error);
+  if (rc != CAI_OK || message == NULL)
+    return rc;
+  o = &message->observation;
+  switch (o->type) {
+  case CAI_INPUT_OBSERVATION_SNAPSHOT_BEGIN:
+    assert(!v->active && message->session != NULL);
+    v->active = 1;
+    v->rows = 0U;
+    v->expected = o->state.count;
+    v->conversation = o->conversation;
+    v->view = o->state.view_revision;
+    v->producer = o->producer;
+    v->high = o->last_request;
+    assert(strlen(message->session) < sizeof(v->session));
+    strcpy(v->session, message->session);
+    break;
+  case CAI_INPUT_OBSERVATION_SNAPSHOT_ITEM:
+    assert(v->active && v->rows == o->index &&
+           v->conversation == o->conversation &&
+           v->view == o->state.view_revision);
+    ++v->rows;
+    if (strlen(o->entry.text) == CAI_CLI_INPUT_TEXT_MAX)
+      ++v->large_rows;
+    v->entry = o->entry;
+    v->entry.text = NULL;
+    break;
+  case CAI_INPUT_OBSERVATION_SNAPSHOT_END:
+    assert(v->active && v->rows == v->expected &&
+           o->state.count == v->expected && v->view == o->state.view_revision);
+    v->active = 0;
+    ++v->snapshots;
+    break;
+  case CAI_INPUT_OBSERVATION_CHANGE:
+    assert(!v->active && o->conversation == v->conversation &&
+           o->change.previous_view_revision == v->view);
+    v->view = o->state.view_revision;
+    if (o->change.type == CAI_INPUT_UPSERT) {
+      v->entry = o->change.entry;
+      v->entry.text = NULL;
+    }
+    break;
+  case CAI_INPUT_OBSERVATION_RESULT:
+    v->result = o->result;
+    v->high = o->last_request;
+    ++v->results;
+    break;
+  case CAI_INPUT_OBSERVATION_DISCONNECTED:
+    v->active = 0;
+    if (message->category == CAI_CLI_INPUT_BIND_REJECTED)
+      ++v->binding_errors;
+    else
+      ++v->resets;
+    v->result = o->result;
+    break;
+  }
+  return CAI_OK;
+}
+static int wire_begin(void *context, const cai_protocol_header *header,
+                      uint32_t size, cai_error *error) {
+  wire_view *v = context;
+  /* Deliberately bypass the optional local authority guard: the server must
+   * reject an observer/stale generation independently at owner admission. */
+  return cai_workspace_client_begin(v->client, header, size, 0, error);
+}
+static int wire_write(void *context, const cai_cbor_token *token,
+                      cai_error *error) {
+  wire_view *v = context;
+  return cai_workspace_client_write(v->client, token, error);
+}
+static int wire_end(void *context, cai_error *error) {
+  wire_view *v = context;
+  return cai_workspace_client_end(v->client, error);
+}
+static void wire_send(wire_view *v, cai_cli_input_wire_message *message) {
+  cai_cli_input_wire_output output;
+  output.context = v;
+  output.begin = wire_begin;
+  output.write = wire_write;
+  output.end = wire_end;
+  assert(cai_cli_input_wire_write(&output, message, NULL) == CAI_OK);
+}
+static void wire_wait(wire_view *v, const size_t *counter, size_t expected) {
+  uint64_t deadline, until = monotonic_ms() + 10000U;
+  struct pollfd fd;
+  while (*counter < expected) {
+    cai_error error;
+    int rc;
+    cai_error_init(&error);
+    rc = cai_workspace_client_pump(v->client, monotonic_ms(), &error);
+    if (rc != CAI_OK)
+      fprintf(stderr, "wire client failed: %d %s\n", rc,
+              error.message != NULL ? error.message : "no message");
+    assert(rc == CAI_OK);
+    cai_error_cleanup(&error);
+    if (*counter >= expected)
+      break;
+    assert(monotonic_ms() < until);
+    assert(cai_workspace_client_prepare(v->client, &fd, &deadline, NULL) ==
+               CAI_OK &&
+           fd.fd >= 0 && poll(&fd, 1U, 1000) >= 0);
+  }
+}
+static void wire_bind(wire_view *v, unsigned long long producer,
+                      const char *session) {
+  cai_cli_input_wire_message message;
+  cai_workspace_client_state state;
+  assert(cai_workspace_client_get_state(v->client, &state, NULL) == CAI_OK);
+  memset(&message, 0, sizeof(message));
+  message.header.kind = CAI_PROTOCOL_SYNCHRONIZE;
+  message.header.request = 1U;
+  message.header.generation = state.generation;
+  message.header.conversation = producer == 0U ? 0U : v->conversation;
+  message.producer = producer;
+  message.session = session;
+  wire_send(v, &message);
+}
+static uint64_t wire_generation(wire_view *v) {
+  cai_workspace_client_state state;
+  assert(cai_workspace_client_get_state(v->client, &state, NULL) == CAI_OK);
+  return state.generation;
+}
+static void wire_request(wire_view *v, unsigned long long id,
+                         cai_input_operation operation, const char *text,
+                         int held, uint64_t generation) {
+  cai_cli_input_wire_message message;
+  memset(&message, 0, sizeof(message));
+  message.header.kind = CAI_PROTOCOL_REQUEST;
+  message.header.request = id;
+  message.header.conversation = v->conversation;
+  message.header.generation = generation;
+  message.request.request_id = id;
+  message.request.operation = operation;
+  message.request.text = text;
+  message.request.enabled = held;
+  message.request.item_id = v->entry.id;
+  message.request.item_revision = v->entry.revision;
+  message.request.edit_token = v->entry.edit_token;
+  wire_send(v, &message);
+}
+static void wire_reopen(wire_view *v,
+                        const cai_workspace_client_config *source) {
+  cai_workspace_client_config config = *source;
+  cai_workspace_client_close(v->client);
+  v->client = NULL;
+  cai_cli_input_wire_decoder_close(v->decoder);
+  v->decoder = NULL;
+  assert(cai_cli_input_wire_decoder_open(&v->decoder, NULL) == CAI_OK);
+  config.event = wire_event;
+  config.context = v;
+  assert(cai_workspace_client_open(&config, monotonic_ms(), &v->client, NULL) ==
+         CAI_OK);
+  socket_wait(v->client, CAI_WORKSPACE_CONNECTED);
+}
+static void wire_scenario(host *h, wire_view *a, wire_view *b,
+                          const cai_workspace_client_config *config) {
+  char *text = malloc(CAI_CLI_INPUT_TEXT_MAX + 1U);
+  unsigned long long producer;
+  uint64_t old_generation;
+  size_t results, i;
+  unsigned int storage_opens = cai_test_storage_open_count();
+  wire_view extra;
+  assert(text != NULL);
+  memset(text, 'x', CAI_CLI_INPUT_TEXT_MAX);
+  text[CAI_CLI_INPUT_TEXT_MAX] = '\0';
+  wire_bind(a, 0U, NULL);
+  wire_bind(b, 0U, NULL);
+  wire_wait(a, &a->snapshots, 1U);
+  wire_wait(b, &b->snapshots, 1U);
+  assert(a->producer != 0U && b->producer != 0U && a->producer != b->producer &&
+         a->conversation == b->conversation &&
+         strcmp(a->session, b->session) == 0);
+  old_generation = wire_generation(a);
+  wire_request(b, 1U, CAI_INPUT_OFFER, "OBSERVER MUST NEVER RUN", 0,
+               wire_generation(b));
+  wire_wait(b, &b->results, 1U);
+  assert(b->result.outcome == CAI_INPUT_REJECTED &&
+         b->result.code == CAI_ERR_INVALID);
+  wire_request(a, 1U, CAI_INPUT_OFFER, text, 1, old_generation);
+  wire_wait(a, &a->results, 1U);
+  assert(a->result.outcome == CAI_INPUT_ACCEPTED && a->entry.held);
+  wire_request(a, 2U, CAI_INPUT_BEGIN_EDIT, NULL, 0, old_generation);
+  wire_wait(a, &a->results, 2U);
+  assert(a->result.outcome == CAI_INPUT_ACCEPTED && a->entry.edit_held &&
+         a->entry.edit_token != 0U);
+  producer = a->producer;
+  cai_workspace_client_close(a->client);
+  a->client = NULL;
+  server_state(h, 1U, 0U);
+  wire_reopen(a, config);
+  wire_bind(a, producer, a->session);
+  wire_wait(a, &a->snapshots, 2U);
+  assert(a->producer == producer && a->high == 2U && a->rows == 1U &&
+         a->large_rows == 1U && a->entry.held && !a->entry.edit_held &&
+         a->entry.edit_token == 0U);
+  wire_request(a, 1U, CAI_INPUT_OFFER, "DUPLICATE MUST NEVER RUN", 0,
+               wire_generation(a));
+  wire_wait(a, &a->results, 3U);
+  assert(a->result.outcome == CAI_INPUT_ACCEPTED && a->high == 2U);
+  wire_request(a, 3U, CAI_INPUT_APPROVE, NULL, 0, old_generation);
+  wire_wait(a, &a->results, 4U);
+  assert(a->result.outcome == CAI_INPUT_REJECTED && a->entry.held);
+  wire_request(a, 3U, CAI_INPUT_APPROVE, NULL, 0, wire_generation(a));
+  wire_wait(a, &a->results, 5U);
+  assert(a->result.outcome == CAI_INPUT_REJECTED && a->entry.held);
+  wire_request(a, 4U, CAI_INPUT_APPROVE, NULL, 0, wire_generation(a));
+  wire_wait(a, &a->results, 6U);
+  assert(a->result.outcome == CAI_INPUT_ACCEPTED);
+  wait_count(h, 1, 0);
+  /* A nonreading observer must not block input or another snapshot. */
+  results = a->results;
+  for (i = 0U; i < 12U; ++i) {
+    wire_request(a, 5U + i, CAI_INPUT_OFFER, text, 1, wire_generation(a));
+    wire_wait(a, &a->results, ++results);
+    assert(a->result.outcome == CAI_INPUT_ACCEPTED);
+  }
+  memset(&extra, 0, sizeof(extra));
+  wire_reopen(&extra, config);
+  wire_bind(&extra, 999999U, a->session);
+  wire_wait(&extra, &extra.binding_errors, 1U);
+  assert(extra.result.code == CAI_ERR_INVALID && extra.snapshots == 0U);
+  wire_bind(&extra, 0U, NULL);
+  wire_wait(&extra, &extra.snapshots, 1U);
+  assert(extra.producer == b->producer + 1U && extra.rows == 12U &&
+         extra.large_rows == 12U);
+  /* Close after sending only part of a structurally valid request. Neither
+   * its provisional header nor fields may admit text to the queue. */
+  {
+    cai_protocol_header header;
+    cai_cbor_token token;
+    memset(&header, 0, sizeof(header));
+    header.kind = CAI_PROTOCOL_REQUEST;
+    header.request = 1U;
+    header.conversation = extra.conversation;
+    header.generation = wire_generation(&extra);
+    assert(cai_workspace_client_begin(extra.client, &header, 20U, 0, NULL) ==
+           CAI_OK);
+    memset(&token, 0, sizeof(token));
+    token.type = CAI_CBOR_ARRAY;
+    token.argument = 9U;
+    assert(cai_workspace_client_write(extra.client, &token, NULL) == CAI_OK);
+    assert(cai_workspace_client_pump(extra.client, monotonic_ms(), NULL) ==
+           CAI_OK);
+  }
+  cai_workspace_client_close(extra.client);
+  cai_cli_input_wire_decoder_close(extra.decoder);
+  server_state(h, 2U, ~(uint64_t)0);
+  wire_request(a, 17U, CAI_INPUT_SYNCHRONIZE, NULL, 0, wire_generation(a));
+  wire_wait(a, &a->results, results + 1U);
+  wire_wait(a, &a->snapshots, 3U);
+  assert(a->rows == 12U && a->result.outcome == CAI_INPUT_ACCEPTED);
+  assert(cai_test_storage_open_count() == storage_opens);
+  free(text);
+}
+static void socket_control(cai_workspace_client *client, uint64_t controller,
+                           uint64_t minimum_generation) {
   cai_workspace_client_state state;
   struct pollfd fd;
   uint64_t deadline, until = monotonic_ms() + 10000U;
   for (;;) {
     assert(cai_workspace_client_pump(client, monotonic_ms(), NULL) == CAI_OK);
     assert(cai_workspace_client_get_state(client, &state, NULL) == CAI_OK);
-    if (state.controller == (own ? state.attachment : 0U))
+    if (state.controller == controller &&
+        state.generation >= minimum_generation)
       break;
     assert(monotonic_ms() < until);
     assert(cai_workspace_client_prepare(client, &fd, &deadline, NULL) ==
@@ -448,7 +724,7 @@ static void server_input(host *h, cai_workspace_client *a,
            CAI_OK);
     assert(cai_app_connect_input(h->app, state.attachment, &h->input, NULL) ==
            CAI_OK);
-    value = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT, 0U);
+    value = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT_END, 0U);
     scope.conversation = value->conversation;
     scope.generation = state.generation;
     cai_input_observation_close(value);
@@ -467,6 +743,61 @@ static void server_input(host *h, cai_workspace_client *a,
   }
   wait_count(h, 1, 0);
 }
+static void server_fence(host *h, cai_workspace_client *a,
+                         cai_workspace_client *b) {
+  cai_workspace_client_state ca, cb;
+  cai_input_scope scope;
+  cai_input_request request;
+  cai_input_observation *event;
+  assert(cai_workspace_client_get_state(a, &ca, NULL) == CAI_OK);
+  assert(cai_workspace_client_get_state(b, &cb, NULL) == CAI_OK);
+  assert(cai_app_connect_input(h->app, ca.attachment, &h->input, NULL) ==
+         CAI_OK);
+  event = input_wait(h, CAI_INPUT_OBSERVATION_SNAPSHOT_END, 0U);
+  scope.conversation = event->conversation;
+  scope.generation = ca.generation;
+  cai_input_observation_close(event);
+  memset(&request, 0, sizeof(request));
+  request.operation = CAI_INPUT_OFFER;
+  request.request_id = 1U;
+  request.text = "keep accepted original";
+  request.enabled = 1;
+  assert(cai_input_connection_request(h->input, &scope, &request, NULL) ==
+         CAI_OK);
+  event = input_wait(h, CAI_INPUT_OBSERVATION_RESULT, 1U);
+  assert(event->result.outcome == CAI_INPUT_ACCEPTED);
+  request.item_id = event->result.item_id;
+  request.item_revision = event->result.item_revision;
+  cai_input_observation_close(event);
+  request.request_id = 2U;
+  request.operation = CAI_INPUT_BEGIN_EDIT;
+  request.text = NULL;
+  request.enabled = 0;
+  assert(cai_input_connection_request(h->input, &scope, &request, NULL) ==
+         CAI_OK);
+  event = input_wait(h, CAI_INPUT_OBSERVATION_RESULT, 2U);
+  assert(event->result.outcome == CAI_INPUT_ACCEPTED &&
+         event->result.edit_token != 0U);
+  cai_input_observation_close(event);
+  assert(cai_workspace_client_takeover(b, 10U, cb.generation, NULL) == CAI_OK);
+  socket_control(b, cb.attachment, cb.generation + 1U);
+  event = input_wait(h, CAI_INPUT_OBSERVATION_CHANGE, 0U);
+  assert(event->change.type == CAI_INPUT_UPSERT &&
+         !event->change.entry.edit_held &&
+         event->change.entry.edit_token == 0U && event->change.entry.held &&
+         event->change.request_id == 0U &&
+         strcmp(event->change.entry.text, "keep accepted original") == 0 &&
+         event->last_request == 2U);
+  cai_input_observation_close(event);
+  /* Restore control, without reviving an old edit token or submitting a draft.
+   */
+  assert(cai_workspace_client_get_state(b, &cb, NULL) == CAI_OK);
+  socket_control(a, cb.attachment, cb.generation);
+  assert(cai_workspace_client_takeover(a, 11U, cb.generation, NULL) == CAI_OK);
+  socket_control(a, ca.attachment, cb.generation + 1U);
+  cai_input_connection_close(h->input);
+  h->input = NULL;
+}
 static void workspace_server(int argc, char **argv, const char *mode) {
   cai_attachment_config lifetime;
   cai_workspace_client_config client_config;
@@ -474,8 +805,16 @@ static void workspace_server(int argc, char **argv, const char *mode) {
   cai_workspace_client_state connection;
   cai_app_status status;
   host h;
+  wire_view wa, wb;
+  int wire = strcmp(mode, "server_wire") == 0;
   int code, persistent = strcmp(mode, "server_persist") == 0;
   open_host(&h, mode);
+  memset(&wa, 0, sizeof(wa));
+  memset(&wb, 0, sizeof(wb));
+  if (wire) {
+    assert(cai_cli_input_wire_decoder_open(&wa.decoder, NULL) == CAI_OK);
+    assert(cai_cli_input_wire_decoder_open(&wb.decoder, NULL) == CAI_OK);
+  }
   cai_app_status_init(&status);
   cai_attachment_config_init(&lifetime);
   lifetime.persist = persistent;
@@ -493,20 +832,35 @@ static void workspace_server(int argc, char **argv, const char *mode) {
     cai_workspace_client_config_init(&client_config);
     client_config.runtime_directory = getenv("CAI_TEST_SERVER_RUNTIME");
     client_config.workspace = getenv("CAI_TEST_CONTROLLER_WORK");
+    if (wire) {
+      client_config.event = wire_event;
+      client_config.context = &wa;
+    }
     assert(cai_workspace_client_open(&client_config, monotonic_ms(), &a,
                                      NULL) == CAI_OK);
     socket_wait(a, CAI_WORKSPACE_CONNECTED);
+    wa.client = a;
     assert(cai_workspace_client_get_state(a, &connection, NULL) == CAI_OK &&
            connection.persist == persistent &&
            connection.controller == connection.attachment);
+    if (wire)
+      client_config.context = &wb;
     assert(cai_workspace_client_open(&client_config, monotonic_ms(), &b,
                                      NULL) == CAI_OK);
     socket_wait(b, CAI_WORKSPACE_CONNECTED);
+    wb.client = b;
     assert(cai_workspace_client_get_state(b, &connection, NULL) == CAI_OK &&
            connection.controller != connection.attachment);
     server_state(&h, 2U, ~(uint64_t)0);
     if (strcmp(mode, "server_input") == 0)
       server_input(&h, a, b);
+    if (strcmp(mode, "server_fence") == 0)
+      server_fence(&h, a, b);
+    if (wire) {
+      wire_scenario(&h, &wa, &wb, &client_config);
+      a = wa.client;
+      b = wb.client;
+    }
     if (strcmp(mode, "server_busy") == 0) {
       host other;
       unsigned int before = cai_test_storage_open_count();
@@ -545,11 +899,12 @@ static void workspace_server(int argc, char **argv, const char *mode) {
     }
     /* An observer keeps a nonpersistent owner alive without taking control. */
     server_state(&h, 1U, 0U);
-    socket_control(b, 0);
+    assert(cai_app_get_status(h.app, &status, NULL) == CAI_OK);
+    socket_control(b, 0, status.server.generation);
     assert(cai_workspace_client_get_state(b, &connection, NULL) == CAI_OK);
     assert(cai_workspace_client_takeover(b, 1U, connection.generation, NULL) ==
            CAI_OK);
-    socket_control(b, 1);
+    socket_control(b, connection.attachment, connection.generation + 1U);
     server_state(&h, 1U, connection.attachment);
     if (strcmp(mode, "server_abrupt") == 0) {
       cai_workspace_client_close(b);
@@ -587,6 +942,8 @@ static void workspace_server(int argc, char **argv, const char *mode) {
     assert(h.completed == 1 && h.starts == 1);
   cai_workspace_client_close(a);
   cai_workspace_client_close(b);
+  cai_cli_input_wire_decoder_close(wa.decoder);
+  cai_cli_input_wire_decoder_close(wb.decoder);
   /* Reuse the endpoint only after the runtime/store owner has been joined. */
   h.mode = "startup_stop";
   h.has_owner = h.acks = h.starts = 0;

@@ -570,6 +570,35 @@ int cai_workspace_server_stop(cai_workspace_server *server, cai_error *error) {
              ? cai_attachment_controller_stop(server->attachments, error)
              : rc;
 }
+int cai_workspace_server_pending(cai_workspace_server *server,
+                                 uint64_t attachment, size_t *out,
+                                 cai_error *error) {
+  server_peer *peer;
+  int rc = valid(server, error);
+  if (out != NULL)
+    *out = 0U;
+  if (rc != CAI_OK)
+    return rc;
+  peer = find(server, attachment);
+  if (peer == NULL || peer->failed || peer->detach || out == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "attachment output is unavailable");
+  *out = cai_wire_peer_pending(peer->wire);
+  return CAI_OK;
+}
+int cai_workspace_server_disconnect(cai_workspace_server *server,
+                                    uint64_t attachment, cai_error *error) {
+  server_peer *peer;
+  int rc = valid(server, error);
+  if (rc != CAI_OK)
+    return rc;
+  peer = find(server, attachment);
+  if (server->pumping || peer == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "detach requires a live attachment outside pump");
+  drop(peer, 1);
+  return roles(server, 0U, 0U, error);
+}
 int cai_workspace_server_begin(cai_workspace_server *server,
                                uint64_t attachment,
                                const cai_protocol_header *header,

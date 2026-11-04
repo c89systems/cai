@@ -33,9 +33,12 @@ struct cai_input_connection {
   input_message *binding_notice;
   size_t submitted, ordinary, reserved[3], message_count, message_bytes;
   unsigned long long conversation, resume_producer;
+  cai_input_state snapshot_state;
+  size_t snapshot_index;
   uint64_t attachment;
   cai_input_result binding_error;
-  int fd, wake_fd, detached, synchronized, needs_snapshot, binding_failed;
+  int fd, wake_fd, detached, synchronized, needs_snapshot, snapshot_started,
+      binding_failed;
 };
 struct cai_input_controller {
   cai_input_controller_config config;
@@ -97,12 +100,9 @@ static void free_text(const char *text) {
   cai_free_mem(NULL, owned);
 }
 void cai_input_observation_close(cai_input_observation *observation) {
-  size_t i;
   if (observation == NULL)
     return;
-  for (i = 0U; i < observation->count; ++i)
-    free_text(observation->entries[i].text);
-  cai_free_mem(NULL, observation->entries);
+  free_text(observation->entry.text);
   free_text(observation->change.entry.text);
   /* value is the first member after the private link, not separately owned. */
   cai_free_mem(NULL, (char *)observation - offsetof(input_message, value));
@@ -145,7 +145,8 @@ static void binding_failed(cai_input_connection *connection, int code,
   message = connection->binding_notice;
   connection->binding_notice = NULL;
   connection->binding_failed = 1;
-  connection->needs_snapshot = connection->synchronized = 0;
+  connection->needs_snapshot = connection->synchronized =
+      connection->snapshot_started = 0;
   connection->binding_error.outcome = CAI_INPUT_REJECTED;
   connection->binding_error.code = code;
   snprintf(connection->binding_error.reason,
@@ -156,15 +157,17 @@ static void binding_failed(cai_input_connection *connection, int code,
 }
 static void disconnect_locked(cai_input_connection *connection) {
   input_message *message;
-  if (!connection->synchronized)
+  if (!connection->synchronized && !connection->snapshot_started)
     return;
-  connection->synchronized = 0;
+  connection->synchronized = connection->snapshot_started = 0;
   message = message_new(CAI_INPUT_OBSERVATION_DISCONNECTED);
   if (message != NULL) {
     message->value.conversation = connection->conversation;
     producer_metadata(connection, &message->value);
     append_message(connection, message);
-  }
+  } else
+    binding_failed(connection, CAI_ERR_NOMEM,
+                   "input observation allocation failed");
 }
 static void observe(void *context, const cai_input_change *change) {
   cai_input_controller *controller = context;
@@ -173,9 +176,15 @@ static void observe(void *context, const cai_input_change *change) {
   for (connection = controller->connections; connection != NULL;
        connection = connection->next) {
     input_message *message;
-    if (connection->detached || connection->client == NULL ||
-        !connection->synchronized)
+    if (connection->detached || connection->client == NULL)
       continue;
+    if (!connection->synchronized) {
+      if (connection->snapshot_started) {
+        disconnect_locked(connection);
+        connection->needs_snapshot = !connection->binding_failed;
+      }
+      continue;
+    }
     if (connection->message_count >= OBSERVATIONS ||
         connection->message_bytes >=
             OBSERVATION_BYTES - sizeof(input_message) - 66049U) {
@@ -211,59 +220,86 @@ static void observe(void *context, const cai_input_change *change) {
   pthread_mutex_unlock(&controller->lock);
 }
 static int snapshot(cai_input_connection *connection, cai_error *error) {
-  input_message *message;
   cai_input_controller *controller = connection->controller;
-  size_t i;
-  int rc;
-  pthread_mutex_lock(&controller->lock);
-  rc = connection->detached;
-  pthread_mutex_unlock(&controller->lock);
-  if (rc)
-    return CAI_OK;
-  message = message_new(CAI_INPUT_OBSERVATION_SNAPSHOT);
-  if (message == NULL)
-    return cai_set_error(error, CAI_ERR_NOMEM, "copy input queue snapshot");
-  message->value.conversation = connection->conversation;
-  producer_metadata(connection, &message->value);
-  rc = cai_input_queue_get_state(controller->queue, &message->value.state,
-                                 error);
-  if (rc == CAI_OK && message->value.state.count != 0U) {
-    message->value.entries = cai_alloc(
-        NULL, message->value.state.count * sizeof(*message->value.entries));
-    if (message->value.entries == NULL)
-      rc = cai_set_error(error, CAI_ERR_NOMEM, "copy pending input entries");
-    else
-      memset(message->value.entries, 0,
-             message->value.state.count * sizeof(*message->value.entries));
-  }
-  for (i = 0U; rc == CAI_OK && i < message->value.state.count; ++i) {
-    cai_input_entry *entry = &message->value.entries[i];
-    rc = cai_input_queue_entry_at(connection->client, i, entry, error);
-    if (rc == CAI_OK) {
-      const char *text = entry->text;
-      entry->text = cai_strdup(NULL, text);
-      if (entry->text == NULL)
-        rc = cai_set_error(error, CAI_ERR_NOMEM, "copy accepted input text");
-      else {
-        ++message->value.count;
-        message->bytes += sizeof(*entry) + strlen(text) + 1U;
+  size_t budget = 4U;
+  while (budget-- != 0U) {
+    input_message *message;
+    cai_input_state current;
+    cai_input_observation_type type;
+    int full, rc;
+    pthread_mutex_lock(&controller->lock);
+    full = connection->detached || connection->binding_failed ||
+           !connection->needs_snapshot || connection->message_count >= 4U ||
+           connection->message_bytes >= 2U * 66049U;
+    pthread_mutex_unlock(&controller->lock);
+    if (full)
+      return CAI_OK;
+    rc = cai_input_queue_get_state(controller->queue, &current, error);
+    if (rc != CAI_OK)
+      return rc;
+    /* One owner serializes row reads and queue mutation. A mutation between
+     * steps aborts the old baseline through observe(), never mixing versions.
+     */
+    type = !connection->snapshot_started ? CAI_INPUT_OBSERVATION_SNAPSHOT_BEGIN
+           : connection->snapshot_index < connection->snapshot_state.count
+               ? CAI_INPUT_OBSERVATION_SNAPSHOT_ITEM
+               : CAI_INPUT_OBSERVATION_SNAPSHOT_END;
+    message = message_new(type);
+    if (message == NULL) {
+      pthread_mutex_lock(&controller->lock);
+      binding_failed(connection, CAI_ERR_NOMEM,
+                     "input snapshot allocation failed");
+      pthread_mutex_unlock(&controller->lock);
+      return CAI_OK;
+    }
+    message->value.conversation = connection->conversation;
+    producer_metadata(connection, &message->value);
+    message->value.state = current;
+    message->value.index = type == CAI_INPUT_OBSERVATION_SNAPSHOT_BEGIN
+                               ? 0U
+                               : connection->snapshot_index;
+    if (type == CAI_INPUT_OBSERVATION_SNAPSHOT_ITEM) {
+      const char *text;
+      rc = cai_input_queue_entry_at(connection->client,
+                                    connection->snapshot_index,
+                                    &message->value.entry, error);
+      text = message->value.entry.text;
+      message->value.entry.text = NULL;
+      if (rc == CAI_OK) {
+        message->value.entry.text = cai_strdup(NULL, text);
+        if (message->value.entry.text == NULL)
+          rc = cai_set_error(error, CAI_ERR_NOMEM, "copy one input entry");
+        else
+          message->bytes += strlen(text) + 1U;
+      }
+      if (rc != CAI_OK) {
+        cai_input_observation_close(&message->value);
+        if (rc == CAI_ERR_NOMEM) {
+          pthread_mutex_lock(&controller->lock);
+          binding_failed(connection, rc, "input snapshot allocation failed");
+          pthread_mutex_unlock(&controller->lock);
+          cai_error_cleanup(error);
+          return CAI_OK;
+        }
+        return rc;
       }
     }
-  }
-  if (rc == CAI_OK) {
     pthread_mutex_lock(&controller->lock);
-    /* Snapshot follows earlier receipts on this ordered connection. */
-    if (!connection->detached) {
+    if (type == CAI_INPUT_OBSERVATION_SNAPSHOT_BEGIN) {
+      connection->snapshot_state = current;
+      connection->snapshot_index = 0U;
+      connection->snapshot_started = 1;
+      connection->synchronized = 0;
+    } else if (type == CAI_INPUT_OBSERVATION_SNAPSHOT_ITEM)
+      ++connection->snapshot_index;
+    else {
       connection->synchronized = 1;
-      connection->needs_snapshot = 0;
-      append_message(connection, message);
-      message = NULL;
+      connection->needs_snapshot = connection->snapshot_started = 0;
     }
+    append_message(connection, message);
     pthread_mutex_unlock(&controller->lock);
   }
-  if (message != NULL)
-    cai_input_observation_close(&message->value);
-  return rc;
+  return CAI_OK;
 }
 int cai_input_controller_open(const cai_input_controller_config *config,
                               cai_input_controller **out, cai_error *error) {
@@ -328,6 +364,11 @@ int cai_input_controller_select(cai_input_controller *controller,
   if (queue != NULL &&
       cai_input_queue_get_state(queue, &state, error) != CAI_OK)
     return CAI_ERR_INVALID;
+  if (queue != NULL) {
+    rc = cai_input_queue_release_orphans(queue, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
   if (queue != NULL && cai_input_queue_retain(queue, error) != CAI_OK)
     return CAI_ERR_INVALID;
   if (controller->queue != NULL &&
@@ -355,9 +396,10 @@ int cai_input_controller_select(cai_input_controller *controller,
     disconnect_locked(connection);
     cai_input_queue_client_close(connection->client);
     connection->client = NULL;
-    if (connection->resume_producer != 0U && !connection->binding_failed) {
+    if ((connection->resume_producer != 0U || connection->detached) &&
+        !connection->binding_failed) {
       binding_failed(connection, CAI_ERR_INVALID,
-                     "conversation changed before producer resume");
+                     "conversation changed before input binding");
     }
     connection->conversation = controller->conversation;
     connection->needs_snapshot = !connection->binding_failed;
@@ -424,6 +466,53 @@ int cai_input_controller_connect(cai_input_controller *controller,
                                  uint64_t attachment,
                                  cai_input_connection **out, cai_error *error) {
   return connect_input(controller, attachment, 0U, 0U, out, error);
+}
+int cai_input_controller_conversation(cai_input_controller *controller,
+                                      unsigned long long *out,
+                                      cai_error *error) {
+  int available;
+  if (out != NULL)
+    *out = 0U;
+  if (controller == NULL || out == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "conversation output required");
+  pthread_mutex_lock(&controller->lock);
+  available = !controller->closed && controller->queue != NULL;
+  if (available)
+    *out = controller->conversation;
+  pthread_mutex_unlock(&controller->lock);
+  return available ? CAI_OK
+                   : cai_set_error(error, CAI_ERR_INVALID,
+                                   "no input conversation selected");
+}
+int cai_input_connection_release_edits(cai_input_connection *connection,
+                                       cai_error *error) {
+  int rc;
+  if (connection == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID, "input connection required");
+  rc = owner(connection->controller, error);
+  if (rc != CAI_OK || connection->client == NULL)
+    return rc;
+  return cai_input_queue_client_release_edits(connection->client, error);
+}
+int cai_input_controller_release_edits(cai_input_controller *controller,
+                                       uint64_t attachment, cai_error *error) {
+  cai_input_connection *connection;
+  int rc = owner(controller, error);
+  if (rc != CAI_OK)
+    return rc;
+  pthread_mutex_lock(&controller->lock);
+  connection = controller->connections;
+  pthread_mutex_unlock(&controller->lock);
+  /* Only this owner removes links. Frontend connect may prepend but cannot
+   * change these links, and callbacks never reenter this controller. */
+  for (; connection != NULL; connection = connection->next)
+    if (connection->attachment == attachment && connection->client != NULL) {
+      rc = cai_input_queue_client_release_edits(connection->client, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
+  return CAI_OK;
 }
 int cai_input_controller_resume(cai_input_controller *controller,
                                 uint64_t attachment,
@@ -633,8 +722,12 @@ int cai_input_controller_pump(cai_input_controller *controller,
           rc = CAI_OK;
         }
         if (rc == CAI_OK &&
-            submission->value.operation == CAI_INPUT_SYNCHRONIZE)
-          rc = snapshot(connection, error);
+            submission->value.operation == CAI_INPUT_SYNCHRONIZE) {
+          pthread_mutex_lock(&controller->lock);
+          disconnect_locked(connection);
+          connection->needs_snapshot = !connection->binding_failed;
+          pthread_mutex_unlock(&controller->lock);
+        }
       }
       slot = reserved(submission->value.operation);
       producer_metadata(connection, &message->value);
@@ -655,7 +748,11 @@ int cai_input_controller_pump(cai_input_controller *controller,
         return rc;
     }
     pthread_mutex_lock(&controller->lock);
-    if (connection->head != NULL)
+    if (connection->head != NULL ||
+        (connection->needs_snapshot && !connection->detached &&
+         !connection->binding_failed && connection->client != NULL &&
+         connection->message_count < 4U &&
+         connection->message_bytes < 2U * 66049U))
       signal_fd(controller->wake_fd);
     pthread_mutex_unlock(&controller->lock);
   }
@@ -700,6 +797,8 @@ int cai_input_connection_poll(cai_input_connection *connection,
         --connection->ordinary;
     }
     *out = &message->value;
+    if (!connection->controller->closed && connection->needs_snapshot)
+      signal_fd(connection->controller->wake_fd);
   }
   pthread_mutex_unlock(&connection->controller->lock);
   return CAI_OK;

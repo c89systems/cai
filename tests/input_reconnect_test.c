@@ -18,6 +18,7 @@ typedef struct frontend {
   unsigned long long conversation, producer, high;
   cai_input_result result, failure;
   size_t snapshots, results, disconnected;
+  int snapshot_active;
 } frontend;
 static int persist(void *context, const cai_input_record *record,
                    unsigned long long *position, cai_error *error) {
@@ -66,13 +67,17 @@ static void drain(frontend *f) {
       f->producer = value->producer;
       f->high = value->last_request;
     }
-    if (value->type == CAI_INPUT_OBSERVATION_SNAPSHOT) {
+    if (value->type == CAI_INPUT_OBSERVATION_SNAPSHOT_END) {
       f->conversation = value->conversation;
       ++f->snapshots;
+      f->snapshot_active = 0;
+    } else if (value->type == CAI_INPUT_OBSERVATION_SNAPSHOT_BEGIN) {
+      f->snapshot_active = 1;
     } else if (value->type == CAI_INPUT_OBSERVATION_RESULT) {
       f->result = value->result;
       ++f->results;
     } else if (value->type == CAI_INPUT_OBSERVATION_DISCONNECTED) {
+      f->snapshot_active = 0;
       f->failure = value->result;
       ++f->disconnected;
     }
@@ -94,9 +99,13 @@ static void send(frontend *f, unsigned long long id, uint64_t generation,
          CAI_OK);
 }
 static void pump(cai_input_controller *controller, frontend *f) {
-  assert(cai_input_controller_pump(controller, 32U, NULL) == CAI_OK);
-  if (f != NULL)
-    drain(f);
+  size_t steps = 0U;
+  do {
+    assert(cai_input_controller_pump(controller, 32U, NULL) == CAI_OK);
+    if (f != NULL)
+      drain(f);
+    assert(++steps < 128U);
+  } while (f != NULL && f->snapshot_active);
 }
 static void resume(cai_input_controller *controller, frontend *f,
                    uint64_t attachment, unsigned long long conversation,
