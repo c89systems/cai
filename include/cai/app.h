@@ -290,9 +290,11 @@ int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
  * work. A persistent owner runs until explicit shutdown or native STOP.
  * No fork, signal handler, terminal, or second runtime/store is created.
  * Socket identity, role, lifetime, model input and queue operations are bound.
- * Application command presentation and transcript streaming are not yet bound;
- * use native observers/control for those. Queue payloads are documented in
- * docs/workspace-wire-queue.md.
+ * Transcript subscriptions and queue payloads use the typed app_client.h
+ * binding. Application command presentation remains pending; native controls
+ * remain available. The executable owns --headless process logging/signals;
+ * native hosts call this API with an explicit lifetime instead of passing that
+ * process-mode flag to the synchronous terminal run.
  * Start success is asynchronous; observe status for readiness or failure.
  */
 int cai_app_start_server(cai_app *self, const cai_config_context *context,

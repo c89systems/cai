@@ -150,6 +150,13 @@ runtime, review, storage, and presentation contracts.
 
 ## Cai terminal agent
 
+`cai -x` / `cai --headless` runs a persistent workspace server in the foreground
+without a terminal frontend. It logs JSON to stderr with automatic color;
+normal `LOG_` overrides apply. SIGINT, SIGTERM, SIGHUP and SIGQUIT stop the owner
+cleanly. Native clients use `cai/app_client.h`; the terminal attach/autostart
+cutover remains in progress. See the [workspace specification](docs/workspace-server.md)
+for the implemented boundaries and remaining work.
+
 Agent startup requires workspace approval. On first use, run `cai -y`
 (`--yes` or `--force`) to approve the current directory and its descendants for
 this and future conversations. Approval is recorded in the conversation journal
@@ -1165,8 +1172,10 @@ jq 'select(.type == "execution") | .data | fromjson | select(.kind == "tool.fail
 ### Embedding the terminal application
 
 `libcai_app` provides the complete CAI application as a synchronous C receiver
-and optional `cai.app` Lua 5.5 module. The `cai` executable is a thin C embedding
-example. Hosts can supply settings, forwarded arguments, a raw startup banner,
+and optional `cai.app` Lua 5.5 module, plus the native terminal-free controller
+and socket client APIs. The `cai` executable owns process scaffolding;
+`examples/app.c` is the minimal public-only C embedding example.
+Hosts can supply settings, forwarded arguments, a raw startup banner,
 a Markdown introduction, custom help naming and an initialized pslog logger.
 Both startup strings default to empty in the library; CAI's scaffold supplies
 its own interactive attribution and usage text before replay. See

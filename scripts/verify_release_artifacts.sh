@@ -1120,7 +1120,7 @@ verify_application_sdk() {
   for path in include/cai/app.h lib/libcai_app.a lib/libcai_app.so \
       lib/pkgconfig/cai-app.pc lib/cmake/cai_app/cai_app-config.cmake \
       share/cai_app/dependencies.json share/doc/libcai_app/embedding.md \
-      share/doc/libcai_app/examples/main.c share/doc/libcai_app/examples/app.lua; do
+      share/doc/libcai_app/examples/app.c share/doc/libcai_app/examples/app.lua; do
     require_file "$root_dir/$path"
   done
 }
@@ -1277,7 +1277,7 @@ verify_cli_archive() {
   for doc in share/man/man1/cai.1 share/doc/libcai/README.md \
       share/doc/libcai/LICENSE share/doc/libcai/docs/model-metadata.md \
       share/doc/libcai/docs/chrome.md share/doc/libcai/docs/embedding.md \
-      share/doc/libcai/examples/main.c share/doc/libcai/examples/app.lua; do
+      share/doc/libcai/examples/app.c share/doc/libcai/examples/app.lua; do
     require_file "$root_dir/$doc"
   done
   local dependency

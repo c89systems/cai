@@ -149,6 +149,10 @@ static int cli_read_options(int argc, char *const *argv,
       options->no_config = 1;
       continue;
     }
+    if (strcmp(flag, "--headless") == 0 || strcmp(flag, "-x") == 0) {
+      options->headless = 1;
+      continue;
+    }
     if (strcmp(flag, "--yes") == 0 || strcmp(flag, "--force") == 0 ||
         strcmp(flag, "-y") == 0) {
       options->force = 1;
@@ -352,6 +356,8 @@ static int cli_read_options(int argc, char *const *argv,
           options->insecure = 1;
         else if (flag[j] == 'y')
           options->force = 1;
+        else if (flag[j] == 'x')
+          options->headless = 1;
         else if (flag[j + 1U] == '\0' &&
                  cai_cli_short_value_option(flag) != 0) {
           short_flag[0] = '-';
@@ -715,6 +721,18 @@ int cai_cli_read_options(int argc, char *const *argv,
 int cai_cli_validate_options(cai_cli_options *options) {
   static const char *const providers[] = {"chatgpt", "openai", "openrouter",
                                           "berget",  "custom", NULL};
+  if (options->headless &&
+      (options->non_interactive || options->review || options->review_and_fix ||
+       options->list || options->resume_list || options->delete_list ||
+       options->delete_id != NULL || options->login || options->chrome_setup ||
+       options->chrome_remove || options->export_id != NULL ||
+       options->import_file != NULL || options->install_skill != NULL ||
+       options->message != NULL)) {
+    cai_cli_option_error(options,
+                         "--headless cannot be combined with batch, review "
+                         "or utility modes");
+    return -1;
+  }
   if (options->export_out != NULL && options->export_id == NULL) {
     cai_cli_option_error(options, "--export-out requires --export ID");
     return -1;

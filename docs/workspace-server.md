@@ -31,9 +31,8 @@ and isolates disconnected/slow subscribers. It has no worker or renderer.
 The matching socket client (`workspace_client.h`) verifies the complete welcome,
 tracks instance/role/generation, streams provisional payloads and performs
 explicit takeover, shutdown and detach without owning stores or starting a
-process. The application controller/frontend cutover, Softline client adapter
-and headless/attach CLI are still pending; these core components alone do not
-enable those CLI modes.
+process. Controller/frontend composition, automatic startup and the attach
+CLI remain pending. Explicit foreground headless startup is implemented below.
 
 The application receiver now also provides `cai_app_start`/`cai_app_join`: an
 asynchronous terminal-free owner using the shared startup, runtime, durable
@@ -67,8 +66,30 @@ model input through the same backend producers and receipts. Snapshot production
 is incremental and credit-bound; it never copies a whole pending queue.
 Disconnect/takeover releases editor holds through durable controller-origin
 records, without changing request IDs or accepted text. New owners release
-orphaned edits before queue selection. Command presentation,
-the headless/autostart executable and terminal client cutover are still pending.
+orphaned edits before queue selection. Command presentation, automatic process
+startup and the terminal client cutover are still pending.
+
+The executable now implements `-x` / `--headless` over this public lifecycle.
+It starts a persistent workspace owner with no terminal frontend, emits JSON
+through libpslog to stderr by default, and uses automatic color detection.
+Process-environment `LOG_` overrides retain their normal meaning. A `workspace_ready` record is
+emitted only after runtime restoration and listener readiness; the final
+`workspace_stopped` record carries the exit code and stop signal. SIGINT,
+SIGTERM, SIGHUP and SIGQUIT request orderly native STOP, including during
+startup, inference or a foreground command. A nonblocking signal pipe and
+status descriptor drive the process loop without idle polling or a signal
+worker. The owner thread
+inherits blocked stop signals; only the executable's loop handles them.
+Executed command/plugin children clear that inherited mask and restore normal
+stop, pipe and job-control dispositions immediately before execution. The
+parent's masks and handlers remain unchanged.
+Standard input is unused. Graceful/abrupt client departure does not stop this
+persistent owner. Explicit socket shutdown does. Duplicate ownership fails
+before opening another runtime/store, and utility/help modes never spawn one.
+Process scaffolding is separate from `examples/app.c`, the public-only SDK
+embedding example. Native application startup does not fork a server or install
+these handlers. The application SDK still links its terminal dependencies;
+optional frontend packaging remains pending.
 
 `cai/app_client.h` now provides the application-side typed queue client over
 that socket. It validates incremental baselines and change revisions, delivers
@@ -99,7 +120,8 @@ native bounded windows, direct committed live notifications, explicit cursors,
 history-change invalidation and bounded independent subscribers. The public
 application client delivers borrowed chunks without collecting complete events.
 Default tail/visibility selection and the terminal presentation adapter remain
-pending; this does not yet enable the headless/attach executable modes.
+pending. Foreground headless startup uses the native controller; automatic
+terminal discovery/attachment remains pending.
 
 The existing terminal path now shares a frontend-owned Softline/libmdf presenter
 for documents, tool styling, timestamps, prompt markers, geometry and theme

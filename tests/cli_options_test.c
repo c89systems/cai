@@ -93,8 +93,35 @@ static int config_option_precedence(void) {
   return 0;
 }
 
+static int headless_options(void) {
+  cai_cli_options options;
+  static char program[] = "cai", short_flag[] = "-x",
+              long_flag[] = "--headless";
+  static char group[] = "-xkN", instruction[] = "-i", goal[] = "-g";
+  static char text[] = "task", help[] = "--help", batch[] = "-n";
+  char *short_args[] = {program, short_flag};
+  char *long_args[] = {program, long_flag};
+  char *group_args[] = {program, group, instruction, text};
+  char *value_args[] = {program, instruction, long_flag, goal, short_flag};
+  char *help_args[] = {program, short_flag, help};
+  char *batch_args[] = {program, long_flag, batch, instruction, text};
+  if (cai_cli_parse_options(2, short_args, &options) != 1 ||
+      !options.headless || cai_cli_parse_options(2, long_args, &options) != 1 ||
+      !options.headless ||
+      cai_cli_parse_options(4, group_args, &options) != 1 ||
+      !options.headless || !options.insecure || !options.new_session ||
+      cai_cli_instruction_at(&options, 0U) != text ||
+      cai_cli_read_options(5, value_args, NULL, &options) != 1 ||
+      options.headless || options.goal != short_flag ||
+      cai_cli_instruction_at(&options, 0U) != long_flag ||
+      cai_cli_read_options(3, help_args, NULL, &options) != 0 ||
+      !options.help || cai_cli_parse_options(5, batch_args, &options) != -1)
+    return 1;
+  return 0;
+}
+
 static int short_argument_options(void) {
-  static const char *const invalid[] = {"", "-", "--", "-x", "-Nq"};
+  static const char *const invalid[] = {"", "-", "--", "-z", "-Nq"};
   char program[] = "cai";
   char *args[2];
   cai_cli_options options;
@@ -728,8 +755,9 @@ int main(void) {
       cai_cli_parse_options(3, invalid_legacy_instructions, &options) != -1 ||
       cai_cli_parse_options(3, invalid_legacy_workspace, &options) != -1)
     return 1;
-  return value_option_instructions() || config_option_precedence() ||
-         replay_options() || resume_alias_options() || delete_options() ||
+  return headless_options() || value_option_instructions() ||
+         config_option_precedence() || replay_options() ||
+         resume_alias_options() || delete_options() ||
          short_argument_options() || grouped_value_options() ||
          help_columns() || shell_options() || storage_options() ||
          tool_options() || capture_options() || messaging_options();

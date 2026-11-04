@@ -8,7 +8,8 @@ with both glibc and musl. The standalone `cai` binary ships for all three Linux
 architectures as a static musl executable, built alongside its matching SDK.
 
 Build with `CAI_BUILD_APP=ON`; `CAI_BUILD_CLI=ON` also selects it. The `cai`
-executable is the small C embedding example in `cli/main.c`. Install the
+executable owns process scaffolding in `cli/main.c` and `cli/process.c`;
+`examples/app.c` is the minimal public-only C embedding example. Install the
 `cai-app` component alongside its separately installed core/dependency SDKs.
 Use `find_package(cai_app CONFIG REQUIRED)` and `cai::app_static` or
 `cai::app_shared`, or pkg-config `cai-app`. The application shared library has
@@ -211,7 +212,8 @@ its known fields, and split large/unknown-length values into chunk records.
 `<cai/workspace.h>` derives a canonical workspace identity and private endpoint,
 owns its native listener lock, validates peer credentials and reclaims stale
 sockets after a crash. Discovery never opens conversation storage. These are
-transport primitives, not the completed attach/headless CLI. The lifecycle,
+transport primitives; the attach/autostart CLI remains pending. Foreground
+`cai -x` uses the native controller described below. The lifecycle,
 roles and persistence cutover is specified in
 [workspace-server.md](workspace-server.md).
 
@@ -264,6 +266,18 @@ it only at the validated end. Disconnect/takeover releases edits durably,
 without advancing request IDs or replacing accepted text. Recovery releases
 orphaned edits before selecting the queue. Application command presentation
 remains pending. This API does not fork or install signals.
+
+`cai -x` / `cai --headless` is the standalone process composition of this API,
+with `persist = true`, default JSON logging to stderr and automatic color.
+SIGINT, SIGTERM, SIGHUP and SIGQUIT request native STOP and join the owner;
+stdin and terminal rendering are unused. Readiness and termination have
+structured `workspace_ready` / `workspace_stopped` records. A disconnected
+frontend leaves this explicit server running. Native embedding uses
+`cai_app_start_server` and the host's own lifecycle/logger, rather than passing
+the executable-only `--headless` mode to the synchronous terminal `run`.
+The current application SDK still links Softline/libmdf; separating optional
+frontend packages is part of the remaining cutover. Core libcai remains
+independent of those dependencies.
 
 `<cai/app_client.h>` is the typed socket-side queue interface in libcai_app.
 Open it with explicit runtime/workspace paths and service its single descriptor
@@ -631,7 +645,7 @@ that logger's records for interactive notices. Use a terminal-compatible sink.
 
 `banner` and `introduction_markdown` default to NULL in C and are unset by
 default in Lua. The host supplies both; CAI's own name, attribution and usage
-text are configured only by `cli/main.c`. The optional raw banner is printed
+text are configured by the executable or the public C example. The optional raw banner is printed
 verbatim before softline/libmdf starts: all newlines belong in the host's banner
 string. CAI's scaffold begins its banner on the first output line and ends it
 with `\n\n` to separate the introduction. The optional Markdown introduction

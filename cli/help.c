@@ -3,6 +3,9 @@
 #include <string.h>
 
 static const cai_app_option options[] = {
+    {"--headless", 'x', CAI_APP_FLAG, NULL,
+     "Run a persistent workspace server in the foreground (executable mode)", 0,
+     0},
     {"--utc", '\0', CAI_APP_FLAG, NULL,
      "Show DTG timestamps in UTC instead of local time", 0, 1},
     {"--plugins", '\0', CAI_APP_FLAG, NULL,

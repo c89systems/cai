@@ -71,6 +71,15 @@
       softline::softline_static libmdf::mdf_static)
     cai_configure_cli_target(cai_cli_geometry_test)
     add_test(NAME cai_cli_geometry COMMAND cai_cli_geometry_test)
+    add_executable(cai_cli_headless_client_test tests/headless_client_test.c)
+    target_link_libraries(cai_cli_headless_client_test PRIVATE cai_app_static)
+    target_link_options(cai_cli_headless_client_test PRIVATE -Wl,--wrap=lc_client_open)
+    cai_configure_cli_target(cai_cli_headless_client_test)
+    target_compile_options(cai_cli_headless_client_test PRIVATE -UNDEBUG)
+    add_test(NAME cai_cli_headless COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_headless_test.sh"
+      "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_cli_headless_client_test>")
+    set_tests_properties(cai_cli_headless PROPERTIES TIMEOUT 45)
     add_executable(cai_cli_tool_result_test tests/cli_tool_result_test.c)
     target_link_libraries(cai_cli_tool_result_test PRIVATE cai_cli_support)
     cai_configure_cli_target(cai_cli_tool_result_test)

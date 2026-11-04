@@ -28,6 +28,15 @@ Use
 to start a new session.
 .SH OPTIONS
 .TP
+.BR \-x , " " \-\-headless
+Start this workspace's persistent server in the foreground, without a terminal
+frontend. JSON logs use stderr and automatic color by default; normal LOG_
+overrides apply. SIGINT, SIGTERM, SIGHUP and SIGQUIT request orderly shutdown.
+Standard input is unused. Client departure leaves this explicit server running;
+an explicit socket shutdown also stops it. Duplicate ownership fails without
+opening another runtime. The terminal attach/autostart cutover remains in progress.
+Native embedding uses cai_app_start_server, not this executable process mode.
+.TP
 .BI \-\-status-fields " FIELDS"
 Colon-separated status fields, default model:ctx:dir:branch:weekly:crd:yolo:goal.
 The Git branch follows the directory and is omitted when unavailable, including

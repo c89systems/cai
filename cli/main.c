@@ -1,4 +1,7 @@
-/* Minimal C embedding example: all CAI behavior lives in libcai_app. */
+/* Standalone process scaffolding. Native embedding uses public lifecycle
+ * APIs directly; examples/app.c remains the minimal public-only example. */
+#include "options.h"
+#include "process.h"
 #include <cai/app.h>
 #include <pslog.h>
 #include <stdio.h>
@@ -10,6 +13,7 @@ int main(int argc, char **argv) {
   cai_app_config config;
   cai_app *app = NULL;
   cai_error error;
+  cai_cli_options options;
   int code = 1;
   int rc;
   cai_app_config_init(&config);
@@ -28,10 +32,17 @@ int main(int argc, char **argv) {
       "for "
       "options.\n";
   cai_error_init(&error);
-  rc = cai_app_open(&config, &app, &error);
-  if (rc == CAI_OK)
-    rc =
-        app->run(app, argc - 1, (const char *const *)(argv + 1), &code, &error);
+  /* Reuse the primary parser so a value such as -i '--headless' cannot
+   * accidentally select a process mode. Help/version/dump remain utilities. */
+  if (cai_cli_read_options(argc, argv, NULL, &options) > 0 && options.headless)
+    rc = cai_cli_headless_run(&config, argc - 1,
+                              (const char *const *)(argv + 1), &code, &error);
+  else {
+    rc = cai_app_open(&config, &app, &error);
+    if (rc == CAI_OK)
+      rc = app->run(app, argc - 1, (const char *const *)(argv + 1), &code,
+                    &error);
+  }
   if (rc != CAI_OK) {
     pslog_config logging;
     pslog_logger *logger;

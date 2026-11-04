@@ -69,7 +69,7 @@ files=(
   docs/patch-tool.md
   docs/plugins.md
   examples/app.lua
-  cli/main.c
+  examples/app.c
   cai.rockspec.in
   scripts/build_lua_rock.sh
   scripts/render_release_rockspec.sh

@@ -932,7 +932,7 @@ if(CAI_BUILD_APP)
 endif()
 
 if(CAI_BUILD_CLI)
-  add_executable(cai_cli cli/main.c)
+  add_executable(cai_cli cli/main.c cli/process.c)
   set_target_properties(cai_cli PROPERTIES OUTPUT_NAME cai)
   if(CAI_TARGET_ID MATCHES "-linux-musl$")
     set_target_properties(cai_cli PROPERTIES SKIP_BUILD_RPATH ON)
@@ -968,7 +968,7 @@ if(CAI_BUILD_CLI)
       "${CMAKE_CURRENT_SOURCE_DIR}/docs/journal.md"
       DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/docs"
       COMPONENT cai-cli EXCLUDE_FROM_ALL)
-    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cli/main.c"
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/app.c"
       "${CMAKE_CURRENT_SOURCE_DIR}/examples/app.lua"
       DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/examples"
       COMPONENT cai-cli EXCLUDE_FROM_ALL)

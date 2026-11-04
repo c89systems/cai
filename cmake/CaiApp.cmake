@@ -319,7 +319,7 @@ if(CAI_INSTALL)
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/kanban.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai_app" COMPONENT cai-app)
-  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cli/main.c"
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/app.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/examples/app.lua"
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai_app/examples" COMPONENT cai-app)
 endif()

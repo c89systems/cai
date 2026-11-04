@@ -5652,6 +5652,12 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   parsed =
       cai_cli_configure_at(argc, argv, &state->options, &state->configuration,
                            application, startup, &error);
+  if (parsed > 0 && state->options.headless && server == NULL) {
+    cai_cli_error(&error, CAI_ERR_INVALID,
+                  "--headless is an executable process mode; native hosts "
+                  "must use cai_app_start_server");
+    parsed = -1;
+  }
   /* Process installation belongs to this legacy synchronous receiver, whose
    * wrapper owns/restores process resources. Configuration resolution itself
    * is reusable by an independent controller without mutating its host. */
