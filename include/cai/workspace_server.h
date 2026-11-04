@@ -11,8 +11,6 @@ extern "C" {
 #endif
 
 typedef struct cai_workspace_server cai_workspace_server;
-#define CAI_WORKSPACE_SCHEMA "cai.workspace"
-#define CAI_WORKSPACE_INSTANCE_BYTES 16U
 #define CAI_WORKSPACE_SERVER_FDS (CAI_ATTACHMENT_LIMIT + 1U)
 typedef enum cai_workspace_server_event_type {
   CAI_WORKSPACE_ATTACHED = 0,
@@ -83,6 +81,8 @@ int cai_workspace_server_stop(cai_workspace_server *server, cai_error *error);
 /** Stream one output record to a connected attachment. begin replaces the
  * attachment/generation metadata with server-owned values. Known bounded
  * payload sizes must come from fields/chunks, never a sizing serialization.
+ * pump may flush a partial record. Role notifications wait until end, in a
+ * bounded queue; overflow disconnects only this subscriber.
  * Failure invalidates this subscriber; pump disconnects it. Other peers and
  * accepted work remain independent. */
 int cai_workspace_server_begin(cai_workspace_server *server,

@@ -7,13 +7,19 @@
 #include <string.h>
 #include <unistd.h>
 
+#define ROLE_NOTICES 16U
+typedef struct role_notice {
+  uint64_t generation, controller, request;
+} role_notice;
 typedef struct server_peer {
   struct cai_workspace_server *server;
   cai_wire_peer *wire;
   cai_protocol_decoder *protocol;
   uint64_t attachment, deadline;
   size_t part, offset;
-  int greeted, detach, failed;
+  role_notice notices[ROLE_NOTICES];
+  size_t notice_head, notice_count;
+  int greeted, detach, failed, writing;
 } server_peer;
 struct cai_workspace_server {
   cai_workspace_server_config config;
@@ -125,6 +131,54 @@ static int welcome(server_peer *peer, cai_error *error) {
     rc = cai_protocol_peer_end(peer->wire, error);
   return rc;
 }
+static int send_role(server_peer *peer, uint64_t generation,
+                     uint64_t controller, uint64_t request, cai_error *error) {
+  cai_protocol_header header;
+  int rc;
+  memset(&header, 0, sizeof(header));
+  header.kind = CAI_PROTOCOL_ROLE;
+  header.attachment = peer->attachment;
+  header.generation = generation;
+  header.request = request;
+  rc = cai_protocol_peer_begin(peer->wire, &header, integer_size(controller),
+                               error);
+  if (rc == CAI_OK)
+    rc = write_token(peer, CAI_CBOR_UINT, controller, NULL, 0U, error);
+  if (rc == CAI_OK)
+    rc = cai_protocol_peer_end(peer->wire, error);
+  return rc;
+}
+static int defer_role(server_peer *peer, uint64_t generation,
+                      uint64_t controller, uint64_t request, cai_error *error) {
+  role_notice *notice;
+  size_t slot = (peer->notice_head + peer->notice_count) % ROLE_NOTICES;
+  if (request == 0U && peer->notice_count != 0U &&
+      peer->notices[(slot + ROLE_NOTICES - 1U) % ROLE_NOTICES].request == 0U)
+    slot = (slot + ROLE_NOTICES - 1U) % ROLE_NOTICES;
+  else {
+    if (peer->notice_count == ROLE_NOTICES)
+      return cai_set_error(error, CAI_ERR_LIMIT,
+                           "workspace subscriber control backlog exceeded");
+    ++peer->notice_count;
+  }
+  notice = &peer->notices[slot];
+  notice->generation = generation;
+  notice->controller = controller;
+  notice->request = request;
+  return CAI_OK;
+}
+static int drain_roles(server_peer *peer, cai_error *error) {
+  while (peer->notice_count != 0U) {
+    const role_notice *notice = &peer->notices[peer->notice_head];
+    int rc = send_role(peer, notice->generation, notice->controller,
+                       notice->request, error);
+    if (rc != CAI_OK)
+      return rc;
+    peer->notice_head = (peer->notice_head + 1U) % ROLE_NOTICES;
+    --peer->notice_count;
+  }
+  return CAI_OK;
+}
 static int roles(cai_workspace_server *server, uint64_t requester,
                  uint64_t request, cai_error *error) {
   cai_attachment_state state;
@@ -135,24 +189,17 @@ static int roles(cai_workspace_server *server, uint64_t requester,
     return rc;
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
     server_peer *peer = &server->peers[i];
-    cai_protocol_header header;
     cai_error local;
     int sent;
     if (peer->attachment == 0U || peer->failed || peer->detach)
       continue;
-    memset(&header, 0, sizeof(header));
-    header.kind = CAI_PROTOCOL_ROLE;
-    header.attachment = peer->attachment;
-    header.generation = state.generation;
-    header.request = peer->attachment == requester ? request : 0U;
     cai_error_init(&local);
-    sent = cai_protocol_peer_begin(peer->wire, &header,
-                                   integer_size(state.controller), &local);
-    if (sent == CAI_OK)
-      sent =
-          write_token(peer, CAI_CBOR_UINT, state.controller, NULL, 0U, &local);
-    if (sent == CAI_OK)
-      sent = cai_protocol_peer_end(peer->wire, &local);
+    sent =
+        peer->writing
+            ? defer_role(peer, state.generation, state.controller,
+                         peer->attachment == requester ? request : 0U, &local)
+            : send_role(peer, state.generation, state.controller,
+                        peer->attachment == requester ? request : 0U, &local);
     if (sent != CAI_OK)
       failed(peer, sent, &local);
     cai_error_cleanup(&local);
@@ -269,8 +316,16 @@ static int receive(void *context, const cai_protocol_event *event,
         peer->detach = 1;
       else if (header->kind == CAI_PROTOCOL_TAKEOVER) {
         uint64_t generation;
-        int rc = cai_attachment_controller_takeover(
-            server->attachments, peer->attachment, &generation, error);
+        cai_attachment_state state;
+        int rc = cai_attachment_controller_get_state(server->attachments,
+                                                     &state, error);
+        if (rc == CAI_OK && header->generation != state.generation)
+          rc = cai_set_error(
+              error, CAI_ERR_INVALID,
+              "takeover generation is stale; synchronize before retrying");
+        if (rc == CAI_OK)
+          rc = cai_attachment_controller_takeover(
+              server->attachments, peer->attachment, &generation, error);
         if (rc == CAI_OK)
           rc = roles(server, peer->attachment, header->request, error);
         return rc;
@@ -526,7 +581,8 @@ int cai_workspace_server_begin(cai_workspace_server *server,
   if (rc != CAI_OK)
     return rc;
   peer = find(server, attachment);
-  if (peer == NULL || peer->failed || peer->detach || header == NULL)
+  if (peer == NULL || peer->failed || peer->detach || peer->writing ||
+      header == NULL)
     return cai_set_error(error, CAI_ERR_INVALID, "attachment is not writable");
   rc = cai_attachment_controller_get_state(server->attachments, &state, error);
   if (rc == CAI_OK) {
@@ -534,6 +590,8 @@ int cai_workspace_server_begin(cai_workspace_server *server,
     copy.attachment = attachment;
     copy.generation = state.generation;
     rc = cai_protocol_peer_begin(peer->wire, &copy, length, error);
+    if (rc == CAI_OK)
+      peer->writing = 1;
     if (rc != CAI_OK)
       failed(peer, rc, error);
   }
@@ -547,7 +605,7 @@ int cai_workspace_server_write(cai_workspace_server *server,
   if (rc != CAI_OK)
     return rc;
   peer = find(server, attachment);
-  if (peer == NULL || peer->failed || peer->detach)
+  if (peer == NULL || peer->failed || peer->detach || !peer->writing)
     return cai_set_error(error, CAI_ERR_INVALID, "attachment is not writable");
   rc = cai_wire_peer_write(peer->wire, token, error);
   if (rc != CAI_OK)
@@ -561,9 +619,13 @@ int cai_workspace_server_end(cai_workspace_server *server, uint64_t attachment,
   if (rc != CAI_OK)
     return rc;
   peer = find(server, attachment);
-  if (peer == NULL || peer->failed || peer->detach)
+  if (peer == NULL || peer->failed || peer->detach || !peer->writing)
     return cai_set_error(error, CAI_ERR_INVALID, "attachment is not writable");
   rc = cai_protocol_peer_end(peer->wire, error);
+  if (rc == CAI_OK) {
+    peer->writing = 0;
+    rc = drain_roles(peer, error);
+  }
   if (rc != CAI_OK)
     failed(peer, rc, error);
   return rc;

@@ -8,6 +8,9 @@
 extern "C" {
 #endif
 
+#define CAI_WORKSPACE_SCHEMA "cai.workspace"
+#define CAI_WORKSPACE_INSTANCE_BYTES 16U
+
 typedef enum cai_protocol_kind {
   CAI_PROTOCOL_HELLO = 0,
   CAI_PROTOCOL_WELCOME,

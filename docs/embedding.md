@@ -215,6 +215,14 @@ transport primitives, not the completed attach/headless CLI. The lifecycle,
 roles and persistence cutover is specified in
 [workspace-server.md](workspace-server.md).
 
+`<cai/workspace_server.h>` and `<cai/workspace_client.h>` bind those primitives
+to owner-loop attachments without a runtime, renderer or worker. The client
+validates the complete welcome identity and initial role, exposes poll
+interests, and streams provisional payloads without gathering them. Requests
+retain their original authority generation. Explicit detach drains pending
+output without waiting for server shutdown; close releases immediately. The
+executable must coordinate autostart, reconnect reconciliation and shutdown.
+
 Lua `runtime:pending_input()` returns an owner-thread attachment with `state()`,
 one-based `entry(index)`, `request(table)`, `set_ready(index, boolean)`,
 `claim(index)` and `close()`. Requests use operation names such as `offer`,

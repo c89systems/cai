@@ -28,8 +28,12 @@ MCP discovery/refresh workers retain their own view for credential lookup.
 The owner-loop workspace host (`workspace_server.h`) now binds those components
 to actual Unix connections, validates greetings incrementally, publishes roles
 and isolates disconnected/slow subscribers. It has no worker or renderer.
-The application controller/frontend cutover, client adapter and headless/attach
-CLI are still pending; these core components alone do not enable those CLI modes.
+The matching socket client (`workspace_client.h`) verifies the complete welcome,
+tracks instance/role/generation, streams provisional payloads and performs
+explicit takeover, shutdown and detach without owning stores or starting a
+process. The application controller/frontend cutover, Softline client adapter
+and headless/attach CLI are still pending; these core components alone do not
+enable those CLI modes.
 
 ## Confirmed product decisions
 
@@ -88,10 +92,13 @@ callbacks. Detach releases attachment resources, then evaluates last-client
 lifetime: a nonpersistent server stops after its last client leaves; a
 persistent server continues. An initial readiness/attachment grace period
 allows an automatically launched server to receive its first client. Failure
-to attach must not leave a nonpersistent server running indefinitely. Once
-last-client shutdown begins, a racing attachment receives a stopping response
-and retries discovery after the old owner releases its endpoint; it does not
-revive a partially stopped runtime.
+to attach must not leave a nonpersistent server running indefinitely. If
+an autostarting client quits before READY, its startup cancellation channel
+must also stop the server it launched; disconnecting an incomplete handshake
+alone is insufficient. An SDK client must never kill an unrelated owner.
+Once last-client shutdown begins, a racing attachment receives a stopping
+response and retries discovery after the old owner releases its endpoint; it
+does not revive a partially stopped runtime.
 
 All same-root store contexts reuse their liblockdc client and retain it for
 their actual lifetime. A frontend neither opens another writer nor renews a
@@ -234,12 +241,19 @@ than treating an old attachment/generation as valid after restart.
 Client `DETACH`, `TAKEOVER` and `SHUTDOWN` require null payloads and zero
 conversation/sequence/stream metadata. The actual connection identity must
 match the attachment header; the header can never impersonate another client.
-`TAKEOVER` explicitly changes control and broadcasts the new role/generation;
+`TAKEOVER` checks the original generation at admission, then explicitly changes
+control and broadcasts the new role/generation;
 `SHUTDOWN` additionally requires current controlling authority. These controls
 take effect only after validated record completion. `REQUEST` and
 `SYNCHRONIZE` payloads remain incremental application callbacks; applications
 must classify mutations, validate payloads and recheck authority at actual
 admission. A COMPLETE callback is still not a durable acceptance receipt.
+
+The socket client has no default connection/greeting deadline: restoration can
+take time while its owner loop remains responsive. Hosts can configure an
+explicit timeout. It preserves the caller's original request generation rather
+than refreshing pending mutations after control returns. Reconnection, instance
+reconciliation and process startup remain explicit host responsibilities.
 
 The owner uses the host's poll interests and absolute monotonic deadline,
 calling a bounded nonblocking pump after readiness or timer expiry. There are
@@ -247,6 +261,10 @@ no per-connection workers or idle timers when no deadline exists. A subscriber
 that exceeds its bounded output backlog is disconnected, without blocking
 other attachments or cancelling accepted runtime work. The application must
 finish orderly worker/storage shutdown before closing endpoint ownership.
+An open outgoing record may be flushed before its producer finishes. Role
+notifications wait behind that record in a fixed queue of 16 small snapshots;
+only consecutive broadcasts may coalesce, never request acknowledgements.
+Overflow disconnects that subscriber. No payload accumulator is introduced.
 
 Use the [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949.html) data model with
 a deliberately small profile: unsigned and
