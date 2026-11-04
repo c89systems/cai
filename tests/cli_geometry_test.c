@@ -16,7 +16,8 @@ static struct winsize geometry;
 static int geometry_error, reconcile_error, reconciles, writes;
 static char capture[8192];
 static size_t captured;
-static int capturing;
+static int capturing, write_error;
+static size_t emitted;
 int __wrap_ioctl(int fd, unsigned long request, ...);
 int __wrap_ioctl(int fd, unsigned long request, ...) {
   va_list arguments;
@@ -40,6 +41,9 @@ int __wrap_sl_output_stream_write(sl_t *sl, const char *bytes, size_t count) {
   (void)sl;
   (void)bytes;
   (void)count;
+  if (write_error)
+    return SL_ERROR_IO;
+  emitted += count;
   if (capturing) {
     if (count >= sizeof(capture) - captured)
       return SL_ERROR_IO;
@@ -50,11 +54,6 @@ int __wrap_sl_output_stream_write(sl_t *sl, const char *bytes, size_t count) {
   writes++;
   return SL_OK;
 }
-int __wrap_sl_output_stream_write_quoted_prompt(sl_t *sl, const char *text);
-int __wrap_sl_output_stream_write_quoted_prompt(sl_t *sl, const char *text) {
-  return __wrap_sl_output_stream_write(sl, text, strlen(text));
-}
-
 #define CHECK(condition)                                                       \
   do {                                                                         \
     if (!(condition)) {                                                        \
@@ -108,7 +107,63 @@ static int geometry_cases(void) {
         writes == 7);
   reconcile_error = 0;
   CHECK(cai_cli_presenter_prompt(&state, "prompt") == 0 && reconciles == 7 &&
-        writes == 8);
+        writes > 7);
+  cai_cli_presenter_close(&state);
+  return 0;
+}
+
+static int prompt_cases(void) {
+  static const char text[] =
+      "Literal **stars** _path_ `code` [name](url) <tag> &amp; \\path\n"
+      "café λ 🚀\n\nlast \033[2J \xc2\x9b invalid \xff \xe2\x82";
+  cai_cli_presenter *state = calloc(1U, sizeof(*state));
+  sl_t *editor = sl_create();
+  char reference[sizeof(capture)];
+  char *long_text = malloc(65537U);
+  size_t before;
+  CHECK(state != NULL && editor != NULL && long_text != NULL);
+  state->sl = editor;
+  state->interactive = 1;
+  state->width = 80;
+  CHECK(cai_cli_theme_parse("plain", &state->theme) == NULL);
+  state->render_theme = state->theme;
+  CHECK(sl_set_buffer(editor, "Untouched draft") == SL_OK);
+  capturing = 1;
+  captured = 0U;
+  capture[0] = '\0';
+  CHECK(cai_cli_presenter_prompt(state, text) == 0);
+  CHECK(strstr(capture, "  > Literal **stars** _path_ `code` [name](url)") !=
+        NULL);
+  CHECK(strstr(capture, "café λ 🚀") != NULL &&
+        strchr(capture, '\033') == NULL);
+  CHECK(strstr(capture, "invalid ? ??") != NULL);
+  memcpy(reference, capture, captured + 1U);
+  captured = 0U;
+  capture[0] = '\0';
+  state->feed_breaks = state->block_spacing_pending = 0;
+  CHECK(cai_cli_presenter_prompt(state, text) == 0 &&
+        strcmp(capture, reference) == 0);
+  before = captured;
+  CHECK(cai_cli_presenter_prompt(state, "") == 0 && captured == before);
+  write_error = 1;
+  CHECK(cai_cli_presenter_prompt(state, "failed write") == -1);
+  write_error = 0;
+  CHECK(cai_cli_presenter_prompt(state, "recovered") == 0);
+  CHECK(strstr(capture, "  > recovered") != NULL);
+  /* Native accepted input is already available as a complete string. This
+   * checks long literal rendering, not bounded remote streaming: libmdf
+   * currently retains this whole word before rendering it. */
+  capturing = 0;
+  memset(long_text, 'x', 65536U);
+  long_text[65536U] = '\0';
+  before = emitted;
+  CHECK(cai_cli_presenter_prompt(state, long_text) == 0 &&
+        emitted > before + 65536U);
+  CHECK(strcmp(sl_buffer(editor), "Untouched draft") == 0);
+  cai_cli_presenter_close(state);
+  sl_destroy(editor);
+  free(long_text);
+  free(state);
   return 0;
 }
 /* Real libmdf/Softline resources, independently of libcai_app and storage.
@@ -155,6 +210,8 @@ static int presenter_lifecycle(void) {
 static void *run(void *context) {
   int *result = context;
   *result = geometry_cases();
+  if (*result == 0)
+    *result = prompt_cases();
   if (*result == 0)
     *result = presenter_lifecycle();
   return NULL;

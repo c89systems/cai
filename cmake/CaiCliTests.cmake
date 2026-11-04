@@ -66,8 +66,7 @@
     add_executable(cai_cli_geometry_test tests/cli_geometry_test.c
       cli/softline_presenter.c cli/literal.c cli/reasoning.c cli/theme.c cli/error.c)
     target_link_options(cai_cli_geometry_test PRIVATE -Wl,--wrap=ioctl
-      -Wl,--wrap=sl_output_stream_reconcile -Wl,--wrap=sl_output_stream_write
-      -Wl,--wrap=sl_output_stream_write_quoted_prompt)
+      -Wl,--wrap=sl_output_stream_reconcile -Wl,--wrap=sl_output_stream_write)
     target_link_libraries(cai_cli_geometry_test PRIVATE cai_static
       softline::softline_static libmdf::mdf_static)
     cai_configure_cli_target(cai_cli_geometry_test)

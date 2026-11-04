@@ -108,11 +108,18 @@ adapter will use this same presenter; it does not yet consume socket spans or
 replace the synchronous terminal lifecycle. Status/command dispatch, final
 replay selection and CLI process composition remain pending.
 
-Incremental remote prompt quoting also needs a Softline API addition: its
-0.16.0 native quote method accepts only a complete string. The local upstream
-handoff, `stash/softline-incremental-quoted-prompts.md` (outside source packages),
-specifies a bounded begin/write/end/abort contract. No whole-prompt buffer or
-replacement quote formatter has been introduced to conceal that dependency.
+Submitted prompts belong to the libmdf feed. The current native terminal path
+supplies an already available accepted string; the presenter uses public
+blockquote and escaped text tokens to render it. Libmdf owns quote layout,
+wrapping, margins and theme colors. Softline receives rendered bytes and owns
+the editor and queue.
+
+Incremental remote prompt rendering still needs bounded literal-word support
+in libmdf. A public-API probe against 0.21.0 fed a 262,144-byte unbroken word in
+256-byte TEXT tokens: no body bytes reached the sink until BLOCKQUOTE_END.
+That buffering is a libmdf dependency issue. The frontend must not gather a
+complete remote prompt or recreate the formatter to conceal it. No Softline
+quote API is required, and no incremental remote prompt adapter is enabled.
 
 ## Confirmed product decisions
 

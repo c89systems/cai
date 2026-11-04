@@ -11,7 +11,7 @@ static int literal_token(mdf *renderer, int kind, const char *data,
   token.len = length;
   return renderer->write_token(renderer, &token) == MDF_OK ? 0 : -1;
 }
-int cai_cli_literal_render(mdf *renderer, const char *text) {
+int cai_cli_literal_write(mdf *renderer, const char *text) {
   char chunk[256];
   size_t used = 0U;
   size_t offset;
@@ -39,6 +39,14 @@ int cai_cli_literal_render(mdf *renderer, const char *text) {
       cai_utf8_repair_text(rune, need);
       if (rune[0] == '?')
         need = 1U;
+      /* C1 controls are valid UTF-8 but invalid terminal feed contents. */
+      if (need == 2U && (unsigned char)rune[0] == 0xc2U &&
+          (unsigned char)rune[1] < 0xa0U) {
+        if (literal_token(renderer, MDF_TOKEN_TEXT, " ", 1U) != 0)
+          return -1;
+        offset++;
+        continue;
+      }
       /* Keep UTF-8 separate from escape pairs: ANSI OFF may filter tokens
        * into smaller writes, while inline escapes require one token. */
       if (literal_token(renderer, MDF_TOKEN_TEXT, rune, need) != 0)
@@ -55,6 +63,12 @@ int cai_cli_literal_render(mdf *renderer, const char *text) {
     }
   }
   if (used != 0U && literal_token(renderer, MDF_TOKEN_TEXT, chunk, used) != 0)
+    return -1;
+  return 0;
+}
+
+int cai_cli_literal_render(mdf *renderer, const char *text) {
+  if (cai_cli_literal_write(renderer, text) != 0)
     return -1;
   return renderer->finish(renderer) == MDF_OK ? 0 : -1;
 }

@@ -315,6 +315,11 @@ int cai_cli_presenter_geometry(cai_cli_presenter *state) {
                                     0) != MDF_OK) {
     return -1;
   }
+  if (state->prompt_renderer != NULL &&
+      state->prompt_renderer->set_geometry(
+          state->prompt_renderer, width,
+          state->interactive && width >= 5 ? 2 : 0, 0) != MDF_OK)
+    return -1;
   state->width = width;
   return 0;
 }
@@ -482,23 +487,60 @@ int cai_cli_presenter_tool_markdown(void *context, const char *text,
   return rc;
 }
 
+static int cai_cli_presenter_prompt_token(cai_cli_presenter *state,
+                                          mdf_token_type type) {
+  mdf_token token;
+  memset(&token, 0, sizeof(token));
+  token.type = type;
+  return cai_cli_presenter_mdf_status(
+      state,
+      state->prompt_renderer->write_token(state->prompt_renderer, &token));
+}
+
+/* The current native terminal path supplies a complete accepted prompt. Use
+ * libmdf for its feed presentation. Remote prompt DATA must wait for libmdf's
+ * bounded literal-word support: TEXT currently retains a whole unbroken word.
+ * Do not adapt that limitation by accumulating a remote prompt here. */
+static int cai_cli_presenter_prompt_render(cai_cli_presenter *state,
+                                           const char *text) {
+  int rc;
+  if (cai_cli_presenter_finish_response(state) != 0 ||
+      cai_cli_presenter_finish_reasoning(state) != 0 ||
+      cai_cli_presenter_reconcile_output(state) != 0 ||
+      cai_cli_presenter_geometry(state) != 0)
+    return -1;
+  if (state->prompt_renderer == NULL &&
+      cai_cli_presenter_renderer_create(
+          state, &state->render_theme, &state->prompt_renderer, NULL) != CAI_OK)
+    return -1;
+  if (text[0] == '\0')
+    return 0;
+  state->block_spacing_pending = 1;
+  rc = cai_cli_presenter_prompt_token(state, MDF_TOKEN_BLOCKQUOTE_START);
+  if (rc == 0)
+    rc = cai_cli_literal_write(state->prompt_renderer, text);
+  if (rc == 0)
+    rc = cai_cli_presenter_prompt_token(state, MDF_TOKEN_BLOCKQUOTE_END);
+  if (rc == 0)
+    rc = cai_cli_presenter_mdf_status(
+        state, state->prompt_renderer->finish(state->prompt_renderer));
+  if (rc != 0)
+    (void)mdf_reset(state->prompt_renderer);
+  state->block_spacing_pending = 1;
+  return rc;
+}
+
 int cai_cli_presenter_input(cai_cli_presenter *state, const char *text,
                             int command) {
   int rc;
   if (state->batch)
     return 0;
+  if (!command)
+    return cai_cli_presenter_prompt_render(state, text);
   if (cai_cli_presenter_finish_response(state) != 0 ||
       cai_cli_presenter_finish_reasoning(state) != 0 ||
-      cai_cli_presenter_reconcile_output(state) != 0) {
-    return -1;
-  }
-  if (!command) {
-    if (sl_output_stream_write_quoted_prompt(state->sl, text) != SL_OK)
-      return -1;
-    state->feed_breaks = 2;
-    return 0;
-  }
-  if (cai_cli_presenter_geometry(state) != 0 ||
+      cai_cli_presenter_reconcile_output(state) != 0 ||
+      cai_cli_presenter_geometry(state) != 0 ||
       cai_cli_presenter_literal_prepare(state) != 0)
     return -1;
   while (state->feed_breaks < 2)
@@ -612,6 +654,10 @@ int cai_cli_presenter_set_theme_scope(cai_cli_presenter *state, int scope,
     state->renderer = renderer;
     state->documents_rendered = 0;
   }
+  if (changed && state->prompt_renderer != NULL) {
+    state->prompt_renderer->destroy(state->prompt_renderer);
+    state->prompt_renderer = NULL;
+  }
   state->render_theme = selected;
   state->theme_scope = scope;
 
@@ -657,6 +703,10 @@ int cai_cli_presenter_set_theme(cai_cli_presenter *state,
   }
   state->renderer->destroy(state->renderer);
   state->renderer = renderer;
+  if (state->prompt_renderer != NULL) {
+    state->prompt_renderer->destroy(state->prompt_renderer);
+    state->prompt_renderer = NULL;
+  }
   state->theme = selected;
   state->render_theme = effective;
   state->documents_rendered = 0;
@@ -671,6 +721,8 @@ void cai_cli_presenter_close(cai_cli_presenter *state) {
     state->renderer->destroy(state->renderer);
   if (state->notice_renderer != NULL)
     state->notice_renderer->destroy(state->notice_renderer);
+  if (state->prompt_renderer != NULL)
+    state->prompt_renderer->destroy(state->prompt_renderer);
   cai_tool_display_close(state->tool_display);
   cai_sink_close(state->tool_sink);
   memset(state, 0, sizeof(*state));

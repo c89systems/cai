@@ -18,6 +18,7 @@ typedef struct cai_cli_presenter {
   int theme_scope; /* 0 parent, 1 ordinary child, 2 reviewer. */
   mdf *renderer;
   mdf *notice_renderer;
+  mdf *prompt_renderer;
   cai_tool_display *tool_display;
   cai_sink *tool_sink;
   int width;
