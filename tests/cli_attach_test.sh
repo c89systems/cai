@@ -27,7 +27,7 @@ wait_for has "$root/server.log" 'Workspace server ready'
 "$client" "$runtime_root" "$work" hold >"$root/holder" 2>"$root/holder.err" & holder_pid=$!
 wait_for test -s "$root/holder"
 terminal_start -s attach-fixture
-expect 'Observing workspace'
+expect 'Observing workspace. /takeover acquires control. Send /help for usage.'
 send 'this observer input must never run\r'
 expect rejected
 [[ $(requests) == 0 ]]

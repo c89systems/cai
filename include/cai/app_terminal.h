@@ -18,8 +18,10 @@ extern "C" {
  * argv excludes the program name. Frontend preferences use normal app config,
  * settings and argv precedence. Explicit startup inputs/settings are submitted
  * through the native backend queue once control is available. Workspace
- * redirection and utility/batch/server modes are rejected; use another explicit
- * attachment for another workspace. NULL application selects defaults.
+ * redirection at startup and utility/batch/server modes are rejected. Runtime
+ * /workspace discovery selects existing owners under this runtime directory;
+ * visited attachments and their editors remain until quit. NULL application
+ * selects defaults.
  * Configuration is borrowed until return. An orderly detach sets exit_code=0;
  * a terminal/transport failure returns its error and exit_code=1. Persistent
  * owner lifetime remains independent of this terminal receiver.

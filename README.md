@@ -161,6 +161,12 @@ receiver is declared in `cai/app_terminal.h`. See
 remaining parity work, and the [workspace specification](docs/workspace-server.md)
 for the complete design.
 
+Inside an attached terminal, `/workspace` lists running owners and
+`/workspace NAME`, ID or path selects another. Drafts, recall and accepted queues
+stay with their workspace and conversation. Visited owners remain attached
+until this terminal quits; model work can continue while viewing another owner.
+Returning reads only the journal suffix missed during that absence.
+
 Workspace servers normally stop after their last client disconnects.
 `--headless` selects persistence as its default; `[server] persist`,
 `CAI_SERVER_PERSIST`, and `--persist` / `--no-persist` override that default

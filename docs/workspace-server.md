@@ -390,7 +390,7 @@ a second owner or mutate config.ini.
 | `cai -L`, `cai --list-all` | List saved conversations across directories in the entire configured session store. Do not launch an agent server. |
 | `--workspace-name NAME` | Assign the workspace discovery name when starting its server. |
 | `/workspace` | List available running workspaces and identify the current one. |
-| `/workspace SELECTOR` | Reconnect this client; do not stop either server or carry accepted inputs across workspaces. |
+| `/workspace SELECTOR` | Select an existing owner after verified discovery and handshake. Retain visited attachments until client quit; do not stop either owner or carry accepted inputs across workspaces. |
 | `/takeover` | Explicitly acquire control, revoking the previous controlling attachment. |
 | `/quit`, Alt-Q, terminal EOF | Detach; Alt-Q persists the local draft to this conversation's prompt history before detach. The last detach shuts down a nonpersistent server; a persistent server continues. |
 | `/shutdown` | Controller-only orderly shutdown, distinct from detach and goal pause. |

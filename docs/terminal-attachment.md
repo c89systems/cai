@@ -9,6 +9,24 @@ The editor remains available while that child restores context and announces
 READY. Explicit `-x` owners persist; ordinary automatic owners stop after their
 last attachment leaves unless persistence was explicitly configured.
 
+`/workspace` lists verified live owners and identifies the current directory.
+`/workspace SELECTOR` switches by name, stable ID or path relative to the
+currently viewed workspace. Lookup and the target handshake run through
+descriptor/deadline watches without blocking the editor. Missing, ambiguous or
+failed selections leave the current owner available. Like takeover and detach,
+this is a terminal connection operation, available to observers; it is never
+submitted as model work or moved into another conversation's queue.
+
+Visited workspaces keep their attachment, producer and native editors while
+this terminal remains open. This also keeps an ordinary nonpersistent owner
+alive while viewing another workspace. Parked attachments continue processing
+queue and authority observations, but unsubscribe from presentation. Returning
+requests the journal suffix after the last authenticated displayed position,
+including accepted frontend actions that arrived during that absence. This is
+continuation of the same subscription/producer, not reexecution of historical
+commands. Quit detaches every visited owner; their configured last-detach
+policy then applies. A persistent owner remains running.
+
 Native hosts can use `cai_app_terminal_run` from `cai/app_terminal.h` with an
 explicit transport target. It uses the same terminal implementation, resolves
 frontend preferences and opens no runtime, authentication store or SDK client.
@@ -48,15 +66,16 @@ status and duration can arrive after its output, producing one final
 `Ran COMMAND (TIME)` footer without a preparatory scan. Ordinary prompt and
 assistant bodies are not collected. Accepted slash commands retain at most the
 same 66,048-byte bound as input admission so their display and frontend actions
-can be applied atomically. Themes and actions from replay or another producer
-never execute on the attaching terminal.
+can be applied atomically. Initial historical replay and another producer's
+actions never execute on the attaching terminal. A parked attachment's cursor
+continuation only applies its own previously undisplayed actions.
 
 ## Remaining cutover work
 
 This is a working terminal/socket composition, not a claim of complete feature
 parity. Skill catalog completion, all pager/layout delegates, full shared help,
 review progress parity,
-default replay-tail selection, workspace switching, concurrent first-launch
+default replay-tail selection, concurrent first-launch
 reconciliation, immediate live command-progress events and explicit
 startup-configuration compatibility still require
 integration. Discovery currently runs before editor construction; a slow identity
@@ -72,3 +91,7 @@ and last-detach shutdown. Its public-header-only embedding host aborts on any
 attempt to open an SDK storage client. Separate tests cover cancellation
 duplicates/authority, queue reconnect identities and one-pass output with late
 status, sink failure and metadata-cache pressure on default-stack workers.
+`cai_cli_workspaces` and `cai_app_terminal_workspaces` exercise the executable
+and public terminal receiver across two actual owners, with isolated drafts,
+observer takeover, invalid/relative selections, queued work continuing while
+parked, suffix-only catch-up and nonpersistent/persistent detach lifetimes.

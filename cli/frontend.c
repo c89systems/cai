@@ -11,6 +11,7 @@
 #include "tool_result.h"
 #include "transcript_presenter.h"
 #include <cai/app_terminal.h>
+#include <cai/workspace_discovery.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -48,7 +49,17 @@ typedef struct frontend_view {
   recall_pending *recall_first, *recall_last;
   size_t recall_count;
 } frontend_view;
+typedef struct frontend_group frontend_group;
 typedef struct frontend {
+  struct frontend *next;
+  frontend_group *group;
+  char *workspace, *runtime_directory;
+  unsigned char instance[16];
+  sl_watch_id_t parked_watch;
+  int parked_fd, parked_failed, expected_close;
+  char resume_collection[21];
+  uint64_t resume_position, resume_sequence;
+  int resume_actions;
   const cai_app_config *application;
   const cai_cli_options *options;
   const cai_cli_frontend_boot *boot;
@@ -96,6 +107,17 @@ typedef struct frontend {
   cai_cli_tool_text tool_text;
 } frontend;
 
+/** One terminal, several explicitly visited owners. Parked sockets continue
+ * processing authority/queue observations, but never render into the selected
+ * terminal. Their attachment keeps nonpersistent owners alive until quit. */
+struct frontend_group {
+  frontend *first, *active, *candidate;
+  cai_workspace_discovery *discovery;
+  sl_watch_id_t discovery_watch;
+  int discovery_fd, listing, listed, switching, requested;
+  char *selector;
+};
+
 static uint64_t clock_ms(void) {
   struct timespec now;
   if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
@@ -106,6 +128,10 @@ static int service(frontend *);
 static int interests(frontend *);
 static int actions(frontend *);
 static int select_view(frontend *, const char *);
+static int workspace_begin(frontend *, const char *);
+static int workspace_progress(frontend *);
+static int workspace_interests(frontend *, uint64_t *);
+static int workspace_activate(frontend **);
 static int completion_catalog(void *context, char trigger,
                               sl_completion_emit_t emit, void *emit_context) {
   size_t i;
@@ -118,6 +144,8 @@ static int completion_catalog(void *context, char trigger,
       rc = emit("/takeover", emit_context);
     if (rc == SL_OK)
       rc = emit("/shutdown", emit_context);
+    if (rc == SL_OK)
+      rc = emit("/workspace", emit_context);
   }
   return rc;
 }
@@ -137,6 +165,8 @@ static int tool_markdown(void *context, const char *bytes, size_t length) {
   return markdown(context, bytes, length);
 }
 static int notice(frontend *f, const char *message) {
+  if (f->group->active != f)
+    return 0;
   return cai_cli_presenter_notice(f->ui, message);
 }
 static void save_submission(void *context, const cai_input_request *request) {
@@ -279,10 +309,15 @@ static int status(frontend *f) {
       return -1;
   }
   if (f->ready && f->history_loaded && !f->welcomed) {
-    snprintf(message, sizeof(message),
-             "Conversation attached. Send /help for usage.");
+    snprintf(message, sizeof(message), "%s",
+             f->state.transport.controller != f->state.transport.attachment
+                 ? "Observing workspace. /takeover acquires control. "
+                   "Send /help for usage."
+                 : "Conversation attached. Send /help for usage.");
     f->welcomed = 1;
-  } else if (f->exit_save != 0U)
+  } else if (f->group->discovery != NULL || f->group->candidate != NULL)
+    snprintf(message, sizeof(message), "Looking up workspace...");
+  else if (f->exit_save != 0U)
     snprintf(message, sizeof(message), "Saving draft before exit...");
   else if (f->bound && !f->history_loaded)
     snprintf(message, sizeof(message), "Loading prompt history...");
@@ -339,8 +374,10 @@ static int observed(void *context, const cai_app_client_event *event,
     f->switching = 1;
   }
   if (event->type == CAI_APP_CLIENT_CONTROL_RESULT &&
-      event->input->result.code != CAI_OK)
+      event->input->result.code != CAI_OK) {
+    f->expected_close = 0;
     (void)notice(f, event->input->result.reason);
+  }
   if (event->type == CAI_APP_CLIENT_HISTORY_RESULT) {
     frontend_view *v;
     for (v = f->views; v != NULL; v = v->next) {
@@ -399,6 +436,8 @@ static int observed(void *context, const cai_app_client_event *event,
 static int transcript(void *context, const cai_transcript_event *event,
                       cai_error *error) {
   frontend *f = context;
+  if (f->group->active != f)
+    return CAI_OK;
   if (event->kind == CAI_TRANSCRIPT_EVENT_BEGIN && event->type != NULL) {
     int review = strcmp(event->type, "review_pending") == 0;
     if ((review || strcmp(event->type, "assistant_text_delta") == 0 ||
@@ -417,8 +456,12 @@ static int transcript(void *context, const cai_transcript_event *event,
   }
   if (event->kind == CAI_TRANSCRIPT_REPLAY_BEGIN)
     f->replaying = 1;
-  else if (event->kind == CAI_TRANSCRIPT_REPLAY_END)
+  else if (event->kind == CAI_TRANSCRIPT_REPLAY_END) {
     f->replaying = 0;
+    f->resume_actions = 0;
+    f->resume_collection[0] = '\0';
+    f->resume_position = f->resume_sequence = 0U;
+  }
   if (event->kind == CAI_TRANSCRIPT_ERROR) {
     f->subscribed = 0;
     if (event->failure == CAI_TRANSCRIPT_CONTEXT_CLOSED) {
@@ -440,7 +483,7 @@ static int action_chunk(frontend *f, const cai_execution_record *record,
   char source[129], tail;
   unsigned long long producer, request, item;
   size_t length = strlen(record->data);
-  if (replay || record->call_id == NULL ||
+  if ((replay && !f->resume_actions) || record->call_id == NULL ||
       sscanf(record->call_id, "command:%128[^:]:%llu:%llu:%llu%c", source,
              &producer, &request, &item, &tail) != 4 ||
       producer != f->state.producer || strcmp(source, f->state.session) != 0)
@@ -610,7 +653,10 @@ static int execution(void *context, const cai_app_execution_event *event,
   frontend *f = context;
   int old_event = f->ui->presentation_event;
   unsigned long long old_stamp = f->ui->presentation_timestamp_ns;
-  int rc = execution_body(context, event, error);
+  int rc;
+  if (f->group->active != f)
+    return CAI_OK;
+  rc = execution_body(context, event, error);
   f->ui->presentation_event = old_event;
   f->ui->presentation_timestamp_ns = old_stamp;
   return rc;
@@ -665,15 +711,14 @@ static int actions(frontend *f) {
       if (rc == 0)
         rc = markdown(f, "  ", 2U);
     }
-    if (rc == 0)
-      rc = markdown(
-          f,
+    if (rc == 0) {
+      const char *usage =
           "\n\nEnter queues; Alt-Enter steers. Alt-E edits queued input. "
           "Escape cancels; Alt-Q quits. /takeover acquires control; "
-          "/shutdown stops the server.\n",
-          strlen("\n\nEnter queues; Alt-Enter steers. Alt-E edits queued "
-                 "input. Escape cancels; Alt-Q quits. /takeover acquires "
-                 "control; /shutdown stops the server.\n"));
+          "/shutdown stops the server. /workspace lists running owners; "
+          "/workspace SELECTOR switches workspace.\n";
+      rc = markdown(f, usage, strlen(usage));
+    }
   } else if (strcmp(line, "/theme") == 0 || strcmp(line, "/t") == 0) {
     cai_sink_callbacks callbacks;
     cai_sink *sink = NULL;
@@ -751,7 +796,7 @@ static int event_ready(sl_t *sl, const sl_watch_event_t *event, void *context) {
     f->failed = 1;
     f->quit = 1;
   }
-  if (f->quit || f->shell || f->switching)
+  if (f->quit || f->shell || f->switching || f->group->switching)
     return sl_suspend(f->ui->sl);
   return SL_OK;
 }
@@ -797,6 +842,8 @@ static int interests(frontend *f) {
       deadline = boot_deadline;
   }
   memset(&timer, 0, sizeof(timer));
+  if (workspace_interests(f, &deadline) != 0)
+    return -1;
   if (deadline != 0U) {
     uint64_t remaining = deadline > now ? deadline - now : 1U;
     timer.it_value.tv_sec = (time_t)(remaining / 1000U);
@@ -906,6 +953,8 @@ static int startup_input(frontend *f) {
 }
 static int service(frontend *f) {
   int rc, ready = 0;
+  if (workspace_progress(f) != 0)
+    return -1;
   if (f->boot != NULL) {
     rc = f->boot->pump(f->boot->context, clock_ms(), &f->target, &ready,
                        &f->error);
@@ -921,8 +970,12 @@ static int service(frontend *f) {
     (void)cai_app_client_get_state(f->client, &f->state, NULL);
     if (f->state.transport.phase == CAI_WORKSPACE_DISCONNECTED ||
         f->state.transport.phase == CAI_WORKSPACE_FAILED) {
-      f->quit = 1;
-      return 0;
+      if (f->expected_close) {
+        f->quit = 1;
+        return 0;
+      }
+      return cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
+                           "workspace server disconnected");
     }
     if (f->pending_context)
       return status(f) == 0 ? interests(f) : -1;
@@ -937,9 +990,11 @@ static int service(frontend *f) {
       f->awaiting_bind = 1;
     }
     if (f->bound && !f->subscribed) {
-      rc = cai_app_client_subscribe(f->client, ++f->subscribe_request,
-                                    f->state.conversation, f->state.session,
-                                    NULL, 0U, 0U, &f->error);
+      rc = cai_app_client_subscribe(
+          f->client, ++f->subscribe_request, f->state.conversation,
+          f->state.session,
+          f->resume_collection[0] != '\0' ? f->resume_collection : NULL,
+          f->resume_position, f->resume_sequence, &f->error);
       if (rc != CAI_OK)
         return -1;
       f->subscribed = 1;
@@ -1022,6 +1077,27 @@ static int enter_key(sl_t *sl, sl_key_t key, void *context,
                      sl_key_action_t *action) {
   frontend *f = context;
   (void)key;
+  if (!sl->history_search_active(sl) &&
+      strncmp(sl_buffer(sl), "/workspace", 10U) == 0 &&
+      (sl_buffer(sl)[10] == '\0' || sl_buffer(sl)[10] == ' ' ||
+       sl_buffer(sl)[10] == '\t')) {
+    sl_prompt_queue_entry_info_t draft;
+    if (sl_prompt_queue_draft_info(sl, &draft) != SL_OK)
+      return SL_ERROR_IO;
+    if (!draft.id) {
+      int rc = workspace_begin(f, sl_buffer(sl));
+      if (rc < 0)
+        return SL_ERROR_IO;
+      if (rc > 0) {
+        *action = SL_KEY_ACTION_HANDLED;
+        return SL_OK;
+      }
+      if (sl_set_buffer(sl, "") != SL_OK)
+        return SL_ERROR_IO;
+      *action = SL_KEY_ACTION_HANDLED;
+      return SL_OK;
+    }
+  }
   if (!sl->history_search_active(sl) && (strcmp(sl_buffer(sl), "/quit") == 0 ||
                                          strcmp(sl_buffer(sl), "/exit") == 0)) {
     sl_prompt_queue_entry_info_t draft;
@@ -1161,6 +1237,9 @@ static int select_view(frontend *f, const char *session) {
   }
   f->pending_context = f->switching = f->ready = f->bound = f->awaiting_bind =
       f->subscribed = f->welcomed = 0;
+  f->resume_collection[0] = '\0';
+  f->resume_position = f->resume_sequence = 0U;
+  f->resume_actions = 0;
   f->history_requested = f->history_loaded = v->history_loaded;
   f->history_limit = v->history_loaded
                          ? v->history_limit
@@ -1171,18 +1250,34 @@ static int select_view(frontend *f, const char *session) {
   return sl_output_stream_begin(f->ui->sl) == SL_OK ? 0 : -1;
 }
 
-int cai_cli_frontend_run(const cai_app_config *application,
-                         const cai_cli_options *options,
-                         const cai_app_client_config *target,
-                         const cai_cli_frontend_boot *boot, int *exit_code,
-                         cai_error *error) {
+static frontend *frontend_open(frontend_group *group,
+                               const cai_app_config *application,
+                               const cai_cli_options *options,
+                               const cai_app_client_config *target,
+                               const cai_cli_frontend_boot *boot,
+                               cai_error *error) {
   frontend *f = calloc(1U, sizeof(*f));
-  int rc = CAI_OK;
-  if (f == NULL)
-    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate terminal frontend");
+  if (f == NULL) {
+    cai_cli_error(error, CAI_ERR_NOMEM, "allocate terminal frontend");
+    return NULL;
+  }
+  f->group = group;
+  f->failed = 1;
+  f->next = group->first;
+  group->first = f;
+  f->workspace = strdup(target->workspace);
+  f->runtime_directory = target->runtime_directory != NULL
+                             ? strdup(target->runtime_directory)
+                             : NULL;
   f->application = application;
   f->options = options;
   f->target = *target;
+  f->target.workspace = f->workspace;
+  f->target.runtime_directory = f->runtime_directory;
+  if (target->expected_instance != NULL) {
+    memcpy(f->instance, target->expected_instance, sizeof(f->instance));
+    f->target.expected_instance = f->instance;
+  }
   f->boot = boot;
   /* A newly spawned owner receives the original argv and applies it itself.
    * Existing owners receive explicit intents exactly once through admissions.
@@ -1194,30 +1289,309 @@ int cai_cli_frontend_run(const cai_app_config *application,
   f->full_output =
       options->tool_output != NULL && strcmp(options->tool_output, "full") == 0;
   f->wake[0] = f->wake[1] = f->timer = f->socket_fd = f->boot_fd = -1;
+  f->parked_fd = -1;
   cai_error_init(&f->error);
+  if (f->workspace == NULL ||
+      (target->runtime_directory != NULL && f->runtime_directory == NULL)) {
+    cai_cli_error(error, CAI_ERR_NOMEM, "copy frontend workspace identity");
+    return NULL;
+  }
   if (pipe2(f->wake, O_CLOEXEC | O_NONBLOCK) != 0 ||
       (f->timer = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK)) <
           0) {
-    rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
-                       "initialize frontend event loop");
-    goto done;
+    cai_cli_error(error, CAI_ERR_TRANSPORT, "initialize frontend event loop");
+    return NULL;
   }
   if (cai_cli_theme_parse(options->theme, &f->theme) != NULL ||
       select_view(f, NULL) != 0) {
-    rc =
-        cai_cli_error(error, CAI_ERR_TRANSPORT, "create terminal editor/theme");
-    goto done;
+    cai_cli_error(error, CAI_ERR_TRANSPORT, "create terminal editor/theme");
+    return NULL;
+  }
+  if (group->active != NULL && sl_output_stream_end(f->ui->sl) != SL_OK) {
+    cai_cli_error(error, CAI_ERR_TRANSPORT, "park new workspace editor");
+    return NULL;
   }
   cai_cli_status_init(&f->status, target->workspace, getenv("HOME"));
   (void)cai_cli_status_fields_parse(options->status_fields, &f->status.fields);
-  if (application->banner != NULL &&
+  if (group->active == NULL && application->banner != NULL &&
       cai_cli_presenter_sink(f->ui, application->banner,
                              strlen(application->banner)) != 0) {
-    rc = CAI_ERR_TRANSPORT;
+    cai_cli_error(error, CAI_ERR_TRANSPORT, "write frontend banner");
+    return NULL;
+  }
+  f->failed = boot == NULL && connect_target(f) != CAI_OK;
+  return f;
+}
+
+static int workspace_begin(frontend *f, const char *line) {
+  frontend_group *g = f->group;
+  char byte = 'w';
+  if (f->client == NULL) {
+    (void)sl_set_status_message(
+        f->ui->sl, "Workspace is still starting; command draft retained.");
+    return 1;
+  }
+  if (g->discovery != NULL || g->requested || g->candidate != NULL ||
+      f->exit_save != 0U) {
+    (void)sl_set_status_message(f->ui->sl,
+                                "Workspace lookup is already in progress.");
+    return 1;
+  }
+  g->selector = strdup(line);
+  if (g->selector == NULL)
+    return -1;
+  g->requested = 1;
+  (void)write(f->wake[1], &byte, 1U);
+  return 0;
+}
+
+/** Discovery callbacks display one verified record at a time. Neither names
+ * nor filesystem bytes are trusted Markdown/terminal control sequences. */
+static int workspace_entry(void *context,
+                           const cai_workspace_discovery_event *event,
+                           cai_error *error) {
+  frontend *f = context;
+  cai_cli_tool_text text;
+  const char *fields[3];
+  size_t i;
+  int rc;
+  if (event->entry == NULL || event->error != NULL)
+    return CAI_OK;
+  ++f->group->listed;
+  fields[0] = event->entry->record.name;
+  fields[1] = event->entry->record.workspace;
+  fields[2] = event->entry->record.id;
+  cai_cli_tool_text_init(&text, 1, 72U);
+  rc = markdown(f,
+                strcmp(fields[1], f->workspace) == 0
+                    ? "**Current workspace**\n\n"
+                    : "**Workspace**\n\n",
+                strcmp(fields[1], f->workspace) == 0 ? 23U : 15U);
+  for (i = 0U; rc == 0 && i < 3U; ++i) {
+    if (fields[i] == NULL || fields[i][0] == '\0')
+      continue;
+    rc = cai_cli_tool_text_write(&text, fields[i], strlen(fields[i]), 0, 1,
+                                 tool_markdown, f, error);
+    if (rc == CAI_OK)
+      rc = cai_cli_tool_text_write(&text, "\n", 1U, 0, 1, tool_markdown, f,
+                                   error);
+  }
+  if (rc == CAI_OK)
+    rc = cai_cli_tool_text_write(&text, "", 0U, 1, 1, tool_markdown, f, error);
+  return rc;
+}
+
+static int workspace_interests(frontend *f, uint64_t *deadline) {
+  frontend_group *g = f->group;
+  frontend *p;
+  struct pollfd descriptor;
+  uint64_t due;
+  for (p = g->first; p != NULL; p = p->next) {
+    if (p == f || p->client == NULL || p->parked_failed)
+      continue;
+    if (cai_app_client_prepare(p->client, &descriptor, &due, &f->error) !=
+            CAI_OK ||
+        watch(f, &p->parked_watch, &p->parked_fd, &descriptor) != 0)
+      return -1;
+    if (due != 0U && (*deadline == 0U || due < *deadline))
+      *deadline = due;
+  }
+  if (g->discovery != NULL) {
+    if (cai_workspace_discovery_prepare(g->discovery, &descriptor, &due,
+                                        &f->error) != CAI_OK ||
+        watch(f, &g->discovery_watch, &g->discovery_fd, &descriptor) != 0)
+      return -1;
+    if (due != 0U && (*deadline == 0U || due < *deadline))
+      *deadline = due;
+  }
+  return 0;
+}
+
+static void workspace_query_close(frontend *f) {
+  frontend_group *g = f->group;
+  if (g->discovery_fd >= 0) {
+    (void)sl_watch_remove(f->ui->sl, g->discovery_watch);
+    g->discovery_fd = -1;
+  }
+  cai_workspace_discovery_close(g->discovery);
+  g->discovery = NULL;
+  free(g->selector);
+  g->selector = NULL;
+}
+
+static int workspace_progress(frontend *f) {
+  frontend_group *g = f->group;
+  frontend *p;
+  cai_error local;
+  int rc = CAI_OK;
+  cai_error_init(&local);
+  if (g->requested) {
+    cai_workspace_discovery_config config;
+    char *argument = g->selector + 10U;
+    size_t length;
+    g->requested = 0;
+    if (cai_cli_presenter_input(f->ui, g->selector, 1) != 0)
+      return -1;
+    argument += strspn(argument, " \t");
+    length = strlen(argument);
+    while (length != 0U && strchr(" \t", argument[length - 1U]) != NULL)
+      argument[--length] = '\0';
+    g->listing = length == 0U;
+    g->listed = 0;
+    cai_workspace_discovery_config_init(&config);
+    config.runtime_directory = f->runtime_directory;
+    config.directory = f->workspace;
+    config.selector = g->listing ? NULL : argument;
+    config.event = g->listing ? workspace_entry : NULL;
+    config.context = f;
+    rc = cai_workspace_discovery_open(&config, clock_ms(), &g->discovery,
+                                      &local);
+  }
+  if (rc == CAI_OK && g->discovery != NULL) {
+    cai_workspace_discovery_state state;
+    rc = cai_workspace_discovery_pump(g->discovery, clock_ms(), &local);
+    if (rc == CAI_OK)
+      rc = cai_workspace_discovery_get_state(g->discovery, &state, &local);
+    if (rc == CAI_OK && state.phase != CAI_WORKSPACE_DISCOVERING) {
+      if (state.phase == CAI_WORKSPACE_FOUND) {
+        const cai_workspace_discovery_result *found =
+            cai_workspace_discovery_get_result(g->discovery);
+        for (p = g->first; p != NULL; p = p->next)
+          if (!p->parked_failed && !p->failed &&
+              strcmp(p->workspace, found->record.workspace) == 0 &&
+              memcmp(p->state.transport.instance, found->record.instance,
+                     16U) == 0)
+            break;
+        if (p == f)
+          (void)notice(f, "Already viewing this workspace.");
+        else {
+          if (p == NULL) {
+            cai_app_client_config target = f->target;
+            target.workspace = found->record.workspace;
+            target.expected_instance = found->record.instance;
+            if (target.handshake_timeout_ms == 0U)
+              target.handshake_timeout_ms = 10000U;
+            p = frontend_open(g, f->application, f->options, &target, NULL,
+                              &local);
+            if (p != NULL)
+              p->startup_stage = 5;
+            else
+              rc = local.code != CAI_OK ? local.code : CAI_ERR_TRANSPORT;
+          }
+          g->candidate = p;
+        }
+      } else if (!g->listing)
+        (void)notice(f, state.phase == CAI_WORKSPACE_AMBIGUOUS
+                            ? "Workspace selector is ambiguous."
+                            : "No running workspace matches that selector.");
+      else if (g->listed == 0)
+        (void)notice(f, "No running workspaces were found.");
+      if (cai_cli_presenter_finish_response(f->ui) != 0)
+        rc = CAI_ERR_TRANSPORT;
+      workspace_query_close(f);
+    }
+  }
+  for (p = g->first; p != NULL; p = p->next) {
+    if (p == f || p->client == NULL || p->parked_failed)
+      continue;
+    if (cai_app_client_pump(p->client, clock_ms(), &p->error) != CAI_OK ||
+        cai_app_client_get_state(p->client, &p->state, NULL) != CAI_OK ||
+        p->state.transport.phase == CAI_WORKSPACE_DISCONNECTED ||
+        p->state.transport.phase == CAI_WORKSPACE_FAILED) {
+      p->parked_failed = 1;
+      if (p->parked_fd >= 0) {
+        (void)sl_watch_remove(f->ui->sl, p->parked_watch);
+        p->parked_fd = -1;
+      }
+    }
+  }
+  if (g->candidate != NULL) {
+    if (g->candidate->parked_failed || g->candidate->failed) {
+      (void)notice(
+          f, "Could not attach that workspace; current workspace retained.");
+      g->candidate = NULL;
+    } else if (g->candidate->state.transport.phase == CAI_WORKSPACE_CONNECTED)
+      g->switching = 1;
+  }
+  if (rc != CAI_OK) {
+    (void)notice(f, local.message != NULL ? local.message
+                                          : "Workspace lookup failed.");
+    workspace_query_close(f);
+  }
+  cai_error_cleanup(&local);
+  return 0;
+}
+
+static int workspace_activate(frontend **current) {
+  frontend *f = *current, *p;
+  frontend_group *g = f->group;
+  frontend *next = g->candidate;
+  const cai_app_view *view = NULL;
+  g->candidate = NULL;
+  g->switching = 0;
+  if (next == NULL)
+    return 0;
+  /* Stop only presentation. Accepted input and model work stay with their
+   * owner. Capture the authenticated cursor before discarding any late spans;
+   * activation requests precisely this missed suffix, not a full replay. */
+  if (cai_app_client_get_state(f->client, &f->state, NULL) != CAI_OK)
+    return -1;
+  if (f->state.transcript.collection[0] != '\0') {
+    snprintf(f->resume_collection, sizeof(f->resume_collection), "%s",
+             f->state.transcript.collection);
+    f->resume_position = f->state.transcript.position;
+    f->resume_sequence = f->state.transcript.sequence;
+    f->resume_actions = 1;
+    if (cai_app_client_unsubscribe(f->client, &f->error) != CAI_OK)
+      return -1;
+  }
+  for (p = g->first; p != NULL; p = p->next)
+    if (p->parked_fd >= 0) {
+      (void)sl_watch_remove(f->ui->sl, p->parked_watch);
+      p->parked_fd = -1;
+    }
+  if (cai_cli_presenter_finish_response(f->ui) != 0 ||
+      cai_cli_presenter_finish_reasoning(f->ui) != 0 ||
+      sl_output_stream_end(f->ui->sl) != SL_OK)
+    return -1;
+  cai_cli_transcript_presenter_reset(f->transcript);
+  f->command_length = f->action_length = 0U;
+  f->action_field = 0;
+  /* Keep bounded call metadata: a yielded command can finish while parked,
+   * and its later write_stdin output still needs the original command label. */
+  park_view(f);
+  g->active = next;
+  *current = next;
+  if (sl_output_stream_begin(next->ui->sl) != SL_OK)
+    return -1;
+  (void)cai_app_client_get_view(next->client, &view, NULL);
+  if (next->pending_context && view != NULL && view->available) {
+    if (select_view(next, view->session_id) != 0)
+      return -1;
+  } else {
+    cai_cli_transcript_presenter_reset(next->transcript);
+    next->subscribed = next->welcomed = 0;
+  }
+  return 0;
+}
+
+int cai_cli_frontend_run(const cai_app_config *application,
+                         const cai_cli_options *options,
+                         const cai_app_client_config *target,
+                         const cai_cli_frontend_boot *boot, int *exit_code,
+                         cai_error *error) {
+  frontend_group group;
+  frontend *f;
+  uint64_t close_deadline;
+  int rc = CAI_OK;
+  memset(&group, 0, sizeof(group));
+  group.discovery_fd = -1;
+  f = frontend_open(&group, application, options, target, boot, error);
+  if (f == NULL) {
+    rc = error != NULL && error->code != CAI_OK ? error->code : CAI_ERR_NOMEM;
     goto done;
   }
-  if (boot == NULL && connect_target(f) != CAI_OK)
-    f->failed = 1;
+  group.active = f;
   if (!f->failed && service(f) != 0)
     f->failed = 1;
   while (!f->quit && !f->failed) {
@@ -1229,6 +1603,9 @@ int cai_cli_frontend_run(const cai_app_config *application,
       sl_free_string(f->ui->sl, line);
       f->failed = 1;
       cai_cli_error(&f->error, CAI_ERR_PROTOCOL, "unmanaged frontend input");
+    } else if (!f->quit && group.switching) {
+      if (workspace_activate(&f) != 0)
+        f->failed = 1;
     } else if (!f->quit && f->switching) {
       if (select_view(f, f->next_session) != 0)
         f->failed = 1;
@@ -1251,6 +1628,8 @@ int cai_cli_frontend_run(const cai_app_config *application,
                 : cai_app_client_shutdown(f->client, ++f->control_request,
                                           f->state.transport.generation,
                                           &f->error);
+        if (submitted == CAI_OK && control == 2)
+          f->expected_close = 1;
         if (submitted != CAI_OK) {
           (void)notice(f, f->error.message != NULL ? f->error.message
                                                    : "Control rejected");
@@ -1281,25 +1660,6 @@ int cai_cli_frontend_run(const cai_app_config *application,
     if (!f->quit && service(f) != 0)
       f->failed = 1;
   }
-  if (f->client != NULL) {
-    uint64_t until = clock_ms() + 2000U;
-    (void)cai_app_client_detach(f->client, NULL);
-    while (clock_ms() < until) {
-      struct pollfd descriptor;
-      uint64_t deadline;
-      if (cai_app_client_get_state(f->client, &f->state, NULL) != CAI_OK ||
-          f->state.transport.phase == CAI_WORKSPACE_DISCONNECTED ||
-          cai_app_client_prepare(f->client, &descriptor, &deadline, NULL) !=
-              CAI_OK ||
-          descriptor.fd < 0)
-        break;
-      if (poll(&descriptor, 1U, (int)(until - clock_ms())) < 0 &&
-          errno != EINTR)
-        break;
-      if (cai_app_client_pump(f->client, clock_ms(), NULL) != CAI_OK)
-        break;
-    }
-  }
   if (f->failed)
     rc = cai_cli_error(
         error, f->error.code != CAI_OK ? f->error.code : CAI_ERR_TRANSPORT,
@@ -1307,41 +1667,71 @@ int cai_cli_frontend_run(const cai_app_config *application,
                                  : "terminal attachment failed");
 done:
   *exit_code = rc == CAI_OK ? 0 : 1;
-  cai_app_client_close(f->client);
-  park_view(f);
-  while (f->views != NULL) {
-    frontend_view *v = f->views;
-    sl_t *editor = v->ui.sl;
-    f->views = v->next;
-    cai_cli_replay_tools_close(v->tools);
-    cai_cli_transcript_presenter_close(v->transcript);
-    cai_cli_presenter_close(&v->ui);
-    if (editor != NULL) {
-      if (v == f->current)
-        (void)sl_output_stream_end(editor);
-      sl_destroy(editor);
+  cai_workspace_discovery_close(group.discovery);
+  free(group.selector);
+  close_deadline = clock_ms() + 2000U;
+  for (f = group.first; f != NULL;) {
+    frontend *next = f->next;
+    if (f->client != NULL) {
+      uint64_t until = close_deadline;
+      (void)cai_app_client_detach(f->client, NULL);
+      while (clock_ms() < until) {
+        struct pollfd descriptor;
+        uint64_t deadline, now;
+        if (cai_app_client_get_state(f->client, &f->state, NULL) != CAI_OK ||
+            f->state.transport.phase == CAI_WORKSPACE_DISCONNECTED ||
+            cai_app_client_prepare(f->client, &descriptor, &deadline, NULL) !=
+                CAI_OK ||
+            descriptor.fd < 0)
+          break;
+        now = clock_ms();
+        if (now >= until)
+          break;
+        if (poll(&descriptor, 1U, (int)(until - now)) < 0 && errno != EINTR)
+          break;
+        if (cai_app_client_pump(f->client, clock_ms(), NULL) != CAI_OK)
+          break;
+      }
     }
-    cai_cli_input_socket_close(v->queue);
-    while (v->recall_first != NULL) {
-      recall_pending *p = v->recall_first;
-      v->recall_first = p->next;
-      free(p->text);
-      free(p);
+    cai_app_client_close(f->client);
+    park_view(f);
+    while (f->views != NULL) {
+      frontend_view *v = f->views;
+      sl_t *editor = v->ui.sl;
+      f->views = v->next;
+      cai_cli_replay_tools_close(v->tools);
+      cai_cli_transcript_presenter_close(v->transcript);
+      cai_cli_presenter_close(&v->ui);
+      if (editor != NULL) {
+        if (v == f->current)
+          (void)sl_output_stream_end(editor);
+        sl_destroy(editor);
+      }
+      cai_cli_input_socket_close(v->queue);
+      while (v->recall_first != NULL) {
+        recall_pending *p = v->recall_first;
+        v->recall_first = p->next;
+        free(p->text);
+        free(p);
+      }
+      free(v);
     }
-    free(v);
+    if (f->wake[0] >= 0)
+      close(f->wake[0]);
+    if (f->wake[1] >= 0)
+      close(f->wake[1]);
+    if (f->timer >= 0)
+      close(f->timer);
+    cai_error_cleanup(&f->error);
+    free(f->action);
+    free(f->command);
+    free(f->history_entry);
+    free(f->exit_draft);
+    free(f->workspace);
+    free(f->runtime_directory);
+    free(f);
+    f = next;
   }
-  if (f->wake[0] >= 0)
-    close(f->wake[0]);
-  if (f->wake[1] >= 0)
-    close(f->wake[1]);
-  if (f->timer >= 0)
-    close(f->timer);
-  cai_error_cleanup(&f->error);
-  free(f->action);
-  free(f->command);
-  free(f->history_entry);
-  free(f->exit_draft);
-  free(f);
   return rc;
 }
 
