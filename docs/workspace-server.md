@@ -49,7 +49,7 @@ the active queue without opening a runtime or store. Their owned observations
 include the producer identity and processed request watermark. Attachment
 admission runs on the controller owner with the authenticated identity and
 original authority generation; trusted native `control()` is a separate host
-surface. Remote command presentation, transcript streaming and Lua
+surface. Remote command presentation and Lua
 asynchronous observations remain pending. The terminal-free owner rejects new
 slash/! input explicitly and leaves restored frontend actions queued.
 
@@ -67,7 +67,7 @@ model input through the same backend producers and receipts. Snapshot production
 is incremental and credit-bound; it never copies a whole pending queue.
 Disconnect/takeover releases editor holds through durable controller-origin
 records, without changing request IDs or accepted text. New owners release
-orphaned edits before queue selection. Command presentation, replay/live output,
+orphaned edits before queue selection. Command presentation,
 the headless/autostart executable and terminal client cutover are still pending.
 
 `cai/app_client.h` now provides the application-side typed queue client over
@@ -77,15 +77,20 @@ bind/resume/takeover/shutdown/detach. It never opens a runtime/store or gathers
 a queue snapshot. Its event loop has one descriptor and a handshake deadline,
 without a worker or idle polling. Failed initial binding and interrupted
 baselines do not change the last validated session identity. Socket command,
-status and transcript presentation remain to be connected to the frontend.
+status and terminal presentation remain to be connected to the frontend.
 
 The storage-to-consumer transcript reader now streams decoded event chunks and
 discards commit state without materializing records. It retains a public
 collection receiver, uses native bounds/cursors/cancellation, and commits an
 event only at the SDK's authenticated entry boundary. Native verification
 confirms a paused consumer does not block appends or reopen the SDK client.
-The context reader worker, append notifications, socket subscription and
-frontend delivery still need to bind this reader to the transport.
+The [transcript subscription binding](workspace-wire-transcript.md) now connects
+that reader to real sockets: one retained replay worker per conversation,
+native bounded windows, direct committed live notifications, explicit cursors,
+history-change invalidation and bounded independent subscribers. The public
+application client delivers borrowed chunks without collecting complete events.
+Default tail/visibility selection and the terminal presentation adapter remain
+pending; this does not yet enable the headless/attach executable modes.
 
 ## Confirmed product decisions
 

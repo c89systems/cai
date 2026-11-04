@@ -823,7 +823,52 @@ typedef struct typed_view {
   cai_input_entry entry;
   cai_input_result result;
   size_t roles, snapshots, results, disconnected;
+  size_t replay_begins, replay_ends, transcript_ends, transcript_failures,
+      assistant_seen;
+  uint64_t transcript_sequence, transcript_offset;
+  char transcript_type[129], transcript_text[128];
+  size_t transcript_length;
 } typed_view;
+static int typed_transcript(void *context, const cai_transcript_event *event,
+                            cai_error *error) {
+  typed_view *v = context;
+  (void)error;
+  if (event->kind == CAI_TRANSCRIPT_REPLAY_BEGIN) {
+    ++v->replay_begins;
+    assert(event->collection != NULL && event->session != NULL);
+  } else if (event->kind == CAI_TRANSCRIPT_EVENT_BEGIN) {
+    assert(event->sequence > v->transcript_sequence);
+    v->transcript_sequence = event->sequence;
+    v->transcript_offset = v->transcript_length = 0U;
+    v->transcript_text[0] = '\0';
+    snprintf(v->transcript_type, sizeof(v->transcript_type), "%s", event->type);
+  } else if (event->kind == CAI_TRANSCRIPT_DATA) {
+    size_t n = event->length;
+    assert(event->sequence == v->transcript_sequence &&
+           event->offset == v->transcript_offset);
+    v->transcript_offset += event->length;
+    if (n > sizeof(v->transcript_text) - 1U - v->transcript_length)
+      n = sizeof(v->transcript_text) - 1U - v->transcript_length;
+    memcpy(v->transcript_text + v->transcript_length, event->data, n);
+    v->transcript_length += n;
+    v->transcript_text[v->transcript_length] = '\0';
+  } else if (event->kind == CAI_TRANSCRIPT_EVENT_END) {
+    assert(event->sequence == v->transcript_sequence &&
+           event->offset == v->transcript_offset);
+    ++v->transcript_ends;
+    if (strcmp(v->transcript_type, "assistant_text_delta") == 0 &&
+        strstr(v->transcript_text, "Background work finished") != NULL)
+      ++v->assistant_seen;
+  } else if (event->kind == CAI_TRANSCRIPT_REPLAY_END)
+    ++v->replay_ends;
+  else {
+    assert(event->code != CAI_OK && event->reason != NULL);
+    if (event->failure != CAI_TRANSCRIPT_CONTEXT_CLOSED)
+      fprintf(stderr, "transcript failed: %d %s\n", event->code, event->reason);
+    ++v->transcript_failures;
+  }
+  return CAI_OK;
+}
 static int typed_event(void *context, const cai_app_client_event *event,
                        cai_error *error) {
   typed_view *v = context;
@@ -881,6 +926,8 @@ static void typed_open(typed_view *v, unsigned long long producer,
   config.workspace = getenv("CAI_TEST_CONTROLLER_WORK");
   config.event = typed_event;
   config.context = v;
+  config.transcript = typed_transcript;
+  config.transcript_context = v;
   assert(cai_app_client_open(&config, monotonic_ms(), &v->client, NULL) ==
          CAI_OK);
   typed_wait(v, &v->roles, 1U);
@@ -911,6 +958,7 @@ static void typed_server(int argc, char **argv) {
   host h;
   typed_view a, b;
   cai_app_client_state original;
+  cai_app_transcript_state cursor;
   cai_app_status final;
   unsigned int opens;
   size_t roles;
@@ -924,6 +972,14 @@ static void typed_server(int argc, char **argv) {
   typed_open(&a, 0U, NULL);
   typed_open(&b, 0U, NULL);
   original = a.state;
+  assert(cai_app_client_subscribe(a.client, 1U, a.state.conversation,
+                                  a.state.session, NULL, 0U, 0U,
+                                  NULL) == CAI_OK);
+  typed_wait(&a, &a.replay_ends, 1U);
+  assert(cai_app_client_subscribe(b.client, 1U, b.state.conversation,
+                                  b.state.session, NULL, 0U, 0U,
+                                  NULL) == CAI_OK);
+  typed_wait(&b, &b.replay_ends, 1U);
   assert(a.state.transport.controller == a.state.transport.attachment &&
          b.state.transport.controller != b.state.transport.attachment);
   typed_request(&b, 1U, CAI_INPUT_OFFER, "OBSERVER MUST NEVER RUN",
@@ -935,12 +991,23 @@ static void typed_server(int argc, char **argv) {
   typed_request(&a, 2U, CAI_INPUT_BEGIN_EDIT, NULL,
                 a.state.transport.generation);
   assert(a.result.outcome == CAI_INPUT_ACCEPTED && a.entry.edit_held);
+  assert(a.state.transcript.active && !a.state.transcript.replaying);
+  cursor = a.state.transcript;
   cai_app_client_close(a.client);
   server_state(&h, 1U, 0U);
   original = a.state;
   typed_open(&a, original.producer, original.session);
   assert(a.state.producer == original.producer && a.state.last_request == 2U &&
          a.state.queue.count == 1U && a.entry.held && !a.entry.edit_held);
+  a.transcript_sequence = cursor.sequence;
+  assert(cai_app_client_subscribe(a.client, 1U, a.state.conversation,
+                                  a.state.session, cursor.collection,
+                                  cursor.position, cursor.sequence,
+                                  NULL) == CAI_OK);
+  typed_wait(&a, &a.replay_ends, 1U);
+  assert(a.state.transcript.active &&
+         strcmp(cursor.collection, a.state.transcript.collection) == 0 &&
+         a.state.transcript.position >= cursor.position);
   roles = a.roles;
   assert(cai_app_client_takeover(a.client, 80U, a.state.transport.generation,
                                  NULL) == CAI_OK);
@@ -952,6 +1019,24 @@ static void typed_server(int argc, char **argv) {
   typed_request(&a, 3U, CAI_INPUT_APPROVE, NULL, a.state.transport.generation);
   assert(a.result.outcome == CAI_INPUT_ACCEPTED);
   wait_count(&h, 1, 0);
+  typed_wait(&a, &a.assistant_seen, 1U);
+  assert(a.transcript_failures == 0U && a.transcript_ends != 0U);
+  cursor = a.state.transcript;
+  assert(cai_app_client_subscribe(a.client, 2U, a.state.conversation,
+                                  "not-the-active-session", NULL, 0U, 0U,
+                                  NULL) == CAI_OK);
+  typed_wait(&a, &a.transcript_failures, 1U);
+  assert(!a.state.transcript.active && !a.state.transcript.subscribing &&
+         a.state.ready && a.state.transcript.position == cursor.position);
+  a.transcript_sequence = cursor.sequence;
+  assert(cai_app_client_subscribe(a.client, 3U, a.state.conversation,
+                                  a.state.session, cursor.collection,
+                                  cursor.position, cursor.sequence,
+                                  NULL) == CAI_OK);
+  typed_wait(&a, &a.replay_ends, 2U);
+  assert(cai_app_client_unsubscribe(a.client, NULL) == CAI_OK);
+  typed_wait(&a, &a.transcript_failures, 2U);
+  assert(!a.state.transcript.active && a.state.ready);
   cai_app_client_close(b.client);
   server_state(&h, 1U, a.state.transport.attachment);
   assert(cai_app_client_detach(a.client, NULL) == CAI_OK);

@@ -115,6 +115,15 @@ static int pouch_cut_publish(cai_cli_pouch *pouch, lc_collection *collection,
   if (rc == CAI_OK) {
     int written =
         collection->edit(collection, &request, input, &result, &local);
+    /* Invalidate attached views on publication, including an uncertain durable
+     * acknowledgement. Never leave the old replay/live watermark armed after
+     * the SDK has changed the visible history. The caller holds journal_lock.
+     */
+    if ((written == LC_OK || result.published) &&
+        pouch->journal_observer != NULL)
+      pouch->journal_observer(
+          pouch->journal_observer_context, session->id,
+          result.has_replacement ? result.replacement.position : 0U, NULL);
     if (written != LC_OK) {
       rc = cai_cli_lc_error(error, &local);
       if (result.published) {

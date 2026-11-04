@@ -3362,6 +3362,9 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
         state->workspace_host, state->input_controller,
         cai_agent_runtime_session_id(state->runtime), error);
   if (rc == CAI_OK)
+    rc = cai_cli_workspace_host_history(state->workspace_host, &state->pouch,
+                                        error);
+  if (rc == CAI_OK)
     rc = cai_cli_workspace_host_ready(state->workspace_host, error);
   if (rc == CAI_OK) {
     cai_app_bridge_bind_input(state->bridge, state->input_admin != NULL

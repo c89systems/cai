@@ -1,6 +1,16 @@
 /* Exercise failures before publication, a stale expected head, and a lost
  * acknowledgement after the real SDK publishes its atomic edit. */
 static int cut_fault_mode, cut_edit_calls;
+static size_t cut_notifications;
+static void cut_test_notification(void *context, const char *session,
+                                  unsigned long long position,
+                                  const cai_agent_session_event *event) {
+  (void)context;
+  assert((strcmp(session, "atomic-cut") == 0 ||
+          strcmp(session, "atomic-cut-success") == 0) &&
+         event == NULL && position != 0U);
+  ++cut_notifications;
+}
 static int (*cut_real_edit)(lc_collection *, const lc_collection_edit_req *,
                             lc_source *, lc_collection_edit_res *, lc_error *);
 typedef struct cut_test_text {
@@ -124,6 +134,7 @@ static void pouch_atomic_cuts(cai_cli_pouch *pouch, cai_error *error) {
   collection->edit = cut_test_edit;
   lc_error_init(&local);
   request.first_sequence = request.through_sequence = 2U;
+  pouch->journal_observer = cut_test_notification;
   for (mode = 1; mode <= 3; mode++) {
     cut_fault_mode = mode;
     assert(collection->describe(collection, &before, &local) == LC_OK);
@@ -131,6 +142,7 @@ static void pouch_atomic_cuts(cai_cli_pouch *pouch, cai_error *error) {
                              NULL, request.through_sequence, error) != CAI_OK);
     if (mode == 3)
       assert(strstr(error->message, "reopen") != NULL);
+    assert(cut_notifications == (size_t)(mode == 3));
     cai_error_cleanup(error);
     cai_error_init(error);
     assert(collection->describe(collection, &after, &local) == LC_OK);
@@ -147,6 +159,7 @@ static void pouch_atomic_cuts(cai_cli_pouch *pouch, cai_error *error) {
       request.through_sequence = 3U;
     }
   }
+  pouch->journal_observer = NULL;
   /* Every alias shares the uncertain-write fence. No subsequent event may
    * reach the SDK until the owning store context has been reopened. */
   assert(cai_cli_pouch_open(alias, NULL, NULL, NULL, error) == CAI_OK);
@@ -182,6 +195,37 @@ static void pouch_atomic_cuts(cai_cli_pouch *pouch, cai_error *error) {
   lc_error_cleanup(&local);
 }
 
+static void pouch_cut_notification_success(cai_cli_pouch *pouch,
+                                           cai_error *error) {
+  const char *scope = "/work/atomic-cut-success", *id = "atomic-cut-success";
+  cai_source_callbacks callbacks;
+  cai_source *source = NULL;
+  cai_agent_session_event event;
+  cai_agent_session_trim_request request;
+  size_t offset = 0U;
+  memset(&callbacks, 0, sizeof(callbacks));
+  callbacks.read = journal_identity_read;
+  callbacks.context = &offset;
+  assert(cai_source_from_callbacks(&callbacks, &source, error) == CAI_OK);
+  assert(pouch->store.commit(pouch, scope, id, source, 0U, error) == CAI_OK);
+  cai_source_close(source);
+  memset(&event, 0, sizeof(event));
+  event.type = "test_event";
+  event.sequence = 1U;
+  event.data = "KEEP";
+  assert(pouch->store.append_event(pouch, scope, id, &event, error) == CAI_OK);
+  event.sequence = 2U;
+  event.data = "DROP";
+  assert(pouch->store.append_event(pouch, scope, id, &event, error) == CAI_OK);
+  cut_notifications = 0U;
+  pouch->journal_observer = cut_test_notification;
+  memset(&request, 0, sizeof(request));
+  request.first_sequence = request.through_sequence = 2U;
+  assert(pouch->store.trim(pouch, scope, id, &request, cut_test_replacement,
+                           NULL, 2U, error) == CAI_OK);
+  assert(cut_notifications == 1U);
+  pouch->journal_observer = NULL;
+}
 static void *pouch_cut_worker(void *context) {
   cai_cli_pouch *pouch = calloc(1U, sizeof(*pouch));
   cai_error error;
@@ -190,6 +234,7 @@ static void *pouch_cut_worker(void *context) {
   cai_error_init(&error);
   assert(cai_cli_pouch_open(pouch, NULL, NULL, NULL, &error) == CAI_OK);
   pouch_atomic_cuts(pouch, &error);
+  pouch_cut_notification_success(pouch, &error);
   cai_cli_pouch_close(pouch);
   cai_error_cleanup(&error);
   free(pouch);

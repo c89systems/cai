@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #include "../cli/input_wire.h"
+#include "../cli/transcript_wire.h"
 #include <assert.h>
 #include <cai/app_client.h>
 #include <cai/workspace_server.h>
@@ -16,12 +17,16 @@ typedef struct fixture {
   cai_workspace_server *server;
   cai_app_client *client;
   cai_cli_input_wire_decoder *decoder;
+  cai_cli_transcript_decoder *transcript_decoder;
   uint64_t attachment;
   size_t binds, requests, begins, rows, ends, results, resets, rejected, roles;
   cai_input_request request;
   cai_protocol_header header;
   char text[80];
   int cancel;
+  size_t subscriptions, spans, record_ends;
+  cai_transcript_kind reject_kind;
+  int reject_transcript;
 } fixture;
 static int received(void *context, const cai_workspace_server_event *event,
                     cai_error *error) {
@@ -32,6 +37,15 @@ static int received(void *context, const cai_workspace_server_event *event,
     f->attachment = event->attachment;
   if (event->type != CAI_WORKSPACE_MESSAGE)
     return CAI_OK;
+  if (event->message->header->kind == CAI_PROTOCOL_SUBSCRIBE ||
+      event->message->header->kind == CAI_PROTOCOL_UNSUBSCRIBE) {
+    const cai_cli_transcript_message *transcript = NULL;
+    rc = cai_cli_transcript_decode(f->transcript_decoder, event->message,
+                                   &transcript, error);
+    if (rc == CAI_OK && transcript != NULL)
+      ++f->subscriptions;
+    return rc;
+  }
   rc = cai_cli_input_wire_decode(f->decoder, event->message, &m, error);
   if (rc != CAI_OK || m == NULL)
     return rc;
@@ -46,6 +60,26 @@ static int received(void *context, const cai_workspace_server_event *event,
       strcpy(f->text, m->request.text);
       f->request.text = f->text;
     }
+  }
+  return CAI_OK;
+}
+static int transcript_observed(void *context, const cai_transcript_event *event,
+                               cai_error *error) {
+  fixture *f = context;
+  cai_app_client_state s;
+  (void)error;
+  assert(cai_app_client_get_state(f->client, &s, NULL) == CAI_OK);
+  assert(cai_app_client_pump(f->client, 1U, NULL) == CAI_ERR_INVALID);
+  assert(cai_app_client_detach(f->client, NULL) == CAI_ERR_INVALID);
+  cai_app_client_close(f->client);
+  ++f->spans;
+  if (f->reject_transcript && event->kind == f->reject_kind)
+    return CAI_ERR_CANCELLED;
+  if (event->kind == CAI_TRANSCRIPT_EVENT_END) {
+    /* Cursor acknowledgement follows callback acceptance. */
+    assert(s.transcript.position < event->position &&
+           s.transcript.sequence < event->sequence);
+    ++f->record_ends;
   }
   return CAI_OK;
 }
@@ -94,6 +128,8 @@ static void open_fixture(fixture *f, const char *runtime,
   cai_app_client_config client;
   memset(f, 0, sizeof(*f));
   assert(cai_cli_input_wire_decoder_open(&f->decoder, NULL) == CAI_OK);
+  assert(cai_cli_transcript_decoder_open(&f->transcript_decoder, NULL) ==
+         CAI_OK);
   cai_workspace_server_config_init(&server);
   server.runtime_directory = runtime;
   server.workspace = workspace;
@@ -107,6 +143,8 @@ static void open_fixture(fixture *f, const char *runtime,
   client.workspace = workspace;
   client.event = observed;
   client.context = f;
+  client.transcript = transcript_observed;
+  client.transcript_context = f;
   assert(cai_app_client_open(&client, 0U, &f->client, NULL) == CAI_OK);
 }
 static int exchange(fixture *f) {
@@ -128,6 +166,7 @@ static void close_fixture(fixture *f) {
   cai_app_client_close(f->client);
   cai_workspace_server_close(f->server);
   cai_cli_input_wire_decoder_close(f->decoder);
+  cai_cli_transcript_decoder_close(f->transcript_decoder);
 }
 static int begin(void *context, const cai_protocol_header *header,
                  uint32_t length, cai_error *error) {
@@ -208,10 +247,173 @@ static void *wrong_owner(void *context) {
          CAI_ERR_INVALID);
   assert(cai_app_client_takeover(f->client, 1U, 1U, NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_shutdown(f->client, 1U, 1U, NULL) == CAI_ERR_INVALID);
+  assert(cai_app_client_subscribe(f->client, 1U, 0U, "session", NULL, 0U, 0U,
+                                  NULL) == CAI_ERR_INVALID);
+  assert(cai_app_client_unsubscribe(f->client, NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_detach(f->client, NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_directory(f->client) == NULL);
   cai_app_client_close(f->client);
   return NULL;
+}
+static void transcript_message(cai_cli_transcript_message *m,
+                               cai_protocol_kind kind) {
+  memset(m, 0, sizeof(*m));
+  m->header.kind = kind;
+  m->header.conversation = 11U;
+  m->header.request = m->header.stream = 1U;
+  if (kind == CAI_PROTOCOL_STREAM_BEGIN || kind == CAI_PROTOCOL_STREAM_CHUNK ||
+      kind == CAI_PROTOCOL_STREAM_END)
+    m->header.sequence = 8U;
+  m->event.session = "session";
+  m->event.collection = "collection";
+  m->event.watermark = 10U;
+  m->event.type = "assistant_text_delta";
+  m->event.has_data = 1;
+  m->event.position = 9U;
+  m->event.data = "abc";
+  m->event.length = 3U;
+  m->event.failure = CAI_TRANSCRIPT_HISTORY_CHANGED;
+  m->event.code = CAI_ERR_INVALID;
+  m->event.reason = "History changed";
+}
+static void transcript_send(fixture *f, cai_cli_transcript_message *m) {
+  cai_cli_input_wire_output out;
+  out.context = f;
+  out.begin = begin;
+  out.write = write_token;
+  out.end = end;
+  assert(cai_cli_transcript_write(&out, m, NULL) == CAI_OK);
+}
+static void subscribe(fixture *f) {
+  assert(exchange(f) == CAI_OK);
+  assert(cai_app_client_subscribe(f->client, 1U, 11U, "session", NULL, 0U, 0U,
+                                  NULL) == CAI_OK);
+  assert(exchange(f) == CAI_OK && f->subscriptions == 1U &&
+         state(f).transcript.subscribing && !state(f).bound);
+}
+static void transcript_tests(const char *runtime, const char *workspace) {
+  fixture *f = calloc(1U, sizeof(*f));
+  cai_cli_transcript_message m;
+  unsigned int scenario;
+  assert(f != NULL);
+  /* Invalid framing is terminal only for the receiving attachment. The
+   * provisional record never advances the accepted reconnect cursor. */
+  for (scenario = 0U; scenario < 18U; ++scenario) {
+    open_fixture(f, runtime, workspace);
+    subscribe(f);
+    transcript_message(&m, CAI_PROTOCOL_REPLAY_BEGIN);
+    if (scenario == 0U)
+      m.event.session = "wrong";
+    if (scenario == 1U)
+      m.header.conversation = 12U;
+    if (scenario == 2U)
+      m.header.request = m.header.stream = 2U;
+    if (scenario < 3U) {
+      transcript_send(f, &m);
+    } else {
+      transcript_send(f, &m);
+      assert(exchange(f) == CAI_OK && state(f).transcript.active);
+      transcript_message(&m, CAI_PROTOCOL_STREAM_BEGIN);
+      if (scenario == 3U)
+        m.event.type = "";
+      if (scenario == 4U)
+        m.header.conversation = 12U;
+      if (scenario >= 5U && scenario != 15U && scenario != 16U) {
+        if (scenario == 14U)
+          m.event.has_data = 0;
+        transcript_send(f, &m);
+        assert(exchange(f) == CAI_OK);
+        if (scenario == 5U) {
+          /* Duplicate BEGIN while a candidate is open. */
+        } else if (scenario == 6U || scenario == 7U || scenario == 14U) {
+          transcript_message(&m, CAI_PROTOCOL_STREAM_CHUNK);
+          if (scenario == 6U)
+            m.event.offset = 1U;
+          if (scenario == 7U)
+            m.header.sequence = 9U;
+        } else if (scenario == 8U) {
+          transcript_message(&m, CAI_PROTOCOL_REPLAY_END);
+        } else {
+          transcript_message(&m, CAI_PROTOCOL_STREAM_END);
+          if (scenario == 9U)
+            m.event.offset = 3U;
+          if (scenario == 10U)
+            m.event.position = 11U;
+          if (scenario == 11U)
+            m.event.position = 0U;
+          if (scenario == 12U)
+            m.header.sequence = 9U;
+          if (scenario == 13U) {
+            f->reject_transcript = 1;
+            f->reject_kind = CAI_TRANSCRIPT_EVENT_END;
+          }
+          if (scenario == 17U) {
+            cai_workspace_server_close(f->server);
+            f->server = NULL;
+            assert(cai_app_client_pump(f->client, 2U, NULL) == CAI_OK &&
+                   !state(f).transcript.active &&
+                   state(f).transcript.position == 0U);
+            close_fixture(f);
+            continue;
+          }
+        }
+      } else if (scenario == 15U) {
+        transcript_message(&m, CAI_PROTOCOL_STREAM_CHUNK);
+      } else if (scenario == 16U) {
+        transcript_message(&m, CAI_PROTOCOL_REPLAY_END);
+        m.event.watermark = 11U;
+      }
+      transcript_send(f, &m);
+    }
+    assert(exchange(f) ==
+           (scenario == 13U ? CAI_ERR_CANCELLED : CAI_ERR_PROTOCOL));
+    assert(state(f).transport.phase == CAI_WORKSPACE_FAILED &&
+           !state(f).transcript.active && state(f).transcript.position == 0U &&
+           f->record_ends == 0U);
+    close_fixture(f);
+  }
+  open_fixture(f, runtime, workspace);
+  subscribe(f);
+  assert(cai_app_client_subscribe(f->client, 1U, 11U, "session", NULL, 0U, 0U,
+                                  NULL) == CAI_ERR_INVALID);
+  assert(cai_app_client_subscribe(f->client, 2U, 11U, "session", NULL, 9U, 8U,
+                                  NULL) == CAI_ERR_INVALID);
+  transcript_message(&m, CAI_PROTOCOL_REPLAY_BEGIN);
+  transcript_send(f, &m);
+  assert(exchange(f) == CAI_OK);
+  transcript_message(&m, CAI_PROTOCOL_STREAM_BEGIN);
+  transcript_send(f, &m);
+  transcript_message(&m, CAI_PROTOCOL_STREAM_CHUNK);
+  transcript_send(f, &m);
+  assert(exchange(f) == CAI_OK && state(f).transcript.position == 0U);
+  transcript_message(&m, CAI_PROTOCOL_STREAM_END);
+  m.event.offset = 3U;
+  transcript_send(f, &m);
+  assert(exchange(f) == CAI_OK && f->record_ends == 1U &&
+         state(f).transcript.position == 9U &&
+         state(f).transcript.sequence == 8U);
+  transcript_message(&m, CAI_PROTOCOL_REPLAY_END);
+  transcript_send(f, &m);
+  assert(exchange(f) == CAI_OK && !state(f).transcript.replaying &&
+         state(f).transcript.position == 10U);
+  /* Explicit replacement hides stale in-flight frames, then a refusal leaves
+   * no old subscription alive. It preserves the accepted cursor for recovery.
+   */
+  assert(cai_app_client_subscribe(f->client, 2U, 11U, "session", "collection",
+                                  10U, 8U, NULL) == CAI_OK);
+  assert(exchange(f) == CAI_OK);
+  transcript_message(&m, CAI_PROTOCOL_STREAM_BEGIN);
+  transcript_send(f, &m);
+  assert(exchange(f) == CAI_OK && !state(f).transcript.active);
+  transcript_message(&m, CAI_PROTOCOL_SUBSCRIPTION_ERROR);
+  m.header.request = m.header.stream = 2U;
+  transcript_send(f, &m);
+  assert(exchange(f) == CAI_OK && !state(f).transcript.active &&
+         !state(f).transcript.subscribing &&
+         state(f).transcript.position == 10U &&
+         state(f).transcript.sequence == 8U);
+  close_fixture(f);
+  free(f);
 }
 static void roundtrip(const char *runtime, const char *workspace) {
   fixture *f = calloc(1U, sizeof(*f));
@@ -485,6 +687,7 @@ static void *run(void *context) {
   roundtrip(runtime, workspace);
   malformed(runtime, workspace);
   rejection_and_eof(runtime, workspace);
+  transcript_tests(runtime, workspace);
   directory = opendir(runtime);
   assert(directory != NULL);
   while ((entry = readdir(directory)) != NULL)

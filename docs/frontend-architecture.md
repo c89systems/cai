@@ -22,14 +22,18 @@ through `cai_app_start`/`cai_app_join`, with explicit startup context, durable
 input, native event/replay observations and a coalescing status wakeup. Its
 startup and runtime code is shared with the synchronous receiver; the latter's
 terminal loop has not yet been replaced by a client composition. Remote command
-presentation, transcript streaming, Softline client lifecycle
+presentation, Softline client lifecycle
 and asynchronous Lua observations remain part of the cutover, not completed
 features. `cai_app_start_server` now binds socket ownership, handshake, roles and
 last-client/persistent lifetime to that same owner. Socket input/queue binding
 now shares its durable producers, receipts and generation checks; queue
 snapshots are incremental begin/item/end observations. Command presentation
-and replay/live output remain pending. See the current public `app.h` contracts
-and workspace specification.
+remains pending. Socket replay/live subscriptions now use one retained reader
+worker per conversation, bounded native collection windows and direct committed
+append notifications. The typed client delivers borrowed chunks and validated
+cursors without context restoration or a transcript mirror. Tail selection and
+terminal presentation remain pending. See the current public `app.h` contracts,
+[transcript binding](workspace-wire-transcript.md) and workspace specification.
 
 Cutover decisions confirmed on 2026-11-03: implement the in-process controller
 and Softline adapter first, without a listener, background-server executable,

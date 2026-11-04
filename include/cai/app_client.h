@@ -1,14 +1,21 @@
 /** @file cai/app_client.h
- * Typed application input client. Owns no runtime, store or terminal.
+ * Typed application input and transcript client. Owns no runtime, store or
+ * terminal.
  */
 #ifndef CAI_APP_CLIENT_H
 #define CAI_APP_CLIENT_H
 #include <cai/input_controller.h>
+#include <cai/transcript.h>
 #include <cai/workspace_client.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
 typedef struct cai_app_client cai_app_client;
+typedef struct cai_app_transcript_state {
+  char session[129], collection[21];
+  uint64_t stream, conversation, sequence, position, watermark, visibility;
+  int subscribing, active, replaying;
+} cai_app_transcript_state;
 typedef struct cai_app_client_state {
   cai_workspace_client_state transport;
   /** Last validated baseline identity; retained after disconnect for explicit
@@ -17,6 +24,7 @@ typedef struct cai_app_client_state {
   unsigned long long conversation, producer, last_request;
   cai_input_state queue;
   int binding, bound, ready;
+  cai_app_transcript_state transcript;
 } cai_app_client_state;
 typedef enum cai_app_client_event_type {
   CAI_APP_CLIENT_CONNECTION = 0,
@@ -42,6 +50,12 @@ typedef struct cai_app_client_config {
    * and send requests/controls; must not reenter pump, detach or close. */
   int (*event)(void *, const cai_app_client_event *, cai_error *);
   void *context;
+  /** Independent borrowed streaming presentation callback. No complete event
+   * strings or transcript mirror are built by the client. Return CAI_OK only
+   * after accepting a span; failures terminate this attachment. Same owner and
+   * reentry rules as event above. Transport loss aborts a partial event. */
+  int (*transcript)(void *, const cai_transcript_event *, cai_error *);
+  void *transcript_context;
 } cai_app_client_config;
 void cai_app_client_config_init(cai_app_client_config *);
 /** Explicit connect only: never forks, opens stores or submits input. All
@@ -78,6 +92,21 @@ int cai_app_client_takeover(cai_app_client *, uint64_t request,
                             uint64_t original_generation, cai_error *);
 int cai_app_client_shutdown(cai_app_client *, uint64_t request,
                             uint64_t original_generation, cai_error *);
+/** Subscribe to the active session without opening stores or queue producers.
+ * Epoch zero resolves the explicitly named session. A resume position requires
+ * its original collection identity and last accepted sequence. Request IDs
+ * increase per attachment, independently of input/control IDs. Replacing a
+ * subscription discards its unfinished candidate, never model input. Replay
+ * ends at the captured watermark, then ordered live events follow. ERROR
+ * requires explicit resubscription; no automatic retry or missing-data skip. */
+int cai_app_client_subscribe(cai_app_client *, uint64_t request,
+                             uint64_t conversation, const char *session,
+                             const char *expected_collection,
+                             uint64_t after_position, uint64_t after_sequence,
+                             cai_error *);
+/** End only this transcript subscription, keeping input and attachment alive.
+ * The terminal ERROR span targets its original stream identity. */
+int cai_app_client_unsubscribe(cai_app_client *, cai_error *);
 /** Drain DETACH using prepare/pump. Default nonpersistent servers stop after
  * their last attachment leaves; persistent servers keep running. */
 int cai_app_client_detach(cai_app_client *, cai_error *);

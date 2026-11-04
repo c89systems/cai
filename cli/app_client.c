@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "input_wire.h"
 #include "pouch_stream.h"
+#include "transcript_wire.h"
 #include <cai/app_client.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 struct cai_app_client {
   cai_workspace_client *socket;
   cai_cli_input_wire_decoder *decoder;
+  cai_cli_transcript_decoder *transcript_decoder;
   cai_app_client_config config;
   cai_app_client_state state;
   cai_input_observation baseline;
@@ -18,7 +20,13 @@ struct cai_app_client {
   char wanted_session[129], baseline_session[129];
   size_t index;
   int snapshot, pumping;
+  uint64_t wanted_stream, wanted_conversation, wanted_position, wanted_sequence,
+      stream_high, event_sequence, event_offset;
+  char transcript_session[129], transcript_collection[21];
+  int event_open, event_has_data;
 };
+static int receive_transcript(cai_app_client *, const cai_protocol_event *,
+                              cai_error *);
 static int valid(cai_app_client *client, cai_error *error) {
   return client != NULL && pthread_equal(client->owner, pthread_self())
              ? CAI_OK
@@ -83,6 +91,13 @@ static int receive(void *context, const cai_protocol_event *event,
                                  event->header->request, NULL, error)
                         : rc;
   }
+  if (event->header->kind == CAI_PROTOCOL_REPLAY_BEGIN ||
+      event->header->kind == CAI_PROTOCOL_REPLAY_END ||
+      event->header->kind == CAI_PROTOCOL_STREAM_BEGIN ||
+      event->header->kind == CAI_PROTOCOL_STREAM_CHUNK ||
+      event->header->kind == CAI_PROTOCOL_STREAM_END ||
+      event->header->kind == CAI_PROTOCOL_SUBSCRIPTION_ERROR)
+    return receive_transcript(client, event, error);
   if (event->header->kind != CAI_PROTOCOL_QUEUE_BEGIN &&
       event->header->kind != CAI_PROTOCOL_QUEUE_ITEM &&
       event->header->kind != CAI_PROTOCOL_QUEUE_END &&
@@ -251,9 +266,12 @@ int cai_app_client_get_state(cai_app_client *client, cai_app_client_state *out,
                                       error);
   if (rc == CAI_OK) {
     if (client->state.transport.phase == CAI_WORKSPACE_FAILED ||
-        client->state.transport.phase == CAI_WORKSPACE_DISCONNECTED)
+        client->state.transport.phase == CAI_WORKSPACE_DISCONNECTED) {
       client->state.ready = client->state.bound = client->state.binding =
           client->snapshot = 0;
+      client->state.transcript.active = client->state.transcript.replaying =
+          client->state.transcript.subscribing = client->event_open = 0;
+    }
     *out = client->state;
   }
   return rc;
@@ -275,6 +293,8 @@ int cai_app_client_pump(cai_app_client *client, uint64_t now,
       client->state.transport.phase == CAI_WORKSPACE_DISCONNECTED) {
     client->state.ready = client->state.bound = client->state.binding =
         client->snapshot = 0;
+    client->state.transcript.active = client->state.transcript.replaying =
+        client->state.transcript.subscribing = client->event_open = 0;
     if (rc == CAI_OK && before != client->state.transport.phase)
       rc = notify(client, CAI_APP_CLIENT_CONNECTION, 0U, NULL, error);
   }
@@ -305,6 +325,166 @@ static int send(cai_app_client *client, const cai_cli_input_wire_message *m,
   output.write = output_write;
   output.end = output_end;
   return cai_cli_input_wire_write(&output, m, error);
+}
+static int receive_transcript(cai_app_client *c,
+                              const cai_protocol_event *event,
+                              cai_error *error) {
+  const cai_cli_transcript_message *m = NULL;
+  const cai_transcript_event *e;
+  cai_app_transcript_state *s = &c->state.transcript;
+  const char *reason = "workspace transcript observation is inconsistent";
+  int rc;
+  if (c->wanted_stream == 0U || event->header->stream > c->wanted_stream)
+    return cai_cli_error(error, CAI_ERR_PROTOCOL, reason);
+  if (event->header->stream < c->wanted_stream)
+    return CAI_OK;
+  if (event->header->request != c->wanted_stream)
+    return cai_cli_error(error, CAI_ERR_PROTOCOL, reason);
+  if (c->transcript_decoder == NULL) {
+    rc = cai_cli_transcript_decoder_open(&c->transcript_decoder, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
+  rc = cai_cli_transcript_decode(c->transcript_decoder, event, &m, error);
+  if (rc != CAI_OK || m == NULL)
+    return rc;
+  e = &m->event;
+  switch (e->kind) {
+  case CAI_TRANSCRIPT_REPLAY_BEGIN:
+    if (!s->subscribing || e->session == NULL || e->collection == NULL ||
+        e->collection[0] == '\0' || e->conversation == 0U ||
+        (c->wanted_conversation != 0U &&
+         e->conversation != c->wanted_conversation) ||
+        strcmp(e->session, c->transcript_session) != 0 ||
+        (c->transcript_collection[0] != '\0' &&
+         strcmp(e->collection, c->transcript_collection) != 0) ||
+        e->watermark < c->wanted_position)
+      return cai_cli_error(error, CAI_ERR_PROTOCOL, reason);
+    strcpy(s->session, e->session);
+    strcpy(s->collection, e->collection);
+    s->stream = e->stream;
+    s->conversation = e->conversation;
+    s->watermark = e->watermark;
+    s->visibility = e->visibility;
+    s->sequence = c->wanted_sequence;
+    s->position = c->wanted_position;
+    s->active = s->replaying = 1;
+    s->subscribing = c->event_open = 0;
+    break;
+  case CAI_TRANSCRIPT_EVENT_BEGIN:
+    if (!s->active || c->event_open || e->conversation != s->conversation ||
+        e->sequence <= s->sequence || e->type == NULL || e->type[0] == '\0')
+      return cai_cli_error(error, CAI_ERR_PROTOCOL, reason);
+    c->event_open = 1;
+    c->event_sequence = e->sequence;
+    c->event_offset = 0U;
+    c->event_has_data = e->has_data;
+    break;
+  case CAI_TRANSCRIPT_DATA:
+    if (!s->active || !c->event_open || !c->event_has_data ||
+        e->conversation != s->conversation ||
+        e->sequence != c->event_sequence || e->offset != c->event_offset ||
+        e->length == 0U || e->length > UINT64_MAX - c->event_offset)
+      return cai_cli_error(error, CAI_ERR_PROTOCOL, reason);
+    c->event_offset += e->length;
+    break;
+  case CAI_TRANSCRIPT_EVENT_END:
+    if (!s->active || !c->event_open || e->conversation != s->conversation ||
+        e->sequence != c->event_sequence || e->offset != c->event_offset ||
+        e->position <= s->position ||
+        (s->replaying ? e->position > s->watermark
+                      : e->position <= s->watermark))
+      return cai_cli_error(error, CAI_ERR_PROTOCOL, reason);
+    break;
+  case CAI_TRANSCRIPT_REPLAY_END:
+    if (!s->active || !s->replaying || c->event_open ||
+        e->conversation != s->conversation || e->watermark != s->watermark)
+      return cai_cli_error(error, CAI_ERR_PROTOCOL, reason);
+    s->replaying = 0;
+    break;
+  case CAI_TRANSCRIPT_ERROR:
+    s->active = s->replaying = s->subscribing = c->event_open = 0;
+    break;
+  }
+  rc = c->config.transcript != NULL
+           ? c->config.transcript(c->config.transcript_context, e, error)
+           : CAI_OK;
+  if (rc == CAI_OK && e->kind == CAI_TRANSCRIPT_EVENT_END) {
+    s->sequence = e->sequence;
+    s->position = e->position;
+    c->event_open = 0;
+  } else if (rc == CAI_OK && e->kind == CAI_TRANSCRIPT_REPLAY_END)
+    s->position = e->watermark;
+  return rc;
+}
+static int send_transcript(cai_app_client *c,
+                           const cai_cli_transcript_message *m,
+                           cai_error *error) {
+  cai_cli_input_wire_output out;
+  out.context = c;
+  out.begin = output_begin;
+  out.write = output_write;
+  out.end = output_end;
+  return cai_cli_transcript_write(&out, m, error);
+}
+int cai_app_client_subscribe(cai_app_client *c, uint64_t request,
+                             uint64_t conversation, const char *session,
+                             const char *collection, uint64_t after,
+                             uint64_t sequence, cai_error *error) {
+  cai_cli_transcript_message m;
+  int rc = valid(c, error);
+  if (rc != CAI_OK)
+    return rc;
+  rc = cai_workspace_client_get_state(c->socket, &c->state.transport, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (c->state.transport.phase != CAI_WORKSPACE_CONNECTED || session == NULL ||
+      session[0] == '\0' || strnlen(session, 129U) > 128U ||
+      (collection != NULL && strnlen(collection, 21U) > 20U) ||
+      request <= c->stream_high ||
+      ((after != 0U || sequence != 0U) &&
+       (collection == NULL || collection[0] == '\0')) ||
+      (after == 0U && sequence != 0U))
+    return cai_cli_error(
+        error, CAI_ERR_INVALID,
+        "Connected client and verified transcript cursor required");
+  memset(&m, 0, sizeof(m));
+  m.header.kind = CAI_PROTOCOL_SUBSCRIBE;
+  m.header.request = request;
+  m.header.conversation = conversation;
+  m.header.generation = c->state.transport.generation;
+  m.event.session = session;
+  m.event.collection = collection;
+  m.event.position = after;
+  m.event.sequence = sequence;
+  rc = send_transcript(c, &m, error);
+  if (rc == CAI_OK) {
+    c->wanted_stream = c->stream_high = request;
+    c->wanted_conversation = conversation;
+    c->wanted_position = after;
+    c->wanted_sequence = sequence;
+    strcpy(c->transcript_session, session);
+    snprintf(c->transcript_collection, sizeof(c->transcript_collection), "%s",
+             collection != NULL ? collection : "");
+    c->state.transcript.subscribing = 1;
+    c->state.transcript.active = 0;
+    c->state.transcript.replaying = c->event_open = 0;
+  }
+  return rc;
+}
+int cai_app_client_unsubscribe(cai_app_client *c, cai_error *error) {
+  cai_cli_transcript_message m;
+  int rc = valid(c, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (c->wanted_stream == 0U)
+    return cai_cli_error(error, CAI_ERR_INVALID, "No transcript subscription");
+  memset(&m, 0, sizeof(m));
+  m.header.kind = CAI_PROTOCOL_UNSUBSCRIBE;
+  m.header.request = m.header.stream = c->wanted_stream;
+  m.header.conversation = c->state.transcript.conversation;
+  m.header.generation = c->state.transport.generation;
+  return send_transcript(c, &m, error);
 }
 int cai_app_client_bind(cai_app_client *client, uint64_t request,
                         unsigned long long epoch, unsigned long long producer,
@@ -397,5 +577,6 @@ void cai_app_client_close(cai_app_client *client) {
     return;
   cai_workspace_client_close(client->socket);
   cai_cli_input_wire_decoder_close(client->decoder);
+  cai_cli_transcript_decoder_close(client->transcript_decoder);
   free(client);
 }

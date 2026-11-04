@@ -45,6 +45,12 @@ typedef struct cai_cli_pouch {
   pthread_mutex_t journal_lock;
   int journal_lock_initialized;
   struct cai_cli_journal_context *journal_contexts;
+  /* Borrowed nonblocking observer, called under journal_lock after durable
+   * publication. NULL event announces an atomic history cut. No SDK calls,
+   * waiting, rendering or reentry is allowed from this hook. */
+  void (*journal_observer)(void *, const char *, unsigned long long,
+                           const cai_agent_session_event *);
+  void *journal_observer_context;
   /* One renewal service for this store context, independent of journal writes.
    * Receivers retain their SDK lease until the context exits. */
   struct cai_cli_collection_owner *collection_owners;

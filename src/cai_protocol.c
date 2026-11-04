@@ -49,7 +49,7 @@ static int decode_token(cai_protocol_decoder *decoder,
       return bad(error);
     switch (decoder->field) {
     case 0:
-      if (token->argument > CAI_PROTOCOL_SHUTDOWN)
+      if (token->argument > CAI_PROTOCOL_SUBSCRIPTION_ERROR)
         return bad(error);
       decoder->header.kind = (cai_protocol_kind)token->argument;
       break;
@@ -192,7 +192,7 @@ int cai_protocol_peer_begin(cai_wire_peer *peer,
   unsigned int i;
   int rc;
   if (peer == NULL || header == NULL || header->kind < CAI_PROTOCOL_HELLO ||
-      header->kind > CAI_PROTOCOL_SHUTDOWN || payload_length == 0U)
+      header->kind > CAI_PROTOCOL_SUBSCRIPTION_ERROR || payload_length == 0U)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "protocol writer requires a header and payload size");
   values[0] = (uint64_t)header->kind;

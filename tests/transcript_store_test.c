@@ -1,6 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../cli/pouch.h"
+#include "../cli/transcript_feed.h"
 #include <assert.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -143,6 +145,110 @@ static void reset(reading *r) {
   memset(&r->seen, 0, sizeof(r->seen));
   r->seen.reader = r->reader;
 }
+static void publisher(cai_cli_pouch *pouch) {
+  cai_cli_transcript_publisher *feed = NULL;
+  cai_cli_transcript_publisher *duplicate = NULL;
+  cai_cli_transcript_frame frame;
+  struct pollfd fd;
+  struct timespec now;
+  uint64_t until, position = 0U, sequence = 0U;
+  char collection[21] = "";
+  size_t replay = 0U, events = 0U, live = 0U;
+  unsigned int opens = cai_test_storage_open_count();
+  int failed, slow = 0, appended = 0;
+  unsigned long long i;
+  for (i = 4U; i <= 42U; ++i)
+    append(pouch, i, "window event");
+  assert(cai_cli_transcript_feed_open(pouch, "/transcript", "stream", 1U, &feed,
+                                      NULL) == CAI_OK);
+  assert(cai_cli_transcript_feed_open(pouch, "/transcript", "stream", 1U,
+                                      &duplicate, NULL) == CAI_ERR_INVALID &&
+         duplicate == NULL);
+  assert(cai_cli_transcript_feed_request(feed, 1U, 1U, NULL, 0U, 0U, NULL) ==
+         CAI_OK);
+  assert(cai_cli_transcript_feed_request(feed, 2U, 2U, NULL, 0U, 0U, NULL) ==
+         CAI_OK);
+  fd.fd = cai_cli_transcript_feed_fd(feed);
+  fd.events = POLLIN;
+  assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+  until = (uint64_t)now.tv_sec + 10U;
+  while (!slow || live == 0U) {
+    cai_cli_transcript_feed_drain(feed);
+    if (cai_cli_transcript_feed_ready(feed, 1U, &failed) && failed) {
+      assert(cai_cli_transcript_feed_next(feed, 1U, &frame));
+      assert(frame.event.kind == CAI_TRANSCRIPT_ERROR &&
+             frame.event.failure == CAI_TRANSCRIPT_SLOW);
+      slow = 1;
+    }
+    while (cai_cli_transcript_feed_next(feed, 2U, &frame)) {
+      const cai_transcript_event *e = &frame.event;
+      assert(e->kind != CAI_TRANSCRIPT_ERROR && e->stream == 2U);
+      if (e->kind == CAI_TRANSCRIPT_REPLAY_BEGIN) {
+        strcpy(collection, e->collection);
+        if (!appended) {
+          append(pouch, 43U, "live after replay");
+          appended = 1;
+        }
+      } else if (e->kind == CAI_TRANSCRIPT_REPLAY_END) {
+        ++replay;
+        assert(events == 42U);
+      } else if (e->kind == CAI_TRANSCRIPT_EVENT_END) {
+        assert(e->sequence > sequence && e->position > position);
+        sequence = e->sequence;
+        position = e->position;
+        if (replay != 0U) {
+          assert(e->sequence == 43U);
+          ++live;
+        } else
+          ++events;
+      }
+    }
+    if (slow && live != 0U)
+      break;
+    assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
+           (uint64_t)now.tv_sec < until);
+    assert(poll(&fd, 1U, 1000) >= 0);
+  }
+  assert(cai_cli_transcript_feed_request(feed, 1U, 3U, collection, position,
+                                         sequence, NULL) == CAI_OK);
+  replay = 0U;
+  while (replay == 0U) {
+    cai_cli_transcript_feed_drain(feed);
+    while (cai_cli_transcript_feed_next(feed, 1U, &frame)) {
+      assert(frame.event.stream == 3U &&
+             frame.event.kind != CAI_TRANSCRIPT_ERROR);
+      if (frame.event.kind == CAI_TRANSCRIPT_REPLAY_END)
+        ++replay;
+      else
+        assert(frame.event.kind == CAI_TRANSCRIPT_REPLAY_BEGIN);
+    }
+    if (replay == 0U)
+      assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
+             (uint64_t)now.tv_sec < until && poll(&fd, 1U, 1000) >= 0);
+  }
+  /* The real durable-cut hook invalidates all subscribed views. Exercising
+   * its consumer contract here avoids inventing a model-context fixture. */
+  pthread_mutex_lock(&pouch->journal_lock);
+  pouch->journal_observer(pouch->journal_observer_context, "stream", 0U, NULL);
+  pthread_mutex_unlock(&pouch->journal_lock);
+  assert(cai_cli_transcript_feed_next(feed, 1U, &frame) &&
+         frame.event.failure == CAI_TRANSCRIPT_HISTORY_CHANGED);
+  assert(cai_cli_transcript_feed_next(feed, 2U, &frame) &&
+         frame.event.failure == CAI_TRANSCRIPT_HISTORY_CHANGED);
+  cai_cli_transcript_feed_drain(feed);
+  assert(poll(&fd, 1U, 0) ==
+         0); /* Idle is quiescent, including after errors. */
+  /* Closing a context cancels a producer even when its history ring is full.
+   * No drain, frontend acknowledgement or one-second timeout is required. */
+  assert(cai_cli_transcript_feed_request(feed, 1U, 4U, NULL, 0U, 0U, NULL) ==
+         CAI_OK);
+  while (!cai_cli_transcript_feed_ready(feed, 1U, &failed))
+    assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
+           (uint64_t)now.tv_sec < until && poll(&fd, 1U, 1000) >= 0);
+  cai_cli_transcript_feed_close(feed);
+  assert(pouch->journal_observer == NULL &&
+         cai_test_storage_open_count() == opens);
+}
 int main(int argc, char **argv) {
   cai_cli_pouch *pouch = calloc(1U, sizeof(*pouch));
   cai_cli_pouch_transcript *reader = NULL, *bad = NULL;
@@ -261,6 +367,7 @@ int main(int argc, char **argv) {
                                        &r.seen, &r.error) == CAI_OK);
   assert(r.seen.events == 1U && r.seen.last == 2U &&
          cai_test_storage_open_count() == opens);
+  publisher(pouch);
   {
     lc_collection_head_res head;
     lc_error local;

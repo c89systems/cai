@@ -4,6 +4,7 @@
 #include "input_wire.h"
 #include "log.h"
 #include "pouch_stream.h"
+#include "transcript_feed.h"
 #include <cai/workspace_server.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -14,8 +15,10 @@ typedef struct host_peer {
   cai_cli_workspace_host *host;
   uint64_t attachment;
   cai_cli_input_wire_decoder *decoder;
+  cai_cli_transcript_decoder *transcript_decoder;
   cai_input_connection *input;
   unsigned long long binding_request, snapshot_request;
+  uint64_t stream, stream_high;
   int detached, binding;
 } host_peer;
 struct cai_cli_workspace_host {
@@ -24,6 +27,7 @@ struct cai_cli_workspace_host {
   pslog_logger *logger;
   cai_input_controller_config admission;
   cai_input_controller *input;
+  cai_cli_transcript_publisher *history;
   char session[129];
   uint64_t generation;
   host_peer peers[CAI_ATTACHMENT_LIMIT];
@@ -52,6 +56,100 @@ static int send_message(host_peer *peer, const cai_cli_input_wire_message *m,
   output.write = output_write;
   output.end = output_end;
   return cai_cli_input_wire_write(&output, m, error);
+}
+static int send_transcript(host_peer *peer, const cai_transcript_event *event,
+                           cai_error *error) {
+  static const cai_protocol_kind kinds[] = {
+      CAI_PROTOCOL_REPLAY_BEGIN, CAI_PROTOCOL_STREAM_BEGIN,
+      CAI_PROTOCOL_STREAM_CHUNK, CAI_PROTOCOL_STREAM_END,
+      CAI_PROTOCOL_REPLAY_END,   CAI_PROTOCOL_SUBSCRIPTION_ERROR};
+  cai_cli_transcript_message m;
+  cai_cli_input_wire_output output;
+  memset(&m, 0, sizeof(m));
+  m.event = *event;
+  m.header.kind = kinds[event->kind];
+  m.header.request = m.header.stream = event->stream;
+  m.header.conversation = event->conversation;
+  if (event->kind >= CAI_TRANSCRIPT_EVENT_BEGIN &&
+      event->kind <= CAI_TRANSCRIPT_EVENT_END)
+    m.header.sequence = event->sequence;
+  output.context = peer;
+  output.begin = output_begin;
+  output.write = output_write;
+  output.end = output_end;
+  return cai_cli_transcript_write(&output, &m, error);
+}
+static int transcript_error(host_peer *peer, uint64_t stream,
+                            cai_transcript_failure failure, int code,
+                            const char *reason, cai_error *error) {
+  cai_transcript_event e;
+  memset(&e, 0, sizeof(e));
+  e.kind = CAI_TRANSCRIPT_ERROR;
+  e.stream = stream;
+  e.failure = failure;
+  e.code = code;
+  e.reason = reason;
+  return send_transcript(peer, &e, error);
+}
+static int transcript_request(host_peer *peer, const cai_protocol_event *event,
+                              cai_error *error) {
+  const cai_cli_transcript_message *m = NULL;
+  unsigned long long epoch;
+  cai_error local;
+  int rc;
+  if (peer->transcript_decoder == NULL) {
+    rc = cai_cli_transcript_decoder_open(&peer->transcript_decoder, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
+  rc = cai_cli_transcript_decode(peer->transcript_decoder, event, &m, error);
+  if (rc != CAI_OK || m == NULL)
+    return rc;
+  if (m->header.kind == CAI_PROTOCOL_UNSUBSCRIBE) {
+    if (m->header.stream == peer->stream)
+      cai_cli_transcript_feed_cancel(peer->host->history, peer->attachment,
+                                     peer->stream);
+    else
+      return transcript_error(peer, m->header.stream,
+                              CAI_TRANSCRIPT_CONTEXT_CLOSED, CAI_ERR_CANCELLED,
+                              "Transcript subscription is not active", error);
+    return CAI_OK;
+  }
+  if (m->header.request <= peer->stream_high)
+    return transcript_error(peer, m->header.request, CAI_TRANSCRIPT_FAILED,
+                            CAI_ERR_INVALID, "Fresh subscription ID required",
+                            error);
+  cai_error_init(&local);
+  if (peer->stream != 0U)
+    cai_cli_transcript_feed_cancel(peer->host->history, peer->attachment,
+                                   peer->stream);
+  peer->stream = 0U;
+  rc =
+      peer->host->history != NULL && m->event.session != NULL &&
+              strcmp(m->event.session, peer->host->session) == 0
+          ? cai_input_controller_conversation(peer->host->input, &epoch, &local)
+          : cai_cli_error(
+                &local, CAI_ERR_INVALID,
+                "Active conversation and fresh subscription ID required");
+  if (m->header.request > peer->stream_high)
+    peer->stream_high = m->header.request;
+  if (rc == CAI_OK && m->header.conversation != 0U &&
+      m->header.conversation != epoch)
+    rc = cai_cli_error(&local, CAI_ERR_INVALID,
+                       "Transcript conversation changed");
+  if (rc == CAI_OK)
+    rc = cai_cli_transcript_feed_request(
+        peer->host->history, peer->attachment, m->header.request,
+        m->event.collection, m->event.position, m->event.sequence, &local);
+  if (rc == CAI_OK)
+    peer->stream = peer->stream_high = m->header.request;
+  else
+    rc = transcript_error(peer, m->header.request, CAI_TRANSCRIPT_FAILED, rc,
+                          local.message != NULL ? local.message
+                                                : "Transcript request failed",
+                          error);
+  cai_error_cleanup(&local);
+  return rc;
 }
 static int clock_ms(uint64_t *out, cai_error *error) {
   struct timespec now;
@@ -118,6 +216,9 @@ static int message(void *context, const cai_workspace_server_event *event,
   if (peer == NULL || peer->detached)
     return cai_cli_error(error, CAI_ERR_PROTOCOL,
                          "workspace input attachment is unavailable");
+  if (event->message->header->kind == CAI_PROTOCOL_SUBSCRIBE ||
+      event->message->header->kind == CAI_PROTOCOL_UNSUBSCRIBE)
+    return transcript_request(peer, event->message, error);
   if (peer->decoder == NULL) {
     rc = cai_cli_input_wire_decoder_open(&peer->decoder, error);
     if (rc != CAI_OK)
@@ -186,6 +287,8 @@ static int release_peer(host_peer *peer, cai_error *error) {
                ? cai_input_controller_release_edits(peer->host->input,
                                                     peer->attachment, error)
                : CAI_OK;
+  if (peer->host != NULL)
+    cai_cli_transcript_feed_detach(peer->host->history, peer->attachment);
   if (peer->input != NULL) {
     cai_input_connection_close(peer->input);
     peer->input = NULL;
@@ -263,6 +366,15 @@ int cai_cli_workspace_host_input(cai_cli_workspace_host *host,
     strcpy(host->session, session);
     return CAI_OK;
   }
+  for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i)
+    if (host->peers[i].stream != 0U) {
+      (void)transcript_error(&host->peers[i], host->peers[i].stream,
+                             CAI_TRANSCRIPT_CONTEXT_CLOSED, CAI_ERR_CANCELLED,
+                             "Conversation closed", NULL);
+      host->peers[i].stream = 0U;
+    }
+  cai_cli_transcript_feed_close(host->history);
+  host->history = NULL;
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
     host_peer *peer = &host->peers[i];
     cai_error local;
@@ -287,6 +399,21 @@ int cai_cli_workspace_host_input(cai_cli_workspace_host *host,
   host->input = NULL;
   host->session[0] = '\0';
   return result;
+}
+int cai_cli_workspace_host_history(cai_cli_workspace_host *host,
+                                   cai_cli_pouch *pouch, cai_error *error) {
+  unsigned long long epoch;
+  int rc;
+  if (host == NULL)
+    return CAI_OK;
+  if (host->history != NULL || host->input == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "Open conversation required for transcript");
+  rc = cai_input_controller_conversation(host->input, &epoch, error);
+  return rc == CAI_OK ? cai_cli_transcript_feed_open(
+                            pouch, cai_workspace_server_directory(host->server),
+                            host->session, epoch, &host->history, error)
+                      : rc;
 }
 int cai_cli_workspace_host_open(const char *runtime_directory,
                                 const char *workspace,
@@ -368,6 +495,24 @@ int cai_cli_workspace_host_prepare(cai_cli_workspace_host *host,
     if (peer->detached)
       *timeout = 0L;
   }
+  for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
+    size_t pending;
+    int failed;
+    host_peer *peer = &host->peers[i];
+    if (!peer->detached && peer->stream != 0U &&
+        cai_cli_transcript_feed_ready(host->history, peer->attachment,
+                                      &failed) &&
+        cai_workspace_server_pending(host->server, peer->attachment, &pending,
+                                     NULL) == CAI_OK &&
+        (failed || pending <= 65536U)) {
+      *timeout = 0L;
+      break;
+    }
+  }
+  if (host->history != NULL) {
+    fds[*count].fd = cai_cli_transcript_feed_fd(host->history);
+    fds[(*count)++].events = POLLIN;
+  }
   if (rc != CAI_OK || deadline == 0U)
     return rc;
   rc = clock_ms(&now, error);
@@ -389,6 +534,7 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
   *stopping = 0;
   if (host == NULL)
     return CAI_OK;
+  cai_cli_transcript_feed_drain(host->history);
   rc = clock_ms(&now, error);
   if (rc == CAI_OK)
     rc = cai_workspace_server_pump(host->server, now, error);
@@ -416,6 +562,7 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
     if (peer->detached) {
       rc = release_peer(peer, error);
       cai_cli_input_wire_decoder_close(peer->decoder);
+      cai_cli_transcript_decoder_close(peer->transcript_decoder);
       memset(peer, 0, sizeof(*peer));
       if (rc != CAI_OK)
         return rc;
@@ -426,6 +573,19 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
                                       &local);
     if (rc == CAI_OK && pending <= 65536U)
       rc = output_one(peer, &local);
+    if (rc == CAI_OK && peer->stream != 0U) {
+      cai_cli_transcript_frame frame;
+      int failed;
+      if (cai_cli_transcript_feed_ready(host->history, peer->attachment,
+                                        &failed) &&
+          (failed || pending <= 65536U) &&
+          cai_cli_transcript_feed_next(host->history, peer->attachment,
+                                       &frame)) {
+        rc = send_transcript(peer, &frame.event, &local);
+        if (frame.event.kind == CAI_TRANSCRIPT_ERROR)
+          peer->stream = 0U;
+      }
+    }
     if (rc != CAI_OK) {
       cai_cli_log_error(host->logger, "workspace input output", &local);
       (void)cai_workspace_server_disconnect(host->server, peer->attachment,
@@ -456,9 +616,11 @@ void cai_cli_workspace_host_stop(cai_cli_workspace_host *host) {
 void cai_cli_workspace_host_close(cai_cli_workspace_host *host) {
   size_t i;
   if (host != NULL) {
+    cai_cli_transcript_feed_close(host->history);
     for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
       cai_input_connection_close(host->peers[i].input);
       cai_cli_input_wire_decoder_close(host->peers[i].decoder);
+      cai_cli_transcript_decoder_close(host->peers[i].transcript_decoder);
     }
     cai_workspace_server_close(host->server);
     free(host);

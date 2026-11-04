@@ -1702,6 +1702,7 @@ static int append_event(void *context, const char *scope, const char *id,
   lc_lease *lease;
   cai_source *source;
   char name[64];
+  unsigned long long position = 0U;
   int rc;
   rc = cai_agent_session_event_project_input(event, &visible, error);
   if (rc != CAI_OK)
@@ -1729,7 +1730,10 @@ static int append_event(void *context, const char *scope, const char *id,
     rc = cai_cli_mapped_source(&event_map, &record, &source, error);
   if (rc == CAI_OK)
     rc = journal_append_source(pouch, &journal->session, journal->collection,
-                               name, source, NULL, error);
+                               name, source, &position, error);
+  if (rc == CAI_OK && pouch->journal_observer != NULL)
+    pouch->journal_observer(pouch->journal_observer_context, id, position,
+                            event);
   if (rc == CAI_OK && journal->session.first_prompt[0] == '\0' &&
       visible.data != NULL &&
       (strcmp(visible.type, "turn_submitted") == 0 ||

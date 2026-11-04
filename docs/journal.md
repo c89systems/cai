@@ -82,9 +82,12 @@ Focused tests stream 8 MiB records while allocations above 64 KiB fail. Native
 Pouch tests also pause a consumer while another thread appends through the same
 SDK client: the append completes, the paused read keeps its captured EOD, and
 the next cursor window delivers the new event once. This storage-to-consumer
-reader is preparation for socket transcript delivery; the current synchronous
-recovery/replay callbacks still use their existing complete-event interface.
-Socket subscription and terminal presentation cutover remain pending.
+reader now feeds [socket transcript subscriptions](workspace-wire-transcript.md)
+through one retained context worker. Committed live events enter bounded rings
+directly at the durable append seam. Native replay windows use the same SDK
+client and receiver; slow or history-invalidated consumers resynchronize
+explicitly. The current synchronous recovery/replay callbacks still use their
+existing complete-event interface. Terminal presentation cutover remains pending.
 
 Internal review/subagent scopes have no workspace-latest index. Their journals
 and session metadata remain available by ID and in the parent's replay timeline;

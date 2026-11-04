@@ -242,7 +242,7 @@ reported through final status/error. Native event/replay callbacks continue to
 receive the borrowed semantic stream. The typed control API accepts prompts,
 steering, goal operations, cancellation and STOP. Slash/! commands require the
 frontend presentation layer and are rejected on this terminal-free surface;
-restored frontend actions stay queued. Socket command/transcript presentation
+restored frontend actions stay queued. Socket command presentation
 and the Softline client cutover are still pending.
 
 `cai_app_start_server` starts this same owner with a canonical workspace
@@ -262,8 +262,8 @@ begin/item/end observations; the producer never builds a complete queue value.
 The Softline adapter constructs its explicit bounded editor mirror and publishes
 it only at the validated end. Disconnect/takeover releases edits durably,
 without advancing request IDs or replacing accepted text. Recovery releases
-orphaned edits before selecting the queue. Application command presentation and
-transcript streaming remain pending. This API does not fork or install signals.
+orphaned edits before selecting the queue. Application command presentation
+remains pending. This API does not fork or install signals.
 
 `<cai/app_client.h>` is the typed socket-side queue interface in libcai_app.
 Open it with explicit runtime/workspace paths and service its single descriptor
@@ -288,8 +288,15 @@ Submit requests with their original scope and ID. The server checks durable
 receipts before authority; this lets an observer or stale generation reconcile
 previously accepted work without authorizing a new mutation. Explicit
 `takeover`, `shutdown` and draining `detach` retain the core lifetime rules.
-This client currently carries input/queue observations, not application status
-or transcript presentation; the terminal frontend cutover remains pending.
+This client also provides `subscribe`/`unsubscribe` and a separate borrowed
+transcript callback. It accepts arbitrarily long logical events as bounded
+BEGIN/DATA/END spans, retaining only fixed metadata and a 4 KiB wire chunk.
+Consumers acknowledge their cursor by returning success from END. Completed
+replay advances across skipped commit records to its captured watermark; live
+events follow it. ERROR aborts provisional rendering and requires explicit
+resubscription without resubmitting input. See the
+[payload and lifetime contract](workspace-wire-transcript.md). Application
+status presentation and the terminal frontend cutover remain pending.
 
 An idle controller stays open until STOP. After observing shutdown, call
 `cai_app_join` outside UI/owner callbacks, then close or start the receiver
