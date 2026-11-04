@@ -33,7 +33,8 @@ tracks instance/role/generation, streams provisional payloads and performs
 explicit takeover, shutdown and detach without owning stores or starting a
 process. Its identity-only probe verifies an owner during STARTING or READY
 without acquiring an attachment or changing authority/lifetime; the real
-headless executable is covered by that probe too. Registry/selector discovery,
+headless executable is covered by that probe too. Native registry publication
+and incremental reading are implemented; live selector resolution,
 controller/frontend composition, automatic startup and the attach
 CLI remain pending. Explicit foreground headless startup is implemented below.
 
@@ -252,6 +253,51 @@ Names are application-local, unique and registered explicitly with
 `--workspace-name NAME`; ambiguous names fail with the available identities.
 Paths and stable workspace IDs also work as selectors. No dependence on
 whether agent-to-agent messaging is enabled.
+
+Implemented registry storage uses `ws-<id>.info` in that same private runtime
+directory. The owner encodes a definite four-item CBOR array directly to an
+exclusive temporary file: schema text `cai.workspace.registry`, canonical
+workspace bytes, name text and 16-byte instance bytes. An atomic rename
+publishes it; readers never see an unfinished record. Its staging path is
+`.ws-<id>.tmp`: while holding workspace ownership, a new publisher may remove
+an interrupted private regular staging file, but rejects symlinks and other
+unsafe types. No directory scan or random temporary-file buildup is needed.
+This bounded metadata
+publication is separate from streamed transcripts and conversation storage.
+Paths are limited to 4095 bytes and names to 255 printable UTF-8 bytes without
+slash, C0/C1 controls, or the special names `.` and `..`. Empty means unnamed.
+Names may contain spaces and non-ASCII characters; escape them when displaying.
+
+`--workspace-name`, `[server] workspace_name`, the application-prefixed
+`WORKSPACE_NAME` environment alias and native `cai_workspace_server_config.name`
+all feed that publication. A separate `nm-<name-hash>.lock` reserves each name
+for its owner's lifetime. Both workspace and name locks are native OS locks:
+no timer, renewal thread, independent Pouch client or stale PID file is involved.
+Lock files remain to avoid split-inode ownership. A crashed process releases
+its locks automatically; stale metadata never prevents a new owner publishing.
+
+`workspace_registry.h` exposes one-record-at-a-time hint iteration, with fixed
+heap metadata and a 512-byte read buffer. It validates file ownership, private
+regular-file type, bounded size, CBOR/schema, strings and the path hash against
+the filename. Invalid records return an error and advance rather than blocking
+the rest of a listing. It does not gather all entries or open session stores.
+Explicit pruning takes the corresponding workspace lock nonblockingly and
+removes only the unchanged current metadata inode. Owner close similarly
+removes only its own publication before releasing endpoint ownership. Neither
+operation unlinks ownership locks, and pruning never removes a socket. Native
+tests cover live-name conflicts, process-death recovery, changed-inode safety,
+malformed/unsafe records and default-stack worker use. The headless CLI tests
+verify flag/config/environment precedence and compare registry instance IDs
+with a real socket probe. Selector resolution and terminal workspace switching
+remain pending.
+
+Selector attachment must bind its selected server instance before the host
+admits an attachment. Merely comparing the later WELCOME is insufficient: an
+owner may restart between probe and attach, and rejecting the new WELCOME
+afterward would already have acquired/released control and affected a
+nonpersistent server's lifetime. An expected-instance greeting guard is part
+of the pending selector implementation; discovery hints alone never admit
+an attachment.
 
 Attaching never overwrites the running server's configuration. Frontend flags
 apply locally. Explicit inference settings are ordinary acknowledged backend

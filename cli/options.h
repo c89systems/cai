@@ -21,6 +21,7 @@ typedef struct cai_cli_options {
   const char *todo_namespace, *messages_namespace;
   const char *sessions_store, *auth_store, *messaging_store;
   const char *home_dir, *runtime_dir;
+  const char *workspace_name;
   const char *state_dir, *cache_dir, *data_dir;
   const char *clipboard_dir, *log_dir, *pouch_key_file;
   int help, version, headless;

@@ -29,6 +29,15 @@ const char *cai_workspace_endpoint_socket(const cai_workspace_endpoint *);
  * disk after close to avoid split locks on different inodes.
  */
 int cai_workspace_endpoint_listen(cai_workspace_endpoint *, cai_error *);
+/** Publish a discovery hint while this handle owns the listening endpoint.
+ * Optional name is reserved with a native lifetime lock; duplicate live names
+ * fail with CAI_ERR_LIMIT. Metadata is atomically replaced, not conversation
+ * storage. instance is the owner's 16-byte greeting identity. Call once after
+ * listen; close removes only this publication and releases its name lock.
+ */
+int cai_workspace_endpoint_publish(cai_workspace_endpoint *, const char *name,
+                                   const unsigned char instance[16],
+                                   cai_error *);
 /** Borrow the listening descriptor for POLLIN; -1 before listen. */
 int cai_workspace_endpoint_fd(const cai_workspace_endpoint *);
 /** Nonblocking accept. CAI_OK with *descriptor == -1 means no pending peer.

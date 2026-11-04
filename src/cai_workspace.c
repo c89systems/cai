@@ -2,10 +2,10 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #include "cai_internal.h"
+#include "cai_workspace_private.h"
 #include <cai/workspace.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <openssl/evp.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
@@ -22,6 +22,7 @@ struct cai_workspace_endpoint {
   dev_t device;
   ino_t inode;
   int listener, lock;
+  cai_workspace_publication *publication;
 };
 static int transport(cai_error *error, const char *message) {
   return cai_set_error_detail(error, CAI_ERR_TRANSPORT, message,
@@ -82,11 +83,8 @@ int cai_workspace_endpoint_open(const char *runtime_directory,
                                 cai_workspace_endpoint **out,
                                 cai_error *error) {
   cai_workspace_endpoint *endpoint;
-  unsigned char digest[EVP_MAX_MD_SIZE];
-  unsigned int length;
   struct stat status;
   char *runtime, *directory;
-  size_t i;
   int n, rc = CAI_OK;
   if (out != NULL)
     *out = NULL;
@@ -121,17 +119,8 @@ int cai_workspace_endpoint_open(const char *runtime_directory,
   memset(endpoint, 0, sizeof(*endpoint));
   endpoint->listener = endpoint->lock = -1;
   endpoint->workspace = directory;
-  if (EVP_Digest(directory, strlen(directory), digest, &length, EVP_sha256(),
-                 NULL) != 1 ||
-      length < 16U)
-    rc = cai_set_error(error, CAI_ERR_TRANSPORT,
-                       "Hash canonical workspace identity");
+  rc = cai_workspace_hash(directory, endpoint->id, error);
   if (rc == CAI_OK) {
-    static const char hex[] = "0123456789abcdef";
-    for (i = 0U; i < 16U; ++i) {
-      endpoint->id[i * 2U] = hex[digest[i] >> 4U];
-      endpoint->id[i * 2U + 1U] = hex[digest[i] & 15U];
-    }
     n = snprintf(endpoint->socket_path, sizeof(endpoint->socket_path),
                  "%s/ws-%s.sock", runtime, endpoint->id);
     if (n < 0 || (size_t)n >= sizeof(endpoint->socket_path))
@@ -160,6 +149,19 @@ const char *cai_workspace_endpoint_id(const cai_workspace_endpoint *self) {
 }
 const char *cai_workspace_endpoint_socket(const cai_workspace_endpoint *self) {
   return self != NULL ? self->socket_path : NULL;
+}
+int cai_workspace_endpoint_publish(cai_workspace_endpoint *self,
+                                   const char *name,
+                                   const unsigned char instance[16],
+                                   cai_error *error) {
+  if (self == NULL || self->listener < 0 || self->lock < 0 ||
+      self->publication != NULL || instance == NULL)
+    return cai_set_error(
+        error, CAI_ERR_INVALID,
+        "discovery publication requires an unpublished owned endpoint");
+  return cai_workspace_publication_open(self->socket_path, self->workspace,
+                                        self->id, name, instance,
+                                        &self->publication, error);
 }
 int cai_workspace_endpoint_listen(cai_workspace_endpoint *self,
                                   cai_error *error) {
@@ -337,6 +339,7 @@ void cai_workspace_endpoint_close(cai_workspace_endpoint *self) {
         (void)unlink(self->socket_path);
       close(self->listener);
     }
+    cai_workspace_publication_close(self->publication);
     if (self->lock >= 0)
       close(self->lock);
     free(self->workspace);

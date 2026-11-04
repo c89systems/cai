@@ -546,6 +546,8 @@ static int cli_read_options(int argc, char *const *argv,
       field = &options->home_dir;
     else if (strcmp(flag, "--runtime-dir") == 0)
       field = &options->runtime_dir;
+    else if (strcmp(flag, "--workspace-name") == 0)
+      field = &options->workspace_name;
     else if (strcmp(flag, "--cache-dir") == 0)
       field = &options->cache_dir;
     else if (strcmp(flag, "--data-dir") == 0)

@@ -403,8 +403,9 @@ static void *run(void *unused) {
   assert(cai_input_queue_open(&config, &f->queue, NULL) == CAI_OK);
   cai_attachment_config_init(&lifetime);
   lifetime.persist = 1;
-  assert(cai_cli_workspace_host_open(f->runtime, f->workspace, &lifetime, NULL,
-                                     NULL, NULL, &f->host, NULL) == CAI_OK);
+  assert(cai_cli_workspace_host_open(f->runtime, f->workspace, NULL, &lifetime,
+                                     NULL, NULL, NULL, &f->host,
+                                     NULL) == CAI_OK);
   memset(&admission, 0, sizeof(admission));
   cai_cli_workspace_host_admission(f->host, &admission);
   assert(cai_input_controller_open(&admission, &f->controller, NULL) == CAI_OK);

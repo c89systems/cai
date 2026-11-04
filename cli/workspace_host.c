@@ -416,7 +416,7 @@ int cai_cli_workspace_host_history(cai_cli_workspace_host *host,
                       : rc;
 }
 int cai_cli_workspace_host_open(const char *runtime_directory,
-                                const char *workspace,
+                                const char *workspace, const char *name,
                                 const cai_attachment_config *lifetime,
                                 const cai_input_controller_config *admission,
                                 cai_app_bridge *bridge, pslog_logger *logger,
@@ -436,6 +436,7 @@ int cai_cli_workspace_host_open(const char *runtime_directory,
   cai_workspace_server_config_init(&config);
   config.runtime_directory = runtime_directory;
   config.workspace = workspace;
+  config.name = name;
   config.lifetime = *lifetime;
   config.event = message;
   config.context = host;

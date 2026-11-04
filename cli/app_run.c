@@ -5732,7 +5732,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   }
   if (server != NULL) {
     rc = cai_cli_workspace_host_open(
-        state->options.runtime_dir, state->workspace, server,
+        state->options.runtime_dir, state->workspace,
+        state->options.workspace_name, server,
         application != NULL ? &application->input : NULL, state->bridge,
         cli_logger(state), &state->workspace_host, &error);
     if (rc != CAI_OK) {

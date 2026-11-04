@@ -408,6 +408,7 @@ int cai_workspace_server_open(const cai_workspace_server_config *config,
   memset(server, 0, sizeof(*server));
   server->config = *config;
   server->config.runtime_directory = server->config.workspace = NULL;
+  server->config.name = NULL;
   server->owner = pthread_self();
   if (server->config.handshake_timeout_ms == 0U)
     server->config.handshake_timeout_ms = 10000U;
@@ -423,6 +424,9 @@ int cai_workspace_server_open(const cai_workspace_server_config *config,
                                         error);
   if (rc == CAI_OK)
     rc = cai_workspace_endpoint_listen(server->endpoint, error);
+  if (rc == CAI_OK)
+    rc = cai_workspace_endpoint_publish(server->endpoint, config->name,
+                                        server->instance, error);
   if (rc == CAI_OK)
     *out = server;
   else

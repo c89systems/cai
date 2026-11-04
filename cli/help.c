@@ -27,6 +27,8 @@ static const cai_app_option options[] = {
      "Override data-dir (otherwise derived from application defaults)", 0, 0},
     {"--runtime-dir", '\0', CAI_APP_STRING, "DIR",
      "Override runtime files directory (including Chrome sockets)", 0, 0},
+    {"--workspace-name", '\0', CAI_APP_STRING, "NAME",
+     "Assign a unique discovery name when starting a workspace server", 0, 0},
     {"--clipboard-dir", '\0', CAI_APP_STRING, "VALUE",
      "Override clipboard-dir (otherwise derived from application defaults)", 0,
      0},

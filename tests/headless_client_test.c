@@ -3,6 +3,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
 #include <cai/app_client.h>
+#include <cai/workspace_registry.h>
 #include <errno.h>
 #include <lc/lc.h>
 #include <stdio.h>
@@ -93,12 +94,16 @@ static void step(view *v) {
   assert(rc == CAI_OK);
   assert(cai_app_client_get_state(v->client, &v->state, NULL) == CAI_OK);
 }
-static void identify(const char *runtime, const char *workspace) {
+static void identify(const char *runtime, const char *workspace,
+                     const char *name) {
   cai_workspace_client_config config;
   cai_workspace_client_state state;
   cai_workspace_client *client;
   struct pollfd fd;
   uint64_t deadline, now;
+  cai_workspace_registry *registry;
+  const cai_workspace_record *record;
+  size_t matches = 0U;
   cai_workspace_client_config_init(&config);
   config.runtime_directory = runtime;
   config.workspace = workspace;
@@ -119,6 +124,20 @@ static void identify(const char *runtime, const char *workspace) {
          state.server_phase == CAI_ATTACHMENT_READY);
   assert(cai_workspace_client_prepare(client, &fd, &deadline, NULL) == CAI_OK);
   assert(fd.fd == -1 && !deadline);
+  assert(cai_workspace_registry_open(runtime, &registry, NULL) == CAI_OK);
+  do {
+    assert(cai_workspace_registry_next(registry, &record, NULL) == CAI_OK);
+    if (record && strcmp(record->workspace,
+                         cai_workspace_client_directory(client)) == 0) {
+      ++matches;
+      assert(memcmp(record->instance, state.instance, sizeof(state.instance)) ==
+             0);
+      if (name)
+        assert(strcmp(record->name, name) == 0);
+    }
+  } while (record);
+  assert(matches == 1U);
+  cai_workspace_registry_close(registry);
   cai_workspace_client_close(client);
 }
 int main(int argc, char **argv) {
@@ -126,8 +145,9 @@ int main(int argc, char **argv) {
   view *v = calloc(1U, sizeof(*v));
   int shutdown, work, abrupt;
   assert(argc == 4 && v != NULL);
-  if (strcmp(argv[3], "probe") == 0) {
-    identify(argv[1], argv[2]);
+  if (strcmp(argv[3], "probe") == 0 || strcmp(argv[3], "named") == 0) {
+    identify(argv[1], argv[2],
+             strcmp(argv[3], "named") == 0 ? "fixture-workspace" : NULL);
     free(v);
     return 0;
   }

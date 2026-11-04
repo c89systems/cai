@@ -35,6 +35,10 @@ typedef int (*cai_workspace_server_event_fn)(
 typedef struct cai_workspace_server_config {
   const char *runtime_directory;
   const char *workspace;
+  /** Optional unique discovery name. Copied into the publication at open.
+   * NULL/empty leaves the owner discoverable by canonical path and stable ID.
+   */
+  const char *name;
   cai_attachment_config lifetime;
   /** Zero selects 10 seconds for an incomplete greeting. Completed greetings
    * can wait through STARTING; READY begins the first-attachment grace period.

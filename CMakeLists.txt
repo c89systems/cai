@@ -727,6 +727,7 @@ set(CAI_SOURCES
   src/cai_workspace.c
   src/cai_workspace_server.c
   src/cai_workspace_client.c
+  src/cai_workspace_registry.c
   src/cai_conversation.c
   src/cai_env.c
   src/cai_environment.c
@@ -1043,6 +1044,12 @@ if(CAI_BUILD_TESTS)
   add_executable(cai_attachment_test tests/attachment_test.c)
   add_executable(cai_workspace_server_test tests/workspace_server_test.c)
   add_executable(cai_workspace_client_test tests/workspace_client_test.c)
+  add_executable(cai_workspace_registry_test tests/workspace_registry_test.c)
+  target_link_libraries(cai_workspace_registry_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_workspace_registry_test)
+  target_compile_options(cai_workspace_registry_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_workspace_registry COMMAND cai_workspace_registry_test)
+  set_tests_properties(cai_workspace_registry PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   target_link_libraries(cai_workspace_client_test PRIVATE ${_cai_internal_link_target})
   cai_configure_cli_target(cai_workspace_client_test)
   target_compile_options(cai_workspace_client_test PRIVATE -UNDEBUG)

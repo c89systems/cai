@@ -36,7 +36,8 @@ inspect() { "$client" "$runtime_root" "$work" inspect; }
 # Real foreground executable, closed stdin and no terminal. Readiness is
 # structured logging; no banner, editor, tool receipt or Markdown reaches stdout.
 plan '{"plan":[{"tool":"exec_command","arguments":{"cmd":"kill -s TERM $$; exit 0","tty":false}},"HEADLESS_ANSWER"]}'
-start_server -x -N --terminal --yolo
+start_server -x -N --terminal --yolo --workspace-name fixture-workspace
+"$client" "$runtime_root" "$work" named
 "$client" "$runtime_root" "$work" probe
 [[ $(requests) == 0 ]]
 id=$(inspect)
@@ -78,6 +79,25 @@ for signal in TERM INT HUP QUIT; do
   stop_server
   jq -se 'any(.[]; .event == "workspace_stopped" and .signal > 0)' "$root/server.log" >/dev/null
 done
+
+# Shared application configuration and environment aliases select the same
+# publication. Explicit argv takes precedence without rewriting the INI.
+printf '[server]\nworkspace_name=fixture-workspace\n' >"$root/named.ini"
+start_server --headless --config "$root/named.ini"
+"$client" "$runtime_root" "$work" named
+kill -TERM "$server_pid"
+stop_server
+CAI_WORKSPACE_NAME=fixture-workspace start_server --headless
+"$client" "$runtime_root" "$work" named
+kill -TERM "$server_pid"
+stop_server
+printf '[server]\nworkspace_name=ignored-name\n' >"$root/named.ini"
+CAI_WORKSPACE_NAME=also-ignored start_server --headless --config "$root/named.ini" --workspace-name fixture-workspace
+"$client" "$runtime_root" "$work" named
+contains "$root/named.ini" 'workspace_name=ignored-name'
+kill -TERM "$server_pid"
+stop_server
+[[ $(requests) == 2 ]]
 
 # Invalid startup and incompatible utility/batch modes do not leave an owner
 # or perform the utility. Help/version remain ordinary output-only invocations.

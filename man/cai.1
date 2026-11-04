@@ -37,6 +37,15 @@ an explicit socket shutdown also stops it. Duplicate ownership fails without
 opening another runtime. The terminal attach/autostart cutover remains in progress.
 Native embedding uses cai_app_start_server, not this executable process mode.
 .TP
+.BI \-\-workspace-name " NAME"
+Assign a unique discovery name when starting a workspace server. Also accepts
+[server] workspace_name or the application-prefixed WORKSPACE_NAME environment
+variable (CAI_WORKSPACE_NAME by default). Empty means path/ID discovery only.
+Names are printable UTF-8, at most 255 bytes, without slash or control characters.
+The name is reserved by an OS lock until owner shutdown or process exit.
+Native clients read discovery hints and verify the owner's socket identity;
+terminal selection by name remains part of the pending attach cutover.
+.TP
 .BI \-\-status-fields " FIELDS"
 Colon-separated status fields, default model:ctx:dir:branch:weekly:crd:yolo:goal.
 The Git branch follows the directory and is omitted when unavailable, including

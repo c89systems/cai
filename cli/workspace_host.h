@@ -11,7 +11,7 @@ struct cai_cli_pouch;
  * publisher owns one retained context reader worker. Holds endpoint ownership
  * until close, after runtime/store shutdown. */
 int cai_cli_workspace_host_open(const char *runtime_directory,
-                                const char *workspace,
+                                const char *workspace, const char *name,
                                 const cai_attachment_config *lifetime,
                                 const cai_input_controller_config *admission,
                                 cai_app_bridge *bridge,

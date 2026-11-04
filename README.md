@@ -157,6 +157,14 @@ cleanly. Native clients use `cai/app_client.h`; the terminal attach/autostart
 cutover remains in progress. See the [workspace specification](docs/workspace-server.md)
 for the implemented boundaries and remaining work.
 
+`--workspace-name NAME` assigns a unique discovery name to a server at startup.
+It also accepts `[server] workspace_name` or `CAI_WORKSPACE_NAME` (application
+prefixes apply). Empty is the default. Private runtime-directory metadata
+contains canonical workspace paths and server identities; native clients read
+these hints with `cai/workspace_registry.h` and verify them with an identity
+probe. A name is reserved by an OS lock for the server lifetime, without
+polling or lease renewals. Terminal selection by name is still pending.
+
 Agent startup requires workspace approval. On first use, run `cai -y`
 (`--yes` or `--force`) to approve the current directory and its descendants for
 this and future conversations. Approval is recorded in the conversation journal

@@ -31,6 +31,9 @@ typedef struct cli_field {
 #define B(s, k, m, d)                                                          \
   {s, k, offsetof(cai_cli_options, m), CAI_CONFIG_BOOL, 0U, NULL, d}
 static const cli_field fields[] = {
+    S("server", "workspace_name", workspace_name, 0U,
+      "Optional unique workspace-server discovery name; empty uses path/ID "
+      "only."),
     B("ui", "utc", utc,
       "Show DTG timestamps in UTC (Zulu); false uses local time. Default "
       "false."),
@@ -749,6 +752,7 @@ static int tool_environment(cai_config *cfg, const char *prefix,
         {"CACHE_DIR", "paths", "cache_dir"},
         {"DATA_DIR", "paths", "data_dir"},
         {"RUNTIME_DIR", "paths", "runtime_dir"},
+        {"WORKSPACE_NAME", "server", "workspace_name"},
         {"CLIPBOARD_DIR", "paths", "clipboard_dir"},
         {"LOG_DIR", "paths", "log_dir"},
         {"POUCH_KEY_FILE", "store.default", "key_file"},
