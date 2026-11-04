@@ -170,8 +170,7 @@ static void malformed(void) {
       bytes[4] = 0xbf; /* indefinite outer schema */
       break;
     case 3:
-      bytes[6] =
-          (unsigned char)(CAI_PROTOCOL_HISTORY_APPEND + 1); /* unknown kind */
+      bytes[6] = (unsigned char)(CAI_PROTOCOL_CATALOG + 1); /* unknown kind */
       break;
     case 4:
       bytes[9] = 1; /* duplicate key */
@@ -330,7 +329,7 @@ static void socket_stream(void) {
   }
   assert(c.bytes == 32U * 1024U * 1024U);
   /* Reject impossible sizes/unknown kinds before emitting any prefix. */
-  c.expected.kind = (cai_protocol_kind)(CAI_PROTOCOL_HISTORY_APPEND + 1);
+  c.expected.kind = (cai_protocol_kind)(CAI_PROTOCOL_CATALOG + 1);
   assert(cai_protocol_peer_begin(sender, &c.expected, 1U, NULL) ==
          CAI_ERR_INVALID);
   assert(cai_wire_peer_pending(sender) == 0U);

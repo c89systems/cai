@@ -1,5 +1,5 @@
 #include "transcript_wire.h"
-#include "pouch_stream.h"
+#include "error.h"
 #include <stdlib.h>
 #include <string.h>
 typedef struct field {

@@ -3,6 +3,8 @@
  */
 #ifndef CAI_SKILLS_H
 #define CAI_SKILLS_H
+#define CAI_SKILL_NAME_MAX 64U
+#define CAI_SKILLS_MAX_PACKAGES 256U
 
 #include <cai/cai.h>
 

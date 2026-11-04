@@ -7,7 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-static int filename_printable(const char *name) {
+int cai_cli_completion_printable(const char *name) {
   const unsigned char *p = (const unsigned char *)name;
   while (*p != 0U) {
     size_t need, i;
@@ -73,7 +73,7 @@ static int complete_files(cai_cli_completions *completions, const char *prefix,
     }
     if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 ||
         strcmp(entry->d_name, ".git") == 0 ||
-        !filename_printable(entry->d_name))
+        !cai_cli_completion_printable(entry->d_name))
       continue;
     if (fstatat(dirfd(directory), entry->d_name, &info, AT_SYMLINK_NOFOLLOW) !=
         0)

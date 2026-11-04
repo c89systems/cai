@@ -85,7 +85,7 @@ int cai_cli_command_frontend(const char *line) {
   arg = line + length;
   arg += strspn(arg, " \t");
   name = cai_cli_command_name(line, &length);
-  return cai_cli_command_is_theme(line) || cli_word_is(name, length, "/help") ||
+  return cai_cli_command_is_theme(line) ||
          cli_word_is(name, length, "/output") ||
          cli_word_is(name, length, "/quit") ||
          cli_word_is(name, length, "/exit") ||

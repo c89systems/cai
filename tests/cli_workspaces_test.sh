@@ -35,7 +35,7 @@ if [[ ${3:-native} == embed ]]; then
 fi
 terminal_start "${attach_args[@]}"
 prompt 'hello in the first workspace' 'FIRST workspace answer'
-send '/help\r'; expect '/workspace SELECTOR'; expect Alt-Enter
+send '/help\r'; expect 'Workspace connections'; expect 'Queue and approval keys'; expect Alt-Enter
 send '/workspace\r'; expect 'Current workspace'; expect workspace-b
 send '/workspace no-such-workspace\r'; expect 'No running workspace'
 send '/status\r'; expect 'Session ID'

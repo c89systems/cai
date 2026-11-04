@@ -25,6 +25,10 @@ void cai_cli_workspace_host_cancel(cai_cli_workspace_host *,
                                    int (*)(void *, cai_error *), void *);
 void cai_cli_workspace_host_prompt_limit(cai_cli_workspace_host *,
                                          unsigned int);
+/** Borrow immutable runtime catalog metadata through context unbind. Publishes
+ * one bounded completion row at a time; does no discovery or model work. */
+int cai_cli_workspace_host_catalog(cai_cli_workspace_host *,
+                                   cai_agent_runtime *, cai_error *);
 /* Borrow the owner snapshot only for this call. Cache semantic changes; no
  * socket I/O, subscriber callbacks or elapsed-only publication here. */
 int cai_cli_workspace_host_status(cai_cli_workspace_host *,

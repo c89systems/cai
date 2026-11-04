@@ -5,167 +5,41 @@ in `frontend-architecture.md`: Unix sockets and CBOR come first; an optional
 HTTP/Web UI adapter comes later. It does not claim that the cutover is already
 implemented. The existing queue/controller foundation remains the baseline.
 
-Current implementation progress: libcai now contains the incremental codec
-(`cbor.h`), record/socket transport (`wire.h`) and canonical endpoint ownership
-(`workspace.h`). Their tests cover streaming, bounded backpressure, native
-ownership races and killed-owner recovery. The core attachment controller
-(`attachment.h`) implements roles, generation-checked admission and persistent
-versus last-client lifetime. Input-controller handoffs carry the original
-authority generation and check it on owner-thread dispatch. Typed protocol
-envelopes (`protocol.h`) stream metadata/payload tokens and distinguish
-provisional data from validated record completion. Queue producers can resume
-their retained receipts after disconnect or ordered journal recovery, without
-another producer reservation. Immutable environment views now scope client
-credentials and command/plugin tools; configuration accepts explicit directory/
-environment contexts and produces effective views without process mutation.
-Application workspace selection, retained inputs, export and temporary
-workspaces now use explicit paths without changing/restoring the host cwd.
-The legacy terminal receiver still temporarily mutates environment, locale
-and signals; that remaining process scaffolding has not been cut over.
-Application configuration resolution itself no longer installs `[env]` into
-the process. Its aliases and XDG defaults use the captured/effective view.
-MCP discovery/refresh workers retain their own view for credential lookup.
-The owner-loop workspace host (`workspace_server.h`) now binds those components
-to actual Unix connections, validates greetings incrementally, publishes roles
-and isolates disconnected/slow subscribers. It has no worker or renderer.
-The matching socket client (`workspace_client.h`) verifies the complete welcome,
-tracks instance/role/generation, streams provisional payloads and performs
-explicit takeover, shutdown and detach without owning stores or starting a
-process. Its identity-only probe verifies an owner during STARTING or READY
-without acquiring an attachment or changing authority/lifetime; the real
-headless executable is covered by that probe too. Native registry publication
-and incremental reading, native verified selector resolution and guarded
-instance admission are implemented. The initial terminal/socket composition,
-automatic startup and `-s` attach CLI are now implemented; remaining parity work
-is listed in [terminal attachment](terminal-attachment.md). Explicit foreground
-headless startup is implemented below.
-The implemented [status projection](workspace-wire-status.md) keeps numeric usage
-values typed and separates semantic updates from frontend elapsed-time ticks.
-The socket client exposes borrowed completed views to controllers and observers
-without a queue producer or a transcript subscription. Headless owners share
-the backend's debounced quota cache with all attachments.
-The executable now also has a tested quiet fork/exec owner handoff and exact
-child watch, described in [workspace process handoff](workspace-process.md).
-It uses the existing CBOR transport and native server lifecycle; normal
-interactive startup now calls it automatically when no owner is discovered.
+Current implementation: core libcai supplies incremental CBOR, bounded records,
+canonical endpoint ownership, registry/probes, attachment roles and reusable
+server/client event loops. The application supplies a terminal-free owner via
+`cai_app_start`/`cai_app_start_server`, with the runtime, stores, accepted queue,
+commands and goals independent of terminal lifetime. READY follows restoration;
+endpoint ownership remains until runtime/store shutdown. Core transport and
+application clients create no model runtime or SDK storage client.
 
-The application receiver now also provides `cai_app_start`/`cai_app_join`: an
-asynchronous terminal-free owner using the shared startup, runtime, durable
-input queue, integrations and goal pursuit. It creates no Softline/libmdf
-objects and does not install process environment, cwd, locale or signals.
-Startup captures explicit directory/environment contexts; native runtime/replay
-observers receive borrowed events on the owner. A coalescing status descriptor
-reports readiness, controls and shutdown without idle polling. This is the
-backend ownership entry point; starting a controller alone opens no socket. The
-synchronous terminal receiver remains to be composed over it. In-process
-frontends can now use `cai_app_connect_input`/`cai_app_resume_input` to attach to
-the active queue without opening a runtime or store. Their owned observations
-include the producer identity and processed request watermark. Attachment
-admission runs on the controller owner with the authenticated identity and
-original authority generation; trusted native `control()` is a separate host
-surface. The owner now executes backend slash/! commands through the shared
-handler and publishes bounded Markdown replies in execution history. Terminal
-actions are delegated to their originating producer; the terminal consumes
-these records without opening a runtime or store. Some presentation delegates
-and Lua asynchronous observations remain pending. See
-[command execution](workspace-commands.md).
+The executable supports persistent `-x` owners, quiet automatic startup,
+verified `-s` selectors and a Softline terminal attachment. One controller
+admits mutations; observers can inspect and explicitly take over. Terminal
+workspaces, drafts and queues remain separate. Native contexts use captured
+environment/directory views; configuration does not install `[env]` into the
+process. The original synchronous receiver still owns legacy process
+scaffolding. Native library startup never forks or installs signal handlers.
 
-`cai_app_start_server` now adds the workspace socket host to that same owner.
-It opens endpoint ownership before stores, publishes READY only after runtime
-restoration, and combines socket interests/deadlines with runtime/input/store
-wakeups. Default lifetime is nonpersistent: graceful or abrupt loss of the last
-attachment cancels active work, closes stores and releases the endpoint. An
-observer still counts as attached; it must explicitly take over vacant control.
-Persistent owners continue work with no clients and accept later attachments.
-Status snapshots retain the server phase, role, generation and shutdown reason.
-They also publish the handshake's server-instance identity and the full owned
-startup/session log path. Native owners without a host logger write files in
-the configured log directory without collecting frontend notices. A borrowed
-host logger retains its output policy and has no inferred path. Explicit native
-lifetime configuration overrides startup settings; NULL uses resolved
-`[server] persist` and the default first-attachment grace period.
-This binding is exercised against real Unix clients. Socket input/queue
-requests now use the [typed payload contract](workspace-wire-queue.md), admitting
-model input through the same backend producers and receipts. Snapshot production
-is incremental and credit-bound; it never copies a whole pending queue.
-Disconnect/takeover releases editor holds through durable controller-origin
-records, without changing request IDs or accepted text. New owners release
-orphaned edits before queue selection. Command presentation and automatic
-process startup are connected to the terminal client; the final receiver and
-feature-parity cutover remains pending.
+Independent typed channels carry [queue observations](workspace-wire-queue.md),
+[status](workspace-wire-status.md),
+[transcript spans](workspace-wire-transcript.md),
+[prompt recall](workspace-wire-history.md) and
+[completion catalogs](workspace-wire-catalog.md). Transport consumers receive
+bounded borrowed spans; they do not restore model context or mirror complete
+journals. One retained collection reader worker services native replay/recall
+windows while direct append notifications supply live transcript events.
+Terminal tools share the common one-pass formatter; help and completion
+semantics are shared with the synchronous receiver.
 
-The executable now implements `-x` / `--headless` over this public lifecycle.
-It defaults to a persistent workspace owner with no terminal frontend, emits JSON
-through libpslog to stderr by default, and uses automatic color detection.
-Process-environment `LOG_` overrides retain their normal meaning. A `workspace_ready` record is
-emitted only after runtime restoration and listener readiness; the final
-`workspace_stopped` record carries the exit code and stop signal. SIGINT,
-SIGTERM, SIGHUP and SIGQUIT request orderly native STOP, including during
-startup, inference or a foreground command. A nonblocking signal pipe and
-status descriptor drive the process loop without idle polling or a signal
-worker. The owner thread
-inherits blocked stop signals; only the executable's loop handles them.
-Executed command/plugin children clear that inherited mask and restore normal
-stop, pipe and job-control dispositions immediately before execution. The
-parent's masks and handlers remain unchanged.
-Standard input is unused. Graceful/abrupt client departure does not stop this
-persistent owner. Explicit socket shutdown does. Duplicate ownership fails
-before opening another runtime/store, and utility/help modes never spawn one.
-Process scaffolding is separate from `examples/app.c`, the public-only SDK
-embedding example. Native application startup does not fork a server or install
-these handlers. The application SDK still links its terminal dependencies;
-optional frontend packaging remains pending.
-
-`cai/app_client.h` now provides the application-side typed queue client over
-that socket. It validates incremental baselines and change revisions, delivers
-borrowed rows/receipts, preserves original request scopes and offers explicit
-bind/resume/takeover/shutdown/detach. It never opens a runtime/store or gathers
-a queue snapshot. Its event loop has one descriptor and a handshake deadline,
-without a worker or idle polling. Failed initial binding and interrupted
-baselines do not change the last validated session identity. Socket command
-results and terminal presentation remain to be connected to the frontend. Typed status
-is delivered independently; its semantic revisions do not generate timer or
-per-token traffic. Partial frames never replace the last completed view.
-
-The constructor-selected Softline queue bridge now supports that public client
-as well as direct native connections, with one shared editor observation path.
-Its socket binding preserves per-editor request IDs, drafts and unresolved
-outcomes across explicit reconnects, and rejects a replacement producer. It
-keeps item identities stable across verified runtime epoch changes, while new
-requests carry the live epoch/generation. This is a frontend component without
-a runtime, storage client or worker; the complete terminal loop and executable
-composition are not yet connected to it.
-
-The storage-to-consumer transcript reader now streams decoded event chunks and
-discards commit state without materializing records. It retains a public
-collection receiver, uses native bounds/cursors/cancellation, and commits an
-event only at the SDK's authenticated entry boundary. Native verification
-confirms a paused consumer does not block appends or reopen the SDK client.
-The [transcript subscription binding](workspace-wire-transcript.md) now connects
-that reader to real sockets: one retained replay worker per conversation,
-native bounded windows, direct committed live notifications, explicit cursors,
-history-change invalidation and bounded independent subscribers. The public
-application client delivers borrowed chunks without collecting complete events.
-Its optional typed execution callback now decodes execution/subagent entries
-through the core incremental decoder, retaining only metadata and one defined
-4 KiB output chunk. Authenticated END and both consumers' acceptance precede
-cursor advancement. Explicit replacement cannot acknowledge the old stream on
-the new cursor or invalidate a record borrowed by its callback.
-Default tail/visibility selection and the terminal presentation adapter remain
-pending. Foreground headless startup uses the native controller; automatic
-terminal discovery/attachment remains pending.
-
-The existing terminal path now shares a frontend-owned Softline/libmdf presenter
-for documents, tool styling, timestamps, prompt markers, geometry and theme
-switching. Its standalone link has no application or Pouch objects. The socket
-transcript adapter now feeds accepted parent prompts, assistant Markdown and
-reasoning into this same presenter incrementally. It retains only a bounded
-delivery header, literal escape chunk and incomplete UTF-8 character, rather
-than collecting whole prompts. The actual standalone headless server is tested
-with this renderer for live delivery and replay after restart, without opening
-stores in the frontend. Typed tool/command presentation, frontend status/command
-application, final replay selection and CLI process composition remain pending;
-the synchronous terminal lifecycle has not yet been replaced.
+See [terminal attachment](terminal-attachment.md) for current verification and
+remaining cutover work, [workspace process handoff](workspace-process.md) for
+executable ownership, and [command execution](workspace-commands.md) for backend
+admission/delegation. The confirmed decisions and specification below remain
+the target contract; an implemented boundary is not a claim of complete feature
+parity. In particular, the synchronous receiver, batch/temp composition, default
+replay selection, some terminal delegates, asynchronous Lua observations and
+optional frontend packaging remain unfinished.
 
 Submitted prompts belong to the libmdf feed. Complete native inputs and
 arbitrarily fragmented socket spans now use the same literal adapter inside

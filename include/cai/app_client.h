@@ -4,6 +4,7 @@
  */
 #ifndef CAI_APP_CLIENT_H
 #define CAI_APP_CLIENT_H
+#include <cai/app_catalog.h>
 #include <cai/app_view.h>
 #include <cai/execution.h>
 #include <cai/input_controller.h>
@@ -99,6 +100,13 @@ typedef struct cai_app_client_config {
    * No complete history or prompt body is retained by this client. */
   int (*prompt_history)(void *, const cai_transcript_event *, cai_error *);
   void *prompt_history_context;
+  /** Owner-pushed presentation metadata, including the actual loaded skills.
+   * Independent of producer binding and model context; observers receive it
+   * too. Borrowed only during this owner-thread callback. Partial candidates
+   * must not be published; transport loss invalidates availability. Same
+   * callback reentry rules as event. No SDK client or resource discovery. */
+  int (*catalog)(void *, const cai_app_catalog_event *, cai_error *);
+  void *catalog_context;
 } cai_app_client_config;
 void cai_app_client_config_init(cai_app_client_config *);
 /** Explicit connect only: never forks, opens stores or submits input. All

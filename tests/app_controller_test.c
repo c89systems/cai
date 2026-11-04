@@ -442,7 +442,8 @@ static int wire_event(void *context, const cai_protocol_event *event,
   int rc;
   if (event->header->kind == CAI_PROTOCOL_WELCOME ||
       event->header->kind == CAI_PROTOCOL_ROLE ||
-      event->header->kind == CAI_PROTOCOL_STATUS)
+      event->header->kind == CAI_PROTOCOL_STATUS ||
+      event->header->kind == CAI_PROTOCOL_CATALOG)
     return CAI_OK;
   rc = cai_cli_input_wire_decode(v->decoder, event, &message, error);
   if (rc != CAI_OK || message == NULL)
@@ -1384,6 +1385,10 @@ static void server_commands(int argc, char **argv) {
                                       "RESTORED RECALL ONLY", NULL) == CAI_OK);
     typed_wait(a, &a->history_results, 45U);
     assert(a->history_code == CAI_OK);
+    typed_command(a, 4U, "/help", 1);
+    assert(strstr(a->command_text, "Queue and approval keys") != NULL &&
+           strstr(a->command_text, "Workspace connections") != NULL &&
+           a->command_frontend == 2U);
   }
   idle_cpu(&h);
   cai_app_client_close(b->client);

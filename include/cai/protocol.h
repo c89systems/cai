@@ -39,7 +39,8 @@ typedef enum cai_protocol_kind {
   CAI_PROTOCOL_IDENTITY,
   CAI_PROTOCOL_CANCEL,
   CAI_PROTOCOL_HISTORY_GET,
-  CAI_PROTOCOL_HISTORY_APPEND
+  CAI_PROTOCOL_HISTORY_APPEND,
+  CAI_PROTOCOL_CATALOG
 } cai_protocol_kind;
 /** Each record is a definite eight-pair map, with ascending integer keys:
  * 0 kind, 1 request, 2 conversation, 3 generation, 4 sequence, 5 stream,

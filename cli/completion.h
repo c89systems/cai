@@ -20,4 +20,7 @@ int cai_cli_completions_open(cai_cli_completions *completions, sl_t *editor,
                              const char *workspace,
                              cai_cli_completion_catalog_fn catalog,
                              void *context);
+/** Valid printable UTF-8, without decoded C0/C1/DEL controls. Shared by file
+ * names and remote completion labels; bytes are never terminal escapes. */
+int cai_cli_completion_printable(const char *text);
 #endif

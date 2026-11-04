@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
+#include "../cli/catalog_wire.h"
 #include "../cli/input_wire.h"
 #include "../cli/status_wire.h"
 #include "../cli/transcript_wire.h"
@@ -33,7 +34,25 @@ typedef struct fixture {
   int replace_transcript;
   cai_transcript_kind reject_kind;
   int reject_transcript;
+  size_t catalogs, catalog_items;
+  int reject_catalog;
 } fixture;
+static int catalog_observed(void *context, const cai_app_catalog_event *e,
+                            cai_error *error) {
+  fixture *f = context;
+  (void)error;
+  assert(cai_app_client_pump(f->client, 1U, NULL) == CAI_ERR_INVALID);
+  assert(cai_app_client_detach(f->client, NULL) == CAI_ERR_INVALID);
+  cai_app_client_close(f->client);
+  if (f->reject_catalog)
+    return CAI_ERR_CANCELLED;
+  ++f->catalogs;
+  if (e->phase == CAI_APP_CATALOG_ITEM) {
+    assert(strcmp(e->text, "example-skill") == 0);
+    ++f->catalog_items;
+  }
+  return CAI_OK;
+}
 static int received(void *context, const cai_workspace_server_event *event,
                     cai_error *error) {
   fixture *f = context;
@@ -193,6 +212,8 @@ static void open_fixture(fixture *f, const char *runtime,
   client.transcript_context = f;
   client.execution = execution_observed;
   client.execution_context = f;
+  client.catalog = catalog_observed;
+  client.catalog_context = f;
   assert(cai_app_client_open(&client, 0U, &f->client, NULL) == CAI_OK);
 }
 static int exchange(fixture *f) {
@@ -941,6 +962,109 @@ static void status_tests(const char *runtime, const char *workspace) {
     close_fixture(&f);
   }
 }
+static void catalog_send(fixture *f, const cai_app_catalog_event *row) {
+  cai_cli_input_wire_output out;
+  out.context = f;
+  out.begin = begin;
+  out.write = write_token;
+  out.end = end;
+  assert(cai_cli_catalog_write(&out, row, NULL) == CAI_OK);
+}
+static void catalog_tests(const char *runtime, const char *workspace) {
+  fixture *f = calloc(1U, sizeof(*f));
+  unsigned int scenario;
+  assert(f != NULL);
+  for (scenario = 0U; scenario < 11U; ++scenario) {
+    cai_app_catalog_event row;
+    size_t i;
+    open_fixture(f, runtime, workspace);
+    assert(exchange(f) == CAI_OK && !state(f).bound);
+    memset(&row, 0, sizeof(row));
+    row.revision = 5U;
+    row.conversation = 11U;
+    row.text = "";
+    if (scenario != 1U) {
+      if (scenario == 8U)
+        f->reject_catalog = 1;
+      catalog_send(f, &row);
+      if (scenario == 8U) {
+        assert(exchange(f) == CAI_ERR_CANCELLED && f->catalogs == 0U);
+        close_fixture(f);
+        continue;
+      }
+      assert(exchange(f) == CAI_OK && f->catalogs == 1U &&
+             f->catalog_items == 0U);
+    }
+    row.phase = CAI_APP_CATALOG_ITEM;
+    row.text = "example-skill";
+    if (scenario == 2U) {
+      row.phase = CAI_APP_CATALOG_BEGIN;
+      row.text = "";
+    }
+    if (scenario == 3U)
+      row.index = 1U;
+    if (scenario == 4U)
+      row.conversation = 12U;
+    if (scenario == 5U)
+      row.revision = 6U;
+    if (scenario == 6U) {
+      row.phase = CAI_APP_CATALOG_END;
+      row.index = 1U;
+      row.text = "";
+    }
+    if (scenario == 7U || scenario == 9U) {
+      row.phase = CAI_APP_CATALOG_END;
+      row.text = "";
+      catalog_send(f, &row);
+      assert(exchange(f) == CAI_OK);
+      row.phase = scenario == 7U ? CAI_APP_CATALOG_ITEM : CAI_APP_CATALOG_ERROR;
+      row.text = "example-skill";
+      if (scenario == 9U) {
+        row.code = CAI_ERR_CANCELLED;
+        catalog_send(f, &row);
+        assert(exchange(f) == CAI_OK);
+      }
+    }
+    if (scenario == 10U) {
+      for (i = 0U; i < CAI_SKILLS_MAX_PACKAGES; ++i) {
+        row.index = i;
+        catalog_send(f, &row);
+        assert(exchange(f) == CAI_OK);
+      }
+      assert(f->catalog_items == CAI_SKILLS_MAX_PACKAGES);
+      row.index = CAI_SKILLS_MAX_PACKAGES;
+    }
+    catalog_send(f, &row);
+    if (scenario == 0U) {
+      assert(exchange(f) == CAI_OK && f->catalog_items == 1U);
+      row.phase = CAI_APP_CATALOG_END;
+      row.index = 1U;
+      row.text = "";
+      catalog_send(f, &row);
+      assert(exchange(f) == CAI_OK);
+      row.phase = CAI_APP_CATALOG_ERROR;
+      row.code = CAI_ERR_CANCELLED;
+      row.text = "Conversation closed";
+      catalog_send(f, &row);
+      assert(exchange(f) == CAI_OK);
+      row.phase = CAI_APP_CATALOG_BEGIN;
+      row.revision = 6U;
+      row.conversation = 12U;
+      row.index = 0U;
+      row.code = CAI_OK;
+      row.text = "";
+      catalog_send(f, &row);
+      assert(exchange(f) == CAI_OK);
+      row.phase = CAI_APP_CATALOG_END;
+      catalog_send(f, &row);
+      assert(exchange(f) == CAI_OK && f->catalogs == 6U);
+    } else
+      assert(exchange(f) == CAI_ERR_PROTOCOL &&
+             state(f).transport.phase == CAI_WORKSPACE_FAILED);
+    close_fixture(f);
+  }
+  free(f);
+}
 static void *run(void *context) {
   char path[] = "./ac.XXXXXX";
   char *runtime, *workspace;
@@ -957,6 +1081,7 @@ static void *run(void *context) {
   transcript_tests(runtime, workspace);
   status_tests(runtime, workspace);
   execution_tests(runtime, workspace);
+  catalog_tests(runtime, workspace);
   directory = opendir(runtime);
   assert(directory != NULL);
   while ((entry = readdir(directory)) != NULL)

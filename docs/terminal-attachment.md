@@ -59,6 +59,15 @@ startup inputs for an existing owner pass through the same editor/backend queue;
 commands wait for application before subsequent inputs. A newly launched owner
 receives the startup arguments itself, avoiding duplicate submission.
 
+Skill completion names arrive through the owner's
+[catalog channel](workspace-wire-catalog.md). Only the bounded native completion
+consumer retains those names; the transport never collects the catalog. The
+frontend does no skill discovery or resource reads. `/`, `@` and `$` use the
+same native completion providers and prefix-removal rules as the synchronous
+receiver. Both receivers also use one shared help generator. Socket `/help`
+runs through the backend command handler, records its Markdown reply in the
+journal and adds connection operations; SDK consumers receive that same reply.
+
 Transcript spans feed the common incremental presenter. Execution records feed
 the common tool formatter in one pass, with a bounded completed-call metadata
 cache. Only decoded subprocess output uses raw command presentation. Command
@@ -73,8 +82,7 @@ continuation only applies its own previously undisplayed actions.
 ## Remaining cutover work
 
 This is a working terminal/socket composition, not a claim of complete feature
-parity. Skill catalog completion, all pager/layout delegates, full shared help,
-review progress parity,
+parity. Remaining key bindings, pager/layout delegates, review progress parity,
 default replay-tail selection, concurrent first-launch
 reconciliation, immediate live command-progress events and explicit
 startup-configuration compatibility still require

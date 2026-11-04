@@ -155,7 +155,7 @@ static int parse_header(cai_buffer_builder *header, const char *fallback,
           rc = cai_set_error(error, CAI_ERR_INVALID,
                              "duplicate skill name field");
         else
-          rc = scalar(value, 64U, &out->name, error);
+          rc = scalar(value, CAI_SKILL_NAME_MAX, &out->name, error);
       } else if (key->data.scalar.length == 11U &&
                  memcmp(key->data.scalar.value, "description", 11U) == 0) {
         if (saw_description++)
@@ -177,7 +177,7 @@ static int parse_header(cai_buffer_builder *header, const char *fallback,
     if (out->name == NULL)
       return cai_set_error(error, CAI_ERR_NOMEM, "copy fallback skill name");
   }
-  if (out->name[0] == '\0' || strlen(out->name) > 64U ||
+  if (out->name[0] == '\0' || strlen(out->name) > CAI_SKILL_NAME_MAX ||
       strcmp(out->name, ".") == 0 || strcmp(out->name, "..") == 0)
     return cai_set_error(error, CAI_ERR_INVALID, "invalid skill name");
   for (name = (const unsigned char *)out->name; *name; name++)

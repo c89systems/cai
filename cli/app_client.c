@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#include "catalog_wire.h"
+#include "error.h"
 #include "input_wire.h"
-#include "pouch_stream.h"
 #include "status_wire.h"
 #include "transcript_wire.h"
 #include <cai/app_client.h>
@@ -38,6 +39,9 @@ struct cai_app_client {
   uint64_t history_stream, history_epoch, history_offset, history_sequence;
   char history_session[129];
   int history_open;
+  cai_cli_catalog_decoder *catalog_decoder;
+  uint64_t catalog_revision, catalog_conversation, catalog_index;
+  int catalog_open, catalog_failed;
 };
 static int receive_history(cai_app_client *, const cai_protocol_event *,
                            cai_error *);
@@ -124,6 +128,44 @@ static int receive(void *context, const cai_protocol_event *event,
   const cai_cli_input_wire_message *m = NULL;
   cai_input_observation o;
   int rc;
+  if (event->header->kind == CAI_PROTOCOL_CATALOG) {
+    const cai_app_catalog_event *row = NULL;
+    if (client->catalog_decoder == NULL) {
+      rc = cai_cli_catalog_decoder_open(&client->catalog_decoder, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
+    rc = cai_cli_catalog_decode(client->catalog_decoder, event, &row, error);
+    if (rc != CAI_OK || row == NULL)
+      return rc;
+    if (row->phase == CAI_APP_CATALOG_BEGIN) {
+      if (row->revision <= client->catalog_revision)
+        return invalid(error);
+      client->catalog_revision = row->revision;
+      client->catalog_conversation = row->conversation;
+      client->catalog_index = 0U;
+      client->catalog_open = 1;
+      client->catalog_failed = 0;
+    } else {
+      if (client->catalog_failed || row->revision != client->catalog_revision ||
+          row->conversation != client->catalog_conversation ||
+          row->index != client->catalog_index ||
+          (!client->catalog_open && row->phase != CAI_APP_CATALOG_ERROR))
+        return invalid(error);
+      if (row->phase == CAI_APP_CATALOG_ITEM) {
+        if (client->catalog_index >= CAI_SKILLS_MAX_PACKAGES)
+          return invalid(error);
+        ++client->catalog_index;
+      } else {
+        client->catalog_open = 0;
+        client->catalog_failed = row->phase == CAI_APP_CATALOG_ERROR;
+      }
+    }
+    return client->config.catalog != NULL
+               ? client->config.catalog(client->config.catalog_context, row,
+                                        error)
+               : CAI_OK;
+  }
   if (event->header->kind == CAI_PROTOCOL_STATUS) {
     const cai_app_view *view = NULL;
     if (client->status_decoder == NULL) {
@@ -879,6 +921,7 @@ void cai_app_client_close(cai_app_client *client) {
     return;
   cai_workspace_client_close(client->socket);
   cai_cli_input_wire_decoder_close(client->decoder);
+  cai_cli_catalog_decoder_close(client->catalog_decoder);
   cai_cli_transcript_decoder_close(client->transcript_decoder);
   cai_cli_status_decoder_close(client->status_decoder);
   cai_cli_status_cleanup(&client->view);

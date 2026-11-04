@@ -561,6 +561,15 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_completions_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")
     set_tests_properties(cai_cli_completions PROPERTIES TIMEOUT 30)
+    add_test(NAME cai_cli_remote_completions COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_completions_test.sh"
+      "$<TARGET_FILE:cai_cli>" remote "$<TARGET_FILE:cai_app_terminal_host>")
+    add_test(NAME cai_app_terminal_completions COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_completions_test.sh"
+      "$<TARGET_FILE:cai_cli>" embed "$<TARGET_FILE:cai_app_terminal_host>")
+    set_tests_properties(cai_cli_remote_completions cai_app_terminal_completions
+      PROPERTIES TIMEOUT 60 LABELS "cli;local;offline"
+      ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
     add_executable(cai_cli_completion_resolver_test tests/cli_completion_resolver_test.c)
     add_executable(cai_cli_input_adapter_test tests/cli_input_adapter_test.c)
     target_link_libraries(cai_cli_input_adapter_test PRIVATE cai_cli_support)

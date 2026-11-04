@@ -5,54 +5,22 @@ one server per workspace, Unix-domain sockets with streaming CBOR, and one
 controlling attachment with observers and explicit takeover. That decision
 supersedes the HTTP-first transport order below; HTTP remains a later adapter.
 
-Status: target architecture, with the input-queue foundation implemented on
-2026-11-03. Core `input_queue.h` and `input_controller.h` provide conversation
-authority, copied asynchronous requests/results, revisioned observations and
-bounded subscriptions. libcai_app uses the Softline backend adapter. Runtime
-input persistence, crash recovery, context switching and trim/export use that
-authority. There is no HTTP listener or attach/reconnect executable. The wider
-application lifecycle/rendering extraction and owner-thread separation described
-below remain follow-up work; the current app event loop still owns both.
-Public headers remain authoritative for the current implementation. Proposed
-names below establish responsibilities; declaration-level API review is part
-of the corresponding implementation step.
+Current implementation: `cai_app_start`/`cai_app_start_server` provide the
+terminal-free owner and Unix socket lifecycle. `cai/app_client.h` supplies typed
+queue, status, transcript and catalog observations. `cai/app_terminal.h` is the
+Softline/libmdf receiver; normal interactive `cai` discovers or starts an owner
+and attaches. HTML/HTTP remains a later adapter. Public headers and the
+[terminal cutover status](terminal-attachment.md) describe the current surface
+and remaining work; this document retains the boundary design below.
 
-The 2026-11-04 implementation now includes a terminal-free application owner
-through `cai_app_start`/`cai_app_join`, with explicit startup context, durable
-input, native event/replay observations and a coalescing status wakeup. Its
-startup and runtime code is shared with the synchronous receiver; the latter's
-terminal loop has not yet been replaced by a client composition. Remote command
-presentation, Softline client lifecycle
-and asynchronous Lua observations remain part of the cutover, not completed
-features. `cai_app_start_server` now binds socket ownership, handshake, roles and
-last-client/persistent lifetime to that same owner. Socket input/queue binding
-now shares its durable producers, receipts and generation checks; queue
-snapshots are incremental begin/item/end observations. Command presentation
-remains pending. Socket replay/live subscriptions now use one retained reader
-worker per conversation, bounded native collection windows and direct committed
-append notifications. The typed client delivers borrowed chunks and validated
-cursors without context restoration or a transcript mirror. Tail selection and
-terminal presentation remain pending. See the current public `app.h` contracts,
-[transcript binding](workspace-wire-transcript.md) and workspace specification.
-
-The terminal composition now uses `cli/softline_presenter.c` for its libmdf
-documents, tool styling, timestamps, literal submitted and command prompts,
-geometry, theme changes and renderer cleanup. That frontend-owned state has no
-runtime, store or application-controller access. The standalone presenter
-fixture compiles and links with core libcai, Softline and libmdf only, and
-exercises its resource lifetime on a default worker stack. Command admission,
-status projection and semantic event dispatch still belong to the remaining extraction; this is not
-yet a socket terminal frontend or a headless application package.
-
-Cutover decisions confirmed on 2026-11-03: implement the in-process controller
-and Softline adapter first, without a listener, background-server executable,
-HTTP framework or attach/reconnect CLI. Softline 0.16.0 now supplies the required
-asynchronous queue-backend constructor and request/result/update API. Pending
-work belongs to each conversation: `/new` and `/resume` leave the previous
-conversation's queue behind rather than moving its text, approval or edit holds
-into another conversation. A frontend attachment observes only its selected
-conversation, and every in-flight request retains its original conversation
-identity even if selection changes before its result arrives.
+The backend owns accepted input, durable receipts, execution and continuation.
+Native editors keep their drafts and presentation. `/new` and `/resume` leave
+pending work with its conversation; `/workspace` retains each visited owner's
+attachment and editor without carrying inputs into another workspace. Every
+in-flight request keeps its original session, producer, epoch and generation.
+The synchronous `cai_app.run` composition, asynchronous Lua observations and
+optional frontend packaging still require cutover. These boundaries are not
+proof of complete feature parity.
 
 The product requirement is one embeddable agent application that can run with
 no frontend, retain active work while a frontend disconnects, and accept a

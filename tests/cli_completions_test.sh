@@ -7,7 +7,39 @@ printf 'file\n' >"$work/report-unique.txt"
 printf 'child\n' >"$work/folder space/deep-file.txt"
 printf 'hidden\n' >"$work/.hidden-file"
 ln -s 'folder space' "$work/linked-folder"
+if [[ ${1:-local} != local ]]; then
+  completion_runtime=$(mktemp -d "$support/../build/cmp.XXXXXX")
+  base+=(--runtime-dir "$completion_runtime")
+  export LOG_LEVEL=info
+  for ((skill=1; skill<256; ++skill)); do
+    printf -v skill_name 'filler-%03d' "$skill"
+    mkdir "$root/skills/$skill_name"
+    printf '%s\n' '---' "name: $skill_name" 'description: Filler.' '---' 'Only loaded on demand.' >"$root/skills/$skill_name/SKILL.md"
+  done
+  completion_owner=
+  completion_cleanup() {
+    local result=$?
+    if [[ -n "$completion_owner" ]]; then
+      kill -TERM "$completion_owner" 2>/dev/null || true
+      wait "$completion_owner" 2>/dev/null || true
+    fi
+    if [[ $result == 0 ]]; then rm -rf -- "$completion_runtime"; fi
+    cleanup "$result"
+  }
+  trap completion_cleanup EXIT
+  "${base[@]}" -x -N --skills --skills-dir "$root/skills" >"$root/owner.out" 2>"$root/owner.log" & completion_owner=$!
+  wait_for has "$root/owner.log" 'Workspace server ready'
+  if [[ $1 == embed ]]; then
+    base=("$(realpath "$2")" "$completion_runtime" "$work" "${base[@]:1}")
+  fi
+fi
 terminal_start -N --skills --skills-dir "$root/skills"
+if [[ ${1:-local} != local ]]; then
+  # Only the owner has the loaded catalog. A frontend scan now sees a decoy.
+  mv "$root/skills" "$root/server-only-skills"
+  mkdir -p "$root/skills/client-only-decoy"
+  printf '%s\n' '---' 'name: client-only-decoy' 'description: Must not be discovered by the frontend.' '---' >"$root/skills/client-only-decoy/SKILL.md"
+fi
 # Complete real slash commands, retaining the slash required by dispatch.
 send '/stat\t\r'; expect_table 1 'Session ID'
 send '/ski\t\r'; expect 'completion-skill'
@@ -27,6 +59,11 @@ prompt 'inspect @fold\t\t' 'DIRECTORY COMPLETED'
 plan '{"plan":["SKILL COMPLETED"]}'
 prompt 'Use $comple\t' 'SKILL COMPLETED'
 [[ $(last_input) == 'Use completion-skill' ]]
+if [[ ${1:-local} != local ]]; then
+  plan '{"plan":["OWNER CATALOG CHECKED"]}'
+  prompt 'Use $client-\t' 'OWNER CATALOG CHECKED'
+  [[ $(last_input) == 'Use client-' ]]
+fi
 plan '{"plan":["HIDDEN COMPLETED"]}'
 prompt 'inspect @.hid\t' 'HIDDEN COMPLETED'
 [[ $(last_input) == 'inspect .hidden-file' ]]

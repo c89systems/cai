@@ -60,6 +60,11 @@ typedef struct frontend {
   char resume_collection[21];
   uint64_t resume_position, resume_sequence;
   int resume_actions;
+  char *skills[CAI_SKILLS_MAX_PACKAGES],
+      *skill_candidate[CAI_SKILLS_MAX_PACKAGES];
+  size_t skill_count, skill_candidate_count;
+  uint64_t skill_conversation;
+  int skills_ready;
   const cai_app_config *application;
   const cai_cli_options *options;
   const cai_cli_frontend_boot *boot;
@@ -128,6 +133,7 @@ static int service(frontend *);
 static int interests(frontend *);
 static int actions(frontend *);
 static int select_view(frontend *, const char *);
+static int notice(frontend *, const char *);
 static int workspace_begin(frontend *, const char *);
 static int workspace_progress(frontend *);
 static int workspace_interests(frontend *, uint64_t *);
@@ -136,7 +142,7 @@ static int completion_catalog(void *context, char trigger,
                               sl_completion_emit_t emit, void *emit_context) {
   size_t i;
   int rc = SL_OK;
-  (void)context;
+  frontend *f = context;
   if (trigger == '/') {
     for (i = 0U; rc == SL_OK && i < cai_cli_command_count(); ++i)
       rc = emit(cai_cli_command_at(i), emit_context);
@@ -146,8 +152,67 @@ static int completion_catalog(void *context, char trigger,
       rc = emit("/shutdown", emit_context);
     if (rc == SL_OK)
       rc = emit("/workspace", emit_context);
+  } else if (trigger == '$' && f->skills_ready && f->bound &&
+             !f->pending_context &&
+             f->skill_conversation == f->state.conversation) {
+    for (i = 0U; i < f->skill_count && rc == SL_OK; ++i) {
+      char name[CAI_SKILL_NAME_MAX + 2U];
+      if (!cai_cli_completion_printable(f->skills[i]))
+        continue;
+      snprintf(name, sizeof(name), "$%s", f->skills[i]);
+      rc = emit(name, emit_context);
+    }
   }
   return rc;
+}
+static void clear_skills(frontend *f) {
+  size_t i;
+  for (i = 0U; i < CAI_SKILLS_MAX_PACKAGES; ++i) {
+    free(f->skills[i]);
+    free(f->skill_candidate[i]);
+    f->skills[i] = f->skill_candidate[i] = NULL;
+  }
+  f->skill_count = f->skill_candidate_count = 0U;
+  f->skills_ready = 0;
+}
+/** Only the completion consumer retains a bounded name list. Incomplete
+ * candidates never replace its available catalog. No resource bodies or
+ * descriptions are read here, including while switching workspaces. */
+static int catalog(void *context, const cai_app_catalog_event *e,
+                   cai_error *error) {
+  frontend *f = context;
+  if (e->phase == CAI_APP_CATALOG_BEGIN || e->phase == CAI_APP_CATALOG_ERROR) {
+    clear_skills(f);
+    f->skill_conversation = e->conversation;
+    if (e->phase == CAI_APP_CATALOG_ERROR) {
+      f->skills_ready = 1; /* Known unavailable: never hold normal input. */
+      if (e->code != CAI_ERR_CANCELLED && notice(f, e->text) != 0)
+        return cai_cli_error(error, CAI_ERR_TRANSPORT, "show catalog failure");
+    }
+  } else if (e->phase == CAI_APP_CATALOG_ITEM) {
+    if (f->skill_candidate_count >= CAI_SKILLS_MAX_PACKAGES)
+      return cai_cli_error(error, CAI_ERR_LIMIT,
+                           "completion catalog limit exceeded");
+    f->skill_candidate[f->skill_candidate_count] = strdup(e->text);
+    if (f->skill_candidate[f->skill_candidate_count] == NULL)
+      return cai_cli_error(error, CAI_ERR_NOMEM, "copy completion label");
+    ++f->skill_candidate_count;
+  } else if (e->phase == CAI_APP_CATALOG_END) {
+    size_t i;
+    for (i = 0U; i < f->skill_candidate_count; ++i) {
+      f->skills[i] = f->skill_candidate[i];
+      f->skill_candidate[i] = NULL;
+    }
+    f->skill_count = f->skill_candidate_count;
+    f->skill_candidate_count = 0U;
+    f->skills_ready = 1;
+  }
+  if ((e->phase == CAI_APP_CATALOG_END || e->phase == CAI_APP_CATALOG_ERROR) &&
+      cai_cli_completions_open(&f->current->completions, f->ui->sl,
+                               f->target.workspace, completion_catalog,
+                               f) != SL_OK)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT, "refresh completion labels");
+  return CAI_OK;
 }
 static int quit_key(sl_t *, sl_key_t, void *, sl_key_action_t *);
 static int enter_key(sl_t *, sl_key_t, void *, sl_key_action_t *);
@@ -308,7 +373,8 @@ static int status(frontend *f) {
     if (cai_cli_status_apply(f->ui->sl, &f->status) != 0)
       return -1;
   }
-  if (f->ready && f->history_loaded && !f->welcomed) {
+  if (f->ready && f->history_loaded && f->skills_ready &&
+      f->skill_conversation == f->state.conversation && !f->welcomed) {
     snprintf(message, sizeof(message), "%s",
              f->state.transport.controller != f->state.transport.attachment
                  ? "Observing workspace. /takeover acquires control. "
@@ -321,6 +387,9 @@ static int status(frontend *f) {
     snprintf(message, sizeof(message), "Saving draft before exit...");
   else if (f->bound && !f->history_loaded)
     snprintf(message, sizeof(message), "Loading prompt history...");
+  else if (f->bound &&
+           (!f->skills_ready || f->skill_conversation != f->state.conversation))
+    snprintf(message, sizeof(message), "Loading completions...");
   else if (!f->ready)
     snprintf(message, sizeof(message), "Connecting to workspace server...");
   else if (f->state.transport.controller != f->state.transport.attachment)
@@ -421,6 +490,10 @@ static int observed(void *context, const cai_app_client_event *event,
              f->state.session);
     f->current->producer = f->state.producer;
     f->current->epoch = f->state.conversation;
+    if (cai_cli_completions_open(&f->current->completions, f->ui->sl,
+                                 f->target.workspace, completion_catalog,
+                                 f) != SL_OK)
+      return cai_cli_error(error, CAI_ERR_TRANSPORT, "bind completion catalog");
   } else if (event->type == CAI_APP_CLIENT_INPUT && event->input != NULL &&
              event->input->type == CAI_INPUT_OBSERVATION_DISCONNECTED &&
              !f->state.bound) {
@@ -673,6 +746,8 @@ static int connect_target(frontend *f) {
   config.execution_context = f;
   config.prompt_history = prompt_history;
   config.prompt_history_context = f;
+  config.catalog = catalog;
+  config.catalog_context = f;
   rc = cai_app_client_open(&config, clock_ms(), &f->client, &f->error);
   if (rc == CAI_OK)
     rc = cai_cli_input_socket_reconnect(f->queue, f->client, &f->error);
@@ -702,23 +777,6 @@ static int actions(frontend *f) {
       rc = markdown(f, "Theme changed.\n", 15U);
     if (why == NULL && rc == 0)
       f->theme = selected;
-  } else if (strcmp(line, "/help") == 0) {
-    size_t i;
-    rc = markdown(f, "## Commands\n\n", 13U);
-    for (i = 0U; rc == 0 && i < cai_cli_command_count(); ++i) {
-      const char *name = cai_cli_command_at(i);
-      rc = markdown(f, name, strlen(name));
-      if (rc == 0)
-        rc = markdown(f, "  ", 2U);
-    }
-    if (rc == 0) {
-      const char *usage =
-          "\n\nEnter queues; Alt-Enter steers. Alt-E edits queued input. "
-          "Escape cancels; Alt-Q quits. /takeover acquires control; "
-          "/shutdown stops the server. /workspace lists running owners; "
-          "/workspace SELECTOR switches workspace.\n";
-      rc = markdown(f, usage, strlen(usage));
-    }
   } else if (strcmp(line, "/theme") == 0 || strcmp(line, "/t") == 0) {
     cai_sink_callbacks callbacks;
     cai_sink *sink = NULL;
@@ -1232,7 +1290,10 @@ static int select_view(frontend *f, const char *session) {
     f->ui->tool_output = f->full_output ? "full" : "compact";
     if (cai_cli_input_socket_reconnect(f->queue, f->client, &f->error) !=
             CAI_OK ||
-        cai_cli_presenter_set_theme(f->ui, &f->theme, &f->error) != CAI_OK)
+        cai_cli_presenter_set_theme(f->ui, &f->theme, &f->error) != CAI_OK ||
+        cai_cli_completions_open(&v->completions, f->ui->sl,
+                                 f->target.workspace, completion_catalog,
+                                 f) != SL_OK)
       return -1;
   }
   f->pending_context = f->switching = f->ready = f->bound = f->awaiting_bind =
@@ -1729,6 +1790,7 @@ done:
     free(f->exit_draft);
     free(f->workspace);
     free(f->runtime_directory);
+    clear_skills(f);
     free(f);
     f = next;
   }

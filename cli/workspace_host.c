@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "workspace_host.h"
+#include "catalog_wire.h"
 #include "identity.h"
 #include "input_wire.h"
 #include "log.h"
@@ -31,6 +32,8 @@ typedef struct host_peer {
   uint64_t cancel_request, cancel_generation, cancel_conversation;
   int cancel_code;
   char cancel_reason[192];
+  uint64_t catalog_revision, catalog_index;
+  int catalog_phase;
 } host_peer;
 struct cai_cli_workspace_host {
   cai_workspace_server *server;
@@ -41,6 +44,8 @@ struct cai_cli_workspace_host {
   cai_cli_transcript_publisher *history;
   cai_cli_pouch *pouch;
   unsigned int prompt_limit;
+  cai_agent_runtime *catalog_runtime;
+  uint64_t catalog_revision;
   char session[129];
   uint64_t generation;
   cai_app_view status;
@@ -83,6 +88,92 @@ static int send_status(host_peer *peer, uint64_t now, cai_error *error) {
   cai_app_view_elapsed(&view, now, &view.metrics.turn_elapsed_ms,
                        &view.goal.elapsed_seconds);
   return cai_cli_status_write(&output, &view, error);
+}
+
+/** The runtime's immutable skills catalog has at most 256 entries. Visiting
+ * one indexed row with an early stop keeps socket backpressure bounded without
+ * copying that catalog or adding another public runtime/catalog API. */
+typedef struct catalog_row {
+  host_peer *peer;
+  size_t skip;
+  int found, rc;
+} catalog_row;
+static int send_catalog(host_peer *peer, cai_app_catalog_phase phase,
+                        const char *text, int code, cai_error *error) {
+  cai_cli_input_wire_output output;
+  cai_app_catalog_event e;
+  unsigned long long epoch;
+  int rc = cai_input_controller_conversation(peer->host->input, &epoch, error);
+  if (rc != CAI_OK)
+    return rc;
+  memset(&e, 0, sizeof(e));
+  e.phase = phase;
+  e.conversation = epoch;
+  e.revision = peer->catalog_revision;
+  e.index = peer->catalog_index;
+  e.text = text;
+  e.code = code;
+  output.context = peer;
+  output.begin = output_begin;
+  output.write = output_write;
+  output.end = output_end;
+  return cai_cli_catalog_write(&output, &e, error);
+}
+static int catalog_item(void *context, const cai_skill_info *skill,
+                        cai_error *error) {
+  catalog_row *row = context;
+  if (row->skip != 0U) {
+    --row->skip;
+    return CAI_OK;
+  }
+  row->found = 1;
+  row->rc =
+      send_catalog(row->peer, CAI_APP_CATALOG_ITEM, skill->name, CAI_OK, error);
+  return row->rc == CAI_OK ? CAI_ERR_CANCELLED : row->rc;
+}
+static int catalog_pending(const host_peer *peer) {
+  return peer->host->catalog_runtime != NULL &&
+         (peer->catalog_revision != peer->host->catalog_revision ||
+          peer->catalog_phase != CAI_APP_CATALOG_END);
+}
+static int output_catalog(host_peer *peer, cai_error *error) {
+  catalog_row row;
+  int rc;
+  if (peer->catalog_revision != peer->host->catalog_revision) {
+    peer->catalog_revision = peer->host->catalog_revision;
+    peer->catalog_index = 0U;
+    peer->catalog_phase = CAI_APP_CATALOG_ITEM;
+    return send_catalog(peer, CAI_APP_CATALOG_BEGIN, "", CAI_OK, error);
+  }
+  memset(&row, 0, sizeof(row));
+  row.peer = peer;
+  row.skip = (size_t)peer->catalog_index;
+  rc = cai_agent_runtime_visit_skills(peer->host->catalog_runtime, catalog_item,
+                                      &row, error);
+  if (row.found) {
+    if (row.rc == CAI_OK && rc == CAI_ERR_CANCELLED) {
+      ++peer->catalog_index;
+      return CAI_OK;
+    }
+    return row.rc != CAI_OK ? row.rc : rc;
+  }
+  if (rc != CAI_OK)
+    return rc;
+  peer->catalog_phase = CAI_APP_CATALOG_END;
+  return send_catalog(peer, CAI_APP_CATALOG_END, "", CAI_OK, error);
+}
+int cai_cli_workspace_host_catalog(cai_cli_workspace_host *host,
+                                   cai_agent_runtime *runtime,
+                                   cai_error *error) {
+  if (host == NULL)
+    return CAI_OK;
+  if (runtime == NULL || host->input == NULL ||
+      host->catalog_revision == UINT64_MAX)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "open catalog context required");
+  host->catalog_runtime = runtime;
+  ++host->catalog_revision;
+  return CAI_OK;
 }
 static int send_transcript(host_peer *peer, const cai_transcript_event *event,
                            cai_error *error) {
@@ -583,6 +674,14 @@ int cai_cli_workspace_host_input(cai_cli_workspace_host *host,
     strcpy(host->session, session);
     return CAI_OK;
   }
+  for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
+    host_peer *peer = &host->peers[i];
+    if (!peer->detached && host->catalog_runtime != NULL &&
+        peer->catalog_revision == host->catalog_revision)
+      (void)send_catalog(peer, CAI_APP_CATALOG_ERROR, "Conversation closed",
+                         CAI_ERR_CANCELLED, NULL);
+  }
+  host->catalog_runtime = NULL;
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i)
     if (host->peers[i].stream != 0U) {
       (void)transcript_error(&host->peers[i], host->peers[i].stream,
@@ -741,7 +840,8 @@ int cai_cli_workspace_host_prepare(cai_cli_workspace_host *host,
     if (peer->detached)
       *timeout = 0L;
     if (peer->attachment != 0U && !peer->detached &&
-        peer->status_revision < host->status.revision &&
+        (peer->status_revision < host->status.revision ||
+         catalog_pending(peer)) &&
         cai_workspace_server_pending(host->server, peer->attachment, &pending,
                                      NULL) == CAI_OK &&
         pending <= 65536U)
@@ -846,6 +946,11 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
     }
     if (rc == CAI_OK && pending <= 65536U)
       rc = output_one(peer, &local);
+    if (rc == CAI_OK && catalog_pending(peer) &&
+        cai_workspace_server_pending(host->server, peer->attachment, &pending,
+                                     &local) == CAI_OK &&
+        pending <= 65536U)
+      rc = output_catalog(peer, &local);
     if (rc == CAI_OK && peer->stream != 0U) {
       cai_cli_transcript_frame frame;
       int failed;
