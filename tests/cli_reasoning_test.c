@@ -273,10 +273,11 @@ static int test_command_queue_modes(void) {
   if (cli_command_at_request_boundary("/fastest") ||
       cli_command_at_request_boundary("/tiers") ||
       cli_command_at_request_boundary("ordinary prompt") ||
-      !cli_is_theme("/t plain") || cli_is_theme("/tier") ||
-      !cli_is_theme("/theme-offset -300") ||
-      !cli_is_theme("/subagent-theme-offset 1234") ||
-      !cli_is_theme("/review-theme-offset -1"))
+      !cai_cli_command_is_theme("/t plain") ||
+      cai_cli_command_is_theme("/tier") ||
+      !cai_cli_command_is_theme("/theme-offset -300") ||
+      !cai_cli_command_is_theme("/subagent-theme-offset 1234") ||
+      !cai_cli_command_is_theme("/review-theme-offset -1"))
     return 1;
   state.was_busy = 0;
   for (i = 0U; i < sizeof(turns) / sizeof(turns[0]); i++) {

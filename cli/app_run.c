@@ -2,6 +2,7 @@
 #define _XOPEN_SOURCE 700
 
 #include "app_internal.h"
+#include "commands.h"
 #include "completion.h"
 #include "config.h"
 #include "identity.h"
@@ -1216,83 +1217,6 @@ static int cli_shell_editor_key(sl_t *sl, sl_key_t key, void *context,
   return rc;
 }
 
-typedef enum cli_command_boundary {
-  CLI_COMMAND_PROMPT,
-  CLI_COMMAND_FEED,
-  CLI_COMMAND_REQUEST,
-  CLI_COMMAND_TURN
-} cli_command_boundary;
-
-/* One policy inventory for the complete slash-command surface. Bare queries
- * can differ from mutations; neither Enter nor Alt-Enter changes the boundary
- * required by a command. Ordinary conversation input keeps its native intent.
- */
-static const struct cli_command_definition {
-  const char *name;
-  cli_command_boundary bare, arguments;
-} cli_command_definitions[] = {
-    {"/help", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/status", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/log", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/tools", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/mcp", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/skills", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/quit", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/exit", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/new", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/resume", CLI_COMMAND_FEED, CLI_COMMAND_TURN},
-    {"/review", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/review-and-fix", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/model", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/reasoning", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/tier", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
-    {"/fast", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
-    {"/foreground", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
-    {"/fg", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
-    {"/background", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
-    {"/bg", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
-    {"/yield_time_ms", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/goal", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/theme", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/theme-offset", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/subagent-theme-offset", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/review-theme-offset", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/yolo", CLI_COMMAND_FEED, CLI_COMMAND_TURN},
-    {"/reasoning-tool", CLI_COMMAND_FEED, CLI_COMMAND_TURN},
-    {"/queue", CLI_COMMAND_FEED, CLI_COMMAND_TURN},
-    {"/todo", CLI_COMMAND_FEED, CLI_COMMAND_TURN},
-    {"/trim", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/export", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/compact", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/shell", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/shellshare", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/autoqueue", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/output", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/history", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/retention", CLI_COMMAND_FEED, CLI_COMMAND_TURN},
-    {"/shell-context", CLI_COMMAND_FEED, CLI_COMMAND_FEED}};
-
-static int cli_word_is(const char *text, size_t length, const char *word) {
-  return strlen(word) == length && strncmp(text, word, length) == 0;
-}
-
-/* Expand only the command token. Queue policy and dispatch share this map;
- * the original alias stays in the editor, prompt history and input echo. */
-static const struct {
-  const char *alias, *name;
-} cli_command_aliases[] = {
-    {"/m", "/model"}, {"/r", "/reasoning"}, {"/t", "/theme"}};
-static const char *cli_command_name(const char *line, size_t *length) {
-  size_t i;
-  for (i = 0U; i < sizeof(cli_command_aliases) / sizeof(cli_command_aliases[0]);
-       i++)
-    if (cli_word_is(line, *length, cli_command_aliases[i].alias)) {
-      *length = strlen(cli_command_aliases[i].name);
-      return cli_command_aliases[i].name;
-    }
-  return line;
-}
-
 typedef struct cli_skill_completion {
   sl_completion_emit_t emit;
   void *context;
@@ -1321,14 +1245,8 @@ static int cli_completion_catalog(void *context, char trigger,
   size_t i;
   int rc = SL_OK;
   if (trigger == '/') {
-    for (i = 0U; rc == SL_OK && i < sizeof(cli_command_definitions) /
-                                        sizeof(cli_command_definitions[0]);
-         ++i)
-      rc = emit(cli_command_definitions[i].name, emit_context);
-    for (i = 0U; rc == SL_OK && i < sizeof(cli_command_aliases) /
-                                        sizeof(cli_command_aliases[0]);
-         ++i)
-      rc = emit(cli_command_aliases[i].alias, emit_context);
+    for (i = 0U; rc == SL_OK && i < cai_cli_command_count(); ++i)
+      rc = emit(cai_cli_command_at(i), emit_context);
   } else if (trigger == '$' && state->options.skills &&
              state->runtime != NULL) {
     cli_skill_completion out;
@@ -1345,60 +1263,8 @@ static int cli_completion_catalog(void *context, char trigger,
   return rc;
 }
 
-static int cli_is_theme(const char *line) {
-  size_t length = strcspn(line, " \t");
-  const char *name = cli_command_name(line, &length);
-  return cli_word_is(name, length, "/theme") ||
-         cli_word_is(name, length, "/theme-offset") ||
-         cli_word_is(name, length, "/subagent-theme-offset") ||
-         cli_word_is(name, length, "/review-theme-offset");
-}
-
-static cli_command_boundary cli_command_delivery(const char *line) {
-  const char *arg, *name;
-  size_t length, arg_length, word_length, i;
-  if (line[0] == '!')
-    return CLI_COMMAND_TURN;
-  if (line[0] != '/')
-    return CLI_COMMAND_PROMPT;
-  length = strcspn(line, " \t");
-  arg = line + length;
-  arg += strspn(arg, " \t");
-  name = cli_command_name(line, &length);
-  arg_length = strlen(arg);
-  while (arg_length > 0U && strchr(" \t", arg[arg_length - 1U]) != NULL)
-    arg_length--;
-  word_length = strcspn(arg, " \t");
-  if (cli_word_is(name, length, "/mcp") &&
-      !cli_word_is(arg, word_length, "enable") &&
-      !cli_word_is(arg, word_length, "disable") &&
-      !cli_word_is(arg, word_length, "refresh"))
-    return CLI_COMMAND_FEED;
-  if (cli_word_is(name, length, "/goal") &&
-      (cli_word_is(arg, arg_length, "status") ||
-       cli_word_is(arg, arg_length, "help")))
-    return CLI_COMMAND_FEED;
-  if (cli_word_is(name, length, "/tier") &&
-      cli_word_is(arg, arg_length, "list"))
-    return CLI_COMMAND_FEED;
-  if (cli_word_is(name, length, "/todo") &&
-      (cli_word_is(arg, arg_length, "list") ||
-       cli_word_is(arg, arg_length, "help") ||
-       cli_word_is(arg, word_length, "layout") ||
-       cli_word_is(arg, word_length, "see")))
-    return CLI_COMMAND_FEED;
-  for (i = 0U;
-       i < sizeof(cli_command_definitions) / sizeof(cli_command_definitions[0]);
-       i++)
-    if (cli_word_is(name, length, cli_command_definitions[i].name))
-      return arg_length == 0U ? cli_command_definitions[i].bare
-                              : cli_command_definitions[i].arguments;
-  /* Reject unknown commands locally; they are never model steering. */
-  return CLI_COMMAND_FEED;
-}
-
 static int cli_command_at_feed_boundary(const char *line) {
-  return cli_command_delivery(line) == CLI_COMMAND_FEED;
+  return cai_cli_command_delivery(line) == CLI_COMMAND_FEED;
 }
 
 static int cli_is_yolo(const char *line) {
@@ -1414,13 +1280,13 @@ static int cli_is_compact(const char *line) {
 /* Agent controls and renderer changes use a response/tool seam, not a new
  * user turn. Both submission keys retain an editable identity until then. */
 static int cli_command_at_request_boundary(const char *line) {
-  return cli_command_delivery(line) == CLI_COMMAND_REQUEST;
+  return cai_cli_command_delivery(line) == CLI_COMMAND_REQUEST;
 }
 
 /* Queued UI commands share admission; delivery follows their actual contract
  * rather than whether Enter or Alt-Enter happened to produce a Q/S label. */
 static int cli_command_at_turn_boundary(const char *line) {
-  return cli_command_delivery(line) == CLI_COMMAND_TURN;
+  return cai_cli_command_delivery(line) == CLI_COMMAND_TURN;
 }
 
 static sl_prompt_queue_mode_t cli_prompt_mode(cli_state *state,
@@ -1430,7 +1296,7 @@ static sl_prompt_queue_mode_t cli_prompt_mode(cli_state *state,
     return mode;
   if (cli_command_at_turn_boundary(text))
     return SL_PROMPT_QUEUE_MODE_QUEUED;
-  if (cli_command_delivery(text) == CLI_COMMAND_PROMPT &&
+  if (cai_cli_command_delivery(text) == CLI_COMMAND_PROMPT &&
       !state->options.subagent_steering &&
       (state->review_runtime != NULL || state->foreground_subagent))
     return SL_PROMPT_QUEUE_MODE_QUEUED;
@@ -1525,7 +1391,7 @@ static int cli_prompt_ready(cli_state *state, const char *text,
   }
   if (cli_command_at_request_boundary(text)) {
     if (!*ready && at_boundary &&
-        (cli_is_theme(text) ||
+        (cai_cli_command_is_theme(text) ||
          (state->review_runtime == NULL && !state->foreground_subagent)))
       *ready = 1;
     return CAI_OK;
@@ -5752,7 +5618,7 @@ static int cli_dispatch_command(cli_state *state, const char *line,
   if (line[0] == '/') {
     size_t name = strcspn(line, " \t"), length;
     const char *arg = line + name;
-    const char *canonical = cli_command_name(line, &name);
+    const char *canonical = cai_cli_command_name(line, &name);
     arg += strspn(arg, " \t");
     length = strlen(arg);
     while (length > 0U && strchr(" \t", arg[length - 1U]) != NULL)
