@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -18,7 +19,7 @@ typedef struct input_message {
 } input_message;
 typedef struct input_submission {
   struct input_submission *next;
-  unsigned long long conversation;
+  cai_input_scope scope;
   cai_input_request value;
   char *text;
 } input_submission;
@@ -30,9 +31,11 @@ struct cai_input_connection {
   input_message *messages, *messages_tail;
   size_t submitted, ordinary, reserved[3], message_count, message_bytes;
   unsigned long long conversation;
+  uint64_t attachment;
   int fd, wake_fd, detached, synchronized, needs_snapshot;
 };
 struct cai_input_controller {
+  cai_input_controller_config config;
   pthread_mutex_t lock;
   pthread_t owner;
   cai_input_queue *queue;
@@ -229,7 +232,8 @@ static int snapshot(cai_input_connection *connection, cai_error *error) {
     cai_input_observation_close(&message->value);
   return rc;
 }
-int cai_input_controller_open(cai_input_controller **out, cai_error *error) {
+int cai_input_controller_open(const cai_input_controller_config *config,
+                              cai_input_controller **out, cai_error *error) {
   cai_input_controller *controller;
   if (out == NULL)
     return cai_set_error(error, CAI_ERR_INVALID,
@@ -239,6 +243,8 @@ int cai_input_controller_open(cai_input_controller **out, cai_error *error) {
   if (controller == NULL)
     return cai_set_error(error, CAI_ERR_NOMEM, "allocate input controller");
   memset(controller, 0, sizeof(*controller));
+  if (config != NULL)
+    controller->config = *config;
   if (pthread_mutex_init(&controller->lock, NULL) != 0) {
     cai_free_mem(NULL, controller);
     return cai_set_error(error, CAI_ERR_TRANSPORT,
@@ -321,6 +327,7 @@ int cai_input_controller_select(cai_input_controller *controller,
   return rc;
 }
 int cai_input_controller_connect(cai_input_controller *controller,
+                                 uint64_t attachment,
                                  cai_input_connection **out, cai_error *error) {
   cai_input_connection *connection;
   if (controller == NULL || out == NULL)
@@ -344,6 +351,7 @@ int cai_input_controller_connect(cai_input_controller *controller,
                          "input controller is closed or full");
   }
   connection->controller = controller;
+  connection->attachment = attachment;
   connection->conversation = controller->conversation;
   connection->needs_snapshot = 1;
   connection->next = controller->connections;
@@ -362,15 +370,15 @@ static int reserved(cai_input_operation operation) {
                                             : -1;
 }
 int cai_input_connection_request(cai_input_connection *connection,
-                                 unsigned long long conversation,
+                                 const cai_input_scope *scope,
                                  const cai_input_request *request,
                                  cai_error *error) {
   cai_input_controller *controller;
   input_submission *submission;
   size_t n = 0U;
   int slot;
-  if (connection == NULL || request == NULL || request->request_id == 0U ||
-      request->operation < CAI_INPUT_OFFER ||
+  if (connection == NULL || scope == NULL || request == NULL ||
+      request->request_id == 0U || request->operation < CAI_INPUT_OFFER ||
       request->operation > CAI_INPUT_RESOLVE)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "input request identity and operation are required");
@@ -385,7 +393,7 @@ int cai_input_connection_request(cai_input_connection *connection,
     return cai_set_error(error, CAI_ERR_NOMEM, "copy input submission");
   memset(submission, 0, sizeof(*submission));
   submission->value = *request;
-  submission->conversation = conversation;
+  submission->scope = *scope;
   if (request->text != NULL) {
     submission->text = cai_strdup(NULL, request->text);
     if (submission->text == NULL) {
@@ -481,19 +489,38 @@ int cai_input_controller_pump(cai_input_controller *controller,
         return cai_set_error(error, CAI_ERR_NOMEM,
                              "prepare input result receipt");
       }
-      message->value.conversation = submission->conversation;
+      message->value.conversation = submission->scope.conversation;
       message->value.result.request_id = submission->value.request_id;
       if (connection->client == NULL ||
-          (submission->conversation != connection->conversation &&
-           !(submission->conversation == 0U &&
+          (submission->scope.conversation != connection->conversation &&
+           !(submission->scope.conversation == 0U &&
              submission->value.operation == CAI_INPUT_SYNCHRONIZE))) {
         message->value.result.outcome = CAI_INPUT_REJECTED;
         message->value.result.code = CAI_ERR_INVALID;
         strcpy(message->value.result.reason,
                "conversation changed; request was not accepted");
       } else {
-        rc = cai_input_queue_request(connection->client, &submission->value,
-                                     &message->value.result, error);
+        cai_error admission;
+        cai_error_init(&admission);
+        rc = CAI_OK;
+        if (controller->config.authorize != NULL &&
+            submission->value.operation != CAI_INPUT_SYNCHRONIZE &&
+            submission->value.operation != CAI_INPUT_RESOLVE)
+          rc = controller->config.authorize(
+              controller->config.authorize_context, connection->attachment,
+              submission->scope.generation, &admission);
+        if (rc != CAI_OK) {
+          message->value.result.outcome = CAI_INPUT_REJECTED;
+          message->value.result.code = rc;
+          snprintf(message->value.result.reason,
+                   sizeof(message->value.result.reason), "%s",
+                   admission.message != NULL ? admission.message
+                                             : "input authority was revoked");
+          rc = CAI_OK;
+        } else
+          rc = cai_input_queue_request(connection->client, &submission->value,
+                                       &message->value.result, error);
+        cai_error_cleanup(&admission);
         if (rc != CAI_OK) {
           message->value.result.outcome = CAI_INPUT_REJECTED;
           message->value.result.code = rc;
@@ -616,7 +643,7 @@ void cai_input_controller_close(cai_input_controller *controller) {
       input_message *message = message_new(CAI_INPUT_OBSERVATION_RESULT);
       connection->head = submission->next;
       if (message != NULL) {
-        message->value.conversation = submission->conversation;
+        message->value.conversation = submission->scope.conversation;
         message->value.result.request_id = submission->value.request_id;
         message->value.result.outcome = CAI_INPUT_REJECTED;
         message->value.result.code = CAI_ERR_CANCELLED;

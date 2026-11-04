@@ -40,6 +40,9 @@ static void drain(frontend *client) {
 static int send(frontend *client, cai_input_operation operation,
                 const char *text) {
   cai_input_request request;
+  cai_input_scope scope;
+  scope.conversation = client->conversation;
+  scope.generation = 0U;
   memset(&request, 0, sizeof(request));
   request.request_id = ++client->request;
   request.operation = operation;
@@ -47,8 +50,8 @@ static int send(frontend *client, cai_input_operation operation,
   request.item_id = client->item;
   request.item_revision = client->revision;
   request.edit_token = client->token;
-  return cai_input_connection_request(client->connection, client->conversation,
-                                      &request, NULL);
+  return cai_input_connection_request(client->connection, &scope, &request,
+                                      NULL);
 }
 static void *submit_thread(void *context) {
   frontend *client = context;
@@ -71,9 +74,10 @@ static void *concurrent_frontend(void *context) {
   cai_input_request request;
   struct pollfd fd;
   unsigned long long conversation = 0U;
+  cai_input_scope scope;
   size_t i;
-  assert(cai_input_controller_connect(fixture->controller, &connection, NULL) ==
-         CAI_OK);
+  assert(cai_input_controller_connect(fixture->controller, 0U, &connection,
+                                      NULL) == CAI_OK);
   fd.fd = cai_input_connection_fd(connection);
   fd.events = POLLIN;
   for (i = 0U; i <= 80U; ++i) {
@@ -82,8 +86,10 @@ static void *concurrent_frontend(void *context) {
     request.request_id = (unsigned long long)i + 1U;
     request.operation = i == 0U ? CAI_INPUT_SYNCHRONIZE : CAI_INPUT_OFFER;
     request.text = i == 0U ? NULL : "concurrent frontend input";
-    assert(cai_input_connection_request(connection, conversation, &request,
-                                        NULL) == CAI_OK);
+    scope.conversation = conversation;
+    scope.generation = 0U;
+    assert(cai_input_connection_request(connection, &scope, &request, NULL) ==
+           CAI_OK);
     while (!received) {
       cai_input_observation *event = NULL;
       assert(poll(&fd, 1U, 5000) > 0);
@@ -126,7 +132,7 @@ static void concurrent_selection(void) {
   assert(pthread_mutex_init(&fixture.lock, NULL) == 0);
   assert(cai_input_queue_open(NULL, &a, NULL) == CAI_OK);
   assert(cai_input_queue_open(NULL, &b, NULL) == CAI_OK);
-  assert(cai_input_controller_open(&fixture.controller, NULL) == CAI_OK);
+  assert(cai_input_controller_open(NULL, &fixture.controller, NULL) == CAI_OK);
   assert(cai_input_controller_select(fixture.controller, a, NULL) == CAI_OK);
   assert(pthread_create(&thread, NULL, concurrent_frontend, &fixture) == 0);
   fd.fd = cai_input_controller_fd(fixture.controller);
@@ -170,11 +176,11 @@ int main(void) {
   cai_input_queue_config_init(&config);
   assert(cai_input_queue_open(&config, &first, NULL) == CAI_OK);
   assert(cai_input_queue_open(&config, &second, NULL) == CAI_OK);
-  assert(cai_input_controller_open(&controller, NULL) == CAI_OK);
+  assert(cai_input_controller_open(NULL, &controller, NULL) == CAI_OK);
   assert(cai_input_controller_select(controller, first, NULL) == CAI_OK);
-  assert(cai_input_controller_connect(controller, &a.connection, NULL) ==
+  assert(cai_input_controller_connect(controller, 0U, &a.connection, NULL) ==
          CAI_OK);
-  assert(cai_input_controller_connect(controller, &b.connection, NULL) ==
+  assert(cai_input_controller_connect(controller, 0U, &b.connection, NULL) ==
          CAI_OK);
   assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
   drain(&a);
@@ -258,7 +264,7 @@ int main(void) {
   /* Handoff remains backend-owned even if its frontend disconnects before
    * admission. Owner dispatch still accepts the approved input exactly once. */
   memset(&a, 0, sizeof(a));
-  assert(cai_input_controller_connect(controller, &a.connection, NULL) ==
+  assert(cai_input_controller_connect(controller, 0U, &a.connection, NULL) ==
          CAI_OK);
   assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
   drain(&a);
@@ -285,7 +291,7 @@ int main(void) {
   cai_input_queue_close(second);
   /* A receiver reference retains allocation without retaining storage access.
    */
-  assert(cai_input_controller_open(&controller, NULL) == CAI_OK);
+  assert(cai_input_controller_open(NULL, &controller, NULL) == CAI_OK);
   assert(cai_input_queue_open(NULL, &first, NULL) == CAI_OK);
   assert(cai_input_controller_select(controller, first, NULL) == CAI_OK);
   cai_input_queue_close(first);

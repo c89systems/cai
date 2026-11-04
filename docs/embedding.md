@@ -120,6 +120,24 @@ resynchronize without removing work. Deselect before closing the runtime;
 detach frontend connections before freeing their callback contexts. No worker
 thread or HTTP listener is created by this core controller.
 
+For a shared frontend server, supply `cai_input_controller_config.authorize`
+and a fixed authenticated attachment identity on each connection. Every copied
+handoff carries `cai_input_scope` (conversation epoch and original control
+generation). Admission checks that generation on the owner thread, immediately
+before queue mutation; a takeover cannot be bypassed by an earlier socket read.
+Synchronization and receipt reconciliation are read-only. A NULL configuration
+selects trusted in-process operation.
+
+`<cai/attachment.h>` supplies transport-independent roles and lifetime for
+that gate. First attach acquires control; subsequent clients observe until
+explicit takeover. Generations advance when authority changes. Persistence
+defaults to false: the last client disconnect starts irreversible shutdown,
+counting observers too. A persistent host continues with no attachments. After
+READY, a nonpersistent host has a bounded first-attachment grace period; schedule
+its reported monotonic deadline without polling while idle. The owner still
+performs runtime/transport shutdown; the attachment controller never exits a
+process, starts workers or closes application stores.
+
 The Unix transport foundation is also independent of libcai_app and terminal
 libraries. `<cai/cbor.h>` decodes fragments into borrowed tokens and writes
 tokens directly to a sink, without a DOM or retained value. A definite string

@@ -41,6 +41,7 @@ static int request(void *context, const sl_queue_request_t *source) {
   cai_input_request target;
   const char *revision = source->queue_revision;
   unsigned long long conversation = adapter->conversation, view;
+  cai_input_scope scope;
   if (adapter->connection == NULL)
     return SL_ERROR_IO;
   memset(&target, 0, sizeof(target));
@@ -61,8 +62,10 @@ static int request(void *context, const sl_queue_request_t *source) {
                       : CAI_INPUT_QUEUED;
   target.enabled = source->enabled;
   target.target_request_id = source->target_request_id;
-  return cai_input_connection_request(adapter->connection, conversation,
-                                      &target, NULL) == CAI_OK
+  scope.conversation = conversation;
+  scope.generation = 0U;
+  return cai_input_connection_request(adapter->connection, &scope, &target,
+                                      NULL) == CAI_OK
              ? SL_OK
              : SL_ERROR_IO;
 }
@@ -86,7 +89,8 @@ int cai_cli_input_adapter_open(cai_input_controller *controller,
   if (adapter == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM,
                          "allocate Softline input adapter");
-  rc = cai_input_controller_connect(controller, &adapter->connection, error);
+  rc =
+      cai_input_controller_connect(controller, 0U, &adapter->connection, error);
   if (rc != CAI_OK) {
     free(adapter);
     return rc;

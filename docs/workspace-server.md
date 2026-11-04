@@ -8,8 +8,12 @@ implemented. The existing queue/controller foundation remains the baseline.
 Current implementation progress: libcai now contains the incremental codec
 (`cbor.h`), record/socket transport (`wire.h`) and canonical endpoint ownership
 (`workspace.h`). Their tests cover streaming, bounded backpressure, native
-ownership races and killed-owner recovery. The application controller/frontend
-cutover, typed attachment protocol and headless/attach CLI are still pending;
+ownership races and killed-owner recovery. The core attachment controller
+(`attachment.h`) implements roles, generation-checked admission and persistent
+versus last-client lifetime. Input-controller handoffs carry the original
+authority generation and check it on owner-thread dispatch. The application
+controller/frontend cutover, typed socket attachment protocol and
+headless/attach CLI are still pending;
 the transport primitives alone do not enable those CLI modes.
 
 ## Confirmed product decisions

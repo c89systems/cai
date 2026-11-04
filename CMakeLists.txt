@@ -715,6 +715,7 @@ set(CAI_SOURCES
   src/cai_skills.c
   src/cai_skill_metadata.c
   src/cai_allocator.c
+  src/cai_attachment.c
   src/cai_auth.c
   src/cai_chrome.c
   src/cai_chrome_protocol.c
@@ -1022,6 +1023,12 @@ endif()
 
 if(CAI_BUILD_TESTS)
   add_executable(cai_input_queue_test tests/input_queue_test.c)
+  add_executable(cai_attachment_test tests/attachment_test.c)
+  target_link_libraries(cai_attachment_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_attachment_test)
+  target_compile_options(cai_attachment_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_attachment COMMAND cai_attachment_test)
+  set_tests_properties(cai_attachment PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   add_executable(cai_cbor_test tests/cbor_test.c)
   target_link_libraries(cai_cbor_test PRIVATE ${_cai_internal_link_target})
   cai_configure_cli_target(cai_cbor_test)

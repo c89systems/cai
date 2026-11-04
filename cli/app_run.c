@@ -6342,7 +6342,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       goto cleanup;
     }
     sl_config_init(&prompt_config);
-    rc = cai_input_controller_open(&state->input_controller, &error);
+    rc = cai_input_controller_open(NULL, &state->input_controller, &error);
     if (rc == CAI_OK && state->interactive)
       rc = cai_cli_input_adapter_open(state->input_controller,
                                       &state->input_adapter, &error);
