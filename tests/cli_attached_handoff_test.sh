@@ -52,6 +52,8 @@ if [[ $mode == embed ]]; then
 fi
 plan '{"plan":["PREHANDOFF"]}'
 prompt 'one turn before handing off' PREHANDOFF
+send '/help -p\r'; expect 'Your coding agent'
+send q; expect 'Pager closed.'
 send 'DRAFT survives handoff\033s'
 expect NATIVE_SHELL_READY
 send 'printf "SHELL_CWD_%s\n" "$PWD"; printf "ENV_%s\n" "$CAI_HANDOFF_VALUE"; printf "CONFIG_%s\n" "$CAI_HANDOFF_CONFIG"\r'

@@ -190,6 +190,11 @@ static int cli_read_options(int argc, char *const *argv,
       options->utc = strcmp(flag, "--utc") == 0;
       continue;
     }
+    if (strcmp(flag, "--prefer-native-pager") == 0 ||
+        strcmp(flag, "--no-prefer-native-pager") == 0) {
+      options->prefer_native_pager = strcmp(flag, "--prefer-native-pager") == 0;
+      continue;
+    }
     if (strcmp(flag, "--plugins") == 0 || strcmp(flag, "--no-plugins") == 0) {
       options->plugins = strcmp(flag, "--plugins") == 0;
       options->owner_explicit |= CAI_CLI_OWNER_BIT(plugins);

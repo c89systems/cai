@@ -11,6 +11,8 @@ static const cai_app_option options[] = {
      0, 1},
     {"--utc", '\0', CAI_APP_FLAG, NULL,
      "Show DTG timestamps in UTC instead of local time", 0, 1},
+    {"--prefer-native-pager", '\0', CAI_APP_FLAG, NULL,
+     "Use libmdf for log paging instead of trying less first", 0, 1},
     {"--plugins", '\0', CAI_APP_FLAG, NULL,
      "Hot-load custom tool packages (default on)", 0, 1},
     {"--tools-dir", '\0', CAI_APP_STRING, "DIR",

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "frontend.h"
+#include "command_help.h"
 #include "commands.h"
 #include "completion.h"
 #include "config.h"
@@ -926,8 +927,10 @@ static int actions(frontend *f) {
       rc = markdown(f, message, strlen(message));
   } else if (strcmp(line, "/shell") == 0 || strcmp(line, "!sh") == 0)
     f->shell = 1;
-  else if (strcmp(line, "/log -p") == 0 || strcmp(line, "/log less") == 0)
+  else if (cai_cli_command_pager(line) == 2)
     f->shell = 2;
+  else if (cai_cli_command_pager(line) == 1)
+    f->shell = 3;
   else
     rc = notice(f, "This frontend action is not connected yet.");
   f->action_length = 0U;
@@ -1896,11 +1899,13 @@ static int pager_cancel(void *context) {
                           &p->frontend->error) != CAI_OK ||
          p->frontend->handoff_failed;
 }
-static int log_pager(frontend *f, const char *log) {
+static int native_pager(frontend *f, const char *log, int help) {
   pager_service service;
   mdf_pager_control control;
   mdf_options options;
   mdf_status status;
+  cai_cli_help_reader *reader = NULL;
+  mdf_source source;
   int rc = CAI_OK;
   memset(&service, 0, sizeof(service));
   service.frontend = f;
@@ -1908,7 +1913,16 @@ static int log_pager(frontend *f, const char *log) {
   if (service.epoll < 0)
     return cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
                          "watch owner during log pager");
+  if (help) {
+    rc = cai_cli_help_reader_open(f->options->invocation_name, 1, &reader,
+                                  &f->error);
+    if (rc != CAI_OK) {
+      close(service.epoll);
+      return rc;
+    }
+  }
   if (sl_output_stream_end(f->ui->sl) != SL_OK) {
+    cai_cli_help_reader_close(reader);
     close(service.epoll);
     return cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
                          "release editor for log pager");
@@ -1920,7 +1934,13 @@ static int log_pager(frontend *f, const char *log) {
   cai_cli_theme_markdown(&f->ui->render_theme, &options);
   if (cai_environment_get(f->options->environment, "NO_COLOR") != NULL)
     options.ansi_mode = MDF_ANSI_OFF;
-  status = mdf_pager_file(log, &options, MDF_PAGER_FORMAT_TEXT, &control);
+  source.userdata = reader;
+  source.read = cai_cli_help_reader_read;
+  status = help
+               ? mdf_pager_source("Help.md", &source, &options,
+                                  MDF_PAGER_FORMAT_MARKDOWN, &control)
+               : mdf_pager_file(log, &options, MDF_PAGER_FORMAT_TEXT, &control);
+  cai_cli_help_reader_close(reader);
   close(service.epoll);
   if (sl_output_stream_begin(f->ui->sl) != SL_OK)
     rc = cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
@@ -1950,7 +1970,8 @@ static int terminal_action(frontend *f, int kind) {
       result = notice(f, "No log file is configured for this conversation.");
       goto done;
     }
-    pager = pager_path(f);
+    if (!f->options->prefer_native_pager)
+      pager = pager_path(f);
     log = strdup(view->log_path);
     if (log == NULL) {
       free(pager);
@@ -1960,7 +1981,7 @@ static int terminal_action(frontend *f, int kind) {
     arguments[1] = "--";
     arguments[2] = log;
     arguments[3] = NULL;
-  } else {
+  } else if (kind == 1) {
     shell = cai_environment_get(f->options->environment, "SHELL");
     arguments[0] = shell != NULL && shell[0] != '\0' ? shell : "/bin/sh";
     arguments[1] = "-i";
@@ -1997,8 +2018,8 @@ static int terminal_action(frontend *f, int kind) {
   cai_cli_transcript_presenter_reset(f->transcript);
   f->subscribed = 0;
   f->group->terminal_active = 1;
-  rc = kind == 2 && pager == NULL
-           ? log_pager(f, log)
+  rc = kind == 3 || (kind == 2 && pager == NULL)
+           ? native_pager(f, log, kind == 3)
            : cai_cli_terminal_program(f->ui->sl, arguments, f->workspace,
                                       f->options->environment, terminal_service,
                                       f, &raw_status, &escaped, &f->error);
@@ -2048,8 +2069,8 @@ static int terminal_action(frontend *f, int kind) {
                                            : "Local terminal handoff failed.");
     cai_error_cleanup(&f->error);
   } else {
-    const char *name = kind == 2 ? "Pager" : "Shell";
-    if (kind == 2 && pager == NULL)
+    const char *name = kind == 1 ? "Shell" : "Pager";
+    if (kind == 3 || (kind == 2 && pager == NULL))
       snprintf(message, sizeof(message), "**Pager closed.**\n");
     else if (escaped)
       snprintf(message, sizeof(message), "**%s escaped.**\n", name);

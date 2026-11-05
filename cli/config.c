@@ -41,6 +41,9 @@ static const cli_field fields[] = {
     B("ui", "utc", utc,
       "Show DTG timestamps in UTC (Zulu); false uses local time. Default "
       "false."),
+    B("ui", "prefer_native_pager", prefer_native_pager,
+      "Use only libmdf for log paging, even when less is available. Default "
+      "false tries less first. Help paging always renders Markdown in libmdf."),
     B("plugins", "enabled", plugins,
       "Enable explicit hot loading of tool.json packages; no filesystem "
       "polling."),
@@ -742,6 +745,7 @@ static int tool_environment(cai_config *cfg, const char *prefix,
         {"MODEL", "agent", "model"},
         {"THEME", "ui", "theme"},
         {"UTC", "ui", "utc"},
+        {"PREFER_NATIVE_PAGER", "ui", "prefer_native_pager"},
         {"THEME_OFFSET", "ui", "theme_offset"},
         {"SUBAGENT_THEME_OFFSET", "subagent", "theme_offset"},
         {"REVIEW_THEME_OFFSET", "review", "theme_offset"},

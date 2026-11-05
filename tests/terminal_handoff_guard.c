@@ -15,6 +15,12 @@ mdf_status __real_mdf_pager_file(const char *, const mdf_options *,
                                  mdf_pager_format, const mdf_pager_control *);
 mdf_status __wrap_mdf_pager_file(const char *, const mdf_options *,
                                  mdf_pager_format, const mdf_pager_control *);
+mdf_status __real_mdf_pager_source(const char *, mdf_source *,
+                                   const mdf_options *, mdf_pager_format,
+                                   const mdf_pager_control *);
+mdf_status __wrap_mdf_pager_source(const char *, mdf_source *,
+                                   const mdf_options *, mdf_pager_format,
+                                   const mdf_pager_control *);
 int __real_sl_terminal_handoff(sl_t *, sl_terminal_callback_t, void *);
 int __wrap_sl_terminal_handoff(sl_t *, sl_terminal_callback_t, void *);
 int __real_sl_queue_backend_update(sl_t *, const sl_queue_change_t *);
@@ -83,6 +89,16 @@ mdf_status __wrap_mdf_pager_file(const char *path, const mdf_options *options,
       assert(sigismember(&before[i].sa_mask, signal_number) ==
              sigismember(&after.sa_mask, signal_number));
   }
+  return rc;
+}
+mdf_status __wrap_mdf_pager_source(const char *name, mdf_source *source,
+                                   const mdf_options *options,
+                                   mdf_pager_format format,
+                                   const mdf_pager_control *control) {
+  mdf_status rc;
+  guard_begin();
+  rc = __real_mdf_pager_source(name, source, options, format, control);
+  guard_end();
   return rc;
 }
 int __wrap_sl_queue_backend_update(sl_t *sl, const sl_queue_change_t *change) {

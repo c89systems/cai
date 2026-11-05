@@ -16,4 +16,7 @@ cli_command_boundary cai_cli_command_delivery(const char *line);
 int cai_cli_command_is_theme(const char *line);
 /* Presentation-only actions are delivered to the originating frontend. */
 int cai_cli_command_frontend(const char *line);
+/** Select a valid paged command: 1 rendered help, 2 literal log, 0 neither.
+ * Whitespace follows ordinary command normalization. No policy or execution. */
+int cai_cli_command_pager(const char *line);
 #endif

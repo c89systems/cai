@@ -80,13 +80,26 @@ int cai_cli_command_is_theme(const char *line) {
          cli_word_is(name, length, "/review-theme-offset");
 }
 
+int cai_cli_command_pager(const char *line) {
+  size_t n = strcspn(line, " \t"), length;
+  const char *arg = line + n;
+  arg += strspn(arg, " \t");
+  length = strlen(arg);
+  while (length > 0U && strchr(" \t", arg[length - 1U]) != NULL)
+    --length;
+  if (!cli_word_is(arg, length, "-p") && !cli_word_is(arg, length, "less"))
+    return 0;
+  return cli_word_is(line, n, "/help")  ? 1
+         : cli_word_is(line, n, "/log") ? 2
+                                        : 0;
+}
 int cai_cli_command_frontend(const char *line) {
   const char *arg, *name;
   size_t length = strcspn(line, " \t");
   arg = line + length;
   arg += strspn(arg, " \t");
   name = cai_cli_command_name(line, &length);
-  return cai_cli_command_is_theme(line) ||
+  return cai_cli_command_pager(line) != 0 || cai_cli_command_is_theme(line) ||
          cli_word_is(name, length, "/output") ||
          cli_word_is(name, length, "/quit") ||
          cli_word_is(name, length, "/exit") ||

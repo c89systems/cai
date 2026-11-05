@@ -1244,6 +1244,14 @@ feed, or explains that no file log is configured (for example, when an embedding
 host supplies its own logger). The path follows `/new` and `/resume` and honors
 the configured log directory.
 
+`/help -p` and `/help less` open rendered Markdown help in libmdf's pager;
+plain `/help` stays inline. `/log -p` and `/log less` try `less` first, then
+fall back to libmdf in pure-text mode. `[ui] prefer_native_pager = true`,
+`CAI_PREFER_NATIVE_PAGER=true` or `--prefer-native-pager` skips `less` for logs;
+the default is false. `--no-prefer-native-pager` restores external-first
+selection. These frontend preferences leave config.ini unchanged. Press `q`
+to return; owner work continues during paging and appears after return.
+
 Add a named Streamable HTTP server to `config.ini`:
 
 ```ini

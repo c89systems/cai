@@ -139,6 +139,19 @@ the original producer synchronizes receipts and resumes from its displayed
 journal position. Takeover or conversation changes during handoff retain their
 normal authority and context rules. Shell bytes never enter model context.
 
+`/help -p` and `/help less` always use libmdf in Markdown mode, including when
+`less` is installed. The same finite help source drives inline and paged help;
+CAI retains paragraph cursors and a bounded startup-example buffer. Libmdf's
+pager explicitly buffers its finite source before displaying it. Help is not
+sent through a temporary file, model request or journal-sized accumulator.
+
+`[ui] prefer_native_pager` defaults to false. Setting it through configuration,
+the application-prefixed `PREFER_NATIVE_PAGER` environment variable, or
+`--prefer-native-pager` bypasses `less` for log paging. The native log path
+always uses `MDF_PAGER_FORMAT_TEXT`, preserving Markdown punctuation literally;
+help always uses `MDF_PAGER_FORMAT_MARKDOWN`. `--no-prefer-native-pager` restores
+external-first selection. Preferences belong to each frontend attachment.
+
 ## Remaining cutover work
 
 This is a working terminal/socket composition, not a claim of complete feature

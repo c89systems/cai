@@ -4973,6 +4973,11 @@ static int cli_handle_command(cli_state *state, const char *line,
       rc = CAI_ERR_TRANSPORT;
     return rc;
   }
+  if (strncmp(line, "/help ", 6U) == 0) {
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "Use /help for inline help or /help -p (alias /help "
+                         "less) in a terminal.");
+  }
   if (strcmp(line, "/quit") == 0 || strcmp(line, "/exit") == 0) {
     if (cli_goodbye(state) != SL_OK)
       return CAI_ERR_TRANSPORT;

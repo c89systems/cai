@@ -127,10 +127,23 @@
     add_executable(cai_cli_handoff_host tests/app_terminal_host.c tests/terminal_handoff_guard.c)
     target_link_libraries(cai_cli_handoff_host PRIVATE cai_app_static)
     target_link_options(cai_cli_handoff_host PRIVATE -Wl,--wrap=lc_client_open
-      -Wl,--wrap=sl_terminal_handoff -Wl,--wrap=mdf_pager_file -Wl,--wrap=sl_queue_backend_update
+      -Wl,--wrap=sl_terminal_handoff -Wl,--wrap=mdf_pager_file -Wl,--wrap=mdf_pager_source -Wl,--wrap=sl_queue_backend_update
       -Wl,--wrap=sl_history_add -Wl,--wrap=sl_set_status_message)
     target_compile_options(cai_cli_handoff_host PRIVATE -UNDEBUG)
     cai_configure_cli_target(cai_cli_handoff_host)
+    add_executable(cai_cli_help_source_test tests/help_source_test.c)
+    target_link_libraries(cai_cli_help_source_test PRIVATE cai_cli_support)
+    cai_configure_cli_target(cai_cli_help_source_test)
+    target_compile_options(cai_cli_help_source_test PRIVATE -UNDEBUG)
+    add_test(NAME cai_cli_help_source COMMAND cai_cli_help_source_test)
+    set_tests_properties(cai_cli_help_source PROPERTIES TIMEOUT 5
+      LABELS "unit;local;offline")
+    add_test(NAME cai_cli_pager COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pager_test.sh"
+      "$<TARGET_FILE:cai_cli>")
+    set_tests_properties(cai_cli_pager PROPERTIES TIMEOUT 40
+      LABELS "cli;local;offline"
+      ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
     foreach(_cai_compat_mode native embed)
       add_test(NAME cai_cli_attached_handoff_${_cai_compat_mode} COMMAND bash
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_attached_handoff_test.sh"
@@ -869,7 +882,7 @@
     list(FILTER _cai_cli_tests INCLUDE REGEX "^cai_cli_")
     set_tests_properties(${_cai_cli_tests} PROPERTIES LABELS "cli;local;offline"
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>;CAI_TEST_PYTHON=${CAI_TEST_PYTHON};CAI_TEST_JQ=${CAI_TEST_JQ};CAI_TEST_TMUX=${CAI_TEST_TMUX}")
-    set_property(TEST cai_cli_bootstrap APPEND PROPERTY LABELS unit)
+    set_property(TEST cai_cli_bootstrap cai_cli_help_source APPEND PROPERTY LABELS unit)
     # These cases assert CLI presentation/tool wiring, not stored history.
     # Stateful cases retain real encrypted commit/replay/export coverage.
     set_property(TEST cai_cli_mcp_inventory_responses

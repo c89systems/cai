@@ -46,6 +46,7 @@ typedef struct cai_cli_options {
   int help, version, headless;
   int server_persist;
   int list_themes;
+  int prefer_native_pager;
   const char *theme;
   long long theme_offset, subagent_theme_offset, review_theme_offset;
   const char *status_fields;
