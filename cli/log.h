@@ -10,6 +10,7 @@ typedef struct cai_cli_log {
   size_t references;
   pslog_logger *root;
   pslog_logger *logger;
+  cai_environment *environment;
   pthread_mutex_t lock;
   int initialized;
   int interactive;
@@ -32,6 +33,10 @@ typedef struct cai_cli_log {
  * still borrows it. Explicit host loggers and their outputs remain borrowed. */
 int cai_cli_log_new(cai_cli_log **out, pslog_level level, int interactive,
                     pslog_logger *logger, cai_error *error);
+/** Captured environment/directory variant for concurrent native owners and
+ * socket frontends. No process state is installed. */
+int cai_cli_log_new_at(cai_cli_log **, pslog_level, int, pslog_logger *,
+                       cai_environment *, const char *, cai_error *);
 cai_cli_log *cai_cli_log_retain(pslog_logger *logger);
 int cai_cli_log_release(cai_cli_log *log);
 

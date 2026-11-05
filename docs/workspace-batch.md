@@ -66,9 +66,47 @@ authorizes a new submission.
    last detach stops a normal owner. Disconnect or ownership/context loss must
    report a known failure or an unknown outcome, never silently reexecute.
 
-Queued turn correlation, bounded final-response selection/projection, and quiet
-owner startup deferral are implemented. The batch frontend adapter remains
-cutover work; the old noninteractive receiver has not yet been removed.
+Queued turn correlation, bounded final-response selection/projection, quiet
+owner startup deferral and the prompt/goal batch adapter are implemented.
+Standalone batch discovers or quietly launches the owner; `-s SELECTOR`
+attaches to an existing one. Native `run()` uses the same calling-thread owner
+and a default-stack batch adapter. Temporary runs share this composition;
+noninteractive cleanup never asks a terminal question. Direct `--review`,
+combined `-g` plus `-i` startup, and slash/shell `-i` instructions still use the
+old receiver, so its removal and terminal-independent packaging remain cutover
+work.
+
+`turn.settled` follows the complete terminal record, including every failure
+field, and carries its exact call identity, code and goal status at that
+boundary. A client must not detach upon the initial `turn.failed` header and
+lose the following diagnostic fields. Active goals continue through unowned
+turns; the adapter installs the next selector at the accepted END before the
+same socket pump can deliver another start. Child sessions and unrelated tagged
+turns cannot complete that selector. A replacement goal may join an already
+active unowned turn at its next response boundary; it does not wait for a start
+record that predates attachment. Only post-cursor text is observed, and later
+responses still replace earlier partial text. Explicit paused/blocked/limited
+goals produce a failed batch result rather than waiting for an invented prompt.
+
+After dispatching callbacks, trusted host controls and automatic pursuit, the
+owner publishes `application.settled` when the runtime is quiescent and no ready
+application input remains. `cai_agent_runtime_is_quiescent` checks the runtime
+side under its lock; it does not claim an application's queue is empty or a
+goal achieved. This ordered marker lets synchronous native batch runs include
+already accepted host follow-ups without treating an independent idle-status
+snapshot as completion. The latest direct/goal response is selected while
+waiting; an explicitly accepted host follow-up can resume cancelled work under
+the existing host API. Otherwise failures remain failures. Attachment lifetime
+shutdown preserves the run's outcome, while an explicit host STOP retains its
+STOP outcome.
+
+Focused `cai_cli_batch` coverage exercises existing-owner controls, `/new` and
+`/resume` handoff, rejected startup controls, observer rejection, explicit and
+model-created goals, pausing, and connection loss after admission. The native
+batch fixture checks default-stack callback affinity, one SDK client, untouched
+host process state, restoration, temporary cleanup and startup failure. Existing
+final-output tests cover both provider protocols and the last-response rules;
+the host-control suite additionally checks follow-up work, failures and STOP.
 
 Proof covers equal-text submissions, unrelated work before the claimed turn,
 multiple producers, live and restored claims/deliveries, success, provider and

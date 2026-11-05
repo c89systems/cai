@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
-#include "run_terminal.h"
+#include "run_frontend.h"
+#include "batch.h"
 #include "config.h"
 #include "error.h"
 #include "frontend.h"
@@ -12,7 +13,7 @@
 /** Only immutable startup views cross threads. Runtime callbacks stay on the
  * calling owner; the frontend consumes its own Unix socket and status wakeup.
  * No journal, output document or model event queue is copied here. */
-typedef struct terminal_run {
+typedef struct frontend_run {
   const cai_app_config *application;
   cai_app_bridge *bridge;
   cai_config_context startup;
@@ -26,15 +27,17 @@ typedef struct terminal_run {
   cai_error error;
   char *directory;
   int rc, code;
-} terminal_run;
+} frontend_run;
 
 static int agent_mode(const cai_cli_options *o) {
-  return !o->headless && o->server == NULL && !o->non_interactive &&
-         !o->review && !cai_cli_options_utility(o);
+  return cai_cli_batch_mode(o) ||
+         (!o->headless && o->server == NULL && !o->non_interactive &&
+          !o->review && !cai_cli_options_utility(o) && isatty(STDIN_FILENO) &&
+          isatty(STDOUT_FILENO));
 }
 static int prepare(void *context, struct pollfd *fd, uint64_t *deadline,
                    cai_error *error) {
-  terminal_run *r = context;
+  frontend_run *r = context;
   (void)error;
   memset(fd, 0, sizeof(*fd));
   fd->fd = r->bridge->frontend_fd;
@@ -44,7 +47,7 @@ static int prepare(void *context, struct pollfd *fd, uint64_t *deadline,
 }
 static int pump(void *context, uint64_t now, cai_app_client_config *target,
                 int *ready, cai_error *error) {
-  terminal_run *r = context;
+  frontend_run *r = context;
   int rc;
   (void)now;
   *ready = 0;
@@ -53,12 +56,16 @@ static int pump(void *context, uint64_t now, cai_app_client_config *target,
     return rc;
   if (!r->status.running ||
       (r->status.has_server && r->status.phase == CAI_ATTACHMENT_STOPPING)) {
-    if (r->status.exit_code != 0)
+    int stopping = cai_app_bridge_stopping(r->bridge);
+    if (r->status.exit_code != 0 || (r->status.code != CAI_OK && !stopping))
       return cai_cli_error(
           error, r->status.code != CAI_OK ? r->status.code : CAI_ERR_TRANSPORT,
           r->status.reason[0] != '\0'
               ? r->status.reason
               : "application owner failed during startup");
+    if (cai_cli_batch_mode(&r->options) && !stopping)
+      return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                           "workspace owner stopped before batch completion");
     *ready = CAI_CLI_FRONTEND_STOPPED;
   } else if (r->status.ready && r->status.has_server &&
              r->status.phase == CAI_ATTACHMENT_READY) {
@@ -68,27 +75,28 @@ static int pump(void *context, uint64_t now, cai_app_client_config *target,
   }
   return CAI_OK;
 }
-static void *terminal(void *context) {
-  terminal_run *r = context;
-  r->rc = cai_cli_frontend_run(r->application, &r->options, &r->target,
-                               &r->boot, &r->code, &r->error);
+static void *frontend(void *context) {
+  frontend_run *r = context;
+  r->rc = cai_cli_batch_mode(&r->options)
+              ? cai_cli_batch_run(r->application, &r->options, &r->target,
+                                  &r->boot, &r->code, &r->error)
+              : cai_cli_frontend_run(r->application, &r->options, &r->target,
+                                     &r->boot, &r->code, &r->error);
   /* Terminal return ends only the controller owned by this run. Other visited
    * workspace owners retain their normal attachment/persistence lifetimes. */
   cai_app_bridge_frontend_done(r->bridge);
   return NULL;
 }
-int cai_cli_run_terminal(const cai_app_config *application,
+int cai_cli_run_frontend(const cai_app_config *application,
                          cai_app_bridge *bridge, int argc, char **argv,
                          const cai_cli_prepared *resolved, int *handled,
                          int *exit_code, cai_error *error) {
-  terminal_run *r;
+  frontend_run *r;
   cai_cli_options early;
   cai_attachment_config lifetime;
   pthread_t thread;
   int parsed, rc = CAI_OK, code = 1, started = 0;
   *handled = 0;
-  if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
-    return CAI_OK;
   if (resolved != NULL)
     early = resolved->options;
   else if (cai_cli_read_options(argc, argv, NULL, &early) != 1)
@@ -97,7 +105,7 @@ int cai_cli_run_terminal(const cai_app_config *application,
     return CAI_OK;
   r = calloc(1U, sizeof(*r));
   if (r == NULL)
-    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate terminal composition");
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate frontend composition");
   r->application = application;
   r->bridge = bridge;
   cai_cli_temp_init(&r->temporary);
@@ -160,15 +168,18 @@ int cai_cli_run_terminal(const cai_app_config *application,
   rc = cai_app_bridge_frontend_open(bridge, error);
   if (rc != CAI_OK)
     goto done;
-  parsed = pthread_create(&thread, NULL, terminal, r);
+  parsed = pthread_create(&thread, NULL, frontend, r);
   if (parsed != 0) {
-    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "start terminal adapter");
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "start frontend adapter");
     goto done;
   }
   started = 1;
   cai_attachment_config_init(&lifetime);
-  code = cai_cli_app_controller_run(argc, argv, application, bridge,
-                                    &r->startup, &lifetime, 0, 1, &r->prepared);
+  code = cai_cli_app_controller_run(
+      argc, argv, application, bridge, &r->startup, &lifetime, 0,
+      cai_cli_batch_mode(&r->options) ? CAI_CLI_OWNER_BATCH_FRONTEND
+                                      : CAI_CLI_OWNER_FRONTEND,
+      &r->prepared);
   /* Wake a terminal whose owner failed or stopped before it could attach.
    * The outer run finalizes the same status after joining this receiver. */
   cai_app_bridge_frontend_owner_end(bridge, code);
@@ -189,15 +200,31 @@ done:
     stopped = cai_app_bridge_cleanup_stop(bridge);
     cleanup_rc = cai_cli_temp_close(
         &r->temporary, r->options.force,
-        started && rc == CAI_OK && *exit_code == 0 && !stopped, bridge->fd,
-        cai_app_bridge_cleanup_stop, bridge, &kept, &cleanup);
+        started && !cai_cli_batch_mode(&r->options) && rc == CAI_OK &&
+            *exit_code == 0 && !stopped,
+        bridge->fd, cai_app_bridge_cleanup_stop, bridge, &kept, &cleanup);
     if (kept) {
+      cai_cli_log *log = NULL;
+      pslog_logger *logger = application->logger;
       pslog_field field = pslog_str("workspace", r->temporary.workspace);
-      cai_cli_log_message(application->logger, PSLOG_LEVEL_INFO,
-                          "temp_workspace_kept", "diagnostic",
-                          "Temporary workspace kept", 24U, &field, 1U);
-      fprintf(stdout, "\nKept temporary workspace: %s\n",
-              r->temporary.workspace);
+      if (cai_cli_batch_mode(&r->options) && logger == NULL) {
+        int log_rc = cai_cli_log_new_at(&log, PSLOG_LEVEL_INFO, 0, NULL,
+                                        r->options.environment,
+                                        r->options.directory, &cleanup);
+        if (log_rc != CAI_OK)
+          cleanup_rc = log_rc;
+        else
+          logger = log->logger;
+      }
+      cai_cli_log_message(logger, PSLOG_LEVEL_INFO, "temp_workspace_kept",
+                          "diagnostic", "Temporary workspace kept", 24U, &field,
+                          1U);
+      if (!cai_cli_batch_mode(&r->options))
+        fprintf(stdout, "\nKept temporary workspace: %s\n",
+                r->temporary.workspace);
+      if (cai_cli_log_release(log) != 0 && cleanup_rc == CAI_OK)
+        cleanup_rc = cai_cli_error(&cleanup, CAI_ERR_TRANSPORT,
+                                   "write temporary workspace notice");
     }
     if (cleanup_rc != CAI_OK) {
       cai_app_bridge_error(bridge, &cleanup);

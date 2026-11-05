@@ -102,6 +102,10 @@
       "$<TARGET_FILE:cai_cli_headless_client_test>" "$<TARGET_FILE:cai_app_terminal_host>")
     set_tests_properties(cai_cli_attach PROPERTIES TIMEOUT 45
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+    add_test(NAME cai_cli_batch COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_batch_test.sh" "$<TARGET_FILE:cai_cli>"
+      "$<TARGET_FILE:cai_cli_headless_client_test>")
+    set_tests_properties(cai_cli_batch PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_attach_boot_test tests/cli_attach_boot_test.c
       cli/attach.c cli/spawn.c cli/bootstrap.c)
     target_link_libraries(cai_cli_attach_boot_test PRIVATE cai_app_static)
@@ -188,7 +192,7 @@
     target_compile_options(cai_cli_tool_result_test PRIVATE -UNDEBUG)
     add_test(NAME cai_cli_tool_result COMMAND cai_cli_tool_result_test)
     add_executable(cai_cli_messages_test tests/cli_messages_test.c
-      cli/identity.c cli/pouch.c cli/replay.c cli/pouch_stream.c cli/error.c cli/session_commands.c cli/log.c cli/message_names.c)
+      cli/identity.c cli/pouch.c cli/replay.c cli/pouch_stream.c cli/error.c cli/session_commands.c cli/log.c cli/log_environment.c cli/message_names.c)
     target_link_libraries(cai_cli_messages_test PRIVATE cai_static
       softline::softline_static lockdc::static)
     cai_configure_cli_target(cai_cli_messages_test)
@@ -542,7 +546,7 @@
         PROPERTIES LABELS "cli;local;offline" TIMEOUT 15)
     endforeach()
     add_executable(cai_cli_log_test tests/cli_log_test.c
-      cli/identity.c cli/log.c cli/response.c cli/pouch_stream.c cli/error.c)
+      cli/identity.c cli/log.c cli/log_environment.c cli/response.c cli/pouch_stream.c cli/error.c)
     target_link_libraries(cai_cli_log_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_log_test)
     add_test(NAME cai_cli_log COMMAND cai_cli_log_test "${CMAKE_CURRENT_BINARY_DIR}")
@@ -563,7 +567,7 @@
     add_test(NAME cai_cli_quota_refresh COMMAND cai_cli_quota_refresh_test)
     set_tests_properties(cai_cli_quota_refresh PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_pouch_startup_test tests/cli_pouch_startup_test.c
-      cli/identity.c cli/replay.c cli/pouch_stream.c cli/error.c cli/log.c)
+      cli/identity.c cli/replay.c cli/pouch_stream.c cli/error.c cli/log.c cli/log_environment.c)
     target_link_libraries(cai_cli_pouch_startup_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_pouch_startup_test)
     target_compile_options(cai_cli_pouch_startup_test PRIVATE -UNDEBUG)
@@ -587,12 +591,16 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_collection_ownership_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")
     set_tests_properties(cai_cli_collection_ownership PROPERTIES TIMEOUT 20)
+    add_test(NAME cai_cli_workspace_ownership COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_collection_ownership_test.sh"
+      "$<TARGET_FILE:cai_cli>" socket)
+    set_tests_properties(cai_cli_workspace_ownership PROPERTIES TIMEOUT 20)
     add_test(NAME cai_cli_replay_limits
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_replay_limits_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_cli_pouch_startup_test>")
     set_tests_properties(cai_cli_replay_limits PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_pouch_compaction_test tests/cli_pouch_compaction_test.c
-      cli/identity.c cli/replay.c cli/pouch_stream.c cli/error.c cli/log.c)
+      cli/identity.c cli/replay.c cli/pouch_stream.c cli/error.c cli/log.c cli/log_environment.c)
     target_link_libraries(cai_cli_pouch_compaction_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_pouch_compaction_test)
     target_compile_options(cai_cli_pouch_compaction_test PRIVATE -UNDEBUG)
@@ -722,7 +730,7 @@
         "$<TARGET_FILE:cai_cli_mock_fixture>")
     set_tests_properties(cai_cli_terminal_handoff PROPERTIES TIMEOUT 45)
     add_executable(cai_cli_prompt_history_test tests/cli_prompt_history_test.c
-      cli/identity.c cli/replay.c cli/pouch_stream.c cli/error.c cli/log.c)
+      cli/identity.c cli/replay.c cli/pouch_stream.c cli/error.c cli/log.c cli/log_environment.c)
     target_link_libraries(cai_cli_prompt_history_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_prompt_history_test)
     cai_cli_use_storage_fixture(cai_cli_prompt_history_test)
@@ -901,7 +909,7 @@
     get_property(_cai_cli_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
     list(FILTER _cai_cli_targets INCLUDE REGEX "^cai_cli($|_)|^cai_terminal_peer$")
     add_custom_target(cai_cli_tests DEPENDS ${_cai_cli_targets})
-    add_dependencies(cai_cli_tests cai_app_test cai_status_wire_test cai_status_host_test cai_transcript_test cai_transcript_wire_test cai_transcript_store_test cai_app_client_test cai_input_socket_test cai_app_controller_test cai_input_wire_test cai_app_home_test cai_app_mcp_environment_test cai_app_status_test cai_app_host cai_app_worker_stack_host cai_app_run_terminal_host cai_app_controls_host cai_app_startup_goal_test cai_app_utility_stop_test cai_kanban_test cai_chrome_client_fixture)
+    add_dependencies(cai_cli_tests cai_log_environment_test cai_app_test cai_status_wire_test cai_status_host_test cai_transcript_test cai_transcript_wire_test cai_transcript_store_test cai_app_client_test cai_input_socket_test cai_app_controller_test cai_input_wire_test cai_app_home_test cai_app_mcp_environment_test cai_app_status_test cai_app_host cai_app_worker_stack_host cai_app_run_terminal_host cai_app_controls_host cai_app_startup_goal_test cai_app_utility_stop_test cai_kanban_test cai_chrome_client_fixture)
     # Tests consume this public client host too. Keep its statically linked
     # protocol/presenter in step with the owner in targeted CLI builds.
     add_dependencies(cai_cli_tests cai_app_terminal_host cai_app_utility_host

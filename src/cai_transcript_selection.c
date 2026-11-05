@@ -103,8 +103,9 @@ int cai_transcript_selection_open(const cai_transcript_position *after,
   size_t length;
   if (out != NULL)
     *out = NULL;
-  if (out == NULL || !position_valid(after) || call == NULL ||
-      strncmp(call, "input:", 6U) != 0 || (length = strlen(call)) >= 256U)
+  length = call != NULL ? strlen(call) : 0U;
+  if (out == NULL || !position_valid(after) ||
+      (call != NULL && strncmp(call, "input:", 6U) != 0) || length >= 256U)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "accepted cursor and queued work identity required");
   s = cai_alloc(NULL, sizeof(*s));
@@ -112,7 +113,8 @@ int cai_transcript_selection_open(const cai_transcript_position *after,
     return cai_set_error(error, CAI_ERR_NOMEM, "allocate transcript selection");
   memset(s, 0, sizeof(*s));
   s->stream.at = s->result.after = *after;
-  memcpy(s->call, call, length + 1U);
+  if (call != NULL)
+    memcpy(s->call, call, length + 1U);
   *out = s;
   return CAI_OK;
 }
@@ -122,6 +124,19 @@ static int selection_execution(cai_transcript_selection *s, cai_error *error) {
   cai_execution_record *r = &s->record;
   int rc;
   rc = cai_execution_decoder_finish(s->decoder, r, error);
+  if (rc == CAI_OK && s->call[0] == '\0' &&
+      s->result.state == CAI_TRANSCRIPT_WORK_WAITING && r->field == NULL &&
+      strcmp(r->session_id, s->stream.at.session) == 0) {
+    if (r->call_id == NULL && strcmp(r->kind, "response.completed") == 0)
+      s->result.state = CAI_TRANSCRIPT_WORK_ACTIVE;
+    else if (r->call_id != NULL &&
+             (strcmp(r->kind, "turn.started") == 0 ||
+              strcmp(r->kind, "response.completed") == 0 ||
+              strcmp(r->kind, "turn.completed") == 0 ||
+              strcmp(r->kind, "turn.failed") == 0 ||
+              strcmp(r->kind, "turn.cancelled") == 0))
+      memset(&s->candidate, 0, sizeof(s->candidate));
+  }
   if (rc == CAI_OK && s->result.state == CAI_TRANSCRIPT_WORK_ACTIVE &&
       strcmp(r->session_id, s->stream.at.session) == 0 &&
       strcmp(r->kind, "request.failed") == 0 && r->field == NULL) {
@@ -130,9 +145,10 @@ static int selection_execution(cai_transcript_selection *s, cai_error *error) {
     s->result.text_bytes = 0U;
     s->result.through_position = s->result.through_sequence = 0U;
   }
-  if (rc == CAI_OK && r->field == NULL && r->call_id != NULL &&
+  if (rc == CAI_OK && r->field == NULL &&
       strcmp(r->session_id, s->stream.at.session) == 0 &&
-      strcmp(r->call_id, s->call) == 0 &&
+      ((r->call_id == NULL && s->call[0] == '\0') ||
+       (r->call_id != NULL && strcmp(r->call_id, s->call) == 0)) &&
       s->result.state <= CAI_TRANSCRIPT_WORK_ACTIVE) {
     if (strcmp(r->kind, "turn.started") == 0) {
       if (s->result.state != CAI_TRANSCRIPT_WORK_WAITING)
@@ -203,7 +219,10 @@ int cai_transcript_selection_event(void *context, const cai_transcript_event *e,
   else if (rc == CAI_OK && e->kind == CAI_TRANSCRIPT_EVENT_END) {
     if (s->stream.execution)
       rc = selection_execution(s, error);
-    else if (s->stream.text && s->result.state == CAI_TRANSCRIPT_WORK_ACTIVE) {
+    else if (s->stream.text &&
+             (s->result.state == CAI_TRANSCRIPT_WORK_ACTIVE ||
+              (s->call[0] == '\0' &&
+               s->result.state == CAI_TRANSCRIPT_WORK_WAITING))) {
       if (s->stream.length > UINT64_MAX - s->candidate.text_bytes)
         rc = selection_error(error, "selected response length overflow");
       else if (s->stream.length != 0U) {

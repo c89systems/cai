@@ -37,3 +37,8 @@ terminal_close
 jq -se 'any(.[]; .role == "assistant" and .msg == "BORROWED LOGGER TURN") and any(.[]; .msg == "HOST_LOGGER_STILL_OPEN")' "$root/host.log" >/dev/null
 [[ ! -e "$root/unused-env.log" ]]
 [[ -z $(find "$root/borrowed-cache" -type f -name '*.log' -print) ]]
+plan '{"plan":["BORROWED LOGGER BATCH"]}'
+run -Nni 'test host logger in batch'; ok
+[[ $(cat "$root/stdout") == 'BORROWED LOGGER BATCH' ]]
+jq -se '[.[] | select(.role == "assistant" and .event == "assistant_text_delta" and .msg == "BORROWED LOGGER BATCH")] | length == 1' "$root/host.log" >/dev/null
+[[ ! -e "$root/unused-env.log" ]]

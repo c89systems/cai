@@ -29,12 +29,14 @@ implementation has been removed from the agent receiver.
 
 This extraction does not claim independent concurrent utility execution.
 The existing process-resource wrapper still serializes utility calls and
-restores configured environment/locale state. Libpslog's complete environment
-overlay currently reads process-global variables, and the OAuth browser opener
-also inherits that environment. The required upstream lookup constructor is
-specified in `stash/cr-libpslog-captured-environment.md`. The workspace owner
-does not enter this wrapper; batch invocation and removal of the remaining
-combined receiver are separate cutover work.
+restores configured environment/locale state. The utility logger still uses
+the dependency's process-environment constructor, and the OAuth browser opener
+inherits that environment. Workspace owners and prompt/goal batch adapters
+instead resolve captured `LOG_` values through public libpslog configuration
+and output APIs; they do not enter this wrapper. The upstream lookup-constructor
+request in `stash/cr-libpslog-captured-environment.md` would allow consolidating
+that overlay in the dependency. Direct review/command batches, utility process
+helpers and removal of the remaining combined receiver are separate cutover work.
 
 `cai_cli_utility_boundary` seeds a conversation using a real local-provider
 runtime, then runs maintenance through an embedding host that permits only

@@ -7608,6 +7608,21 @@ int cai_agent_runtime_can_compact(cai_agent_runtime *runtime, int *ready,
   return CAI_OK;
 }
 
+int cai_agent_runtime_is_quiescent(cai_agent_runtime *runtime, int *out,
+                                   cai_error *error) {
+  int rc = cai_runtime_owner(runtime, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (out == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "quiescence output is required");
+  pthread_mutex_lock(&runtime->lock);
+  *out = !runtime->terminal_event_pending && runtime->event_head == NULL &&
+         cai_runtime_history_ready(runtime, NULL) == CAI_OK;
+  pthread_mutex_unlock(&runtime->lock);
+  return CAI_OK;
+}
+
 int cai_agent_runtime_compact(cai_agent_runtime *runtime, cai_error *error) {
   int rc = cai_runtime_owner(runtime, error);
   if (rc != CAI_OK)

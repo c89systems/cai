@@ -157,6 +157,31 @@ static int cai_runtime_execution_write(void *context, const void *bytes,
 
 /** Errors may alias the callback's error output. Use an independent error so a
  * persistence failure cannot free strings while they are being recorded. */
+/** A durable turn boundary follows every failure field and includes the goal
+ * projection at that boundary. Frontends need not race an independent idle
+ * status against transcript delivery or discard late error details. Reuse the
+ * caller's bounded writer instead of adding a nested worker-stack frame. */
+static int cai_runtime_execution_settled_locked(cai_runtime_execution_stream *s,
+                                                cai_agent_runtime *runtime,
+                                                int code, cai_error *error) {
+  const char *goal = runtime->goal_projection_status;
+  size_t n;
+  if (goal == NULL)
+    goal = "none";
+  n = strlen(goal);
+  if (n > CAI_EXECUTION_CHUNK_BYTES)
+    return cai_set_error(error, CAI_ERR_LIMIT,
+                         "goal status exceeds execution chunk");
+  cai_runtime_execution_init(
+      s, runtime, "turn.settled", NULL,
+      runtime->active_input_call[0] != '\0' ? runtime->active_input_call : NULL,
+      "goal_status");
+  s->record.code = code;
+  memcpy(s->bytes, goal, n);
+  s->length = n;
+  return cai_runtime_execution_emit_locked(s, n, 1, error);
+}
+
 static int
 cai_runtime_execution_error_locked(cai_agent_runtime *runtime, const char *kind,
                                    const char *tool, const char *call,
@@ -205,6 +230,10 @@ cai_runtime_execution_error_locked(cai_agent_runtime *runtime, const char *kind,
       rc = cai_runtime_execution_emit_locked(&s, prefix, *text == '\0', &local);
     } while (rc == CAI_OK && *text != '\0');
   }
+  if (rc == CAI_OK && strcmp(kind, "turn.failed") == 0)
+    rc = cai_runtime_execution_settled_locked(
+        &s, runtime, failure != NULL ? failure->code : CAI_ERR_PROTOCOL,
+        &local);
   if (rc != CAI_OK)
     cai_set_error_detail(error, rc, "persist execution failure", local.message);
   cai_error_cleanup(&local);
@@ -300,7 +329,16 @@ static int cai_runtime_execution_lifecycle_locked(cai_agent_runtime *runtime,
     s.length = n;
     return cai_runtime_execution_emit_locked(&s, n, 1, error);
   }
-  return cai_runtime_execution_emit_locked(&s, 0U, 1, error);
+  {
+    int rc = cai_runtime_execution_emit_locked(&s, 0U, 1, error);
+    if (rc == CAI_OK && (type == CAI_AGENT_EVENT_RUN_COMPLETED ||
+                         type == CAI_AGENT_EVENT_RUN_CANCELLED))
+      rc = cai_runtime_execution_settled_locked(
+          &s, runtime,
+          type == CAI_AGENT_EVENT_RUN_CANCELLED ? CAI_ERR_CANCELLED : CAI_OK,
+          error);
+    return rc;
+  }
 }
 
 static int cai_runtime_execution_child_input_locked(cai_agent_runtime *runtime,

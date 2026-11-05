@@ -4,6 +4,11 @@ typedef struct input_identity_trace {
   unsigned long long through;
   size_t count;
   int terminals;
+  size_t settled_count;
+  struct {
+    char call[256], goal[32];
+    long long code;
+  } settled[8];
   struct {
     char kind[32], call[256];
     long long code;
@@ -21,6 +26,23 @@ static int input_identity_collect(void *context,
     return CAI_OK;
   cai_execution_record_init(&record);
   rc = cai_execution_record_parse(event->data, &record, error);
+  if (rc == CAI_OK && strcmp(record.kind, "turn.settled") == 0) {
+    size_t n = trace->settled_count;
+    if (n >= 8U || record.field == NULL ||
+        strcmp(record.field, "goal_status") != 0 || !record.final ||
+        record.offset != 0U || strlen(record.data) >= 32U ||
+        trace->count == 0U ||
+        strcmp(trace->entries[trace->count - 1U].kind, "turn.started") == 0)
+      rc = cai_set_error(error, CAI_ERR_PROTOCOL, "invalid settled boundary");
+    else {
+      snprintf(trace->settled[n].call, sizeof(trace->settled[n].call), "%s",
+               record.call_id != NULL ? record.call_id : "");
+      snprintf(trace->settled[n].goal, sizeof(trace->settled[n].goal), "%s",
+               record.data);
+      trace->settled[n].code = record.code;
+      ++trace->settled_count;
+    }
+  }
   if (rc == CAI_OK && record.field == NULL &&
       (strncmp(record.kind, "turn.", 5U) == 0 ||
        strcmp(record.kind, "response.completed") == 0)) {
@@ -97,18 +119,30 @@ static int input_identity_wait(cai_agent_runtime *runtime,
                                input_identity_trace *trace, int terminals,
                                cai_error *error) {
   int i, rc = CAI_OK;
-  for (i = 0; rc == CAI_OK && trace->terminals < terminals && i < 80; ++i) {
+  for (i = 0; rc == CAI_OK &&
+              (trace->terminals < terminals ||
+               trace->settled_count < (size_t)terminals) &&
+              i < 80;
+       ++i) {
     rc = cai_agent_runtime_pump(runtime, 50L, error);
     if (rc == CAI_OK)
       rc = store->load_events_after(store->context, scope, session,
                                     trace->through, input_identity_collect,
                                     trace, error);
   }
-  if (rc == CAI_OK && trace->terminals != terminals)
+  if (rc == CAI_OK && (trace->terminals != terminals ||
+                       trace->settled_count != (size_t)terminals))
     rc = cai_set_error(error, CAI_ERR_LIMIT, "queued outcome did not arrive");
   /* Dispatch terminal observations before another direct submission. */
   if (rc == CAI_OK)
     rc = cai_agent_runtime_pump(runtime, 0L, error);
+  if (rc == CAI_OK) {
+    int quiet = 0;
+    rc = cai_agent_runtime_is_quiescent(runtime, &quiet, error);
+    if (rc == CAI_OK && !quiet)
+      rc = cai_set_error(error, CAI_ERR_PROTOCOL,
+                         "settled runtime is not quiescent");
+  }
   return rc;
 }
 
@@ -264,8 +298,12 @@ static void input_identity_cases(test_state *state) {
                                             &error) == CAI_OK);
     observer.runtime = runtime;
     if (success) {
+      int quiet = 1;
       IDENTITY_REQUIRE(cai_agent_runtime_submit(runtime, "same text", &error) ==
                        CAI_OK);
+      IDENTITY_REQUIRE(
+          cai_agent_runtime_is_quiescent(runtime, &quiet, &error) == CAI_OK &&
+          !quiet);
       IDENTITY_REQUIRE(
           input_identity_wait(runtime, &store, config.session_scope,
                               config.session_id, trace, 1, &error) == CAI_OK);
@@ -336,6 +374,19 @@ static void input_identity_cases(test_state *state) {
                  variant == 2              ? 0L
                  : variant == 1 && j == 0U ? 2L
                                            : 1L);
+      {
+        size_t n = success ? j + 1U : j;
+        expect_int(state, "queued_settlement_keeps_identity",
+                   n < trace->settled_count &&
+                       strcmp(trace->settled[n].call, calls[j]) == 0,
+                   1L);
+        expect_str(state, "queued_settlement_goal_status",
+                   trace->settled[n].goal, "none");
+        expect_int(state, "queued_settlement_code", trace->settled[n].code,
+                   success        ? CAI_OK
+                   : variant == 3 ? CAI_ERR_CANCELLED
+                                  : CAI_ERR_SERVER);
+      }
     }
     if (success) {
       IDENTITY_REQUIRE(strcmp(calls[0], calls[1]) != 0);
@@ -472,6 +523,12 @@ static void input_identity_preflight(test_state *state) {
              input_identity_count(&s->trace, "turn.started", call), 0L);
   expect_int(state, "input_preflight_no_request",
              input_identity_count(&s->trace, "response.completed", call), 0L);
+  expect_int(state, "input_preflight_settled", (long)s->trace.settled_count,
+             1L);
+  expect_str(state, "input_preflight_settled_identity",
+             s->trace.settled[0].call, call);
+  expect_int(state, "input_preflight_settled_code", s->trace.settled[0].code,
+             CAI_ERR_LIMIT);
   expect_int(state, "input_preflight_budget_code",
              s->trace.count == 1U ? s->trace.entries[0].code : -1L,
              CAI_ERR_LIMIT);

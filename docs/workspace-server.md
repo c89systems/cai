@@ -21,12 +21,17 @@ environment/directory views; configuration does not install `[env]` into the
 process. Interactive synchronous run now composes this owner and socket
 frontend while retaining callbacks on the calling thread. Temporary interactive
 runs use that same composition, with an ephemeral owner and cleanup after join.
-Batch composition still owns legacy process scaffolding; its next cutover uses
-[durable queued-work identity](workspace-batch.md) to match each accepted input
-to its outcome through the typed socket client. Maintenance now has
-its own [utility dispatcher](application-utilities.md), retaining the serialized
-environment/logging wrapper until the upstream lookup API is available. Native library
-controller startup never forks or installs signal handlers.
+Noninteractive prompts, goals and explicit review/fix loops use that same owner
+and a batch socket adapter, with [durable queued-work identity](workspace-batch.md)
+and ordered turn/application settlement records. Native synchronous batch runs
+preserve host controls and callback affinity without installing process state.
+Direct `--review`, combined `-g`/`-i` startup and slash/shell `-i` instructions
+still use the older receiver; their cutover remains unfinished. Maintenance now
+has its own [utility dispatcher](application-utilities.md), retaining the serialized
+environment wrapper for its remaining process-owned helpers. Owner and batch
+logging now resolve `LOG_` settings from captured views through public libpslog
+configuration/output APIs; relative file sinks use the selected workspace.
+Native library controller startup never forks or installs signal handlers.
 
 Independent typed channels carry [queue observations](workspace-wire-queue.md),
 [status](workspace-wire-status.md),
@@ -44,7 +49,7 @@ remaining cutover work, [workspace process handoff](workspace-process.md) for
 executable ownership, and [command execution](workspace-commands.md) for backend
 admission/delegation. The confirmed decisions and specification below remain
 the target contract; an implemented boundary is not a claim of complete feature
-parity. In particular, batch composition, extended startup parity
+parity. In particular, direct review/command batch composition, extended startup parity
 and optional frontend packaging remain unfinished.
 
 The optional [Lua workspace client](lua-workspace-client.md) exposes the typed

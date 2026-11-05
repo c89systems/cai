@@ -98,6 +98,7 @@ typedef struct cli_state {
   int has_host_watch;
   int host_stopped;
   size_t batch_pending_turns;
+  int batch_frontend, settlement_pending;
   cai_cli_options options;
   cai_cli_options normal_options;
   cai_cli_temp temporary;
@@ -1349,11 +1350,16 @@ static int cli_event_lifecycle(cli_state *state,
     if (event->type == CAI_AGENT_EVENT_GOAL_CHANGED && state->starting_goal &&
         state->startup_goal_pending > 0U)
       state->startup_goal_pending--;
-    if (state->batch && state->batch_pending_turns > 0U &&
+    if ((state->batch || state->batch_frontend) &&
+        state->batch_pending_turns > 0U &&
         (event->type == CAI_AGENT_EVENT_RUN_COMPLETED ||
          event->type == CAI_AGENT_EVENT_RUN_FAILED ||
          event->type == CAI_AGENT_EVENT_RUN_CANCELLED))
       state->batch_pending_turns--;
+    if (event->type == CAI_AGENT_EVENT_RUN_COMPLETED ||
+        event->type == CAI_AGENT_EVENT_RUN_FAILED ||
+        event->type == CAI_AGENT_EVENT_RUN_CANCELLED)
+      state->settlement_pending = 1;
     if (event->type == CAI_AGENT_EVENT_GOAL_CHANGED &&
         state->goal_starts_pending > 0U && event->data != NULL &&
         ((event->data_length == 8U &&
@@ -1390,6 +1396,7 @@ static int cli_event_lifecycle(cli_state *state,
       }
     }
     if (event->type == CAI_AGENT_EVENT_RUN_STARTED) {
+      state->settlement_pending = 1;
       state->has_review_metrics = 0;
       cai_app_bridge_outcome(state->bridge, CAI_APP_RUNNING);
       state->awaiting_turn = 1;
@@ -3628,12 +3635,21 @@ static int cli_stop(cli_state *state, cai_error *error) {
     (void)sl_cancel(state->sl);
   return rc;
 }
+static int cli_stop_owned(cli_state *state, cai_error *error) {
+  int stopped = state->host_stopped;
+  int rc;
+  rc = cli_stop(state, error);
+  state->host_stopped = stopped;
+  return rc;
+}
 static int cli_host_process(cli_state *state, cai_error *error) {
   cai_app_command *command;
   size_t count;
   int rc;
   if (cai_app_bridge_frontend_ended(state->bridge)) {
-    rc = cli_stop(state, error);
+    rc = cli_stop_owned(state, error);
+    /* Detaching this run's frontend ends its owned controller; it is not an
+     * explicit host STOP and must preserve failure/cancellation semantics. */
     if (rc != CAI_OK)
       return rc;
   }
@@ -3657,7 +3673,7 @@ static int cli_host_process(cli_state *state, cai_error *error) {
       rc = cai_cli_error(&applied, CAI_ERR_INVALID,
                          "terminal commands require a frontend attachment");
     } else if (command->type == CAI_APP_QUEUE_PROMPT) {
-      if (state->batch) {
+      if (state->batch || state->batch_frontend) {
         rc = cai_agent_runtime_submit_queued(state->runtime, command->text,
                                              &applied);
         if (rc == CAI_OK) {
@@ -3672,7 +3688,7 @@ static int cli_host_process(cli_state *state, cai_error *error) {
             NULL, NULL, &applied);
       }
     } else if (command->type == CAI_APP_STEER) {
-      rc = state->controller
+      rc = state->controller && !state->batch_frontend
                ? cli_input_request(state, CAI_INPUT_OFFER, command->text,
                                    CAI_INPUT_STEERING, 0, NULL, NULL, &applied)
                : cai_agent_runtime_submit_steering(state->runtime,
@@ -3786,8 +3802,14 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
   rc = cai_cli_workspace_host_pump(state->workspace_host, &stopping, error);
   if (rc != CAI_OK)
     return rc;
-  if (stopping)
-    return cli_stop(state, error);
+  if (stopping) {
+    int detached;
+    pthread_mutex_lock(&state->bridge->lock);
+    detached = state->bridge->status.server.stop_reason ==
+               CAI_ATTACHMENT_LAST_DETACHED;
+    pthread_mutex_unlock(&state->bridge->lock);
+    return detached ? cli_stop_owned(state, error) : cli_stop(state, error);
+  }
   rc = cai_cli_pouch_ownership_check(&state->pouch, error);
   if (rc != CAI_OK) {
     (void)cai_agent_runtime_cancel_turn(state->runtime, NULL);
@@ -5488,6 +5510,51 @@ static int cli_advance_automation(cli_state *state, cai_error *error) {
   return CAI_OK;
 }
 
+/** Publish only after owner callbacks, host controls and automatic pursuit
+ * have drained. A terminal model record alone does not settle a synchronous
+ * application invocation that already accepted host follow-up work. */
+static int cli_publish_settlement(cli_state *state, cai_error *error) {
+  cai_execution_record *record;
+  cai_agent_execution *writer = NULL;
+  cai_input_state queue;
+  cai_input_entry entry;
+  size_t i;
+  int quiet, pending, rc;
+  if (!state->settlement_pending || state->awaiting_turn ||
+      state->batch_pending_turns > 0U || state->review_runtime != NULL ||
+      state->shell.pid > 0 || state->goal_starts_pending > 0U)
+    return CAI_OK;
+  rc = cai_agent_runtime_is_quiescent(state->runtime, &quiet, error);
+  if (rc != CAI_OK || !quiet)
+    return rc;
+  rc = cai_input_queue_get_state(state->input, &queue, error);
+  for (i = 0U; rc == CAI_OK && i < queue.count; ++i) {
+    rc = cai_input_queue_entry_at(state->input_admin, i, &entry, error);
+    if (rc == CAI_OK && entry.ready && !entry.held && !entry.stopped)
+      return CAI_OK;
+  }
+  if (rc != CAI_OK)
+    return rc;
+  pthread_mutex_lock(&state->bridge->lock);
+  pending = state->bridge->head != NULL || state->bridge->stop_requested;
+  pthread_mutex_unlock(&state->bridge->lock);
+  if (pending)
+    return CAI_OK;
+  record = calloc(1U, sizeof(*record));
+  if (record == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate application settlement");
+  record->kind = "application.settled";
+  rc = cai_agent_runtime_execution_open(state->runtime, record, &writer, error);
+  free(record);
+  if (rc == CAI_OK)
+    rc = cai_agent_execution_finish(writer, error);
+  cai_agent_execution_close(writer);
+  if (rc == CAI_OK)
+    state->settlement_pending = 0;
+  return rc;
+}
+
 static int cli_run_noninteractive(cli_state *state, cai_error *error) {
   cai_agent_runtime_metrics metrics;
   cai_agent_run_state run_state;
@@ -5754,15 +5821,17 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   snprintf(state->welcome, sizeof(state->welcome),
            "Welcome to %s. Send /help for usage.", state->options.program_name);
   if (state->controller && frontend_startup) {
+    state->batch_frontend = frontend_startup == CAI_CLI_OWNER_BATCH_FRONTEND;
     state->options.review = state->options.review_and_fix = 0;
     state->options.non_interactive = 0;
     state->options.out = NULL;
   }
   state->batch = state->options.review || state->options.non_interactive;
-  if (cai_cli_log_new(&state->log, PSLOG_LEVEL_TRACE,
-                      !state->batch && (!state->controller || server != NULL),
-                      application != NULL ? application->logger : NULL,
-                      &error) != CAI_OK)
+  if (cai_cli_log_new_at(
+          &state->log, PSLOG_LEVEL_TRACE,
+          !state->batch && (!state->controller || server != NULL),
+          application != NULL ? application->logger : NULL, state->environment,
+          state->options.directory, &error) != CAI_OK)
     goto cleanup;
   if (!state->controller)
     (void)setlocale(LC_CTYPE, "");
@@ -6220,6 +6289,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
         rc = cli_advance_automation(state, &error);
       if (rc == CAI_OK)
         rc = cli_sync_status(state, &error);
+      if (rc == CAI_OK)
+        rc = cli_publish_settlement(state, &error);
       if (rc == CAI_OK && !state->exit_requested)
         rc = cli_pump(state, -1L, &error);
       if (rc != CAI_OK) {

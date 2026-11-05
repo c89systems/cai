@@ -1,0 +1,540 @@
+#define _POSIX_C_SOURCE 200809L
+#include "batch.h"
+#include "error.h"
+#include "log.h"
+#include "startup.h"
+#include <cai/transcript_selection.h>
+#include <errno.h>
+#include <libmdf/mdf.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+
+/** Fixed invocation metadata only. The server owns accepted input, model
+ * context and history. Neither provisional responses nor whole tool bodies
+ * are accumulated in this adapter. */
+typedef struct batch {
+  cai_app_client *client;
+  cai_app_client_state state;
+  cai_cli_startup startup;
+  cai_cli_log *log;
+  cai_transcript_position at;
+  cai_transcript_selection *selection;
+  cai_transcript_selection_result result;
+  cai_transcript_projector *projector;
+  cai_sink *sink;
+  mdf *renderer;
+  char *offered;
+  char call[256], type[96], goal_status[32];
+  uint64_t binding, subscription, generation, old_conversation;
+  unsigned long long request, item;
+  int awaiting_bind, subscribed, replaying, entry_open;
+  int pending, command, receipt, command_done, command_code, handoff;
+  int work_failed, has_result, projecting, detaching;
+  int goal_command, goal_follow, settled;
+  int awaiting_application, application_settled;
+  int shared_logger;
+} batch;
+
+int cai_cli_batch_mode(const cai_cli_options *o) {
+  size_t i;
+  if (o->headless || o->review || cai_cli_options_utility(o) ||
+      (o->goal != NULL && o->instruction_count != 0U) ||
+      (o->instruction_count == 0U && o->goal == NULL && !o->review_and_fix) ||
+      (!o->non_interactive && isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)))
+    return 0;
+  for (i = 0U; i < o->instruction_count; ++i) {
+    const char *text = cai_cli_instruction_at(o, i);
+    if (text == NULL || text[0] == '/' || text[0] == '!')
+      return 0;
+  }
+  return 1;
+}
+static uint64_t clock_ms(void) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+    return 0U;
+  return (uint64_t)now.tv_sec * 1000U + (uint64_t)now.tv_nsec / 1000000U;
+}
+static int observe(void *context, const cai_app_client_event *e,
+                   cai_error *error) {
+  batch *b = context;
+  if (e->type == CAI_APP_CLIENT_BIND_REJECTED)
+    return cai_cli_error(error, CAI_ERR_INVALID, "batch producer was rejected");
+  if (e->type == CAI_APP_CLIENT_INPUT && e->input != NULL) {
+    if (e->input->type == CAI_INPUT_OBSERVATION_DISCONNECTED &&
+        !e->state->bound) {
+      if (!b->handoff)
+        return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                             "batch conversation changed; outcome unknown");
+      b->awaiting_bind = b->subscribed = 0;
+    }
+    if (e->input->type == CAI_INPUT_OBSERVATION_RESULT && b->pending &&
+        e->input->result.request_id == b->request) {
+      if (e->input->result.outcome != CAI_INPUT_ACCEPTED)
+        return cai_cli_error(error,
+                             e->input->result.code != CAI_OK
+                                 ? e->input->result.code
+                                 : CAI_ERR_INVALID,
+                             e->input->result.reason[0] != '\0'
+                                 ? e->input->result.reason
+                                 : "batch input was not accepted");
+      b->item = e->input->result.item_id;
+      b->receipt = 1;
+    }
+  }
+  return CAI_OK;
+}
+static int execution(void *context, const cai_app_execution_event *e,
+                     cai_error *error) {
+  batch *b = context;
+  const cai_execution_record *r = e->record;
+  if (b->projecting)
+    return CAI_OK;
+  if (r == NULL)
+    return cai_cli_error(error, e->code != CAI_OK ? e->code : CAI_ERR_PROTOCOL,
+                         e->reason != NULL ? e->reason
+                                           : "invalid execution history");
+  if (b->pending && b->command && r->call_id != NULL &&
+      strcmp(r->call_id, b->call) == 0) {
+    if (strcmp(r->kind, "command.handoff") == 0) {
+      b->handoff = 1;
+      b->old_conversation = e->boundary->conversation;
+    }
+    if (r->final && (strcmp(r->kind, "command.completed") == 0 ||
+                     strcmp(r->kind, "command.failed") == 0)) {
+      b->command_done = 1;
+      b->command_code =
+          strcmp(r->kind, "command.failed") == 0
+              ? (r->code > CAI_OK ? (int)r->code : CAI_ERR_INVALID)
+              : CAI_OK;
+    }
+  }
+  if (b->selection != NULL && strcmp(r->kind, "turn.settled") == 0 &&
+      strcmp(r->session_id, b->at.session) == 0 &&
+      ((b->goal_follow && r->call_id == NULL) ||
+       (!b->goal_follow && r->call_id != NULL &&
+        strcmp(r->call_id, b->call) == 0))) {
+    if (!r->final || r->offset != 0U || r->field == NULL ||
+        strcmp(r->field, "goal_status") != 0 ||
+        strlen(r->data) >= sizeof(b->goal_status))
+      return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                           "invalid batch turn settlement");
+    snprintf(b->goal_status, sizeof(b->goal_status), "%s", r->data);
+    b->settled = 1;
+  }
+  /* An earlier background turn may settle after the goal's OFFER receipt but
+   * before that command applies. Only its actual command outcome releases
+   * this dependency, including when both records arrive in the same pump. */
+  if (b->awaiting_application &&
+      (!b->goal_command || !b->command || b->command_done) &&
+      strcmp(r->kind, "application.settled") == 0 &&
+      strcmp(r->session_id, b->at.session) == 0 && r->field == NULL && r->final)
+    b->application_settled = 1;
+  if (!b->shared_logger && r->data[0] != '\0' &&
+      strcmp(r->kind, "turn.settled") != 0) {
+    pslog_field fields[4];
+    char status[48];
+    fields[0] = pslog_str("tool_call_id", r->call_id);
+    fields[1] = pslog_str("field", r->field);
+    fields[2] = pslog_i64("code", r->code);
+    snprintf(status, sizeof(status), "HTTP %lld", r->http_status);
+    fields[3] = pslog_str("http", r->http_status > 0 ? status : "");
+    cai_cli_log_message(
+        b->log->logger,
+        r->code != CAI_OK ? PSLOG_LEVEL_ERROR : PSLOG_LEVEL_INFO, r->kind,
+        "runtime", r->data, strlen(r->data), fields, 4U);
+  }
+  return CAI_OK;
+}
+static int transcript(void *context, const cai_transcript_event *e,
+                      cai_error *error) {
+  batch *b = context;
+  int rc = CAI_OK;
+  if (b->projecting)
+    return b->projector != NULL
+               ? cai_transcript_projector_event(b->projector, e, error)
+               : CAI_OK;
+  if (e->kind == CAI_TRANSCRIPT_ERROR) {
+    if (b->handoff && e->failure == CAI_TRANSCRIPT_CONTEXT_CLOSED) {
+      b->entry_open = b->subscribed = 0;
+      return CAI_OK;
+    }
+    return cai_cli_error(error, e->code != CAI_OK ? e->code : CAI_ERR_TRANSPORT,
+                         e->reason != NULL ? e->reason
+                                           : "batch transcript unavailable");
+  }
+  if (b->selection != NULL) {
+    rc = cai_transcript_selection_event(b->selection, e, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
+  if (e->kind == CAI_TRANSCRIPT_REPLAY_BEGIN) {
+    memset(&b->at, 0, sizeof(b->at));
+    snprintf(b->at.session, sizeof(b->at.session), "%s", e->session);
+    snprintf(b->at.collection, sizeof(b->at.collection), "%s", e->collection);
+    b->at.stream = e->stream;
+    b->at.conversation = e->conversation;
+    b->replaying = 1;
+  } else if (e->kind == CAI_TRANSCRIPT_EVENT_BEGIN) {
+    snprintf(b->type, sizeof(b->type), "%s", e->type);
+    b->entry_open = 1;
+  } else if (!b->shared_logger && e->kind == CAI_TRANSCRIPT_DATA &&
+             (strcmp(b->type, "assistant_text_delta") == 0 ||
+              strcmp(b->type, "reasoning_summary") == 0 ||
+              strcmp(b->type, "turn_submitted") == 0 ||
+              strcmp(b->type, "goal_continuation") == 0)) {
+    pslog_field field = pslog_str("prompt_kind", "normal");
+    int assistant = strcmp(b->type, "assistant_text_delta") == 0 ||
+                    strcmp(b->type, "reasoning_summary") == 0;
+    cai_cli_log_message(b->log->logger, PSLOG_LEVEL_INFO, b->type,
+                        assistant ? "assistant" : "user", e->data, e->length,
+                        &field, 1U);
+  } else if (e->kind == CAI_TRANSCRIPT_EVENT_END) {
+    b->at.position = e->position;
+    b->at.sequence = e->sequence;
+    b->entry_open = 0;
+    if (b->settled) {
+      rc = cai_transcript_selection_get(b->selection, &b->result, error);
+      if (rc != CAI_OK)
+        return rc;
+      if (b->result.state < CAI_TRANSCRIPT_WORK_COMPLETED)
+        return cai_cli_error(
+            error, CAI_ERR_PROTOCOL,
+            "batch settlement has no matched terminal outcome");
+      b->has_result = 1;
+      b->work_failed = b->result.state != CAI_TRANSCRIPT_WORK_COMPLETED;
+      cai_transcript_selection_close(b->selection);
+      b->selection = NULL;
+      b->settled = 0;
+      if (!b->work_failed && strcmp(b->goal_status, "active") == 0) {
+        /* Install before returning this END: the next unowned turn may already
+         * follow in the same socket pump. No status-channel or idle race. */
+        b->goal_follow = 1;
+        rc = cai_transcript_selection_open(&b->at, NULL, &b->selection, error);
+        if (rc != CAI_OK)
+          return rc;
+      } else {
+        if (strcmp(b->goal_status, "none") != 0 &&
+            strcmp(b->goal_status, "complete") != 0)
+          b->work_failed = 1;
+        b->awaiting_application = 1;
+        b->goal_follow = 1;
+        rc = cai_transcript_selection_open(&b->at, NULL, &b->selection, error);
+        if (rc != CAI_OK)
+          return rc;
+      }
+    }
+    if (b->application_settled) {
+      cai_transcript_selection_result waiting;
+      rc = cai_transcript_selection_get(b->selection, &waiting, error);
+      if (rc != CAI_OK)
+        return rc;
+      if (waiting.state != CAI_TRANSCRIPT_WORK_WAITING)
+        return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                             "application settled during an active batch turn");
+      cai_transcript_selection_close(b->selection);
+      b->selection = NULL;
+      b->pending = b->awaiting_application = b->application_settled = 0;
+      if (b->work_failed)
+        b->startup.stage = CAI_CLI_STARTUP_DONE;
+    }
+  } else if (e->kind == CAI_TRANSCRIPT_REPLAY_END) {
+    b->at.position = e->watermark;
+    b->replaying = 0;
+  }
+  return CAI_OK;
+}
+static int rendered(void *context, const char *bytes, size_t count) {
+  (void)context;
+  return fwrite(bytes, 1U, count, stdout) == count ? 0 : -1;
+}
+static int project(void *context, const void *bytes, size_t length,
+                   cai_error *error) {
+  batch *b = context;
+  return b->renderer->feed(b->renderer, bytes, length) == MDF_OK
+             ? CAI_OK
+             : cai_cli_error(error, CAI_ERR_TRANSPORT, "render batch response");
+}
+static int projection_open(batch *b, cai_error *error) {
+  mdf_options options;
+  mdf_sink output;
+  cai_sink_callbacks callbacks = {0};
+  int rc;
+  mdf_options_init(&options);
+  options.output_fd = STDOUT_FILENO;
+  options.width = 80;
+  options.boring = 1;
+  options.margin_left = 0;
+  options.ansi_mode = MDF_ANSI_OFF;
+  options.table_buffer_mode = MDF_TABLE_BUFFER_FULL;
+  if (mdf_create(MDF_FORMAT_ANSI, &options, &b->renderer) != MDF_OK)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "create batch renderer");
+  output.userdata = b;
+  output.write = rendered;
+  if (b->renderer->set_sink(b->renderer, &output) != MDF_OK)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT, "connect batch renderer");
+  callbacks.context = b;
+  callbacks.write = project;
+  rc = cai_sink_from_callbacks(&callbacks, &b->sink, error);
+  if (rc == CAI_OK)
+    rc = cai_transcript_projector_open(&b->result, b->sink, &b->projector,
+                                       error);
+  if (rc == CAI_OK) {
+    b->projecting = 1;
+    rc = cai_app_client_subscribe(
+        b->client, ++b->subscription, b->result.after.conversation,
+        b->result.after.session, b->result.after.collection,
+        b->result.after.position, b->result.after.sequence, -1LL, error);
+  }
+  return rc;
+}
+/** Never turn silence, a shared idle status or a queue receipt into success.
+ * Delivery stays gated until this exact input's observer has been installed. */
+static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
+  cai_input_scope scope;
+  int rc;
+  if (!b->state.bound || !b->state.ready || !b->subscribed || b->replaying ||
+      b->entry_open || b->at.stream == 0U)
+    return CAI_OK;
+  scope.conversation = b->state.conversation;
+  scope.generation = b->state.transport.generation;
+  if (b->pending && b->receipt == 1) {
+    snprintf(b->call, sizeof(b->call), "%s:%s:%llu:%llu:%llu",
+             b->command ? "command" : "input", b->state.session,
+             b->state.producer, b->request, b->item);
+    if (!b->command || b->goal_command) {
+      b->goal_follow = b->goal_command;
+      rc = cai_transcript_selection_open(
+          &b->at, b->goal_follow ? NULL : b->call, &b->selection, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
+    if (!b->shared_logger) {
+      pslog_field field =
+          pslog_str("prompt_kind", b->command ? "command" : "normal");
+      cai_cli_log_message(b->log->logger, PSLOG_LEVEL_INFO,
+                          b->command ? "command_input" : "turn_submitted",
+                          "user", b->offered, strlen(b->offered), &field, 1U);
+    }
+    free(b->offered);
+    b->offered = NULL;
+    rc = cai_app_client_settled(b->client, &scope, b->request, error);
+    if (rc != CAI_OK)
+      return rc;
+    b->receipt = 2;
+  }
+  if (b->command_done) {
+    b->command_done = b->handoff = 0;
+    b->command = 0;
+    if (!b->goal_command)
+      b->pending = 0;
+    if (b->command_code != CAI_OK)
+      return cai_cli_error(
+          error, b->command_code,
+          "batch startup command failed; instructions not submitted");
+  }
+  if (!b->pending && b->startup.stage < CAI_CLI_STARTUP_DONE) {
+    cai_input_request request = {0};
+    char *text = NULL;
+    int control;
+    rc = cai_cli_startup_next(&b->startup, o, b->state.session, &text, &control,
+                              error);
+    if (rc != CAI_OK || text == NULL)
+      return rc;
+    b->request = b->state.last_request + 1U;
+    b->command = control;
+    b->goal_command = control && (strncmp(text, "/goal new ", 10U) == 0 ||
+                                  strncmp(text, "/review-and-fix", 15U) == 0);
+    b->pending = 1;
+    b->receipt = 0;
+    request.request_id = b->request;
+    request.operation = CAI_INPUT_OFFER;
+    request.intent = CAI_INPUT_QUEUED;
+    request.text = text;
+    rc = cai_app_client_request(b->client, &scope, &request, error);
+    b->offered = text;
+    return rc;
+  }
+  return CAI_OK;
+}
+
+int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
+                      const cai_app_client_config *initial,
+                      const cai_cli_frontend_boot *boot, int *code,
+                      cai_error *error) {
+  batch *b = calloc(1U, sizeof(*b));
+  cai_app_client_config target = *initial;
+  int rc = CAI_OK;
+  uint64_t detach_deadline = 0U;
+  *code = 1;
+  if (b == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate batch adapter");
+  b->shared_logger = app->logger != NULL;
+  rc = cai_cli_log_new_at(&b->log, PSLOG_LEVEL_INFO, 0, app->logger,
+                          options->environment, options->directory, error);
+  while (rc == CAI_OK) {
+    struct pollfd fds[2];
+    uint64_t now = clock_ms(), deadline = 0U, boot_deadline = 0U;
+    int ready = 0, timeout = -1;
+    memset(fds, 0, sizeof(fds));
+    fds[0].fd = fds[1].fd = -1;
+    if (boot != NULL) {
+      rc = boot->pump(boot->context, now, &target, &ready, error);
+      if (rc != CAI_OK) {
+        if (b->detaching) {
+          /* Accepted work and output are already settled. Native composition
+           * reports the owner's shutdown code after joining; a retained turn
+           * failure must not become a second attachment failure here. */
+          cai_error_cleanup(error);
+          cai_error_init(error);
+          rc = CAI_OK;
+        }
+        break;
+      }
+      if (ready == CAI_CLI_FRONTEND_STOPPED) {
+        if (!b->detaching)
+          b->work_failed = 0; /* Explicit native host STOP owns this outcome. */
+        break;
+      }
+    } else
+      ready = CAI_CLI_FRONTEND_EXISTING;
+    if (ready && b->client == NULL) {
+      target.event = observe;
+      target.context = b;
+      target.transcript = transcript;
+      target.transcript_context = b;
+      target.execution = execution;
+      target.execution_context = b;
+      b->startup.stage = ready == CAI_CLI_FRONTEND_STARTED
+                             ? CAI_CLI_STARTUP_REVIEW_AND_FIX
+                             : CAI_CLI_STARTUP_SELECT;
+      rc = cai_app_client_open(&target, now, &b->client, error);
+      if (rc == CAI_OK)
+        rc = cai_app_client_manage_delivery(b->client, error);
+      if (rc != CAI_OK)
+        break;
+    }
+    if (b->client != NULL) {
+      const cai_app_view *view = NULL;
+      rc = cai_app_client_pump(b->client, now, error);
+      if (rc != CAI_OK)
+        break;
+      rc = cai_app_client_get_state(b->client, &b->state, error);
+      if (rc != CAI_OK)
+        break;
+      if (b->state.transport.phase == CAI_WORKSPACE_DISCONNECTED ||
+          b->state.transport.phase == CAI_WORKSPACE_FAILED) {
+        if (!b->detaching)
+          rc = cai_cli_error(
+              error, CAI_ERR_TRANSPORT,
+              "batch server disconnected; accepted work outcome unknown");
+        break;
+      }
+      if (!b->detaching &&
+          b->state.transport.phase == CAI_WORKSPACE_CONNECTED) {
+        if (b->state.transport.controller != b->state.transport.attachment ||
+            (b->generation != 0U &&
+             b->generation != b->state.transport.generation)) {
+          rc = cai_cli_error(
+              error, CAI_ERR_INVALID,
+              "batch requires controller authority; no automatic takeover");
+          break;
+        }
+        b->generation = b->state.transport.generation;
+        rc = cai_app_client_get_view(b->client, &view, error);
+        if (rc != CAI_OK)
+          break;
+        if (!b->state.bound && !b->awaiting_bind && view != NULL &&
+            view->available &&
+            (!b->handoff || view->conversation != b->old_conversation)) {
+          rc =
+              cai_app_client_bind(b->client, ++b->binding, 0U, 0U, NULL, error);
+          b->awaiting_bind = 1;
+        }
+        if (rc == CAI_OK && b->state.ready && !b->subscribed) {
+          rc = cai_app_client_subscribe(
+              b->client, ++b->subscription, b->state.conversation,
+              b->state.session, NULL, 0U, 0U, b->handoff ? 1LL : 0LL, error);
+          b->subscribed = 1;
+          b->replaying = 1;
+        }
+        if (rc == CAI_OK && !b->projecting)
+          rc = advance(b, options, error);
+        if (rc == CAI_OK && !b->projecting && !b->pending &&
+            b->startup.stage == CAI_CLI_STARTUP_DONE) {
+          if (b->has_result && b->result.text_bytes != 0U)
+            rc = projection_open(b, error);
+          else
+            b->projecting = 1;
+        }
+        if (rc == CAI_OK && b->projecting &&
+            (b->projector == NULL ||
+             cai_transcript_projector_done(b->projector))) {
+          if (b->renderer != NULL &&
+              (b->renderer->finish_document(b->renderer) != MDF_OK ||
+               fflush(stdout) != 0))
+            rc =
+                cai_cli_error(error, CAI_ERR_TRANSPORT, "write batch response");
+          if (rc == CAI_OK)
+            rc = cai_app_client_detach(b->client, error);
+          b->detaching = 1;
+          detach_deadline = now + 2000U;
+        }
+      }
+    }
+    if (rc != CAI_OK)
+      break;
+    if (b->client != NULL)
+      rc = cai_app_client_prepare(b->client, &fds[0], &deadline, error);
+    if (rc == CAI_OK && boot != NULL)
+      rc = boot->prepare(boot->context, &fds[1], &boot_deadline, error);
+    if (rc != CAI_OK)
+      break;
+    if (boot_deadline && (!deadline || boot_deadline < deadline))
+      deadline = boot_deadline;
+    if (b->detaching && (!deadline || detach_deadline < deadline))
+      deadline = detach_deadline;
+    now = clock_ms();
+    if (b->detaching && now >= detach_deadline) {
+      rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "batch detach timed out");
+      break;
+    }
+    if (deadline)
+      timeout = deadline <= now            ? 0
+                : deadline - now > INT_MAX ? INT_MAX
+                                           : (int)(deadline - now);
+    if (poll(fds, 2U, timeout) < 0 && errno != EINTR) {
+      rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "wait for batch attachment");
+      break;
+    }
+  }
+  if (rc == CAI_OK)
+    *code = b->work_failed ? 1 : 0;
+  if (rc != CAI_OK || b->work_failed) {
+    cai_error failed;
+    cai_error_init(&failed);
+    if (rc != CAI_OK)
+      cai_cli_log_error(b->log != NULL ? b->log->logger : NULL, "batch", error);
+    else if (!b->shared_logger) {
+      cai_cli_error(&failed, CAI_ERR_TRANSPORT, "batch turn failed");
+      cai_cli_log_message(b->log->logger, PSLOG_LEVEL_ERROR, "run_failed",
+                          "runtime", failed.message, strlen(failed.message),
+                          NULL, 0U);
+    }
+    cai_error_cleanup(&failed);
+  }
+  cai_app_client_close(b->client);
+  cai_transcript_selection_close(b->selection);
+  cai_transcript_projector_close(b->projector);
+  cai_sink_close(b->sink);
+  if (b->renderer != NULL)
+    b->renderer->destroy(b->renderer);
+  if (cai_cli_log_release(b->log) != 0 && rc == CAI_OK)
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "write batch activity log");
+  free(b->offered);
+  free(b);
+  return rc;
+}

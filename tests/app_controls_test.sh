@@ -15,15 +15,15 @@ plan '{"plan":["Resumed reply"]}'
 run -ni resume; ok
 contains "$root/stdout" 'Resumed reply'
 export CAI_TEST_APP_CONTROL=replay_error
-run -ni resume; bad
+run -ni resume; bad; [[ "$rc" == 1 ]]
 contains "$root/stderr" 'HOST REPLAY FAILED'
 export CAI_TEST_APP_CONTROL=observer_error
 plan '{"plan":["Observer failure"]}'
-run -Nni initial; bad
+run -Nni initial; bad; [[ "$rc" == 1 ]]
 contains "$root/stderr" 'HOST OBSERVER FAILED'
 export CAI_TEST_APP_CONTROL=failure
 plan '{"plan":[{"error":"provider exploded"}]}'
-run -Nni initial; bad
+run -Nni initial; bad; [[ "$rc" == 1 ]]
 contains "$root/stderr" 'provider exploded'
 export CAI_TEST_APP_CONTROL=reject
 plan '{"plan":["Completed turn"]}'

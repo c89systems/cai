@@ -1,10 +1,11 @@
 #define _GNU_SOURCE
 #include "attach.h"
+#include "batch.h"
 #include "config.h"
 #include "error.h"
 #include "frontend.h"
 #include "identity.h"
-#include "run_terminal.h"
+#include "run_frontend.h"
 #include "spawn.h"
 #include "workspace_claims.h"
 #include <cai/environment.h>
@@ -226,14 +227,14 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
     rc = cai_app_bridge_open(&bridge, application, error);
     if (rc == CAI_OK) {
       cai_app_bridge_begin(bridge);
-      rc = cai_cli_run_terminal(application, bridge, argc, argv, &resolved,
+      rc = cai_cli_run_frontend(application, bridge, argc, argv, &resolved,
                                 &handled, exit_code, error);
       cai_app_bridge_end(bridge, rc == CAI_OK ? *exit_code : 1,
                          rc != CAI_OK ? error : NULL);
       cai_app_bridge_close(bridge);
       if (rc == CAI_OK && !handled)
         rc = cai_cli_error(error, CAI_ERR_INVALID,
-                           "temporary startup requires an interactive agent");
+                           "temporary startup requires an agent frontend");
     }
     goto done;
   }
@@ -253,9 +254,13 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
   cai_app_client_config_init(&target);
   target.runtime_directory = options.runtime_dir;
   target.workspace = options.directory;
-  rc = cai_cli_frontend_run(application, &options, &target,
-                            cai_cli_attach_boot_adapter(startup), exit_code,
-                            error);
+  rc = cai_cli_batch_mode(&options)
+           ? cai_cli_batch_run(application, &options, &target,
+                               cai_cli_attach_boot_adapter(startup), exit_code,
+                               error)
+           : cai_cli_frontend_run(application, &options, &target,
+                                  cai_cli_attach_boot_adapter(startup),
+                                  exit_code, error);
 done:
   cai_cli_attach_boot_close(startup);
   cai_environment_close(environment);

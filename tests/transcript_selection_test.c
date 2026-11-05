@@ -212,6 +212,27 @@ static void last_response(size_t fragment) {
   cai_sink_close(sink);
   cai_transcript_selection_close(selection);
 }
+static void join_unowned_response(void) {
+  stream s;
+  cai_transcript_selection *selection = NULL;
+  cai_transcript_selection_result result;
+  base(&s);
+  assert(cai_transcript_selection_open(&s.at, NULL, &selection, NULL) ==
+         CAI_OK);
+  s.event = cai_transcript_selection_event;
+  s.context = selection;
+  /* A goal command can apply while its owner was already pursuing an unowned
+   * turn before this attachment. Its start precedes the accepted cursor. */
+  assert(emit(&s, "assistant_text_delta", "OLD PARTIAL", 11U) == CAI_OK);
+  execution(&s, "response.completed", NULL, "parent", 0);
+  assert(emit(&s, "assistant_text_delta", "NEW GOAL FINAL", 14U) == CAI_OK);
+  execution(&s, "response.completed", NULL, "parent", 0);
+  execution(&s, "turn.completed", NULL, "parent", 0);
+  assert(cai_transcript_selection_get(selection, &result, NULL) == CAI_OK &&
+         result.state == CAI_TRANSCRIPT_WORK_COMPLETED &&
+         result.text_bytes == 14U);
+  cai_transcript_selection_close(selection);
+}
 static void terminal_cases(void) {
   int mode;
   for (mode = 0; mode < 6; ++mode) {
@@ -505,12 +526,40 @@ static void invalid_and_allocation(void) {
   cai_transcript_selection_close(selection);
   cai_sink_close(sink);
 }
+static void unowned_turn(void) {
+  stream s;
+  cai_transcript_selection *selection = NULL;
+  cai_transcript_selection_result result;
+  base(&s);
+  assert(cai_transcript_selection_open(&s.at, NULL, &selection, NULL) ==
+         CAI_OK);
+  s.event = cai_transcript_selection_event;
+  s.context = selection;
+  execution(&s, "turn.started", work, "parent", 0);
+  assert(emit(&s, "assistant_text_delta", "UNRELATED", 9U) == CAI_OK);
+  execution(&s, "response.completed", work, "parent", 0);
+  execution(&s, "turn.completed", work, "parent", 0);
+  execution(&s, "turn.started", NULL, "child", 0);
+  execution(&s, "turn.completed", NULL, "child", 0);
+  assert(cai_transcript_selection_get(selection, &result, NULL) == CAI_OK &&
+         result.state == CAI_TRANSCRIPT_WORK_WAITING);
+  execution(&s, "turn.started", NULL, "parent", 0);
+  assert(emit(&s, "assistant_text_delta", "DIRECT", 6U) == CAI_OK);
+  execution(&s, "response.completed", NULL, "parent", 0);
+  execution(&s, "turn.completed", NULL, "parent", 0);
+  assert(cai_transcript_selection_get(selection, &result, NULL) == CAI_OK &&
+         result.state == CAI_TRANSCRIPT_WORK_COMPLETED &&
+         result.text_bytes == 6U);
+  cai_transcript_selection_close(selection);
+}
 static void *worker(void *unused) {
   size_t i;
   (void)unused;
   for (i = 1U; i <= 17U; ++i)
     last_response(i);
   terminal_cases();
+  unowned_turn();
+  join_unowned_response();
   large_response();
   errors();
   invalid_and_allocation();

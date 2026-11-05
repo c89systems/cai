@@ -1,4 +1,4 @@
-add_library(cai_app_objects OBJECT cli/app.c cli/app_client.c cli/input_socket.c cli/frontend.c cli/terminal_program.c cli/run_terminal.c cli/utility.c cli/app_run.c cli/kanban.c)
+add_library(cai_app_objects OBJECT cli/app.c cli/app_client.c cli/input_socket.c cli/frontend.c cli/batch.c cli/terminal_program.c cli/run_frontend.c cli/utility.c cli/app_run.c cli/kanban.c)
 target_link_libraries(cai_app_objects PRIVATE cai_cli_support)
 cai_configure_c_target(cai_app_objects)
 add_library(cai_app_static STATIC $<TARGET_OBJECTS:cai_app_objects>
@@ -40,6 +40,12 @@ if(CAI_BUILD_SHARED)
   cai_configure_c_target(cai_app_shared)
 endif()
 if(CAI_BUILD_TESTS)
+  add_executable(cai_log_environment_test tests/log_environment_test.c cli/log_environment.c)
+  target_link_libraries(cai_log_environment_test PRIVATE cai_static pslog::pslog_static)
+  cai_configure_cli_target(cai_log_environment_test)
+  target_compile_options(cai_log_environment_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_log_environment COMMAND cai_log_environment_test)
+  set_tests_properties(cai_log_environment PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   # Compile the protocol consumer with core only: neither SDK storage nor
   # terminal objects are part of this client's link boundary.
   add_executable(cai_catalog_wire_test tests/catalog_wire_test.c
@@ -204,6 +210,10 @@ if(CAI_BUILD_TESTS)
   target_compile_options(cai_app_run_terminal_host PRIVATE -UNDEBUG)
   cai_configure_cli_target(cai_app_run_terminal_host)
   if(CAI_BUILD_CLI)
+    add_test(NAME cai_app_run_batch COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_run_batch_test.sh"
+      "$<TARGET_FILE:cai_app_run_terminal_host>")
+    set_tests_properties(cai_app_run_batch PROPERTIES LABELS "cli;local;offline" TIMEOUT 20)
     add_test(NAME cai_app_run_terminal COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_run_terminal_test.sh"
       "$<TARGET_FILE:cai_app_run_terminal_host>")

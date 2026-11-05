@@ -797,9 +797,9 @@ int cai_cli_validate_options(cai_cli_options *options) {
        options->import_file != NULL || options->login ||
        options->chrome_setup || options->chrome_remove ||
        options->install_skill != NULL || options->message != NULL ||
-       options->non_interactive || options->review)) {
+       options->review)) {
     cai_cli_option_error(options,
-                         "--server selects an interactive attachment; "
+                         "--server selects a workspace attachment; "
                          "it cannot be combined with server or utility modes");
     return -1;
   }

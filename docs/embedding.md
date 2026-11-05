@@ -175,9 +175,10 @@ The explicit `apply_environment` utility still changes process-global state;
 use the immutable view for independently running controllers. The current
 application configuration resolver does not install `[env]`: it uses the
 effective view for option aliases, path expansion and XDG derivation. The legacy
-synchronous batch/utility receiver explicitly installs it within its temporary
-process ownership; that lifecycle extraction remains pending. Interactive run,
-including temporary workspaces, uses the captured controller/adapter views. MCP
+synchronous direct-review/command/utility receiver explicitly installs it within
+its temporary process ownership; that lifecycle extraction remains pending.
+Interactive run and ordinary prompt/goal batch run, including temporary
+workspaces, use the captured controller/adapter views. MCP
 discovery and later refreshes retain a separate effective environment snapshot,
 so worker credential lookup does not depend on later global changes. Reopening
 the MCP context adopts updated configuration; `/mcp refresh` retains the current
@@ -706,13 +707,22 @@ a caller-owned sink. Neither method loads configuration, logs in or starts UI.
 Interactive `run` keeps the common controller and host callbacks on the calling
 thread, with one default-stack terminal adapter worker. The caller may itself
 be a host worker. Give the adapter exclusive terminal ownership; its terminal
-modes and signal dispositions are restored before return. Batch and maintenance
-utilities still require serialized process-resource use: configured environment
+modes and signal dispositions are restored before return. Ordinary batch prompts,
+goals and explicit review/fix loops use a default-stack socket adapter instead
+of a terminal worker. They preserve trusted host follow-up controls, callback
+affinity and the original failure/cancellation/STOP outcomes. Final output is a
+streamed journal-range projection through libmdf without an intermediate spool.
+Direct review, combined goal/instruction startup, slash/shell batch instructions
+and maintenance utilities still
+require serialized process-resource use: configured environment
 and locale state are restored after their synchronous invocation, including
 failures. Maintenance has a separate dispatcher and cannot run an agent loop or
 open a workspace owner/editor; its offline export helper still restores saved
 context read-only. See [application utilities](application-utilities.md) for the
-remaining logging/browser environment boundary. One run per receiver may be
+remaining utility/browser environment boundary. Owner and batch loggers read
+captured `LOG_` settings without installing an environment; relative file sinks
+use the selected workspace, and retained loggers retain that immutable view.
+One run per receiver may be
 active; recursive invocation is rejected.
 Workspace selection, configuration and temporary workspaces leave the host cwd
 unchanged. Relative CLI paths use the selected workspace, while INI paths use

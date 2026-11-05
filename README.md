@@ -161,6 +161,14 @@ receiver is declared in `cai/app_terminal.h`. See
 remaining parity work, and the [workspace specification](docs/workspace-server.md)
 for the complete design.
 
+Noninteractive `cai -n -i 'task'` uses the workspace owner too, as do goals and
+explicit review/fix loops. `cai -s NAME -n -i 'task'` selects an existing owner;
+it requires vacant controller authority and never takes over automatically.
+Only the final selected reply goes to stdout, without interactive margins.
+Direct `--review`, combined `-g`/`-i` startup and slash/shell instructions passed
+through `-i` still use the older synchronous receiver while their frontend
+cutover is completed.
+
 Inside an attached terminal, `/workspace` lists running owners and
 `/workspace NAME`, ID or path selects another. Drafts, recall and accepted queues
 stay with their workspace and conversation. Visited owners remain attached

@@ -34,8 +34,12 @@ typedef struct cai_transcript_selection_result {
 } cai_transcript_selection_result;
 typedef struct cai_transcript_selection cai_transcript_selection;
 /** Observe from an accepted cursor before admitting work. call_id is the
- * queued turn identity input:SESSION:PRODUCER:REQUEST:ITEM. All calls stay on
- * one owner thread. The adapter retains fixed metadata plus one bounded
+ * queued turn identity input:SESSION:PRODUCER:REQUEST:ITEM. NULL explicitly
+ * observes unowned/direct work in this session (for example goal pursuit).
+ * It may join an already-active unowned turn at its next response boundary;
+ * only text after the supplied cursor is available. Tagged turns and child
+ * sessions cannot start it. All calls
+ * stay on one owner thread. The adapter retains fixed metadata plus one bounded
  * incremental execution decoder, never the assistant response. */
 int cai_transcript_selection_open(const cai_transcript_position *,
                                   const char *call_id,

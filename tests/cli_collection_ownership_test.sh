@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# The real app opens the same conversation twice, then recovers a killed owner.
+# The CLI refuses competing controllers, then recovers a killed workspace owner.
 # Only the wire provider is a fixture; journal and ownership use real Pouch.
 source "$(dirname "$0")/cli_test_common.sh"
+mode=${1:-native}
 peer_start
 plan '{"plan":["OWNER READY"]}'
 terminal_start -N
@@ -10,23 +11,37 @@ id=$(current_session_id)
 [[ -n "$id" ]]
 before=$(requests)
 run --resume "$id" -ni 'MUST NOT REACH INFERENCE'; bad
-contains "$root/stderr" 'owned'
+if [[ "$mode" == socket ]]; then contains "$root/stderr" 'controller authority'
+else contains "$root/stderr" 'server owner'; fi
 [[ $(requests) == "$before" ]]
 # Ownership does not prevent another process from exporting the committed view.
 run --export "$id"; ok
 contains "$root/data/cai/exports/$id/$id.md" 'OWNER READY'
-# A different conversation on that same root still works while the owner is idle.
-plan '{"plan":["INDEPENDENT READY"]}'
-run -Nni 'independent conversation'; ok
-contains "$root/stdout" 'INDEPENDENT READY'
+# A second frontend cannot switch the controlling terminal's conversation.
+run -Nni 'independent conversation'; bad
+if [[ "$mode" == socket ]]; then contains "$root/stderr" 'controller authority'
+else contains "$root/stderr" 'server owner'; fi
+[[ $(requests) == "$before" ]]
 send '/status\r'; expect "$id"
 wait_for test -s "$term/tty"
 read -r canonical foreground app_pid <"$term/tty"
 [[ "$app_pid" =~ ^[0-9]+$ && "$app_pid" -gt 1 ]]
-kill -KILL "$app_pid"
+# Quiet startup gives the frontend an exact child-process watch. Inspect only
+# that known process's direct children; never search the host process table.
+owner_pid=$app_pid
+if [[ "$mode" == socket ]]; then
+  owner_children=()
+  read -r -a owner_children <"/proc/$app_pid/task/$app_pid/children" || :
+  [[ ${#owner_children[@]} == 1 ]]
+  owner_pid=${owner_children[0]}
+  [[ "$owner_pid" =~ ^[0-9]+$ && "$owner_pid" -gt 1 ]]
+fi
+kill -KILL "$owner_pid"
 wait_for test -s "$term/status"
 status=0; wait "$terminal_pid" || status=$?
-[[ "$status" == 137 && $(cat "$term/status") == 137 ]]
+expected=137
+[[ "$mode" != socket ]] || expected=1
+[[ "$status" == "$expected" && $(cat "$term/status") == "$expected" ]]
 terminal_pid=
 exec 7>&-
 exec {terminal_event_fd}>&-

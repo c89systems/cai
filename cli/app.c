@@ -2,7 +2,7 @@
 #include "app_internal.h"
 #include "identity.h"
 #include "pouch_stream.h"
-#include "run_terminal.h"
+#include "run_frontend.h"
 #include "utility.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -152,7 +152,7 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
   if (rc != CAI_OK) {
     cai_cli_error(error, rc, "copy application arguments");
   } else {
-    rc = cai_cli_run_terminal(&app->config, app->bridge, argc + 1, arguments,
+    rc = cai_cli_run_frontend(&app->config, app->bridge, argc + 1, arguments,
                               NULL, &handled, exit_code, error);
     if (rc == CAI_OK && !handled) {
       if (pthread_mutex_trylock(&application_lock) != 0)
@@ -280,7 +280,8 @@ int cai_app_start_server(cai_app *self, const cai_config_context *context,
 int cai_app_start_frontend_owner(cai_app *self,
                                  const cai_config_context *context, int argc,
                                  const char *const *argv, cai_error *error) {
-  return controller_start(self, context, argc, argv, 1, NULL, 1, error);
+  return controller_start(self, context, argc, argv, 1, NULL,
+                          CAI_CLI_OWNER_FRONTEND, error);
 }
 int cai_app_join(cai_app *self, int *exit_code, cai_error *error) {
   app_impl *app;

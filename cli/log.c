@@ -2,6 +2,7 @@
 #include "log.h"
 #include "../src/cai_utf8.h"
 #include "identity.h"
+#include "log_environment.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -15,14 +16,22 @@
 static pthread_mutex_t owned_logs_lock = PTHREAD_MUTEX_INITIALIZER;
 static cai_cli_log *owned_logs;
 
+static int log_open(cai_cli_log *, pslog_level, int, pslog_logger *,
+                    cai_environment *, const char *, cai_error *);
+
 int cai_cli_log_new(cai_cli_log **out, pslog_level level, int interactive,
                     pslog_logger *logger, cai_error *error) {
+  return cai_cli_log_new_at(out, level, interactive, logger, NULL, NULL, error);
+}
+int cai_cli_log_new_at(cai_cli_log **out, pslog_level level, int interactive,
+                       pslog_logger *logger, cai_environment *environment,
+                       const char *directory, cai_error *error) {
   cai_cli_log *log = calloc(1U, sizeof(*log));
   int rc;
   *out = NULL;
   if (log == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "allocate logging context");
-  rc = cai_cli_log_open_with_logger(log, level, interactive, logger, error);
+  rc = log_open(log, level, interactive, logger, environment, directory, error);
   if (rc != CAI_OK) {
     cai_cli_log_close(log);
     free(log);
@@ -396,6 +405,12 @@ int cai_cli_log_open(cai_cli_log *log, pslog_level default_level,
 int cai_cli_log_open_with_logger(cai_cli_log *log, pslog_level default_level,
                                  int interactive, pslog_logger *logger,
                                  cai_error *error) {
+  return log_open(log, default_level, interactive, logger, NULL, NULL, error);
+}
+static int log_open(cai_cli_log *log, pslog_level default_level,
+                    int interactive, pslog_logger *logger,
+                    cai_environment *environment, const char *directory,
+                    cai_error *error) {
   pslog_config config;
   memset(log, 0, sizeof(*log));
   log->fd = -1;
@@ -409,6 +424,12 @@ int cai_cli_log_open_with_logger(cai_cli_log *log, pslog_level default_level,
   if (pthread_mutex_init(&log->lock, NULL) != 0)
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "initialize logging lock");
   log->initialized = 1;
+  if (environment != NULL) {
+    int rc = cai_environment_retain(environment, error);
+    if (rc != CAI_OK)
+      return rc;
+    log->environment = environment;
+  }
   pslog_default_config(&config);
   config.mode = PSLOG_MODE_JSON;
   config.min_level = default_level;
@@ -418,7 +439,10 @@ int cai_cli_log_open_with_logger(cai_cli_log *log, pslog_level default_level,
   config.output.isatty = log_isatty;
   config.output.userdata = log;
   config.output.owned = 0;
-  log->root = pslog_new_from_env("LOG_", &config);
+  log->root =
+      environment != NULL
+          ? cai_cli_logger_from_environment(&config, environment, directory)
+          : pslog_new_from_env("LOG_", &config);
   log->logger = log->root;
   return log->logger != NULL
              ? CAI_OK
@@ -589,6 +613,7 @@ int cai_cli_log_close(cai_cli_log *log) {
     close(log->wakeup_fd);
   if (log->initialized)
     pthread_mutex_destroy(&log->lock);
+  cai_environment_close(log->environment);
   return rc;
 }
 

@@ -1212,6 +1212,11 @@ int cai_agent_runtime_wakeup_fd(const cai_agent_runtime *runtime, int *out_fd,
 /** Read the currently observable runtime state on the owner thread. */
 int cai_agent_runtime_state(cai_agent_runtime *runtime,
                             cai_agent_run_state *out, cai_error *error);
+/** Owner-thread stable boundary: no worker/queued turn, undelivered terminal
+ * observation, model/settings/goal transition, subagent or shell operation.
+ * Does not imply an application queue is empty or a goal achieved. Applications
+ * must dispatch their own controls/automation before publishing quiescence. */
+int cai_agent_runtime_is_quiescent(cai_agent_runtime *, int *, cai_error *);
 /** Last completed response's context use; unavailable until usage is known. */
 int cai_agent_runtime_context_percent(cai_agent_runtime *runtime, double *out,
                                       int *available, cai_error *error);
