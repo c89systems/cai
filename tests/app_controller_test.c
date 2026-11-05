@@ -1469,9 +1469,11 @@ static void server_commands(int argc, char **argv) {
     typed_wait(a, &a->history_results, 3U);
     assert(a->history_code == CAI_ERR_INVALID);
     for (n = 2U; n <= 40U; ++n) {
+      char prompt[64];
+      snprintf(prompt, sizeof(prompt), "RECALL ONLY %lu", (unsigned long)n);
       assert(cai_app_client_save_prompt(a->client, n,
-                                        a->state.transport.generation,
-                                        "RECALL ONLY", NULL) == CAI_OK);
+                                        a->state.transport.generation, prompt,
+                                        NULL) == CAI_OK);
       typed_wait(a, &a->history_results, n + 2U);
       assert(a->history_code == CAI_OK);
     }
@@ -1515,6 +1517,17 @@ static void server_commands(int argc, char **argv) {
     typed_wait(a, &a->command_completed, completed + 2U);
     typed_wait(a, &a->assistant_seen, 1U);
   }
+  {
+    char command[160];
+    unsigned long long conversation = a->state.conversation;
+    unsigned long long producer = a->state.producer;
+    unsigned int before = cai_test_storage_open_count();
+    snprintf(command, sizeof(command), "/resume %s", a->state.session);
+    typed_command(a, 5U, command, 1);
+    assert(a->state.conversation == conversation &&
+           a->state.producer == producer &&
+           cai_test_storage_open_count() == before);
+  }
   for (i = 0U; i < sizeof(queries) / sizeof(queries[0]); ++i) {
     typed_command(a, i + 10U, queries[i].command, 1);
     if (strstr(a->command_text, queries[i].reply) == NULL)
@@ -1529,6 +1542,8 @@ static void server_commands(int argc, char **argv) {
   assert(cai_app_client_prompt_history(a->client, 3U, a->state.conversation,
                                        a->state.session, 0U, NULL) == CAI_OK);
   typed_wait(a, &a->history_ends, 2U);
+  /* The callback counter includes the initial 41 entries and this capped
+   * 17-entry suffix, irrespective of additional accepted command prompts. */
   assert(a->history_limit == 17U && a->history_entries == 58U);
   typed_request(b, 1U, CAI_INPUT_OFFER, "/quit", b->state.transport.generation);
   assert(b->result.outcome == CAI_INPUT_REJECTED);

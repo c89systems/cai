@@ -204,8 +204,12 @@ owner/socket adapter. Plain redirected input without `-i` now shares that
 producer and renders live output without an editor. Native `run --server`
 uses verified discovery and the same socket frontends, without a local runtime
 or storage client; STOP detaches only that client. The old combined readline
-loop is removed. Unused terminal helpers still need removal from the owner
-source before frontend-independent application packaging is complete.
+loop and unused terminal helpers are removed. The owner compiles without
+Softline/libmdf include paths or editor/renderer references. Restoration calls
+the host replay observer once; it does not render or construct another console
+replay. Presentation tests use the actual shared transcript/presenter path.
+The combined application package still includes the terminal facade/adapters;
+frontend-independent application packaging remains unfinished.
 Maintenance uses the separate [utility dispatcher](application-utilities.md);
 its remaining process-global logging/browser environment boundary is explicit.
 These remain part of the active goal.

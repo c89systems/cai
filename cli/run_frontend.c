@@ -158,6 +158,22 @@ int cai_cli_run_frontend(const cai_app_config *application,
     if (rc != CAI_OK)
       goto done;
     r->prepared.temporary = &r->temporary;
+    if (cai_cli_batch_mode(&r->options)) {
+      cai_cli_log *log = NULL;
+      pslog_field field = pslog_str("workspace", r->temporary.workspace);
+      rc = cai_cli_log_new_at(&log, PSLOG_LEVEL_INFO, 0, application->logger,
+                              r->options.environment, r->options.directory,
+                              error);
+      if (rc == CAI_OK)
+        cai_cli_log_message(log->logger, PSLOG_LEVEL_INFO,
+                            "temp_workspace_opened", "diagnostic",
+                            "Temporary workspace created", 27U, &field, 1U);
+      if (cai_cli_log_release(log) != 0 && rc == CAI_OK)
+        rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
+                           "write temporary workspace notice");
+      if (rc != CAI_OK)
+        goto done;
+    }
   }
   r->prepared.options = r->options;
   if (r->options.server != NULL) {

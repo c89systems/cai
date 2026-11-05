@@ -210,6 +210,58 @@ int cai_cli_pouch_prompt_load(cai_cli_pouch *pouch, unsigned int limit,
   lc_error_cleanup(&local);
   return rc;
 }
+typedef struct prompt_save {
+  const char *text;
+  uint64_t position;
+} prompt_save;
+static int prompt_save_match(void *context, uint64_t position, const char *text,
+                             cai_error *error) {
+  prompt_save *save = context;
+  (void)error;
+  save->position = strcmp(save->text, text) == 0 ? position : 0U;
+  return CAI_OK;
+}
+int cai_cli_pouch_prompt_save(cai_cli_pouch *pouch, const char *identity,
+                              const char *prompt, unsigned long long *position,
+                              cai_error *error) {
+  lc_collection_info info;
+  lc_collection_read_opts options;
+  lc_collection_read_res result;
+  lc_error local;
+  prompt_save save;
+  int rc;
+  if (pouch->prompt_history == NULL || pouch->prompt_history_read_only ||
+      prompt == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "prompt-history collection is not open");
+  lc_error_init(&local);
+  rc = pouch->prompt_history->describe(pouch->prompt_history, &info, &local);
+  if (rc != LC_OK)
+    rc = cai_cli_lc_error(error, &local);
+  lc_error_cleanup(&local);
+  if (rc != CAI_OK)
+    return rc;
+  save.text = prompt;
+  save.position = 0U;
+  lc_collection_read_opts_init(&options);
+  lc_collection_read_res_init(&result);
+  options.has_after = options.has_through = 1;
+  options.after = info.upper_position > 0U ? info.upper_position - 1U : 0U;
+  options.through = info.upper_position;
+  if (info.upper_position > 0U)
+    rc = cai_cli_pouch_prompt_scan(pouch->prompt_history, &options, &result,
+                                   prompt_save_match, &save, error);
+  lc_collection_read_res_cleanup(&result);
+  if (rc == CAI_OK && save.position != 0U) {
+    if (position != NULL)
+      *position = save.position;
+    return CAI_OK;
+  }
+  return rc == CAI_OK ? cai_cli_pouch_prompt_append_id(pouch, identity, prompt,
+                                                       position, error)
+                      : rc;
+}
+
 int cai_cli_pouch_prompt_append_id(cai_cli_pouch *pouch, const char *id,
                                    const char *prompt,
                                    unsigned long long *position,

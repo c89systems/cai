@@ -1,7 +1,13 @@
-add_library(cai_app_objects OBJECT cli/app.c cli/app_client.c cli/input_socket.c cli/frontend.c cli/batch.c cli/batch_document.c cli/terminal_program.c cli/run_frontend.c cli/existing_frontend.c cli/utility.c cli/app_run.c cli/kanban.c)
+add_library(cai_app_owner_objects OBJECT cli/app_run.c)
+# Compile the owner with SDK/storage dependencies only. No terminal include
+# directories, renderer declarations or editor usage requirements propagate.
+target_link_libraries(cai_app_owner_objects PRIVATE cai_static lockdc::static)
+cai_configure_c_target(cai_app_owner_objects)
+add_library(cai_app_objects OBJECT cli/app.c cli/app_client.c cli/input_socket.c cli/frontend.c cli/batch.c cli/batch_document.c cli/terminal_program.c cli/run_frontend.c cli/existing_frontend.c cli/utility.c cli/kanban.c)
 target_link_libraries(cai_app_objects PRIVATE cai_cli_support)
 cai_configure_c_target(cai_app_objects)
 add_library(cai_app_static STATIC $<TARGET_OBJECTS:cai_app_objects>
+  $<TARGET_OBJECTS:cai_app_owner_objects>
   $<TARGET_OBJECTS:cai_cli_support>)
 add_library(cai::app_static ALIAS cai_app_static)
 set_target_properties(cai_app_static PROPERTIES OUTPUT_NAME cai_app EXPORT_NAME app_static)
@@ -16,6 +22,8 @@ if(CAI_BUILD_LUA_TOOLS)
   set(CAI_LUA_TOOLS_JSON true)
   # Fixtures that compile app_run.c use the same executor selection as the app.
   target_compile_definitions(cai_cli_support PUBLIC CAI_APP_LUA_TOOLS=1)
+  target_compile_definitions(cai_app_owner_objects PRIVATE CAI_APP_LUA_TOOLS=1)
+  target_link_libraries(cai_app_owner_objects PRIVATE cai_lua_tools_static)
   target_link_libraries(cai_cli_support PUBLIC cai_lua_tools_static)
   target_link_libraries(cai_app_static PUBLIC cai_lua_tools_static)
   set(CAI_APP_LUA_TOOLS_PC " cai-lua-tools")
@@ -23,6 +31,7 @@ endif()
 if(CAI_BUILD_SHARED)
   find_package(lockdc CONFIG REQUIRED COMPONENTS shared)
   add_library(cai_app_shared SHARED $<TARGET_OBJECTS:cai_app_objects>
+    $<TARGET_OBJECTS:cai_app_owner_objects>
     $<TARGET_OBJECTS:cai_cli_support>)
   add_library(cai::app_shared ALIAS cai_app_shared)
   set_target_properties(cai_app_shared PROPERTIES OUTPUT_NAME cai_app EXPORT_NAME app_shared
@@ -40,6 +49,17 @@ if(CAI_BUILD_SHARED)
   cai_configure_c_target(cai_app_shared)
 endif()
 if(CAI_BUILD_TESTS)
+  add_test(NAME cai_app_owner_boundary COMMAND "${CMAKE_COMMAND}"
+    "-DCAI_NM=${CMAKE_NM}"
+    "-DCAI_OWNER_OBJECT=$<TARGET_OBJECTS:cai_app_owner_objects>"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_owner_boundary_test.cmake")
+  set_tests_properties(cai_app_owner_boundary PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
+  add_executable(cai_presenter_test tests/presenter_test.c)
+  target_link_libraries(cai_presenter_test PRIVATE cai_cli_support)
+  cai_configure_cli_target(cai_presenter_test)
+  target_compile_options(cai_presenter_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_presenter COMMAND cai_presenter_test)
+  set_tests_properties(cai_presenter PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   add_executable(cai_plain_feed_test tests/plain_feed_test.c)
   target_link_libraries(cai_plain_feed_test PRIVATE cai_cli_support)
   cai_configure_cli_target(cai_plain_feed_test)

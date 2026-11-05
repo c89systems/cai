@@ -92,8 +92,10 @@ EOF drains accepted work, `/quit` stops further admission, and terminal-only
 commands report inline errors without entering a shell. Existing replay limits
 apply to this frontend. Native `run --server` attaches without a runtime,
 storage client or process launch; host STOP detaches only that client. The
-old combined readline loop is removed. Remaining terminal helper removal and
-terminal-independent packaging remain cutover work.
+old combined readline loop and the owner's terminal helpers are removed.
+The owner compiles with SDK/storage dependencies only; its compiled-object
+boundary check rejects editor/renderer references. The combined application
+package still includes its terminal facade and adapters.
 
 Batch stderr activity uses semantic execution names such as `tool.patch`,
 `tool.output` and `reasoning.receipt`; command output in a tool result retains

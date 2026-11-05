@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "../cli/status.h"
+#include "../cli/statusline.h"
 
 #include <stdio.h>
 #include <stdlib.h>

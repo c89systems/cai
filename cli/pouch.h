@@ -141,6 +141,11 @@ int cai_cli_pouch_prompt_append(cai_cli_pouch *pouch, const char *prompt,
 int cai_cli_pouch_prompt_append_id(cai_cli_pouch *, const char *identity,
                                    const char *prompt,
                                    unsigned long long *position, cai_error *);
+/** Save an explicit frontend draft, skipping an identical last durable prompt.
+ * Reads only the newest entry through the existing owned collection. */
+int cai_cli_pouch_prompt_save(cai_cli_pouch *, const char *identity,
+                              const char *prompt, unsigned long long *position,
+                              cai_error *);
 /** Separate public reader sharing the existing SDK client, without replacing
  * or releasing the context's owned prompt writer. Close with collection_close.
  */

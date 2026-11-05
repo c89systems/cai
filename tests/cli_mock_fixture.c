@@ -68,13 +68,21 @@ static int fixture_capacity_wait(cai_agent_runtime *runtime, long delay,
   return CAI_OK;
 }
 
-static int fixture_prompt_append(cai_cli_pouch *pouch, const char *prompt,
-                                 cai_error *error) {
+int __real_cai_cli_pouch_prompt_save(cai_cli_pouch *, const char *,
+                                     const char *, unsigned long long *,
+                                     cai_error *);
+int __wrap_cai_cli_pouch_prompt_save(cai_cli_pouch *, const char *,
+                                     const char *, unsigned long long *,
+                                     cai_error *);
+int __wrap_cai_cli_pouch_prompt_save(cai_cli_pouch *pouch, const char *id,
+                                     const char *prompt,
+                                     unsigned long long *position,
+                                     cai_error *error) {
   const char *failure = getenv("CAI_TEST_PROMPT_APPEND_FAILURE");
   if (failure != NULL && access(failure, F_OK) == 0)
     return cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "Injected prompt persistence failure");
-  return cai_cli_pouch_prompt_append(pouch, prompt, error);
+  return __real_cai_cli_pouch_prompt_save(pouch, id, prompt, position, error);
 }
 
 static int fixture_runtime_open(cai_client *client,
@@ -130,9 +138,7 @@ static int fixture_messages_start(cai_cli_messages *messages, const char *id,
 }
 #define cai_agent_runtime_open fixture_runtime_open
 #define cai_cli_messages_start fixture_messages_start
-#define cai_cli_pouch_prompt_append fixture_prompt_append
 #include "../cli/app_run.c"
-#undef cai_cli_pouch_prompt_append
 #undef cai_cli_messages_start
 #undef cai_agent_runtime_open
 
@@ -146,13 +152,14 @@ static int fixture_late_steer(void *context,
   if (rc != CAI_OK || inserted || event->type != CAI_AGENT_EVENT_RUN_COMPLETED)
     return rc;
   inserted = 1;
-  /* Admission after the final active boundary deterministically reproduces
-   * the live session's idle S entry with a Q theme command behind it. */
+  /* Admission after the final active boundary leaves an idle S entry with an
+   * independent backend query behind it. Frontend actions require their own
+   * attached producer; an internal host must not impersonate that identity. */
   if (cli_input_request(state, CAI_INPUT_OFFER, "LATE_STEER",
                         CAI_INPUT_STEERING, strcmp(mode, "held") == 0, NULL,
                         NULL, error) != CAI_OK ||
-      cli_input_request(state, CAI_INPUT_OFFER, "/theme gruvbox",
-                        CAI_INPUT_QUEUED, 0, NULL, NULL, error) != CAI_OK)
+      cli_input_request(state, CAI_INPUT_OFFER, "/status", CAI_INPUT_QUEUED, 0,
+                        NULL, NULL, error) != CAI_OK)
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "inject late steer fixture");
   return CAI_OK;
 }

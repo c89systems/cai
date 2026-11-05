@@ -36,7 +36,7 @@ send '\025/compact\r'; expect 'Q 1. /compact'
 # Empty Alt-Enter promotes the newest native queue entry without going
 # through the draft hook. It must still wait past the upcoming tool seam.
 send '\033\r'
-release; expect BeforeCompactAnswer; expect 'Context compacted.'
+release; expect BeforeCompactAnswer; expect 'Context compacted'
 [[ $(requests) == 3 ]]
 logs
 jq -se 'any(.[]; .event == "run_started" and .role == "runtime" and .prompt_kind == "compaction")' "$root/logs.jsonl" >/dev/null
@@ -65,7 +65,7 @@ if [[ "$chat" == false ]]; then
   wait_for review_requested
   send '/compact\033\r'; expect 'Q 1. /compact'
   [[ $(requests) == $((before+1)) ]]
-  release; expect 'Context compacted.'
+  release; expect 'Context compacted'
   [[ $(requests) == $((before+2)) ]]
   terminal_close
 
@@ -78,7 +78,7 @@ if [[ "$chat" == false ]]; then
   send '/compact\r'; expect 'Q 1. /compact'
   [[ $(requests) == "$before" ]]
   printf 'ShellGateFinished\n' >"$work/compact.gate"
-  expect 'Context compacted.'
+  expect 'Context compacted'
   [[ $(requests) == $((before+1)) ]]
   terminal_close
 fi

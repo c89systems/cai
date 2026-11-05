@@ -23,6 +23,7 @@
     cai_configure_cli_target(cai_cli_mock_fixture)
     cai_cli_use_storage_fixture(cai_cli_mock_fixture)
     target_link_options(cai_cli_mock_fixture PRIVATE "-Wl,--wrap=cai_mcp_streamable_http_client_open")
+    target_link_options(cai_cli_mock_fixture PRIVATE "-Wl,--wrap=cai_cli_pouch_prompt_save")
     add_executable(cai_terminal_peer tests/terminal_peer.c)
     add_test(NAME cai_cli_pipe COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pipe_test.sh" "$<TARGET_FILE:cai_cli>"
@@ -371,6 +372,7 @@
     add_executable(cai_cli_spinner_test tests/cli_spinner_test.c)
     target_link_libraries(cai_cli_spinner_test PRIVATE cai_cli_support cai_app_static)
     cai_configure_cli_target(cai_cli_spinner_test)
+    target_compile_options(cai_cli_spinner_test PRIVATE -UNDEBUG)
     add_test(NAME cai_cli_spinner COMMAND cai_cli_spinner_test)
     add_test(NAME cai_cli_model_catalog
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_model_catalog_test.sh"
@@ -511,7 +513,6 @@
     add_test(NAME cai_cli_storage_stream COMMAND cai_cli_storage_stream_test)
     set_tests_properties(cai_cli_storage_stream PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_reasoning_test tests/cli_reasoning_test.c)
-    target_link_options(cai_cli_reasoning_test PRIVATE -Wl,--wrap=cai_tool_display_tick)
     target_link_libraries(cai_cli_reasoning_test PRIVATE cai_cli_support cai_app_static)
     cai_configure_cli_target(cai_cli_reasoning_test)
     add_test(NAME cai_cli_reasoning COMMAND cai_cli_reasoning_test)
@@ -624,7 +625,7 @@
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_idle_test.sh"
         "$<TARGET_FILE:cai_cli>")
     set_tests_properties(cai_cli_idle PROPERTIES TIMEOUT 45)
-    add_executable(cai_cli_status_test tests/cli_status_test.c cli/status.c)
+    add_executable(cai_cli_status_test tests/cli_status_test.c cli/status.c cli/statusline.c)
     target_link_libraries(cai_cli_status_test PRIVATE cai_static
       softline::softline_static)
     cai_configure_cli_target(cai_cli_status_test)
@@ -920,7 +921,7 @@
     # Tests consume this public client host too. Keep its statically linked
     # protocol/presenter in step with the owner in targeted CLI builds.
     add_dependencies(cai_cli_tests cai_app_terminal_host cai_app_utility_host
-      cai_transcript_selection_test cai_line_input_test cai_plain_feed_test cai_app_existing_host)
+      cai_transcript_selection_test cai_line_input_test cai_plain_feed_test cai_presenter_test cai_app_existing_host)
     add_test(NAME cai_cli_kanban COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_kanban_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")

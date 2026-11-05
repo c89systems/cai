@@ -217,6 +217,7 @@ int cai_app_client_prompt_history(cai_app_client *, uint64_t request,
 /** Save one bounded input without submitting it to the model. Await
  * HISTORY_RESULT before claiming durability or exiting after a draft save.
  * Controller only; unchanged repeats of the most recent request are idempotent.
+ * Saving the same text as the last durable entry returns its existing position.
  * No auto retry. */
 int cai_app_client_save_prompt(cai_app_client *, uint64_t request,
                                uint64_t original_generation, const char *,

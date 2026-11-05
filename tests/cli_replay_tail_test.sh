@@ -162,7 +162,7 @@ terminal_start --resume "$id"
 absent "$term/text" 'CONTEXT RETAINED'
 send "/resume\r"; expect "$id"
 send '/resume 1\r'; expect '$ /resume 1'
-send '/status\r'; expect '## Status'
+send '/status\r'; expect 'Session ID'
 absent "$term/text" 'CONTEXT RETAINED'
 terminal_close
 terminal_start --resume "$id" --replay-turns 1

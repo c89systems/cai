@@ -1,124 +1,9 @@
-/* Drive the CLI's owner-thread event renderer with provider-shaped chunks. */
+/* Backend queue/lifecycle, event logging and shared authentication. */
 #include "../cli/app_run.c"
-#include <fcntl.h>
-
 typedef struct event_log_capture {
   char bytes[16384];
   size_t length;
 } event_log_capture;
-
-static int tick_stub, tick_calls;
-
-typedef struct table_counter {
-  size_t bytes, rows, matched;
-} table_counter;
-static int table_count_write(void *context, const char *bytes, size_t count) {
-  table_counter *total = context;
-  size_t i;
-  total->bytes += count;
-  for (i = 0U; i < count; ++i) {
-    if (bytes[i] == "tool"[total->matched]) {
-      if (++total->matched == 4U) {
-        total->rows++;
-        total->matched = 0U;
-      }
-    } else
-      total->matched = bytes[i] == 't' ? 1U : 0U;
-  }
-  return 0;
-}
-
-/* Small tables retain full layout. Oversized tables flush once and continue
- * before EOF at either the byte or row limit, preserving every body row. */
-static int test_streaming_tables(void) {
-  cli_state *state = calloc(1U, sizeof(*state));
-  mdf_sink sink;
-  table_counter total;
-  int scenario, i, rows, rc = 1;
-  const char *header = "| Tool | Description |\n| --- | --- |\n";
-  const char *long_row =
-      "| tool | A complete description with enough words to exceed the full "
-      "table retention budget after many rows. |\n";
-  const char *short_row = "| tool | short |\n";
-  if (state == NULL)
-    return 1;
-  state->ui.width = 120;
-  for (scenario = 0; scenario < 3; ++scenario) {
-    const char *row = scenario == 1 ? long_row : short_row;
-    memset(&total, 0, sizeof(total));
-    if (cli_renderer_create(state, &state->ui.render_theme, &state->ui.renderer,
-                            NULL) != CAI_OK)
-      goto done;
-    sink.userdata = &total;
-    sink.write = table_count_write;
-    if (state->ui.renderer->set_sink(state->ui.renderer, &sink) != MDF_OK ||
-        state->ui.renderer->feed(state->ui.renderer, header, strlen(header)) !=
-            MDF_OK ||
-        state->ui.renderer->feed(state->ui.renderer, row, strlen(row)) !=
-            MDF_OK ||
-        total.rows != 0U)
-      goto done;
-    rows = scenario == 0 ? 5 : 1030;
-    for (i = 0; i < rows; i++)
-      if (state->ui.renderer->feed(state->ui.renderer, row, strlen(row)) !=
-          MDF_OK)
-        goto done;
-    if ((scenario == 0 && total.rows != 0U) ||
-        (scenario != 0 && total.rows == 0U) ||
-        state->ui.renderer->finish_document(state->ui.renderer) != MDF_OK ||
-        total.rows != (size_t)rows + 1U)
-      goto done;
-    state->ui.renderer->destroy(state->ui.renderer);
-    state->ui.renderer = NULL;
-  }
-  rc = 0;
-done:
-  if (state->ui.renderer != NULL)
-    state->ui.renderer->destroy(state->ui.renderer);
-  free(state);
-  if (rc)
-    fprintf(stderr, "full-layout table fallback lost layout or body rows\n");
-  return rc;
-}
-int __real_cai_tool_display_tick(cai_tool_display *display, cai_error *error);
-int __wrap_cai_tool_display_tick(cai_tool_display *display, cai_error *error);
-int __wrap_cai_tool_display_tick(cai_tool_display *display, cai_error *error) {
-  if (!tick_stub)
-    return __real_cai_tool_display_tick(display, error);
-  tick_calls++;
-  return CAI_OK;
-}
-static int test_command_timer_boundary(void) {
-  cli_state *state = calloc(1U, sizeof(*state));
-  uint64_t expiration = 1U;
-  int descriptors[2], scenario, rc = 0;
-  if (state == NULL)
-    return 1;
-  if (pipe(descriptors) != 0) {
-    free(state);
-    return 1;
-  }
-  state->timer_fd = descriptors[0];
-  tick_stub = 1;
-  tick_calls = 0;
-  for (scenario = 0; scenario < 4; scenario++) {
-    state->ui.response_open = scenario == 0;
-    state->ui.reasoning_open = scenario == 1;
-    state->ui.notice_open = scenario == 2;
-    if (write(descriptors[1], &expiration, sizeof(expiration)) !=
-            (ssize_t)sizeof(expiration) ||
-        cli_timer_wakeup(NULL, NULL, state) != SL_OK ||
-        tick_calls != (scenario == 3 ? 1 : 0)) {
-      rc = 1;
-      break;
-    }
-  }
-  tick_stub = 0;
-  close(descriptors[0]);
-  close(descriptors[1]);
-  free(state);
-  return rc;
-}
 
 static int test_command_queue_modes(void) {
   static const char *const turns[] = {"/new",
@@ -237,8 +122,8 @@ static int test_command_queue_modes(void) {
     if (cli_prompt_classify(&state, turns[i], &policy, NULL) != CAI_OK ||
         !policy.action || policy.independent ||
         policy.intent != CAI_INPUT_QUEUED ||
-        cli_prompt_mode(&state, turns[i], SL_PROMPT_QUEUE_MODE_STEER) !=
-            SL_PROMPT_QUEUE_MODE_QUEUED)
+        cli_prompt_mode(&state, turns[i], CAI_INPUT_STEERING) !=
+            CAI_INPUT_QUEUED)
       return 1;
   }
   for (i = 0U; i < sizeof(feed) / sizeof(feed[0]); i++) {
@@ -255,15 +140,14 @@ static int test_command_queue_modes(void) {
       return 1;
   }
   for (i = 0U; i < sizeof(requests) / sizeof(requests[0]); i++) {
-    sl_prompt_queue_mode_t modes[2];
+    cai_input_intent modes[2];
     size_t m;
-    modes[0] = SL_PROMPT_QUEUE_MODE_QUEUED;
-    modes[1] = SL_PROMPT_QUEUE_MODE_STEER;
+    modes[0] = CAI_INPUT_QUEUED;
+    modes[1] = CAI_INPUT_STEERING;
     for (m = 0U; m < 2U; m++) {
       memset(&policy, 0, sizeof(policy));
-      policy.intent = modes[m] == SL_PROMPT_QUEUE_MODE_STEER
-                          ? CAI_INPUT_STEERING
-                          : CAI_INPUT_QUEUED;
+      policy.intent = modes[m] == CAI_INPUT_STEERING ? CAI_INPUT_STEERING
+                                                     : CAI_INPUT_QUEUED;
       if (cli_prompt_classify(&state, requests[i], &policy, NULL) != CAI_OK ||
           !policy.action || !policy.independent ||
           cli_command_at_feed_boundary(requests[i]) ||
@@ -291,24 +175,22 @@ static int test_command_queue_modes(void) {
   }
   state.foreground_subagent = 1;
   if (cai_cli_command_delivery("/goal start {}") != CLI_COMMAND_TURN ||
-      cli_prompt_mode(&state, "/goal start {}", SL_PROMPT_QUEUE_MODE_STEER) !=
-          SL_PROMPT_QUEUE_MODE_QUEUED)
+      cli_prompt_mode(&state, "/goal start {}", CAI_INPUT_STEERING) !=
+          CAI_INPUT_QUEUED)
     return 1;
   state.options.subagent_steering = 0;
   memset(&policy, 0, sizeof(policy));
   if (cli_prompt_classify(&state, "ordinary prompt", &policy, NULL) != CAI_OK ||
       policy.action || policy.independent ||
-      cli_prompt_mode(&state, "ordinary prompt", SL_PROMPT_QUEUE_MODE_QUEUED) !=
-          SL_PROMPT_QUEUE_MODE_QUEUED)
+      cli_prompt_mode(&state, "ordinary prompt", CAI_INPUT_QUEUED) !=
+          CAI_INPUT_QUEUED)
     return 1;
-  return cli_prompt_mode(&state, "child steer", SL_PROMPT_QUEUE_MODE_STEER) ==
-                     SL_PROMPT_QUEUE_MODE_QUEUED &&
-                 cli_prompt_mode(&state, "/theme plain",
-                                 SL_PROMPT_QUEUE_MODE_STEER) ==
-                     SL_PROMPT_QUEUE_MODE_STEER &&
-                 cli_prompt_mode(&state, "/t plain",
-                                 SL_PROMPT_QUEUE_MODE_STEER) ==
-                     SL_PROMPT_QUEUE_MODE_STEER
+  return cli_prompt_mode(&state, "child steer", CAI_INPUT_STEERING) ==
+                     CAI_INPUT_QUEUED &&
+                 cli_prompt_mode(&state, "/theme plain", CAI_INPUT_STEERING) ==
+                     CAI_INPUT_STEERING &&
+                 cli_prompt_mode(&state, "/t plain", CAI_INPUT_STEERING) ==
+                     CAI_INPUT_STEERING
              ? 0
              : 1;
 }
@@ -318,43 +200,43 @@ static int test_goal_handoff(void) {
   cai_agent_runtime_event event;
   memset(&state, 0, sizeof(state));
   memset(&event, 0, sizeof(event));
-  state.batch = 1;
   state.awaiting_turn = 1;
   state.goal_starts_pending = 2U;
   event.type = CAI_AGENT_EVENT_RUN_COMPLETED;
-  if (cli_event(&state, &event, NULL) != CAI_OK || state.awaiting_turn ||
-      cli_advance_automation(&state, NULL) != CAI_OK || state.automation_done)
+  if (cli_event_lifecycle(&state, &event, NULL) != CAI_OK ||
+      state.awaiting_turn || cli_advance_automation(&state, NULL) != CAI_OK ||
+      state.automation_done)
     return 1;
   /* An older turn completing must not consult an obsolete goal projection.
    * Unrelated and child goal events cannot acknowledge these host starts. */
   event.type = CAI_AGENT_EVENT_GOAL_CHANGED;
   event.data = "paused";
   event.data_length = 6U;
-  if (cli_event(&state, &event, NULL) != CAI_OK ||
+  if (cli_event_lifecycle(&state, &event, NULL) != CAI_OK ||
       state.goal_starts_pending != 2U)
     return 1;
   event.data = "replaced";
   event.data_length = 8U;
   event.parent_tool_call_id = "child";
-  if (cli_event(&state, &event, NULL) != CAI_OK ||
+  if (cli_event_lifecycle(&state, &event, NULL) != CAI_OK ||
       state.goal_starts_pending != 2U)
     return 1;
   event.parent_tool_call_id = NULL;
-  if (cli_event(&state, &event, NULL) != CAI_OK ||
+  if (cli_event_lifecycle(&state, &event, NULL) != CAI_OK ||
       state.goal_starts_pending != 1U ||
       cli_advance_automation(&state, NULL) != CAI_OK || state.automation_done)
     return 1;
   event.data = "resumed";
   event.data_length = 7U;
-  if (cli_event(&state, &event, NULL) != CAI_OK ||
+  if (cli_event_lifecycle(&state, &event, NULL) != CAI_OK ||
       state.goal_starts_pending != 0U ||
-      cli_event(&state, &event, NULL) != CAI_OK ||
+      cli_event_lifecycle(&state, &event, NULL) != CAI_OK ||
       state.goal_starts_pending != 0U)
     return 1;
   state.goal_starts_pending = 1U;
   state.awaiting_turn = 1;
   event.type = CAI_AGENT_EVENT_RUN_FAILED;
-  if (cli_event(&state, &event, NULL) != CAI_OK ||
+  if (cli_event_lifecycle(&state, &event, NULL) != CAI_OK ||
       state.goal_starts_pending != 0U || state.awaiting_turn ||
       cli_advance_automation(&state, NULL) != CAI_OK || !state.automation_done)
     return 1;
@@ -383,7 +265,6 @@ static int test_event_logging(void) {
   memset(&state, 0, sizeof(state));
   memset(&event, 0, sizeof(event));
   memset(&capture, 0, sizeof(capture));
-  state.batch = 1;
   strcpy(state.pouch.state_directory, ".");
   pslog_default_config(&config);
   config.mode = PSLOG_MODE_JSON;
@@ -405,44 +286,53 @@ static int test_event_logging(void) {
   event.type = CAI_AGENT_EVENT_RUN_STARTED;
   event.data = "normal prompt";
   event.data_length = strlen(event.data);
-  rc = cli_event(&state, &event, &error);
+  cli_log_event(&state, &event);
+  rc = CAI_OK;
   event.type = CAI_AGENT_EVENT_STEERING_QUEUED;
   event.data = "steer prompt";
   event.data_length = strlen(event.data);
   if (rc == CAI_OK)
-    rc = cli_event(&state, &event, &error);
+    cli_log_event(&state, &event);
+  rc = CAI_OK;
   event.type = CAI_AGENT_EVENT_STEERING_DELIVERED;
   if (rc == CAI_OK)
-    rc = cli_event(&state, &event, &error);
+    cli_log_event(&state, &event);
+  rc = CAI_OK;
   event.type = CAI_AGENT_EVENT_TURN_QUEUED;
   event.data = "queued prompt";
   event.data_length = strlen(event.data);
   if (rc == CAI_OK)
-    rc = cli_event(&state, &event, &error);
+    cli_log_event(&state, &event);
+  rc = CAI_OK;
   event.type = CAI_AGENT_EVENT_TEXT_DELTA;
   event.data = "parent answer";
   event.data_length = strlen(event.data);
   if (rc == CAI_OK)
-    rc = cli_event(&state, &event, &error);
+    cli_log_event(&state, &event);
+  rc = CAI_OK;
   event.parent_tool_call_id = "child-invocation";
   event.data = "child answer";
   event.data_length = strlen(event.data);
   if (rc == CAI_OK)
-    rc = cli_event(&state, &event, &error);
+    cli_log_event(&state, &event);
+  rc = CAI_OK;
   event.type = CAI_AGENT_EVENT_REVIEW_REPORT;
   if (rc == CAI_OK)
-    rc = cli_event(&state, &event, &error);
+    cli_log_event(&state, &event);
+  rc = CAI_OK;
   event.type = CAI_AGENT_EVENT_RESPONSE_COMPLETED;
   event.data = NULL;
   event.data_length = 0U;
   if (rc == CAI_OK)
-    rc = cli_event(&state, &event, &error);
+    cli_log_event(&state, &event);
+  rc = CAI_OK;
   event.parent_tool_call_id = NULL;
   event.type = CAI_AGENT_EVENT_TEXT_DELTA;
   event.data = " continues";
   event.data_length = strlen(event.data);
   if (rc == CAI_OK)
-    rc = cli_event(&state, &event, &error);
+    cli_log_event(&state, &event);
+  rc = CAI_OK;
   state.log->logger->destroy(state.log->logger);
   free(state.log);
   cai_error_cleanup(&error);
@@ -555,998 +445,7 @@ static int test_shared_auth(void) {
   return fixture.calls == 2 ? 0 : 1;
 }
 
-/* Use the production libmdf -> softline sink, then revoke its output fd.
- * This verifies errors cross both renderer boundaries rather than substituting
- * a renderer mock that always returns failure. */
-static int test_output_failure(int operation) {
-  cli_state state;
-  sl_config_t config;
-  mdf_options options;
-  mdf_sink sink;
-  cai_agent_runtime_event event;
-  cai_agent_session_event replay = {0};
-  int pipe_fd[2];
-  int rc = -1;
-  int handled = 0;
-  memset(&state, 0, sizeof(state));
-  memset(&event, 0, sizeof(event));
-  memset(&replay, 0, sizeof(replay));
-  if (pipe(pipe_fd) != 0)
-    return 1;
-  sl_config_init(&config);
-  config.output_fd = pipe_fd[1];
-  state.sl = sl_create_with_config(&config);
-  state.ui.width = 80;
-  mdf_options_init(&options);
-  options.width = state.ui.width;
-  options.boring = 1;
-  if (state.sl == NULL || sl_output_stream_begin(state.sl) != SL_OK ||
-      mdf_create(MDF_FORMAT_ANSI, &options, &state.ui.renderer) != MDF_OK)
-    goto cleanup;
-  sink.userdata = &state;
-  sink.write = cli_renderer_sink;
-  if (state.ui.renderer->set_sink(state.ui.renderer, &sink) != MDF_OK)
-    goto cleanup;
-  if (operation == 2) {
-    const char *table = "| Left | Right |\n| --- | --- |\n| a | b |\n";
-    if (cli_text(&state, table, strlen(table)) != 0)
-      goto cleanup;
-  }
-  close(pipe_fd[1]);
-  pipe_fd[1] = -1;
-  if (operation == 8)
-    state.ui.block_spacing_pending = 1;
-  event.data = "Output unavailable.\n\n";
-  event.data_length = strlen(event.data);
-  if (operation == 0 || operation == 8) {
-    event.type = CAI_AGENT_EVENT_TEXT_DELTA;
-    rc = cli_event(&state, &event, NULL);
-  } else if (operation == 1) {
-    event.data = "Heading\n\nOutput unavailable.\n\n";
-    event.data_length = strlen(event.data);
-    event.type = CAI_AGENT_EVENT_REASONING_SUMMARY;
-    rc = cli_event(&state, &event, NULL);
-  } else if (operation == 2) {
-    event.type = CAI_AGENT_EVENT_RESPONSE_COMPLETED;
-    rc = cli_event(&state, &event, NULL);
-  } else if (operation == 3) {
-    rc = cli_prompt(&state, "literal prompt") != 0 ? CAI_ERR_TRANSPORT : CAI_OK;
-  } else if (operation == 4) {
-    rc = cli_handle_command(&state, "/help", NULL, &handled);
-    if (!handled)
-      rc = CAI_OK;
-  } else if (operation == 6) {
-    rc = cli_notice(&state, "* WARN: Output unavailable") != 0
-             ? CAI_ERR_TRANSPORT
-             : CAI_OK;
-  } else if (operation == 7) {
-    rc = cli_markdown(&state, "Output unavailable") != 0 ? CAI_ERR_TRANSPORT
-                                                         : CAI_OK;
-  } else if (operation == 17) {
-    replay.type = "reasoning_summary";
-    replay.data = "Heading\n\nOutput unavailable.\n\n";
-    rc = cli_replay_render(&state, &replay, NULL);
-  } else if (operation == 18) {
-    rc = cli_dispatch_command(&state, "/quit", NULL, NULL, &handled);
-    if (state.exit_requested)
-      rc = CAI_OK; /* A failed receipt must prevent command side effects. */
-  } else if (operation >= 15) {
-    event.type = CAI_AGENT_EVENT_SUBAGENT_HANDED_OFF;
-    event.subagent_name = "review";
-    event.parent_tool_call_id = "review-call";
-    state.batch = operation == 16;
-    rc = cli_event(&state, &event, NULL);
-  } else if (operation >= 11) {
-    event.type = operation == 11   ? CAI_AGENT_EVENT_RUN_STARTED
-                 : operation == 12 ? CAI_AGENT_EVENT_STEERING_DELIVERED
-                 : operation == 13 ? CAI_AGENT_EVENT_STEERING_QUEUED
-                                   : CAI_AGENT_EVENT_TURN_QUEUED;
-    rc = cli_event(&state, &event, NULL);
-  } else {
-    replay.type = "assistant_text_delta";
-    replay.data = event.data;
-    if (operation == 5)
-      state.options.replay_turns = -1L;
-    rc = operation == 9 || operation == 5
-             ? cli_replay_render(&state, &replay, NULL)
-             : cli_replay_event(&state, &replay, NULL);
-  }
-cleanup:
-  if (state.ui.notice_renderer != NULL)
-    state.ui.notice_renderer->destroy(state.ui.notice_renderer);
-  if (state.ui.renderer != NULL)
-    state.ui.renderer->destroy(state.ui.renderer);
-  if (state.sl != NULL)
-    sl_destroy(state.sl);
-  close(pipe_fd[0]);
-  if (pipe_fd[1] >= 0)
-    close(pipe_fd[1]);
-  if (rc !=
-      (operation == 10 || operation == 13 || operation == 14 || operation == 16
-           ? CAI_OK
-           : CAI_ERR_TRANSPORT)) {
-    fprintf(stderr, "unexpected output result for operation %d: %d\n",
-            operation, rc);
-    return 1;
-  }
-  return 0;
-}
-
-typedef struct reasoning_capture {
-  char bytes[2048];
-  size_t length;
-  int fail;
-  int calls, fail_at;
-} reasoning_capture;
-static int reasoning_capture_body(void *context, const char *data,
-                                  size_t length) {
-  reasoning_capture *capture = context;
-  capture->calls++;
-  if (capture->fail ||
-      (capture->fail_at != 0 && capture->calls == capture->fail_at) ||
-      length >= sizeof(capture->bytes) - capture->length)
-    return -1;
-  memcpy(capture->bytes + capture->length, data, length);
-  capture->length += length;
-  capture->bytes[capture->length] = '\0';
-  return 0;
-}
-static int test_reasoning_quotes(void) {
-  static const char *inputs[] = {
-      "",
-      "one",
-      "one\n",
-      "one\r\n\r\ntwo\rthree\n",
-      "**Bold**\n\n- item with `code`\n\n```c\nint x;\n```",
-      "caf\303\251\n> nested\n"};
-  static const char *expected[] = {
-      "",
-      "> one",
-      "> one\n",
-      "> one\n> \n> two\n> three\n",
-      "> **Bold**\n> \n> - item with `code`\n> \n> ```c\n> int x;\n> ```",
-      "> caf\303\251\n> > nested\n"};
-  cai_cli_reasoning_quote quote;
-  reasoning_capture capture;
-  size_t n, chunk, offset, count, length;
-  int fail_at;
-  for (n = 0U; n < sizeof(inputs) / sizeof(inputs[0]); n++) {
-    length = strlen(inputs[n]);
-    for (chunk = 1U; chunk <= (length != 0U ? length : 1U); chunk++) {
-      cai_cli_reasoning_quote_init(&quote);
-      memset(&capture, 0, sizeof(capture));
-      if (cai_cli_reasoning_quote_feed(&quote, NULL, 0U, reasoning_capture_body,
-                                       &capture) != 0)
-        return 1;
-      for (offset = 0U; offset < length; offset += count) {
-        count = length - offset;
-        if (count > chunk)
-          count = chunk;
-        if (cai_cli_reasoning_quote_feed(&quote, inputs[n] + offset, count,
-                                         reasoning_capture_body, &capture) != 0)
-          return 1;
-      }
-      if (strcmp(capture.bytes, expected[n]) != 0) {
-        fprintf(stderr, "quoted Markdown case %lu chunk %lu: %s\n",
-                (unsigned long)n, (unsigned long)chunk, capture.bytes);
-        return 1;
-      }
-    }
-  }
-  cai_cli_reasoning_quote_init(&quote);
-  memset(&capture, 0, sizeof(capture));
-  if (cai_cli_reasoning_quote_feed(&quote, "partial", 7U,
-                                   reasoning_capture_body, &capture) != 0 ||
-      strcmp(capture.bytes, "> partial") != 0)
-    return 1; /* Output arrives without waiting for a newline or section EOF. */
-  for (fail_at = 1; fail_at <= 3; fail_at++) {
-    cai_cli_reasoning_quote_init(&quote);
-    memset(&capture, 0, sizeof(capture));
-    capture.fail_at = fail_at;
-    if (cai_cli_reasoning_quote_feed(&quote, "line\n", 5U,
-                                     reasoning_capture_body, &capture) != -1 ||
-        capture.calls != fail_at)
-      return 1;
-  }
-  if (cai_cli_reasoning_quote_feed(&quote, NULL, 1U, reasoning_capture_body,
-                                   &capture) != -1 ||
-      cai_cli_reasoning_quote_feed(NULL, "text", 4U, reasoning_capture_body,
-                                   &capture) != -1)
-    return 1;
-  return 0;
-}
-static int test_reasoning_sections(void) {
-  static const char *inputs[] = {"**Applying patch**",
-                                 "**Applying patch**\n\n",
-                                 "\n  **Applying patch**\r\n\n",
-                                 "**Applying patch**\n\nBody å🚀\nNext",
-                                 "**Applying patch**\r\n  Body å🚀\nNext",
-                                 "**Å🚀 title**\nbody"};
-  static const char *bodies[] = {
-      "", "", "", "Body å🚀\nNext", "  Body å🚀\nNext", "body"};
-  static const char *titles[] = {"Applying patch", "Applying patch",
-                                 "Applying patch", "Applying patch",
-                                 "Applying patch", "Å🚀 title"};
-  cai_cli_reasoning reasoning;
-  reasoning_capture capture;
-  const char *title;
-  char long_header[1024];
-  size_t n, chunk, offset, count;
-  for (n = 0U; n < sizeof(inputs) / sizeof(inputs[0]); n++) {
-    for (chunk = 1U; chunk <= strlen(inputs[n]); chunk++) {
-      cai_cli_reasoning_reset(&reasoning);
-      memset(&capture, 0, sizeof(capture));
-      for (offset = 0U; offset < strlen(inputs[n]); offset += count) {
-        count = strlen(inputs[n]) - offset;
-        if (count > chunk)
-          count = chunk;
-        if (cai_cli_reasoning_feed(&reasoning, inputs[n] + offset, count,
-                                   reasoning_capture_body, &capture) != 0 ||
-            cai_cli_reasoning_title(&reasoning, &title) != 0) {
-          fprintf(stderr,
-                  "fragmented heading failed at section %lu offset %lu\n",
-                  (unsigned long)n, (unsigned long)offset);
-          return 1;
-        }
-      }
-      if (cai_cli_reasoning_title(&reasoning, &title) != 0 ||
-          strcmp(title, titles[n]) != 0 ||
-          strcmp(capture.bytes, bodies[n]) != 0) {
-        fprintf(stderr, "section %lu chunk %lu: title=%s body=%s\n",
-                (unsigned long)n, (unsigned long)chunk, title, capture.bytes);
-        return 1;
-      }
-      cai_cli_reasoning_end(&reasoning);
-      if (cai_cli_reasoning_title(&reasoning, &title) != 0 ||
-          strcmp(title, titles[n]) != 0)
-        return 1;
-      if (cai_cli_reasoning_feed(&reasoning, "# Fresh", 7U,
-                                 reasoning_capture_body, &capture) != 0 ||
-          cai_cli_reasoning_title(&reasoning, &title) != 0 ||
-          strcmp(title, "# Fresh") != 0) {
-        fprintf(stderr, "fresh heading: %s\n", title);
-        return 1;
-      }
-    }
-  }
-  memset(long_header, 'x', sizeof(long_header));
-  cai_cli_reasoning_reset(&reasoning);
-  memset(&capture, 0, sizeof(capture));
-  if (cai_cli_reasoning_feed(&reasoning, long_header, sizeof(long_header),
-                             reasoning_capture_body, &capture) != 0 ||
-      reasoning.header_length != sizeof(reasoning.header) - 1U ||
-      capture.length != 0U ||
-      cai_cli_reasoning_feed(&reasoning, "\nbody", 5U, reasoning_capture_body,
-                             &capture) != 0 ||
-      strcmp(capture.bytes, "body") != 0)
-    return 1;
-  /* The body is delivered before section completion; sink failures propagate.
-   */
-  capture.fail = 1;
-  if (cai_cli_reasoning_feed(&reasoning, "more", 4U, reasoning_capture_body,
-                             &capture) != -1)
-    return 1;
-  cai_cli_reasoning_reset(&reasoning);
-  if (cai_cli_reasoning_feed(&reasoning, "title\n  body", 12U,
-                             reasoning_capture_body, &capture) != -1)
-    return 1;
-  cai_cli_reasoning_reset(&reasoning);
-  if (cai_cli_reasoning_title(&reasoning, &title) != 0 || title[0] != '\0')
-    return 1;
-  return 0;
-}
-
-static int literal_capture_write(void *context, const char *data,
-                                 size_t length) {
-  size_t written;
-  return event_log_write(context, data, length, &written);
-}
-static void without_spaces(char *out, const char *input) {
-  while (*input != '\0') {
-    if (*input != ' ' && *input != '\n' && *input != '\r' && *input != '\t')
-      *out++ = *input;
-    input++;
-  }
-  *out = '\0';
-}
-static int test_literal_tokens(void) {
-  static const char *inputs[] = {
-      "**stars** _path_ `tick` [name](url) <tag> {value} a+b-1.! \\path &amp;",
-      "café λ å🚀 **stars** _path_ `tick` &amp;",
-      "invalid \xff**stars** \xc3[_path_]",
-      "control \033[2J **stars**",
-      "first\nsecond\n\nlast",
-      ""};
-  static const char *expected[] = {
-      "**stars** _path_ `tick` [name](url) <tag> {value} a+b-1.! \\path &amp;",
-      "café λ å🚀 **stars** _path_ `tick` &amp;",
-      "invalid ?**stars** ?[_path_]",
-      "control [2J **stars**",
-      "first\nsecond\n\nlast",
-      ""};
-  event_log_capture capture;
-  char actual_text[16384];
-  char expected_text[16384];
-  char long_text[6001];
-  mdf_options options;
-  mdf_sink sink;
-  mdf *renderer;
-  size_t i, n, columns;
-  int rc = 0;
-  mdf_options_init(&options);
-  options.width = 40;
-  options.boring = 1;
-  options.ansi_mode = MDF_ANSI_OFF;
-  if (mdf_create(MDF_FORMAT_ANSI, &options, &renderer) != MDF_OK)
-    return 1;
-  memset(&capture, 0, sizeof(capture));
-  sink.userdata = &capture;
-  sink.write = literal_capture_write;
-  if (renderer->set_sink(renderer, &sink) != MDF_OK) {
-    renderer->destroy(renderer);
-    return 1;
-  }
-  for (i = 0U; i < sizeof(long_text) - 1U; i++)
-    long_text[i] = "a*\\_[x]&"[i % (sizeof("a*\\_[x]&") - 1U)];
-  long_text[i] = '\0';
-  for (n = 0U; n <= sizeof(inputs) / sizeof(inputs[0]); n++) {
-    const char *input =
-        n < sizeof(inputs) / sizeof(inputs[0]) ? inputs[n] : long_text;
-    const char *wanted =
-        n < sizeof(inputs) / sizeof(inputs[0]) ? expected[n] : long_text;
-    memset(&capture, 0, sizeof(capture));
-    if (cai_cli_literal_render(renderer, input) != 0) {
-      rc = 1;
-      break;
-    }
-    without_spaces(actual_text, capture.bytes);
-    without_spaces(expected_text, wanted);
-    if (strcmp(actual_text, expected_text) != 0 ||
-        strchr(capture.bytes, '\033') != NULL) {
-      fprintf(stderr, "literal token case %lu changed text\n",
-              (unsigned long)n);
-      rc = 1;
-      break;
-    }
-    if (n == 1U)
-      continue; /* Unicode display width is also checked by the PTY test. */
-    columns = 0U;
-    for (i = 0U; i < capture.length; i++) {
-      if (capture.bytes[i] == '\n')
-        columns = 0U;
-      else if (++columns > 40U) {
-        fprintf(stderr, "literal token case %lu exceeded wrap width\n",
-                (unsigned long)n);
-        rc = 1;
-        break;
-      }
-    }
-    if (rc != 0)
-      break;
-  }
-  renderer->destroy(renderer);
-  return rc;
-}
-
-static int test_literal_fragments(void) {
-  static const char input[] =
-      "prefix **stars** _path_ `tick` [name](url) &amp; \\x café λ🚀\n"
-      "controls\0\033\xc2\x9b end\xc3";
-  static const char expected[] =
-      "prefix **stars** _path_ `tick` [name](url) &amp; \\x café λ🚀\n"
-      "controls   end?";
-  event_log_capture *capture = calloc(1U, sizeof(*capture));
-  cai_cli_literal literal;
-  mdf_options options;
-  mdf_sink sink;
-  mdf *renderer = NULL;
-  size_t span, at;
-  char actual[512], wanted[512], reference[512];
-  int rc = 1;
-  if (capture == NULL)
-    return 1;
-  mdf_options_init(&options);
-  options.width = 240;
-  options.boring = 1;
-  options.ansi_mode = MDF_ANSI_OFF;
-  if (mdf_create(MDF_FORMAT_ANSI, &options, &renderer) != MDF_OK)
-    goto done;
-  sink.userdata = capture;
-  sink.write = literal_capture_write;
-  if (renderer->set_sink(renderer, &sink) != MDF_OK)
-    goto done;
-  cai_cli_literal_init(&literal, renderer);
-  if (cai_cli_literal_feed(&literal, input, sizeof(input) - 1U) != 0 ||
-      cai_cli_literal_finish(&literal) != 0 ||
-      renderer->finish(renderer) != MDF_OK ||
-      capture->length >= sizeof(reference))
-    goto done;
-  memcpy(reference, capture->bytes, capture->length + 1U);
-  without_spaces(wanted, expected);
-  for (span = 1U; span <= 7U; ++span) {
-    memset(capture, 0, sizeof(*capture));
-    cai_cli_literal_init(&literal, renderer);
-    for (at = 0U; at < sizeof(input) - 1U;) {
-      size_t n = sizeof(input) - 1U - at;
-      if (n > span)
-        n = span;
-      if (cai_cli_literal_feed(&literal, input + at, n) != 0)
-        goto done;
-      at += n;
-    }
-    /* Complete words flow before field completion, without Markdown escapes
-     * or interpreting literal stars/entities/links at fragment boundaries. */
-    if (strstr(capture->bytes, "**stars**") == NULL ||
-        cai_cli_literal_finish(&literal) != 0 ||
-        renderer->finish(renderer) != MDF_OK)
-      goto done;
-    without_spaces(actual, capture->bytes);
-    if (strcmp(capture->bytes, reference) != 0 || strcmp(actual, wanted) != 0 ||
-        strchr(capture->bytes, '\033') != NULL ||
-        cai_cli_literal_feed(&literal, "late", 4U) != -1 ||
-        cai_cli_literal_finish(&literal) != -1)
-      goto done;
-  }
-  capture->length = sizeof(capture->bytes) - 1U;
-  cai_cli_literal_init(&literal, renderer);
-  if (cai_cli_literal_feed(&literal, "sink failure\n", 13U) != -1)
-    goto done;
-  capture->length = 0U;
-  if (cai_cli_literal_feed(&literal, "retry", 5U) != -1 ||
-      cai_cli_literal_finish(&literal) != -1 || capture->length != 0U)
-    goto done;
-  rc = 0;
-done:
-  if (rc != 0)
-    fprintf(stderr, "fragmented literal rendering failed\n");
-  if (renderer != NULL)
-    renderer->destroy(renderer);
-  free(capture);
-  return rc;
-}
-
-static int test_reasoning_replay(void) {
-  static const char *const types[] = {
-      "assistant_text_delta",      "reasoning_summary_started",
-      "reasoning_summary",         "reasoning_summary",
-      "reasoning_summary",         "reasoning_summary_started",
-      "reasoning_summary",         "assistant_text_end",
-      "assistant_text_delta",      "assistant_text_end",
-      "reasoning_summary_started", "reasoning_summary",
-      "assistant_text_end"};
-  static const char *const values[] = {"Commentary.",
-                                       NULL,
-                                       "**First heading**\r",
-                                       "\n\nBody **one** λ ",
-                                       "continues.",
-                                       NULL,
-                                       "**Second heading**\n\nBody two.",
-                                       NULL,
-                                       "Answer.",
-                                       NULL,
-                                       NULL,
-                                       "**Title only**",
-                                       NULL};
-  cli_state state;
-  cai_agent_session_event event = {0};
-  reasoning_capture capture;
-  mdf_options options;
-  mdf_sink sink;
-  size_t i;
-  int rc = CAI_OK;
-  memset(&state, 0, sizeof(state));
-  memset(&event, 0, sizeof(event));
-  memset(&capture, 0, sizeof(capture));
-  state.ui.width = 80;
-  mdf_options_init(&options);
-  options.width = state.ui.width;
-  options.margin_left = 2;
-  options.ansi_mode = MDF_ANSI_OFF;
-  if (mdf_create(MDF_FORMAT_ANSI, &options, &state.ui.renderer) != MDF_OK)
-    return 1;
-  sink.userdata = &capture;
-  sink.write = reasoning_capture_body;
-  if (state.ui.renderer->set_sink(state.ui.renderer, &sink) != MDF_OK)
-    rc = CAI_ERR_TRANSPORT;
-  for (i = 0U; rc == CAI_OK && i < sizeof(types) / sizeof(types[0]); i++) {
-    event.type = types[i];
-    event.data = values[i];
-    event.sequence = (unsigned long long)i + 1U;
-    rc = cli_replay_render(&state, &event, NULL);
-  }
-  state.ui.renderer->destroy(state.ui.renderer);
-  /* This sink captures Markdown rendering alone. Softline block spacing is
-   * exercised separately by the real-terminal replay regression. */
-  if (rc != CAI_OK || state.ui.reasoning_open || state.reasoning.started ||
-      state.ui.documents_rendered != 4 ||
-      strstr(capture.bytes, "  Commentary.\n  > Body one λ continues.") ==
-          NULL ||
-      strstr(capture.bytes, "  > Body two.\n  Answer.") == NULL ||
-      strstr(capture.bytes, "heading") != NULL ||
-      strstr(capture.bytes, "Title only") != NULL) {
-    fprintf(stderr, "reasoning replay lost sections: %s\n", capture.bytes);
-    return 1;
-  }
-  return 0;
-}
-
-static int test_deferred_command_spacing(void) {
-  cli_state *state = calloc(1U, sizeof(*state));
-  char output[256];
-  int pipes[2], saved = -1, rc = 1;
-  ssize_t count;
-  if (state == NULL)
-    return 1;
-  if (pipe(pipes) != 0) {
-    free(state);
-    return 1;
-  }
-  saved = dup(STDOUT_FILENO);
-  if (saved < 0 || dup2(pipes[1], STDOUT_FILENO) < 0)
-    goto done;
-  close(pipes[1]);
-  pipes[1] = -1;
-  if (fcntl(pipes[0], F_SETFL, O_NONBLOCK) != 0)
-    goto done;
-  state->sl = sl_create();
-  state->ui.width = 80;
-  state->ui.feed_breaks = 2;
-  if (state->sl == NULL || sl_output_stream_begin(state->sl) != SL_OK ||
-      cli_renderer_create(state, &state->ui.render_theme, &state->ui.renderer,
-                          NULL) != CAI_OK ||
-      cli_command_input(state, "/delayed") != 0)
-    goto done;
-  count = read(pipes[0], output, sizeof(output));
-  if (count != (ssize_t)strlen("$ /delayed\n") ||
-      memcmp(output, "$ /delayed\n", (size_t)count) != 0)
-    goto done;
-  /* The same renderer adds the separator when a response finally arrives. */
-  if (cli_text(state, "Response arrived.", strlen("Response arrived.")) != 0 ||
-      cli_finish_response(state) != 0)
-    goto done;
-  count = read(pipes[0], output, sizeof(output));
-  if (count != (ssize_t)strlen("\nResponse arrived.\n") ||
-      memcmp(output, "\nResponse arrived.\n", (size_t)count) != 0)
-    goto done;
-  /* Raw shell output shares that deferred boundary without inserting gaps
-   * between subsequent chunks. */
-  if (cli_command_input(state, "!delayed") != 0)
-    goto done;
-  count = read(pipes[0], output, sizeof(output));
-  if (count != (ssize_t)strlen("\n$ !delayed\n") ||
-      memcmp(output, "\n$ !delayed\n", (size_t)count) != 0)
-    goto done;
-  if (cli_shell_literal(state, "first", 5U, NULL) != CAI_OK)
-    goto done;
-  count = read(pipes[0], output, sizeof(output));
-  if (count != 6 || memcmp(output, "\nfirst", 6U) != 0)
-    goto done;
-  if (cli_shell_literal(state, "second", 6U, NULL) != CAI_OK)
-    goto done;
-  count = read(pipes[0], output, sizeof(output));
-  if (count != 6 || memcmp(output, "second", 6U) != 0)
-    goto done;
-  rc = 0;
-done:
-  if (state->ui.renderer != NULL)
-    state->ui.renderer->destroy(state->ui.renderer);
-  if (state->ui.notice_renderer != NULL)
-    state->ui.notice_renderer->destroy(state->ui.notice_renderer);
-  if (state->sl != NULL) {
-    (void)sl_output_stream_end(state->sl);
-    sl_destroy(state->sl);
-  }
-  if (saved >= 0) {
-    (void)dup2(saved, STDOUT_FILENO);
-    close(saved);
-  }
-  if (pipes[1] >= 0)
-    close(pipes[1]);
-  close(pipes[0]);
-  free(state);
-  if (rc)
-    fprintf(stderr, "command separator was not deferred until output\n");
-  return rc;
-}
-
-static int test_timestamps(void) {
-  cli_state *state = calloc(1U, sizeof(*state));
-  cai_error error;
-  char output[4096], stamp[CAI_DTG_CAPACITY], expected[128];
-  int pipes[2], saved, rc = 0;
-  ssize_t count;
-  if (state == NULL || pipe(pipes) != 0)
-    return 1;
-  saved = dup(STDOUT_FILENO);
-  if (saved < 0 || dup2(pipes[1], STDOUT_FILENO) < 0)
-    return 1;
-  close(pipes[1]);
-  state->sl = sl_create();
-  state->interactive = 1;
-  state->ui.width = 80;
-  state->options.utc = 1;
-  state->ui.presentation_event = 1;
-  state->ui.presentation_timestamp_ns = 1793622600123456789ULL;
-  cai_error_init(&error);
-  if (cai_cli_theme_parse("default", &state->ui.theme) != NULL ||
-      sl_output_stream_begin(state->sl) != SL_OK ||
-      cli_renderer_create(state, &state->ui.theme, &state->ui.renderer,
-                          &error) != CAI_OK ||
-      cai_cli_presenter_timestamp(cli_presenter(state), stamp, sizeof(stamp)) ==
-          0 ||
-      cli_command_input(state, "/status") != 0 ||
-      cli_tool_markdown(state, "Tool result body.",
-                        strlen("Tool result body.")) != 0 ||
-      cli_finish_response(state) != 0 ||
-      cli_text(state, "Visible answer.", 15U) != 0 ||
-      cli_finish_response(state) != 0)
-    rc = 1;
-  state->ui.presentation_timestamp_ns = 0U;
-  if (cai_cli_presenter_timestamp(cli_presenter(state), expected,
-                                  sizeof(expected)) != 0)
-    rc = 1;
-  state->interactive = 0;
-  state->ui.presentation_event = 0;
-  if (cai_cli_presenter_timestamp(cli_presenter(state), expected,
-                                  sizeof(expected)) != 0)
-    rc = 1;
-  state->ui.renderer->destroy(state->ui.renderer);
-  if (state->ui.notice_renderer != NULL)
-    state->ui.notice_renderer->destroy(state->ui.notice_renderer);
-  (void)sl_output_stream_end(state->sl);
-  sl_destroy(state->sl);
-  fflush(stdout);
-  (void)dup2(saved, STDOUT_FILENO);
-  close(saved);
-  count = read(pipes[0], output, sizeof(output) - 1U);
-  close(pipes[0]);
-  if (count < 0)
-    rc = 1;
-  else {
-    output[count] = '\0';
-    snprintf(expected, sizeof(expected), "$ %s /status", stamp);
-    if (memchr(output, '\0', (size_t)count) != NULL ||
-        strstr(output, expected) == NULL || strstr(output, "/status") == NULL ||
-        strstr(output, "Visible answer.") == NULL)
-      rc = 1;
-    snprintf(expected, sizeof(expected), "  %s%s%s\n",
-             getenv("NO_COLOR") == NULL ? "\033[0;90m" : "", stamp,
-             getenv("NO_COLOR") == NULL ? "\033[0m" : "");
-    if (strstr(output, expected) == NULL ||
-        strstr(strstr(output, expected) + strlen(expected), expected) != NULL ||
-        strstr(output, "Tool result body.") == NULL ||
-        strstr(output, "Tool result body.") > strstr(output, expected))
-      rc = 1;
-    if (rc != 0)
-      fprintf(stderr, "timestamp rendering failed: %s\n", output);
-  }
-  cai_error_cleanup(&error);
-  free(state);
-  return rc;
-}
-
 int main(void) {
-  cli_state state;
-  cai_agent_runtime_event event;
-  mdf_options renderer_options;
-  mdf_sink sink;
-  int pipe_fd[2];
-  int saved_stdout;
-  char output[4096];
-  const char *title;
-  ssize_t count;
-  int rc, scenario, documents;
-  size_t offset;
-  static const char *tool_results[] = {"{\"ok\":true}", "failed output\n",
-                                       "already separated\n\n",
-                                       "before reasoning", "ok"};
-  static const char *review_handoffs[] = {
-      "## Review result\n\n**Visible finding**\n\nFix this defect.\n",
-      "## Review result\n\nThe reviewer was cancelled.\n",
-      "## Review result\n\nThe reviewer failed before producing a valid "
-      "report.\n"};
-  struct timespec start = {100, 500000000L};
-  struct timespec before = {400, 499999999L};
-  struct timespec boundary = {400, 500000000L};
-
-  for (rc = 0; rc < 19; rc++)
-    if (test_output_failure(rc) != 0)
-      return 1;
-  if (test_command_queue_modes() != 0 || test_goal_handoff() != 0 ||
-      test_command_timer_boundary() != 0 || test_shared_auth() != 0 ||
-      test_event_logging() != 0 || test_reasoning_sections() != 0 ||
-      test_literal_tokens() != 0 || test_literal_fragments() != 0 ||
-      test_reasoning_quotes() != 0 || test_reasoning_replay() != 0 ||
-      test_timestamps() != 0 || test_streaming_tables() != 0 ||
-      test_deferred_command_spacing() != 0)
-    return 1;
-  memset(&state, 0, sizeof(state));
-  if (!cai_cli_quota_due(0, start, start, 0) ||
-      cai_cli_quota_due(1, start, before, 0) ||
-      !cai_cli_quota_due(1, start, boundary, 0) ||
-      !cai_cli_quota_due(1, start, before, 1)) {
-    fprintf(stderr, "quota refresh interval or forced refresh failed\n");
-    return 1;
-  }
-  memset(&event, 0, sizeof(event));
-  if (pipe(pipe_fd) != 0) {
-    return 1;
-  }
-  saved_stdout = dup(STDOUT_FILENO);
-  if (saved_stdout < 0 || dup2(pipe_fd[1], STDOUT_FILENO) < 0) {
-    return 1;
-  }
-  close(pipe_fd[1]);
-  state.sl = sl_create();
-  if (state.sl == NULL || sl_output_stream_begin(state.sl) != SL_OK) {
-    return 1;
-  }
-  state.ui.width = 80;
-  mdf_options_init(&renderer_options);
-  renderer_options.output_fd = STDOUT_FILENO;
-  renderer_options.width = state.ui.width;
-  renderer_options.ansi_mode = MDF_ANSI_OFF;
-  renderer_options.margin_left = 2;
-  if (mdf_create(MDF_FORMAT_ANSI, &renderer_options, &state.ui.renderer) !=
-      MDF_OK) {
-    return 1;
-  }
-  sink.userdata = &state;
-  sink.write = cli_renderer_sink;
-  if (state.ui.renderer->set_sink(state.ui.renderer, &sink) != MDF_OK) {
-    return 1;
-  }
-  if (cli_prompt(&state, "Hello") != 0 ||
-      cli_notice(&state, "* WARN: useful diagnostic") != 0 ||
-      cli_prompt(&state, "Next") != 0)
-    return 1;
-  state.interactive = 1;
-  state.ui.presentation_event = 1; /* Legacy fixture has no original time. */
-  if (unsetenv("NO_COLOR") != 0)
-    return 1;
-  if (cli_notice(&state, "* WARN: colored diagnostic") != 0)
-    return 1;
-  if (setenv("NO_COLOR", "1", 1) != 0 ||
-      cli_notice(&state, "* ERROR: no color") != 0 || unsetenv("NO_COLOR") != 0)
-    return 1;
-  state.interactive = 0;
-  if (cli_notice(&state,
-                 "* WARN: **literal** _file_ `tick` [name](url) "
-                 "word01 word02 word03 word04 word05 word06 word07 "
-                 "word08 word09 word10 word11 word12 word13 word14 "
-                 "word15 word16 word17 word18 word19 word20 END") != 0 ||
-      cli_markdown(&state, "**Local** informational Markdown\n") != 0)
-    return 1;
-  strcpy(state.reasoning.header, "Previous turn");
-  state.reasoning.header_length = strlen(state.reasoning.header);
-  event.type = CAI_AGENT_EVENT_RUN_STARTED;
-  event.data = "Renderer turn";
-  event.data_length = strlen(event.data);
-  rc = cli_event(&state, &event, NULL);
-  if (state.reasoning.header_length != 0U)
-    return 1;
-  event.type = CAI_AGENT_EVENT_REASONING_SUMMARY;
-  event.data = "**Actual provider ";
-  event.data_length = strlen(event.data);
-  if (rc == CAI_OK)
-    rc = cli_event(&state, &event, NULL);
-  event.type = CAI_AGENT_EVENT_RUN_STARTED;
-  event.parent_tool_call_id = "child-tool";
-  if (rc == CAI_OK)
-    rc = cli_event(&state, &event, NULL);
-  if (strcmp(state.reasoning.header, "**Actual provider ") != 0)
-    return 1;
-  event.parent_tool_call_id = NULL;
-  event.type = CAI_AGENT_EVENT_REASONING_SUMMARY;
-  event.data = "summary**";
-  event.data_length = strlen(event.data);
-  if (rc == CAI_OK) {
-    rc = cli_event(&state, &event, NULL);
-  }
-  event.type = CAI_AGENT_EVENT_RESPONSE_COMPLETED;
-  event.data = NULL;
-  event.data_length = 0U;
-  if (rc == CAI_OK) {
-    rc = cli_event(&state, &event, NULL);
-  }
-  if (cai_cli_reasoning_title(&state.reasoning, &title) != 0 ||
-      strcmp(title, "Actual provider summary") != 0 ||
-      state.ui.reasoning_open) {
-    fprintf(stderr, "single header: %s open=%d\n", title,
-            state.ui.reasoning_open);
-    return 1;
-  }
-  event.type = CAI_AGENT_EVENT_TEXT_DELTA;
-  event.data = "Commentary before reasoning.\n";
-  event.data_length = strlen(event.data);
-  if (rc == CAI_OK)
-    rc = cli_event(&state, &event, NULL);
-  event.type = CAI_AGENT_EVENT_REASONING_SUMMARY;
-  event.data = "**Next header**\r";
-  event.data_length = strlen(event.data);
-  if (rc == CAI_OK)
-    rc = cli_event(&state, &event, NULL);
-  event.data = "\n\nFirst body line\nSecond body ";
-  event.data_length = strlen(event.data);
-  if (rc == CAI_OK)
-    rc = cli_event(&state, &event, NULL);
-  event.data = "line\n";
-  event.data_length = strlen(event.data);
-  if (rc == CAI_OK)
-    rc = cli_event(&state, &event, NULL);
-  event.type = CAI_AGENT_EVENT_TEXT_DELTA;
-  event.data = "Assistant text\n";
-  event.data_length = strlen(event.data);
-  if (rc == CAI_OK)
-    rc = cli_event(&state, &event, NULL);
-  event.type = CAI_AGENT_EVENT_RESPONSE_COMPLETED;
-  event.data = NULL;
-  event.data_length = 0U;
-  if (rc == CAI_OK)
-    rc = cli_event(&state, &event, NULL);
-  /* Real tool events must leave a blank row before the next model block,
-   * including failures, pre-separated output and streamed reasoning bodies. */
-  if (cli_tool_display_init(&state, NULL) != CAI_OK)
-    return 1;
-  for (scenario = 0; scenario < 5; scenario++) {
-    const char *answer = "Answer after tool.\n";
-    memset(&event, 0, sizeof(event));
-    event.type = CAI_AGENT_EVENT_TOOL_CALL_STARTED;
-    event.tool_name = scenario == 4 ? "set_reasoning" : "todo_kanban";
-    event.tool_call_id = "spacing-call";
-    event.tool_action = CAI_AGENT_TOOL_ACTION_EXTERNAL;
-    if (rc == CAI_OK)
-      rc = cli_event(&state, &event, NULL);
-    event.type = scenario == 1 ? CAI_AGENT_EVENT_TOOL_CALL_FAILED
-                               : CAI_AGENT_EVENT_TOOL_CALL_COMPLETED;
-    event.data = tool_results[scenario];
-    event.data_length = strlen(event.data);
-    if (rc == CAI_OK)
-      rc = cli_event(&state, &event, NULL);
-    if (scenario == 4) {
-      event.type = CAI_AGENT_EVENT_REASONING_TOOL_RESULT;
-      event.data = "requested high (high): medium -> high";
-      event.data_length = strlen(event.data);
-      if (rc == CAI_OK)
-        rc = cli_event(&state, &event, NULL);
-    }
-    if (scenario == 3) {
-      event.type = CAI_AGENT_EVENT_REASONING_SUMMARY;
-      event.data = "**Tool follow-up**\n\nReasoning after tool\n";
-      event.data_length = strlen(event.data);
-      if (rc == CAI_OK)
-        rc = cli_event(&state, &event, NULL);
-    }
-    event.type = CAI_AGENT_EVENT_TEXT_DELTA;
-    event.data_length = 1U;
-    for (offset = 0U; answer[offset] != '\0' && rc == CAI_OK; offset++) {
-      event.data = answer + offset;
-      rc = cli_event(&state, &event, NULL);
-    }
-    event.type = CAI_AGENT_EVENT_RESPONSE_COMPLETED;
-    event.data = NULL;
-    event.data_length = 0U;
-    if (rc == CAI_OK)
-      rc = cli_event(&state, &event, NULL);
-  }
-  for (scenario = 0; scenario < 3 && rc == CAI_OK; scenario++) {
-    memset(&event, 0, sizeof(event));
-    event.type = CAI_AGENT_EVENT_SUBAGENT_HANDED_OFF;
-    event.subagent_name = "review";
-    event.parent_tool_call_id = "review-call";
-    event.data = review_handoffs[scenario];
-    event.data_length = strlen(event.data);
-    state.foreground_subagent = 1;
-    rc = cli_event(&state, &event, NULL);
-    if (state.foreground_subagent)
-      return 1;
-  }
-  /* Worker answers already streamed; batch stdout belongs to the parent. */
-  documents = state.ui.documents_rendered;
-  event.subagent_name = "worker";
-  if (rc == CAI_OK)
-    rc = cli_event(&state, &event, NULL);
-  state.batch = 1;
-  event.subagent_name = "review";
-  if (rc == CAI_OK)
-    rc = cli_event(&state, &event, NULL);
-  state.batch = 0;
-  if (state.ui.documents_rendered != documents)
-    return 1;
-  cai_tool_display_close(state.ui.tool_display);
-  cai_sink_close(state.ui.tool_sink);
-  /* A split SGR sequence and a reset-only blank row never receive markers. */
-  state.ui.row_line_start = 1;
-  state.ui.row_ansi = 0;
-  state.ui.notice_first_row = 1;
-  if (cai_cli_presenter_notice_sink(cli_presenter(&state), "\033[", 2U) != 0 ||
-      cai_cli_presenter_notice_sink(cli_presenter(&state),
-                                    "1mDecorated\n\033[0",
-                                    strlen("1mDecorated\n\033[0")) != 0 ||
-      cai_cli_presenter_notice_sink(cli_presenter(&state), "m\nPlain row\n",
-                                    strlen("m\nPlain row\n")) != 0)
-    return 1;
-  state.timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-  if (state.timer_fd < 0 || cli_timer_wakeup(state.sl, NULL, &state) != SL_OK) {
-    return 1;
-  }
-  close(state.timer_fd);
-  state.timer_fd = -1;
-  if (sl_output_stream_end(state.sl) != SL_OK) {
-    rc = CAI_ERR_TRANSPORT;
-  }
-  state.ui.renderer->destroy(state.ui.renderer);
-  if (state.ui.notice_renderer != NULL)
-    state.ui.notice_renderer->destroy(state.ui.notice_renderer);
-  sl_destroy(state.sl);
-  if (dup2(saved_stdout, STDOUT_FILENO) < 0) {
-    return 1;
-  }
-  close(saved_stdout);
-  count = read(pipe_fd[0], output, sizeof(output) - 1U);
-  close(pipe_fd[0]);
-  if (count < 0 || rc != CAI_OK || state.ui.reasoning_open ||
-      cai_cli_reasoning_title(&state.reasoning, &title) != 0 ||
-      strcmp(title, "Tool follow-up") != 0) {
-    fprintf(stderr, "finished reasoning: rc=%d title=%s open=%d\n", rc, title,
-            state.ui.reasoning_open);
-    return 1;
-  }
-  output[count] = '\0';
-  if (strstr(output, "Visible finding") == NULL ||
-      strstr(output, "**Visible finding**") != NULL ||
-      strstr(output, "Fix this defect.") == NULL ||
-      strstr(output, "The reviewer was cancelled.") == NULL ||
-      strstr(output, "The reviewer failed before producing a valid report.") ==
-          NULL) {
-    fprintf(stderr, "missing Markdown review handoff: %s\n", output);
-    return 1;
-  }
-  if (strstr(output, "Commentary before reasoning.\n\n  > First body line") ==
-          NULL ||
-      strstr(output,
-             "  > First body line Second body line\n\n  Assistant text\n") ==
-          NULL ||
-      strstr(output, "  > Reasoning after tool\n\n  Answer after tool.\n") ==
-          NULL) {
-    fprintf(stderr, "missing assistant/reasoning block spacing: %s\n", output);
-    return 1;
-  }
-  if (strstr(output, "{\"ok\":true}\n\n  Answer after tool.\n") == NULL ||
-      strstr(output, "  > failed output\n\n  Answer after tool.\n") == NULL ||
-      strstr(output, "already separated\n\n  Answer after tool.\n") == NULL ||
-      strstr(output, "before reasoning\n\n  > Reasoning after tool\n") ==
-          NULL ||
-      strstr(output, "* Reasoning requested high (high): medium -> high\n\n"
-                     "  Answer after tool.\n") == NULL) {
-    fprintf(stderr, "missing tool/model block spacing: %s\n", output);
-    return 1;
-  }
-  if (strstr(output, "\033[91m*\033[0m WARN: colored diagnostic") == NULL ||
-      strstr(output, "\n\n* ERROR: no color\n\n") == NULL) {
-    fprintf(stderr, "interactive warning star/spacing mismatch: %s\n", output);
-    return 1;
-  }
-  if (strstr(output, "> Hello\n\n* WARN: useful diagnostic\n\n> Next\n\n") ==
-      NULL) {
-    fprintf(stderr, "inconsistent prompt/notice spacing: %s\n", output);
-    return 1;
-  }
-  if (strstr(output, "[reasoning]") != NULL ||
-      strstr(output, "Actual provider") != NULL ||
-      strstr(output, "Next header") != NULL ||
-      strstr(output, "  > First body line Second body line") == NULL ||
-      strstr(output, "Assistant text") == NULL ||
-      strstr(output, "? ") != NULL ||
-      strstr(output, "> Assistant text") != NULL ||
-      strstr(output, "\033[1m* Decorated\n\033[0m\n  Plain row\n") == NULL ||
-      strstr(output, "Thinking...") != NULL ||
-      strstr(output, "* WARN: **literal** _file_ `tick` [name](url)") == NULL ||
-      strstr(output, "\n  word") == NULL ||
-      strstr(output, "Local informational Markdown\n\n> Renderer turn\n\n  "
-                     "Commentary before reasoning.") == NULL) {
-    fprintf(stderr, "reasoning header/body routing failed: %s\n", output);
-    return 1;
-  }
-  return 0;
+  return test_command_queue_modes() || test_goal_handoff() ||
+         test_shared_auth() || test_event_logging();
 }

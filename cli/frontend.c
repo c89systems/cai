@@ -11,6 +11,7 @@
 #include "review_report.h"
 #include "startup.h"
 #include "status.h"
+#include "statusline.h"
 #include "terminal_program.h"
 #include "tool_result.h"
 #include "transcript_presenter.h"
@@ -92,6 +93,7 @@ typedef struct frontend {
   long long theme_offsets[3];
   int full_output;
   int review_open;
+  int compacting;
   int history_requested, history_loaded;
   int resolve_receipts;
   unsigned int history_limit;
@@ -439,6 +441,8 @@ static int status(frontend *f) {
         cai_cli_transcript_presenter_title(f->transcript, &title) != 0)
       return -1;
   }
+  if (f->compacting && metrics.turn_active)
+    title = "Compacting context";
   if (f->ready && f->history_loaded && f->skills_ready && f->subscribed &&
       !f->replaying && f->replay_finished &&
       f->skill_conversation == f->state.conversation && !f->welcomed) {
@@ -539,7 +543,8 @@ static int observed(void *context, const cai_app_client_event *event,
             event->input->result.code == CAI_OK)
           p->position = event->input->result.item_id;
     }
-    if (event->input->result.code != CAI_OK)
+    if (event->input->result.code != CAI_OK &&
+        !(f->exit_save != 0U && event->request == f->exit_save))
       (void)notice(f, event->input->result.reason);
     if (f->exit_save != 0U && event->request == f->exit_save) {
       if (event->input->result.code == CAI_OK && f->current == f->exit_view &&
@@ -550,6 +555,8 @@ static int observed(void *context, const cai_app_client_event *event,
         f->quit = 1;
       } else if (event->input->result.code == CAI_OK)
         (void)notice(f, "Draft changed while saving; exit cancelled.");
+      else
+        (void)notice(f, "Draft not saved; staying open. Retry Alt-Q to save.");
       f->exit_save = 0U;
       free(f->exit_draft);
       f->exit_draft = NULL;
@@ -749,6 +756,17 @@ static int execution_body(void *context, const cai_app_execution_event *event,
                ? CAI_OK
                : CAI_ERR_TRANSPORT;
   length = strlen(r->data);
+  if (!event->subagent) {
+    if (strcmp(r->kind, "compaction.started") == 0)
+      f->compacting = 1;
+    else if (strcmp(r->kind, "compaction.completed") == 0 ||
+             strcmp(r->kind, "compaction.failed") == 0 ||
+             strcmp(r->kind, "turn.started") == 0 ||
+             strcmp(r->kind, "turn.settled") == 0 ||
+             strcmp(r->kind, "turn.failed") == 0 ||
+             strcmp(r->kind, "turn.cancelled") == 0)
+      f->compacting = 0;
+  }
   if (!event->replay && strcmp(r->kind, "command.settled") == 0 &&
       r->code == CAI_OK && r->call_id != NULL &&
       f->history_command[0] != '\0' &&
@@ -1000,8 +1018,13 @@ static int actions(frontend *f) {
       rc = notice(f, why);
     else if (cai_cli_presenter_set_theme(f->ui, &selected, &f->error) != CAI_OK)
       return -1;
-    else
-      rc = markdown(f, "Theme changed.\n", 15U);
+    else {
+      char message[256];
+      snprintf(message, sizeof(message), "Theme changed to %s:%s.\n",
+               cai_cli_theme_prompt_name(&selected),
+               selected.ascii ? "ascii" : selected.markdown);
+      rc = markdown(f, message, strlen(message));
+    }
     if (why == NULL && rc == 0)
       f->theme = selected;
   } else if (strcmp(line, "/theme") == 0 || strcmp(line, "/t") == 0) {
@@ -1683,6 +1706,7 @@ static int select_view(frontend *f, const char *session) {
                          : (unsigned int)f->options->prompt_history_limit;
   f->history_length = 0U;
   f->action_field = f->action_length = f->command_length = f->review_open = 0U;
+  f->compacting = 0;
   park_view(f);
   return sl_output_stream_begin(f->ui->sl) == SL_OK ? 0 : -1;
 }
@@ -2649,12 +2673,20 @@ int cai_cli_frontend_run(const cai_app_config *application,
     if (!f->quit && service(f) != 0)
       f->failed = 1;
   }
-  if (f->failed)
+  if (f->failed) {
     rc = cai_cli_error(
         error, f->error.code != CAI_OK ? f->error.code : CAI_ERR_TRANSPORT,
         f->error.message != NULL           ? f->error.message
         : sl_last_error(f->ui->sl) != NULL ? sl_last_error(f->ui->sl)
                                            : "terminal attachment failed");
+    /* Keep unexpected transport failures visible in the rendered feed before
+     * releasing the editor. The caller still receives/logs the original error.
+     * An unusable output sink cannot be repaired by another diagnostic write.
+     */
+    if (!f->ui->sink_failed)
+      (void)notice(f, f->error.message != NULL ? f->error.message
+                                               : "terminal attachment failed");
+  }
 done:
   *exit_code = rc == CAI_OK ? 0 : 1;
   cai_workspace_discovery_close(group.discovery);

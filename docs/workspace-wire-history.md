@@ -48,6 +48,11 @@ identity includes the verified server instance, attachment and save request;
 the SDK append is idempotent. Repeating the last identical request returns its
 cached result, while changed content/scope or older IDs are rejected. It never
 submits the text to the agent.
+Saving text identical to the newest durable prompt returns that existing
+position. This preserves native recall deduplication when an unchanged draft
+is saved again after reconnect. The owner reads only that last entry through
+the already-owned collection; it does not reload prompt history or reopen the
+store.
 
 RESULT category 4 reports the save outcome independently of queue watermarks.
 Its item ID is the committed prompt collection position. Only this successful

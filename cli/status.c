@@ -758,9 +758,3 @@ int cai_cli_turn_status_message(char *out, size_t capacity,
   }
   return written < 0 || (size_t)written >= capacity ? -1 : 0;
 }
-
-int cai_cli_status_apply(sl_t *sl, const cai_cli_status *status) {
-  return sl_set_status_elements(sl, status->elements, status->count) == SL_OK
-             ? 0
-             : -1;
-}

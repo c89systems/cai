@@ -23,7 +23,7 @@ for mode in ready held draft; do
   fi
   expect_assistant LateSteerHandled
   if [[ "$mode" == draft ]]; then expect_prompt KEEP_THIS_DRAFT; fi
-  wait_for has "$term/feed" 'Theme changed to gruvbox:gruvbox.'
+  wait_for has "$term/feed" 'Session ID'
   [[ $(requests) == $((before+2)) ]]
   tail -1 "$root/peer/requests.jsonl" >"$root/continuation"
   contains "$root/continuation" LATE_STEER

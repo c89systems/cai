@@ -60,8 +60,11 @@ remaining cutover work, [workspace process handoff](workspace-process.md) for
 executable ownership, and [command execution](workspace-commands.md) for backend
 admission/delegation. The confirmed decisions and specification below remain
 the target contract; an implemented boundary is not a claim of complete feature
-parity. Removal of remaining unused terminal helpers from the owner source,
-extended startup parity and optional frontend packaging remain unfinished.
+parity. The owner's former terminal helpers, timers and replay renderer are
+removed. It compiles with SDK/storage dependencies only; a compiled-object
+check guards against editor/renderer references. Its tests cover backend
+policy/lifetime, while presentation tests use the shared frontend adapters.
+Extended startup parity and optional frontend packaging remain unfinished.
 
 The optional [Lua workspace client](lua-workspace-client.md) exposes the typed
 C client channels and explicit scopes. Lua drives prepare/pump (or an explicit

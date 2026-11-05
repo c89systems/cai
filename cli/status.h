@@ -4,7 +4,6 @@
 #include "options.h"
 #include <cai/agent_runtime.h>
 #include <cai/quota.h>
-#include <softline/softline.h>
 
 #define CAI_CLI_STATUS_FIELD_COUNT 9
 typedef struct cai_cli_status_fields {
@@ -78,6 +77,5 @@ int cai_cli_status_log_markdown(const char *path, int table,
 int cai_cli_turn_status_message(char *out, size_t capacity,
                                 const char *reasoning_summary,
                                 const cai_agent_runtime_metrics *metrics);
-int cai_cli_status_apply(sl_t *sl, const cai_cli_status *status);
 
 #endif

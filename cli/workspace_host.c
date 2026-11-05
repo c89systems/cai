@@ -520,9 +520,8 @@ static int append_prompt(host_peer *peer, const cai_cli_input_wire_message *m,
                (unsigned long long)peer->attachment,
                (unsigned long long)m->header.request);
       peer->prompt_position = 0U;
-      rc =
-          cai_cli_pouch_prompt_append_id(host->pouch, identity, m->request.text,
-                                         &peer->prompt_position, &local);
+      rc = cai_cli_pouch_prompt_save(host->pouch, identity, m->request.text,
+                                     &peer->prompt_position, &local);
     }
     peer->prompt_request = m->header.request;
     peer->prompt_generation = m->header.generation;
@@ -715,6 +714,11 @@ static int message(void *context, const cai_workspace_server_event *event,
     cai_error_cleanup(&binding);
     return rc;
   }
+  /* A readiness observation can have been sent before the peer received the
+   * context-closed notification. It cannot release a departed/new producer. */
+  if ((peer->input == NULL || peer->binding) &&
+      m->header.kind == CAI_PROTOCOL_INPUT_SETTLED)
+    return CAI_OK;
   if (peer->input == NULL || peer->binding)
     return cai_cli_error(error, CAI_ERR_PROTOCOL,
                          "bind the input producer before submitting work");
