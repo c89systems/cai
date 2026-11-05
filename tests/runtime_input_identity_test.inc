@@ -125,16 +125,17 @@ static int input_identity_cut_event(const char *root, const char *scope,
   return rc;
 }
 
-/** Polls for exact durable terminal records, not a transient idle state. */
+/** Wait for exact durable outcomes and their dispatched runtime boundary.
+ * A persisted settlement can precede the worker's final event publication. */
 static int input_identity_wait(cai_agent_runtime *runtime,
                                cai_agent_session_store *store,
                                const char *scope, const char *session,
                                input_identity_trace *trace, int terminals,
                                cai_error *error) {
-  int i, rc = CAI_OK;
+  int i, quiet = 0, rc = CAI_OK;
   for (i = 0; rc == CAI_OK &&
               (trace->terminals < terminals ||
-               trace->settled_count < (size_t)terminals) &&
+               trace->settled_count < (size_t)terminals || !quiet) &&
               i < 80;
        ++i) {
     rc = cai_agent_runtime_pump(runtime, 50L, error);
@@ -142,20 +143,12 @@ static int input_identity_wait(cai_agent_runtime *runtime,
       rc = store->load_events_after(store->context, scope, session,
                                     trace->through, input_identity_collect,
                                     trace, error);
+    if (rc == CAI_OK)
+      rc = cai_agent_runtime_is_quiescent(runtime, &quiet, error);
   }
   if (rc == CAI_OK && (trace->terminals != terminals ||
-                       trace->settled_count != (size_t)terminals))
+                       trace->settled_count != (size_t)terminals || !quiet))
     rc = cai_set_error(error, CAI_ERR_LIMIT, "queued outcome did not arrive");
-  /* Dispatch terminal observations before another direct submission. */
-  if (rc == CAI_OK)
-    rc = cai_agent_runtime_pump(runtime, 0L, error);
-  if (rc == CAI_OK) {
-    int quiet = 0;
-    rc = cai_agent_runtime_is_quiescent(runtime, &quiet, error);
-    if (rc == CAI_OK && !quiet)
-      rc = cai_set_error(error, CAI_ERR_PROTOCOL,
-                         "settled runtime is not quiescent");
-  }
   return rc;
 }
 
