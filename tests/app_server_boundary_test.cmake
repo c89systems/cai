@@ -1,0 +1,10 @@
+foreach(object IN LISTS CAI_SERVER_OBJECTS)
+  execute_process(COMMAND "${CAI_NM}" -u "${object}"
+    RESULT_VARIABLE result OUTPUT_VARIABLE symbols ERROR_VARIABLE failure)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "Cannot inspect application server: ${failure}")
+  endif()
+  if(symbols MATCHES "[ \t](sl_|mdf_|cai_cli_presenter_|cai_cli_completions_|cai_cli_input_adapter_|cai_cli_theme_|cai_cli_literal_)")
+    message(FATAL_ERROR "Application server requires a rendering adapter: ${symbols}")
+  endif()
+endforeach()

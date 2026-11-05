@@ -211,8 +211,9 @@ the host replay observer once; it does not render or construct another console
 replay. Presentation tests use the actual shared transcript/presenter path.
 The standalone [typed client package](application-client.md) requires only core
 libcai and reuses the same codec objects as the combined application. The
-combined application still includes the terminal facade/adapters;
-frontend-independent owner packaging remains unfinished.
+combined application includes the terminal facade/adapters and depends on the
+independent [workspace owner SDK](application-server.md). Owner lifecycle,
+configuration and semantic command services have no renderer dependency.
 Maintenance uses the separate [utility dispatcher](application-utilities.md);
 its remaining process-global logging/browser environment boundary is explicit.
 These remain part of the active goal.

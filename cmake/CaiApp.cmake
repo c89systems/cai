@@ -1,22 +1,15 @@
-add_library(cai_app_owner_objects OBJECT cli/app_run.c)
-# Compile the owner with SDK/storage dependencies only. No terminal include
-# directories, renderer declarations or editor usage requirements propagate.
-target_link_libraries(cai_app_owner_objects PRIVATE cai_static lockdc::static)
-cai_configure_c_target(cai_app_owner_objects)
 add_library(cai_app_objects OBJECT cli/app.c cli/input_socket.c cli/frontend.c cli/batch.c cli/batch_document.c cli/terminal_program.c cli/run_frontend.c cli/existing_frontend.c cli/utility.c cli/kanban.c)
 target_link_libraries(cai_app_objects PRIVATE cai_cli_support)
 cai_configure_c_target(cai_app_objects)
 add_library(cai_app_static STATIC $<TARGET_OBJECTS:cai_app_objects>
   $<TARGET_OBJECTS:cai_app_client_objects>
-  $<TARGET_OBJECTS:cai_app_wire_objects>
-  $<TARGET_OBJECTS:cai_app_owner_objects>
   $<TARGET_OBJECTS:cai_cli_support>)
 add_library(cai::app_static ALIAS cai_app_static)
 set_target_properties(cai_app_static PROPERTIES OUTPUT_NAME cai_app EXPORT_NAME app_static)
 target_include_directories(cai_app_static PUBLIC
   $<BUILD_INTERFACE:${CAI_PUBLIC_INCLUDE_DIR}>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_link_libraries(cai_app_static PUBLIC cai_static softline::softline_static
+target_link_libraries(cai_app_static PUBLIC cai_app_server_static cai_static softline::softline_static
   libmdf::mdf_static lockdc::static)
 set(CAI_APP_LUA_TOOLS_PC "")
 set(CAI_LUA_TOOLS_JSON false)
@@ -24,8 +17,6 @@ if(CAI_BUILD_LUA_TOOLS)
   set(CAI_LUA_TOOLS_JSON true)
   # Fixtures that compile app_run.c use the same executor selection as the app.
   target_compile_definitions(cai_cli_support PUBLIC CAI_APP_LUA_TOOLS=1)
-  target_compile_definitions(cai_app_owner_objects PRIVATE CAI_APP_LUA_TOOLS=1)
-  target_link_libraries(cai_app_owner_objects PRIVATE cai_lua_tools_static)
   target_link_libraries(cai_cli_support PUBLIC cai_lua_tools_static)
   target_link_libraries(cai_app_static PUBLIC cai_lua_tools_static)
   set(CAI_APP_LUA_TOOLS_PC " cai-lua-tools")
@@ -34,8 +25,6 @@ if(CAI_BUILD_SHARED)
   find_package(lockdc CONFIG REQUIRED COMPONENTS shared)
   add_library(cai_app_shared SHARED $<TARGET_OBJECTS:cai_app_objects>
     $<TARGET_OBJECTS:cai_app_client_objects>
-    $<TARGET_OBJECTS:cai_app_wire_objects>
-    $<TARGET_OBJECTS:cai_app_owner_objects>
     $<TARGET_OBJECTS:cai_cli_support>)
   add_library(cai::app_shared ALIAS cai_app_shared)
   set_target_properties(cai_app_shared PROPERTIES OUTPUT_NAME cai_app EXPORT_NAME app_shared
@@ -43,7 +32,7 @@ if(CAI_BUILD_SHARED)
   target_include_directories(cai_app_shared PUBLIC
     $<BUILD_INTERFACE:${CAI_PUBLIC_INCLUDE_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-  target_link_libraries(cai_app_shared PUBLIC cai_shared pslog::pslog_shared PRIVATE
+  target_link_libraries(cai_app_shared PUBLIC cai_app_server_shared cai_shared pslog::pslog_shared PRIVATE
     softline::softline libmdf::mdf_shared lockdc::shared)
   if(CAI_BUILD_LUA_TOOLS)
     target_link_libraries(cai_app_shared PRIVATE cai_lua_tools_shared)
@@ -397,6 +386,8 @@ if(CAI_INSTALL)
       LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT cai-app)
   endif()
   install(FILES "${CAI_PUBLIC_INCLUDE_DIR}/cai/app.h"
+    "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_types.h"
+    "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_server.h"
     "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_client.h"
     "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_terminal.h"
     "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_view.h"

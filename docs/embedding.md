@@ -10,7 +10,7 @@ architectures as a static musl executable, built alongside its matching SDK.
 Build with `CAI_BUILD_APP=ON`; `CAI_BUILD_CLI=ON` also selects it. The `cai`
 executable owns process scaffolding in `cli/main.c` and `cli/process.c`;
 `examples/app.c` is the minimal public-only C embedding example. Install the
-`cai-app` component alongside its separately installed core/dependency SDKs.
+`cai-app` and `cai-app-server` components alongside their core/dependency SDKs.
 Use `find_package(cai_app CONFIG REQUIRED)` and `cai::app_static` or
 `cai::app_shared`, or pkg-config `cai-app`. The application shared library has
 ABI 0; the core libcai ABI is 5.
@@ -21,6 +21,13 @@ builds `libcai_app_client` without selecting the terminal application or its
 dependencies. Its CMake package is `cai_app_client`; pkg-config uses
 `cai-app-client`. The combined application reuses the same compiled client and
 wire codecs, with the existing C API unchanged.
+
+The standalone [workspace owner SDK](application-server.md),
+`libcai_app_server`, supplies asynchronous server lifecycle and supervisory
+controls without Softline or libmdf. The combined facade depends on that same
+backend, preserving one process-wide store registry. Shared settings/status
+types live in `cai/app_types.h`; existing `cai/app.h` users retain their API and
+structure layouts. Enable `CAI_BUILD_APP_SERVER=ON` independently of the UI.
 
 An agent invocation fails before provider access when its canonical workspace
 has no saved approval. Pass `-y` / `--yes` / `--force` to approve that directory

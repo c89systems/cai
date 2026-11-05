@@ -2,7 +2,13 @@
 source "$(dirname "$0")/cli_test_common.sh"
 peer_start
 export LOG_LEVEL=warn
-for mode in run queue steer input input_steer goal cancel stop_active startup_stop provider_error observer_error invalid invalid_config invalid_directory; do
+modes=(run queue steer input input_steer goal cancel stop_active startup_stop provider_error observer_error invalid invalid_config invalid_directory)
+if [[ ${1:-} == server ]]; then
+  # Native unbacked input authorization belongs to the local controller.
+  # Server input/roles/reconnect are exercised by the real socket suite.
+  modes=(run queue steer goal cancel stop_active startup_stop provider_error observer_error invalid invalid_config invalid_directory)
+fi
+for mode in "${modes[@]}"; do
   export CAI_TEST_CONTROLLER_MODE=$mode
   args=(-N)
   plan '{"plan":["First reply","Next reply","Final reply"]}'

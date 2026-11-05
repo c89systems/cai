@@ -1,8 +1,11 @@
+/** @file Combined app facade: compose the shared owner with a socket frontend,
+ * and retain process-scoped maintenance utilities outside owner lifetime. */
 #define _GNU_SOURCE
-#include "app_internal.h"
 #include "identity.h"
+#include "log.h"
 #include "pouch_stream.h"
 #include "run_frontend.h"
+#include "server_internal.h"
 #include "utility.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -21,20 +24,7 @@ static const int signals[] = {SIGINT,  SIGTERM, SIGHUP,  SIGQUIT, SIGWINCH,
                               SIGTSTP, SIGCONT, SIGPIPE, SIGTTOU, SIGTTIN};
 typedef struct app_impl {
   cai_app shell;
-  cai_app_config config;
-  cai_app_setting *settings;
-  char **strings;
-  size_t string_count;
-  int running;
-  cai_app_bridge *bridge;
-  pthread_t owner;
-  int asynchronous, controller_code;
-  int argument_count;
-  char **arguments;
-  char *directory;
-  cai_config_context startup;
-  cai_attachment_config lifetime;
-  int server, lifetime_explicit, frontend_startup;
+  cai_app_server *owner;
 } app_impl;
 typedef struct process_state {
   char **environment;
@@ -47,12 +37,6 @@ typedef struct process_state {
   int has_terminal;
 } process_state;
 
-void cai_app_config_init(cai_app_config *config) {
-  if (config != NULL) {
-    memset(config, 0, sizeof(*config));
-    config->program_name = CAI_APP_DEFAULT_PROGRAM_NAME;
-  }
-}
 static void process_free(process_state *saved) {
   size_t i;
   for (i = 0U; i < saved->count; i++)
@@ -122,7 +106,7 @@ static int process_restore(process_state *saved, cai_error *error) {
 }
 int cai_app_run(cai_app *self, int argc, const char *const *argv,
                 int *exit_code, cai_error *error) {
-  app_impl *app;
+  cai_app_server *app;
   process_state saved;
   char **arguments;
   int i, rc, handled = 0;
@@ -131,7 +115,7 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "invalid application arguments");
   *exit_code = 1;
-  app = self->impl;
+  app = ((app_impl *)self->impl)->owner;
   if (app->running)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "application is already running");
@@ -180,168 +164,6 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
   app->running = 0;
   return rc;
 }
-static void controller_arguments_close(app_impl *app) {
-  int i;
-  for (i = 0; app->arguments != NULL && i <= app->argument_count; ++i)
-    free(app->arguments[i]);
-  free(app->arguments);
-  app->arguments = NULL;
-  free(app->directory);
-  app->directory = NULL;
-  cai_environment_close(app->startup.environment);
-  memset(&app->startup, 0, sizeof(app->startup));
-}
-static void *controller_run(void *context) {
-  app_impl *app = context;
-  app->controller_code = cai_cli_app_controller_run(
-      app->argument_count + 1, app->arguments, &app->config, app->bridge,
-      &app->startup, app->server ? &app->lifetime : NULL,
-      app->lifetime_explicit, app->frontend_startup, NULL);
-  cai_app_bridge_end(app->bridge, app->controller_code, NULL);
-  return NULL;
-}
-static int controller_start(cai_app *self, const cai_config_context *context,
-                            int argc, const char *const *argv, int server_mode,
-                            const cai_attachment_config *server,
-                            int frontend_startup, cai_error *error) {
-  app_impl *app;
-  int i, rc;
-  if (self == NULL || argc < 0 || argc == INT_MAX ||
-      (argc > 0 && argv == NULL) ||
-      (context != NULL && context->directory != NULL &&
-       context->directory[0] != '/'))
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "invalid controller startup arguments");
-  app = self->impl;
-  if (app->running)
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "application is already running");
-  app->server = server_mode;
-  app->frontend_startup = frontend_startup;
-  app->lifetime_explicit = server != NULL;
-  cai_attachment_config_init(&app->lifetime);
-  if (server != NULL)
-    app->lifetime = *server;
-  app->argument_count = argc;
-  app->directory = context != NULL && context->directory != NULL
-                       ? strdup(context->directory)
-                       : getcwd(NULL, 0U);
-  if (app->directory == NULL)
-    return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                         "capture controller directory");
-  app->startup.directory = app->directory;
-  if (context != NULL && context->environment != NULL) {
-    rc = cai_environment_retain(context->environment, error);
-    if (rc == CAI_OK)
-      app->startup.environment = context->environment;
-  } else
-    rc = cai_environment_open(NULL, &app->startup.environment, error);
-  if (rc == CAI_OK) {
-    app->arguments = calloc((size_t)argc + 2U, sizeof(*app->arguments));
-    if (app->arguments == NULL)
-      rc = cai_cli_error(error, CAI_ERR_NOMEM, "copy controller arguments");
-  }
-  for (i = 0; rc == CAI_OK && i <= argc; ++i) {
-    const char *value = i == 0 ? (app->config.invocation_name != NULL
-                                      ? app->config.invocation_name
-                                      : app->config.program_name)
-                               : argv[i - 1];
-    if (value == NULL)
-      rc = cai_cli_error(error, CAI_ERR_INVALID, "null controller argument");
-    else if ((app->arguments[i] = strdup(value)) == NULL)
-      rc = cai_cli_error(error, CAI_ERR_NOMEM, "copy controller argument");
-  }
-  if (rc == CAI_OK) {
-    app->running = app->asynchronous = 1;
-    cai_app_bridge_begin(app->bridge);
-    if (pthread_create(&app->owner, NULL, controller_run, app) != 0) {
-      rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "start controller owner");
-      cai_app_bridge_end(app->bridge, 1, error);
-      app->running = app->asynchronous = 0;
-    }
-  }
-  if (rc != CAI_OK)
-    controller_arguments_close(app);
-  return rc;
-}
-int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
-                  const char *const *argv, cai_error *error) {
-  return controller_start(self, context, argc, argv, 0, NULL, 0, error);
-}
-int cai_app_start_server(cai_app *self, const cai_config_context *context,
-                         int argc, const char *const *argv,
-                         const cai_attachment_config *lifetime,
-                         cai_error *error) {
-  return controller_start(self, context, argc, argv, 1, lifetime, 0, error);
-}
-int cai_app_start_frontend_owner(cai_app *self,
-                                 const cai_config_context *context, int argc,
-                                 const char *const *argv, cai_error *error) {
-  return controller_start(self, context, argc, argv, 1, NULL,
-                          CAI_CLI_OWNER_FRONTEND, error);
-}
-int cai_app_join(cai_app *self, int *exit_code, cai_error *error) {
-  app_impl *app;
-  if (self == NULL || exit_code == NULL)
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "controller join outputs required");
-  app = self->impl;
-  if (!app->asynchronous || pthread_equal(app->owner, pthread_self()))
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "join requires another running controller owner");
-  if (pthread_join(app->owner, NULL) != 0)
-    return cai_cli_error(error, CAI_ERR_TRANSPORT, "join controller owner");
-  *exit_code = app->controller_code;
-  app->running = app->asynchronous = 0;
-  controller_arguments_close(app);
-  return CAI_OK;
-}
-int cai_app_control(cai_app *self, cai_app_control_type type, const char *text,
-                    unsigned long long *id, cai_error *error) {
-  app_impl *app;
-  if (id != NULL)
-    *id = 0U;
-  if (self == NULL)
-    return cai_cli_error(error, CAI_ERR_INVALID, "application is required");
-  app = self->impl;
-  return cai_app_bridge_control(app->bridge, type, text, id, error);
-}
-int cai_app_get_status(const cai_app *self, cai_app_status *out,
-                       cai_error *error) {
-  const app_impl *app;
-  if (self == NULL)
-    return cai_cli_error(error, CAI_ERR_INVALID, "application is required");
-  app = self->impl;
-  return cai_app_bridge_status(app->bridge, out, error);
-}
-int cai_app_status_fd(const cai_app *self) {
-  const app_impl *app = self != NULL ? self->impl : NULL;
-  return app != NULL ? app->bridge->status_fd : -1;
-}
-int cai_app_observe_status(const cai_app *self, cai_app_status *out,
-                           cai_error *error) {
-  const app_impl *app = self != NULL ? self->impl : NULL;
-  return cai_app_bridge_observe(app != NULL ? app->bridge : NULL, out, error);
-}
-int cai_app_connect_input(cai_app *self, uint64_t attachment,
-                          cai_input_connection **out, cai_error *error) {
-  app_impl *app = self != NULL ? self->impl : NULL;
-  return cai_app_bridge_input(app != NULL ? app->bridge : NULL, attachment, 0U,
-                              0U, out, error);
-}
-int cai_app_resume_input(cai_app *self, uint64_t attachment,
-                         unsigned long long conversation,
-                         unsigned long long producer,
-                         cai_input_connection **out, cai_error *error) {
-  app_impl *app = self != NULL ? self->impl : NULL;
-  if (out != NULL)
-    *out = NULL;
-  if (conversation == 0U || producer == 0U)
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "verified conversation and producer required");
-  return cai_app_bridge_input(app != NULL ? app->bridge : NULL, attachment,
-                              conversation, producer, out, error);
-}
 size_t cai_app_option_count(const cai_app *self) {
   return self != NULL ? cai_cli_help_count() : 0U;
 }
@@ -349,13 +171,13 @@ const cai_app_option *cai_app_option_at(const cai_app *self, size_t index) {
   return self != NULL ? cai_cli_help_at(index) : NULL;
 }
 int cai_app_write_help(const cai_app *self, cai_sink *sink, cai_error *error) {
-  const app_impl *app;
+  const cai_app_server *app;
   char prefix[65];
   int rc;
   if (self == NULL || sink == NULL)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "help requires application and sink");
-  app = self->impl;
+  app = ((app_impl *)self->impl)->owner;
   rc = cai_cli_environment_prefix(&app->config, prefix, error);
   if (rc != CAI_OK)
     return rc;
@@ -365,52 +187,85 @@ int cai_app_write_help(const cai_app *self, cai_sink *sink, cai_error *error) {
                                 : app->config.program_name,
                             prefix, sink, error);
 }
+
+static cai_app_server *owner(const cai_app *self) {
+  return self != NULL ? ((app_impl *)self->impl)->owner : NULL;
+}
+int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
+                  const char *const *argv, cai_error *error) {
+  return cai_app_owner_start(owner(self), context, argc, argv, 0, NULL, 0,
+                             error);
+}
+int cai_app_start_server(cai_app *self, const cai_config_context *context,
+                         int argc, const char *const *argv,
+                         const cai_attachment_config *lifetime,
+                         cai_error *error) {
+  return cai_app_server_start(owner(self), context, argc, argv, lifetime,
+                              error);
+}
+int cai_app_start_frontend_owner(cai_app *self,
+                                 const cai_config_context *context, int argc,
+                                 const char *const *argv, cai_error *error) {
+  return cai_app_owner_start(owner(self), context, argc, argv, 1, NULL,
+                             CAI_CLI_OWNER_FRONTEND, error);
+}
+int cai_app_join(cai_app *self, int *exit_code, cai_error *error) {
+  return cai_app_server_join(owner(self), exit_code, error);
+}
+int cai_app_control(cai_app *self, cai_app_control_type type, const char *text,
+                    unsigned long long *id, cai_error *error) {
+  return cai_app_server_control(owner(self), type, text, id, error);
+}
+int cai_app_get_status(const cai_app *self, cai_app_status *out,
+                       cai_error *error) {
+  return cai_app_server_get_status(owner(self), out, error);
+}
+int cai_app_status_fd(const cai_app *self) {
+  return cai_app_server_status_fd(owner(self));
+}
+int cai_app_observe_status(const cai_app *self, cai_app_status *out,
+                           cai_error *error) {
+  return cai_app_server_observe_status(owner(self), out, error);
+}
+int cai_app_connect_input(cai_app *self, uint64_t attachment,
+                          cai_input_connection **out, cai_error *error) {
+  return cai_app_server_connect_input(owner(self), attachment, out, error);
+}
+int cai_app_resume_input(cai_app *self, uint64_t attachment,
+                         unsigned long long conversation,
+                         unsigned long long producer,
+                         cai_input_connection **out, cai_error *error) {
+  return cai_app_server_resume_input(owner(self), attachment, conversation,
+                                     producer, out, error);
+}
 void cai_app_close(cai_app *self) {
   app_impl *app;
-  size_t i;
   if (self == NULL)
     return;
   app = self->impl;
-  if (app->running)
+  if (app->owner->running)
     return;
-  for (i = 0U; app->strings != NULL && i < app->string_count; i++)
-    free(app->strings[i]);
-  free(app->strings);
-  free(app->settings);
-  cai_app_bridge_close(app->bridge);
+  cai_app_server_close(app->owner);
   free(app);
 }
 int cai_app_open(const cai_app_config *config, cai_app **out,
                  cai_error *error) {
-  cai_app_config defaults;
-  cai_config *schema = NULL;
   app_impl *app;
-#define STRING_OFFSET(n) offsetof(cai_app_config, n),
-  static const size_t offsets[] = {CAI_APP_STRINGS(STRING_OFFSET)};
-#undef STRING_OFFSET
-  char prefix[65];
-  size_t base_count = sizeof(offsets) / sizeof(offsets[0]);
-  size_t i;
+  cai_app_server *server;
   int rc;
   if (out == NULL)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "application output is required");
   *out = NULL;
-  cai_app_config_init(&defaults);
-  if (config == NULL)
-    config = &defaults;
-  if (config->introduction_margin_left < 0 ||
-      config->introduction_margin_right < 0)
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "introduction margins must be nonnegative");
-  if ((config->setting_count != 0U && config->settings == NULL) ||
-      config->setting_count >
-          ((size_t)-1 / sizeof(cai_app_setting) - base_count) / 3U)
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "invalid application settings");
+  rc = cai_app_server_open(config, &server, error);
+  if (rc != CAI_OK)
+    return rc;
   app = calloc(1U, sizeof(*app));
-  if (app == NULL)
-    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate application");
+  if (app == NULL) {
+    cai_app_server_close(server);
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate application facade");
+  }
+  app->owner = server;
   app->shell.impl = app;
   app->shell.run = cai_app_run;
   app->shell.option_count = cai_app_option_count;
@@ -421,73 +276,27 @@ int cai_app_open(const cai_app_config *config, cai_app **out,
   app->shell.start = cai_app_start;
   app->shell.join = cai_app_join;
   app->shell.close = cai_app_close;
-  app->config.setting_count = config->setting_count;
-  app->string_count = base_count + 3U * config->setting_count;
-  app->strings = calloc(app->string_count, sizeof(char *));
-  if (app->strings == NULL) {
-    cai_app_close(&app->shell);
-    return cai_cli_error(error, CAI_ERR_NOMEM,
-                         "copy application configuration");
-  }
-  app->config = *config;
-  rc = CAI_OK;
-  for (i = 0U; i < base_count; i++) {
-    const char *value =
-        *(const char *const *)((const char *)config + offsets[i]);
-    if (offsets[i] == offsetof(cai_app_config, program_name) && value == NULL)
-      value = CAI_APP_DEFAULT_PROGRAM_NAME;
-    app->strings[i] = value != NULL ? strdup(value) : NULL;
-    *(const char **)((char *)&app->config + offsets[i]) = app->strings[i];
-    if (value != NULL && app->strings[i] == NULL)
-      rc =
-          cai_cli_error(error, CAI_ERR_NOMEM, "copy application configuration");
-  }
-  if (rc == CAI_OK)
-    rc = cai_cli_environment_prefix(&app->config, prefix, error);
-  if (rc == CAI_OK && app->config.invocation_name != NULL &&
-      (app->config.invocation_name[0] == '\0' ||
-       strlen(app->config.invocation_name) > 512U ||
-       strpbrk(app->config.invocation_name, "\r\n\t") != NULL))
-    rc = cai_cli_error(error, CAI_ERR_INVALID, "invalid invocation_name");
-  if (rc == CAI_OK && app->config.queue_prefix != NULL &&
-      !cai_cli_identity_valid(app->config.queue_prefix))
-    rc = cai_cli_error(error, CAI_ERR_INVALID, "invalid queue_prefix");
-  if (rc != CAI_OK) {
-    cai_app_close(&app->shell);
-    return rc;
-  }
-  rc = cai_cli_app_schema(&schema, error) < 0 ? CAI_ERR_INVALID : CAI_OK;
-  if (config->setting_count != 0U) {
-    app->settings = calloc(config->setting_count, sizeof(*app->settings));
-    if (app->settings == NULL)
-      rc = cai_cli_error(error, CAI_ERR_NOMEM, "copy application settings");
-  }
-  for (i = 0U; rc == CAI_OK && i < config->setting_count; i++) {
-    const cai_app_setting *s = &config->settings[i];
-    rc = cai_config_set(schema, s->section, s->key, s->value, error);
-    if (rc == CAI_OK) {
-      app->settings[i].section = app->strings[base_count + i * 3U] =
-          strdup(s->section);
-      app->settings[i].key = app->strings[base_count + 1U + i * 3U] =
-          strdup(s->key);
-      app->settings[i].value = app->strings[base_count + 2U + i * 3U] =
-          strdup(s->value);
-      if (app->settings[i].section == NULL || app->settings[i].key == NULL ||
-          app->settings[i].value == NULL)
-        rc = cai_cli_error(error, CAI_ERR_NOMEM, "copy application setting");
-    }
-  }
-  cai_config_close(schema);
-  app->config.settings = app->settings;
-  if (rc != CAI_OK) {
-    cai_app_close(&app->shell);
-    return rc;
-  }
-  rc = cai_app_bridge_open(&app->bridge, &app->config, error);
-  if (rc != CAI_OK) {
-    cai_app_close(&app->shell);
-    return rc;
-  }
   *out = &app->shell;
   return CAI_OK;
+}
+
+int cai_cli_app_main(int argc, char **argv, const cai_app_config *application) {
+  cai_app *app = NULL;
+  cai_error error;
+  int code = 1, rc;
+  cai_error_init(&error);
+  rc = cai_app_open(application, &app, &error);
+  if (rc == CAI_OK)
+    rc = cai_app_run(app, argc - 1, (const char *const *)(argv + 1), &code,
+                     &error);
+  if (rc != CAI_OK) {
+    if (application != NULL && application->logger != NULL)
+      cai_cli_log_error(application->logger, "application", &error);
+    else
+      fprintf(stderr, "application: %s\n",
+              error.message != NULL ? error.message : cai_status_string(rc));
+  }
+  cai_app_close(app);
+  cai_error_cleanup(&error);
+  return rc == CAI_OK ? code : 1;
 }

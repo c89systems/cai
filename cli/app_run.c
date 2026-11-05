@@ -4391,24 +4391,3 @@ int cai_cli_app_controller_run(int argc, char **argv,
   return cli_app_receive(argc, argv, application, bridge, startup, server,
                          lifetime_explicit, frontend_startup, prepared);
 }
-
-int cai_cli_app_main(int argc, char **argv, const cai_app_config *application) {
-  cai_app *app = NULL;
-  cai_error error;
-  int code = 1, rc;
-  cai_error_init(&error);
-  rc = cai_app_open(application, &app, &error);
-  if (rc == CAI_OK)
-    rc = cai_app_run(app, argc - 1, (const char *const *)(argv + 1), &code,
-                     &error);
-  if (rc != CAI_OK) {
-    if (application != NULL && application->logger != NULL)
-      cai_cli_log_error(application->logger, "application", &error);
-    else
-      fprintf(stderr, "application: %s\n",
-              error.message != NULL ? error.message : cai_status_string(rc));
-  }
-  cai_app_close(app);
-  cai_error_cleanup(&error);
-  return rc == CAI_OK ? code : 1;
-}

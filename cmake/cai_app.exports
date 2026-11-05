@@ -21,7 +21,6 @@ cai_app_client_subscribe
 cai_app_client_takeover
 cai_app_client_unsubscribe
 cai_app_close
-cai_app_config_init
 cai_app_connect_input
 cai_app_control
 cai_app_get_status
@@ -36,9 +35,6 @@ cai_app_resume_input
 cai_app_run
 cai_app_start
 cai_app_start_server
-cai_app_status_cleanup
 cai_app_status_fd
-cai_app_status_init
 cai_app_terminal_run
-cai_app_view_elapsed
 cai_app_write_help

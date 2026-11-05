@@ -1,12 +1,17 @@
 # Typed application transport is an independent product. Neither compiling nor
 # consuming it discovers an editor, renderer, storage SDK or Lua runtime.
-if(NOT CAI_BUILD_APP_CLIENT)
+if(NOT CAI_BUILD_APP_CLIENT AND NOT CAI_BUILD_APP_SERVER)
   return()
 endif()
 add_library(cai_app_wire_objects OBJECT cli/input_wire.c cli/status_wire.c
   cli/transcript_wire.c cli/catalog_wire.c cli/error.c)
+target_link_libraries(cai_app_wire_objects PRIVATE ${_cai_internal_link_target})
+cai_configure_c_target(cai_app_wire_objects)
+if(NOT CAI_BUILD_APP_CLIENT)
+  return()
+endif()
 add_library(cai_app_client_objects OBJECT cli/app_client.c)
-foreach(target cai_app_wire_objects cai_app_client_objects)
+foreach(target cai_app_client_objects)
   target_link_libraries(${target} PRIVATE ${_cai_internal_link_target})
   cai_configure_c_target(${target})
 endforeach()

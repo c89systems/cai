@@ -917,6 +917,9 @@
     get_property(_cai_cli_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
     list(FILTER _cai_cli_targets INCLUDE REGEX "^cai_cli($|_)|^cai_terminal_peer$")
     add_custom_target(cai_cli_tests DEPENDS ${_cai_cli_targets})
+    if(TARGET cai_app_server_tests)
+      add_dependencies(cai_cli_tests cai_app_server_tests)
+    endif()
     add_dependencies(cai_cli_tests cai_batch_document_test cai_log_environment_test cai_app_test cai_status_wire_test cai_status_host_test cai_transcript_test cai_transcript_wire_test cai_transcript_store_test cai_app_client_test cai_input_socket_test cai_app_controller_test cai_input_wire_test cai_app_home_test cai_app_mcp_environment_test cai_app_status_test cai_app_host cai_app_worker_stack_host cai_app_run_terminal_host cai_app_controls_host cai_app_startup_goal_test cai_app_utility_stop_test cai_kanban_test cai_chrome_client_fixture)
     # Tests consume this public client host too. Keep its statically linked
     # protocol/presenter in step with the owner in targeted CLI builds.

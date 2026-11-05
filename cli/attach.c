@@ -7,6 +7,7 @@
 #include "identity.h"
 #include "run_frontend.h"
 #include "spawn.h"
+#include "theme.h"
 #include "workspace_claims.h"
 #include <cai/environment.h>
 #include <cai/workspace_discovery.h>
@@ -210,6 +211,8 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
   *exit_code = 1;
   rc = cai_cli_configure(argc, argv, &options, &configuration, application,
                          error);
+  if (rc > 0 && cai_cli_theme_validate(&options, error) != CAI_OK)
+    rc = -1;
   if (rc <= 0) {
     *exit_code = rc == 0 ? 0 : 2;
     cai_config_close(configuration);

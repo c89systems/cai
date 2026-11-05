@@ -1234,6 +1234,8 @@ application's softline, libmdf and liblockdc dependencies.
 The standalone [application socket client](docs/application-client.md),
 `libcai_app_client`, also needs only core libcai. Build it independently with
 `CAI_BUILD_APP_CLIENT=ON`, or select the combined application as usual.
+`CAI_BUILD_APP_SERVER=ON` similarly selects the independent
+[workspace owner SDK](docs/application-server.md) without a terminal renderer.
 The x86_64, aarch64 and armhf Linux SDK archives include both static and shared
 application libraries for glibc and musl.
 

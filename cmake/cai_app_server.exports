@@ -1,0 +1,14 @@
+cai_app_config_init
+cai_app_server_close
+cai_app_server_connect_input
+cai_app_server_control
+cai_app_server_get_status
+cai_app_server_join
+cai_app_server_observe_status
+cai_app_server_open
+cai_app_server_resume_input
+cai_app_server_start
+cai_app_server_status_fd
+cai_app_status_cleanup
+cai_app_status_init
+cai_app_view_elapsed

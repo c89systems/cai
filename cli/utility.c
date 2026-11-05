@@ -9,6 +9,7 @@
 #include "session_commands.h"
 #include "skills.h"
 #include "stores.h"
+#include "theme.h"
 #include <cai/chrome.h>
 #include <libmdf/mdf.h>
 #include <limits.h>
@@ -173,8 +174,21 @@ int cai_cli_utility_run(int argc, char **argv,
                                application, &u->error);
   if (parsed <= 0) {
     result = parsed == 0 ? 0 : 2;
+    if (parsed == 0 && u->options.list_themes) {
+      cai_sink *sink = NULL;
+      rc = cai_sink_stdout(&sink, &u->error);
+      if (rc == CAI_OK)
+        rc = cai_cli_theme_list(sink, &u->error);
+      cai_sink_close(sink);
+      if (rc != CAI_OK)
+        result = 1;
+    }
     if (parsed < 0 && u->error.code == CAI_OK)
       cai_cli_error(&u->error, CAI_ERR_INVALID, u->options.diagnostic);
+    goto done;
+  }
+  if (cai_cli_theme_validate(&u->options, &u->error) != CAI_OK) {
+    result = 2;
     goto done;
   }
   if (u->options.headless && !cai_cli_options_utility(&u->options)) {

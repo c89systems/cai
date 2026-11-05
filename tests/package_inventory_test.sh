@@ -41,13 +41,17 @@ verify_manifest_artifacts "${names[@]}"
 require_complete_manifest "${names[@]}"
 if (require_complete_manifest "cai-$version-flow.1-x86_64-linux-gnu.tar.gz" "${names[@]:1}") >"$scratch/out" 2>"$scratch/err"; then exit 1; fi
 if (require_complete_manifest "${names[@]:1}") >"$scratch/out" 2>"$scratch/err"; then exit 1; fi )
-# All six Linux SDKs must ship the static/shared app surface.
+# All six Linux SDKs must ship the static/shared facade and owner surfaces.
 ( CAI_REPO_ROOT="$repo" CAI_VERSION="$version" source "$repo/scripts/verify_release_artifacts.sh" --self-test
 verify_application_sdk "$scratch/sdk" arm64-apple-darwin
 paths=(include/cai/app.h lib/libcai_app.a lib/libcai_app.so
   lib/pkgconfig/cai-app.pc lib/cmake/cai_app/cai_app-config.cmake
   share/cai_app/dependencies.json share/doc/libcai_app/embedding.md
-  share/doc/libcai_app/examples/app.c share/doc/libcai_app/examples/app.lua)
+  share/doc/libcai_app/examples/app.c share/doc/libcai_app/examples/app.lua
+  include/cai/app_server.h include/cai/app_types.h
+  lib/libcai_app_server.a lib/libcai_app_server.so
+  lib/pkgconfig/cai-app-server.pc lib/cmake/cai_app_server/cai_app_server-config.cmake
+  share/cai_app_server/dependencies.json share/doc/libcai_app_server/application-server.md)
 for path in "${paths[@]}"; do mkdir -p "$scratch/sdk/$(dirname "$path")"; touch "$scratch/sdk/$path"; done
 for target in x86_64-linux-gnu x86_64-linux-musl aarch64-linux-gnu aarch64-linux-musl armhf-linux-gnu armhf-linux-musl; do
   verify_application_sdk "$scratch/sdk" "$target"

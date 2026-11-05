@@ -48,11 +48,13 @@ option(CAI_REGISTER_API_KEY_EXAMPLE_SMOKE
 option(CAI_BUILD_EXAMPLES "Build cai examples." ON)
 option(CAI_BUILD_CLI "Build the standalone cai terminal agent." OFF)
 option(CAI_BUILD_APP "Build the embeddable CAI terminal application." OFF)
+option(CAI_BUILD_APP_SERVER "Build the terminal-independent application workspace server." OFF)
 option(CAI_BUILD_APP_CLIENT "Build the terminal-independent application socket client." OFF)
 if(CAI_BUILD_CLI)
   set(CAI_BUILD_APP ON)
 endif()
 if(CAI_BUILD_APP)
+  set(CAI_BUILD_APP_SERVER ON)
   set(CAI_BUILD_APP_CLIENT ON)
 endif()
 option(CAI_BUILD_LUA "Build the Lua 5.5 binding and Lua tests." OFF)
@@ -141,7 +143,7 @@ if(CAI_TARGET_ID STREQUAL "")
 endif()
 set(CAI_TARGET_ID "${CAI_TARGET_ID}" CACHE STRING "Release archive target id." FORCE)
 
-if(CAI_BUILD_APP AND (NOT CAI_TARGET_ID MATCHES "^(x86_64|aarch64|armhf)-linux-(gnu|musl)$" OR
+if((CAI_BUILD_APP OR CAI_BUILD_APP_SERVER) AND (NOT CAI_TARGET_ID MATCHES "^(x86_64|aarch64|armhf)-linux-(gnu|musl)$" OR
                       NOT CAI_DEPENDENCY_MODE STREQUAL "cpkt"))
   message(FATAL_ERROR
     "The CAI application requires Linux x86_64, aarch64 or armhf, glibc or musl, and cpkt dependencies")
@@ -329,7 +331,7 @@ function(cai_set_pslog_from_target)
   endif()
 endfunction()
 
-if(CAI_BUILD_APP)
+if(CAI_BUILD_APP OR CAI_BUILD_APP_SERVER)
   if(CAI_TARGET_ID STREQUAL "x86_64-linux-gnu")
     set(_cai_liblql_sha256 "d6b3d12afcf6ba2582cb9103cc6a6a97a7378870d969e0755d467d72b9f43030")
     set(_cai_lockdc_sha256 "fb4806e36c2619ac789ca8c145f967c04ec440335e23d9bfeb8c3452e19297ea")
@@ -387,41 +389,43 @@ if(CAI_BUILD_APP)
     CACHE PATH "liblockdc package directory" FORCE)
   set(liblql_DIR "${_cai_liblql_prefix}/lib/cmake/liblql"
     CACHE PATH "liblql package directory" FORCE)
-  set(_cai_softline_name
-      "softline-${CAI_SOFTLINE_VERSION}-${CAI_TARGET_ID}")
-  set(_cai_softline_prefix "${CAI_DEPS_DIR}/${_cai_softline_name}")
-  cai_dependency_archive_path(
-    "${_cai_softline_name}.tar.gz"
-    "${_cai_softline_sha256}"
-    _cai_softline_archive)
-  cai_download_tarball(
-    "softline ${CAI_SOFTLINE_VERSION} ${CAI_TARGET_ID}"
-    "https://github.com/c89systems/softline/releases/download/v${CAI_SOFTLINE_VERSION}/${_cai_softline_name}.tar.gz"
-    "${_cai_softline_archive}" "${_cai_softline_prefix}"
-    "${_cai_softline_sha256}"
-    "${_cai_softline_prefix}/include/softline/softline.h")
-  set(_cai_libmdf_name "libmdf-${CAI_LIBMDF_VERSION}-${CAI_TARGET_ID}")
-  set(_cai_libmdf_prefix "${CAI_DEPS_DIR}/${_cai_libmdf_name}")
-  cai_dependency_archive_path(
-    "${_cai_libmdf_name}.tar.gz"
-    "${_cai_libmdf_sha256}"
-    _cai_libmdf_archive)
-  cai_download_tarball(
-    "libmdf ${CAI_LIBMDF_VERSION} ${CAI_TARGET_ID}"
-    "https://github.com/c89systems/libmdf/releases/download/v${CAI_LIBMDF_VERSION}/${_cai_libmdf_name}.tar.gz"
-    "${_cai_libmdf_archive}" "${_cai_libmdf_prefix}"
-    "${_cai_libmdf_sha256}"
-    "${_cai_libmdf_prefix}/include/libmdf/mdf.h")
-  list(PREPEND CMAKE_PREFIX_PATH "${_cai_softline_prefix}"
-       "${_cai_libmdf_prefix}")
-  list(APPEND CMAKE_FIND_ROOT_PATH "${_cai_softline_prefix}"
-       "${_cai_libmdf_prefix}")
-  set(softline_DIR "${_cai_softline_prefix}/lib/cmake/softline"
-      CACHE PATH "softline package directory" FORCE)
-  set(libmdf_DIR "${_cai_libmdf_prefix}/lib/cmake/libmdf"
-      CACHE PATH "libmdf package directory" FORCE)
-  find_package(softline CONFIG REQUIRED)
-  find_package(libmdf CONFIG REQUIRED)
+  if(CAI_BUILD_APP)
+    set(_cai_softline_name
+        "softline-${CAI_SOFTLINE_VERSION}-${CAI_TARGET_ID}")
+    set(_cai_softline_prefix "${CAI_DEPS_DIR}/${_cai_softline_name}")
+    cai_dependency_archive_path(
+      "${_cai_softline_name}.tar.gz"
+      "${_cai_softline_sha256}"
+      _cai_softline_archive)
+    cai_download_tarball(
+      "softline ${CAI_SOFTLINE_VERSION} ${CAI_TARGET_ID}"
+      "https://github.com/c89systems/softline/releases/download/v${CAI_SOFTLINE_VERSION}/${_cai_softline_name}.tar.gz"
+      "${_cai_softline_archive}" "${_cai_softline_prefix}"
+      "${_cai_softline_sha256}"
+      "${_cai_softline_prefix}/include/softline/softline.h")
+    set(_cai_libmdf_name "libmdf-${CAI_LIBMDF_VERSION}-${CAI_TARGET_ID}")
+    set(_cai_libmdf_prefix "${CAI_DEPS_DIR}/${_cai_libmdf_name}")
+    cai_dependency_archive_path(
+      "${_cai_libmdf_name}.tar.gz"
+      "${_cai_libmdf_sha256}"
+      _cai_libmdf_archive)
+    cai_download_tarball(
+      "libmdf ${CAI_LIBMDF_VERSION} ${CAI_TARGET_ID}"
+      "https://github.com/c89systems/libmdf/releases/download/v${CAI_LIBMDF_VERSION}/${_cai_libmdf_name}.tar.gz"
+      "${_cai_libmdf_archive}" "${_cai_libmdf_prefix}"
+      "${_cai_libmdf_sha256}"
+      "${_cai_libmdf_prefix}/include/libmdf/mdf.h")
+    list(PREPEND CMAKE_PREFIX_PATH "${_cai_softline_prefix}"
+         "${_cai_libmdf_prefix}")
+    list(APPEND CMAKE_FIND_ROOT_PATH "${_cai_softline_prefix}"
+         "${_cai_libmdf_prefix}")
+    set(softline_DIR "${_cai_softline_prefix}/lib/cmake/softline"
+        CACHE PATH "softline package directory" FORCE)
+    set(libmdf_DIR "${_cai_libmdf_prefix}/lib/cmake/libmdf"
+        CACHE PATH "libmdf package directory" FORCE)
+    find_package(softline CONFIG REQUIRED)
+    find_package(libmdf CONFIG REQUIRED)
+  endif()
 endif()
 
 if(CAI_RESOLVED_DEPENDENCY_MODE STREQUAL "cpkt")
@@ -926,15 +930,17 @@ endfunction()
 
 include(CaiLuaTools)
 include(CaiAppClient)
+include(CaiAppServer)
 
 if(CAI_BUILD_APP)
   find_package(lockdc CONFIG REQUIRED COMPONENTS static)
   # The product and fixture entrypoints share these exact sources/options.
   # Compile them once per configuration; keep fixture substitutions in main.
-  add_library(cai_cli_support OBJECT cli/identity.c cli/app_control.c cli/workspace_host.c cli/commands.c cli/completion.c cli/input_adapter.c cli/input_local.c cli/options.c cli/help.c cli/config.c cli/runtime_options.c cli/mcp.c cli/skills.c cli/status.c cli/reasoning.c cli/literal.c cli/shell.c cli/shell_text.c cli/login.c
-    cli/startup.c cli/goal_input.c cli/line_input.c cli/plain_feed.c cli/statusline.c cli/command_help.c cli/review_report.c cli/pouch.c cli/pouch_stream.c cli/pouch_transcript.c cli/transcript.c cli/transcript_feed.c cli/quota_refresh.c cli/session_commands.c cli/workspace_claims.c
-    cli/log.c cli/log_environment.c cli/softline_presenter.c cli/transcript_presenter.c cli/documents.c cli/messages.c cli/message_names.c cli/todo.c cli/theme.c cli/stores.c cli/temp.c cli/replay.c cli/replay_tools.c cli/tool_result.c)
-  target_link_libraries(cai_cli_support PUBLIC cai_static
+  add_library(cai_cli_support OBJECT cli/completion.c cli/input_adapter.c cli/input_local.c
+    cli/reasoning.c cli/literal.c cli/login.c cli/line_input.c cli/plain_feed.c
+    cli/statusline.c cli/softline_presenter.c cli/transcript_presenter.c cli/theme.c
+    cli/replay_tools.c cli/tool_result.c)
+  target_link_libraries(cai_cli_support PUBLIC cai_app_server_static cai_static
     softline::softline_static libmdf::mdf_static lockdc::static)
   target_link_libraries(cai_cli_support PUBLIC cai_app_client_static)
   cai_configure_c_target(cai_cli_support)
@@ -1664,6 +1670,7 @@ if(CAI_INSTALL)
 
   install(DIRECTORY "${CAI_PUBLIC_INCLUDE_DIR}/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     PATTERN "app.h" EXCLUDE PATTERN "app_client.h" EXCLUDE
+    PATTERN "app_server.h" EXCLUDE PATTERN "app_types.h" EXCLUDE
     PATTERN "app_view.h" EXCLUDE
     PATTERN "app_terminal.h" EXCLUDE
     PATTERN "lua_tools.h" EXCLUDE)

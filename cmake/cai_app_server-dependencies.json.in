@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "project": "libcai_app_server",
+  "version": "@CAI_PACKAGE_VERSION@",
+  "targetId": "@CAI_TARGET_ID@",
+  "abiVersion": 0,
+  "libcaiAbiVersion": @CAI_ABI_VERSION@,
+  "luaTools": {"enabled": @CAI_APP_SERVER_LUA_JSON@, "version": "5.5.1", "providedBy": "cpkt"},
+  "dependencies": [
+    {"name":"liblockdc","version":"@CAI_LOCKDC_VERSION@","targetId":"@CAI_TARGET_ID@","sourceUrl":"https://github.com/c89systems/liblockdc/releases/download/v@CAI_LOCKDC_VERSION@/@_cai_lockdc_name@.tar.gz","sha256":"@_cai_lockdc_sha256@","bundled":false},
+    {"name":"liblql","version":"@CAI_LIBLQL_VERSION@","targetId":"@CAI_TARGET_ID@","sourceUrl":"https://github.com/c89systems/liblql/releases/download/v@CAI_LIBLQL_VERSION@/@_cai_liblql_name@.tar.gz","sha256":"@_cai_liblql_sha256@","bundled":false}
+  ]
+}

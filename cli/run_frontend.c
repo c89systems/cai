@@ -6,6 +6,7 @@
 #include "existing_frontend.h"
 #include "frontend.h"
 #include "log.h"
+#include "theme.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -135,6 +136,8 @@ int cai_cli_run_frontend(const cai_app_config *application,
   } else
     parsed = cai_cli_configure_at(argc, argv, &r->options, &r->configuration,
                                   application, &r->startup, &r->error);
+  if (parsed > 0 && cai_cli_theme_validate(&r->options, &r->error) != CAI_OK)
+    parsed = -1;
   if (parsed <= 0 || !agent_mode(&r->options)) {
     /* Configuration errors still use the common diagnostic path. A completed
      * help/dump utility has already written its explicit result exactly once.

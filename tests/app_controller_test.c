@@ -5,12 +5,16 @@
 #include <cai/app_client.h>
 #include <cai/transcript_selection.h>
 #include <cai/workspace_client.h>
+#ifndef CAI_TEST_SERVER_SDK
 #include <libmdf/mdf.h>
+#endif
 #include <locale.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#ifndef CAI_TEST_SERVER_SDK
 #include <softline/softline.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +22,7 @@
 #include <unistd.h>
 
 /* A controller must not create presentation objects, even with a terminal. */
+#ifndef CAI_TEST_SERVER_SDK
 mdf_status __wrap_mdf_create(mdf_format, const mdf_options *, mdf **);
 mdf_status __wrap_mdf_create(mdf_format format, const mdf_options *options,
                              mdf **out) {
@@ -31,6 +36,7 @@ sl_t *__wrap_sl_create_with_config(const sl_config_t *config) {
   (void)config;
   abort();
 }
+#endif
 typedef struct host {
   cai_app *app;
   pthread_t caller, owner;
@@ -239,7 +245,9 @@ static void open_host(host *h, const char *mode) {
   config.control_context = h;
   config.register_agent_tools = register_tools;
   config.register_agent_tools_context = h;
+#ifndef CAI_TEST_SERVER_SDK
   if (strncmp(mode, "server_", 7U) == 0)
+#endif
     config.runtime_directory = getenv("CAI_TEST_SERVER_RUNTIME");
   if (strncmp(mode, "server_", 7U) != 0) {
     config.input.authorize = authorize;

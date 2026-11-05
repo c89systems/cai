@@ -1,4 +1,5 @@
 #include "theme.h"
+#include "error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +31,13 @@ static int theme_equal(const char *a, size_t length, const char *b) {
       return 0;
   }
   return 1;
+}
+
+int cai_cli_theme_validate(const cai_cli_options *options, cai_error *error) {
+  cai_cli_theme selected;
+  const char *reason = cai_cli_theme_parse(options->theme, &selected);
+  return reason != NULL ? cai_cli_error(error, CAI_ERR_INVALID, reason)
+                        : CAI_OK;
 }
 
 const char *cai_cli_theme_parse(const char *text, cai_cli_theme *out) {

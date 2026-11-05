@@ -95,6 +95,16 @@ if(TARGET cai::app_shared)
 endif()
 ]=])
 set(prefixes "${prefix};${CAI_DEPENDENCY_PREFIXES}")
+file(MAKE_DIRECTORY "${root}/wrong-server")
+file(WRITE "${root}/wrong-server/cai_app_server-config.cmake"
+  "set(cai_app_server_VERSION 9999.0.0)\n")
+execute_process(COMMAND "${CMAKE_COMMAND}" -S "${root}/source" -B "${root}/mismatched-server"
+  -G Ninja "-DCMAKE_C_COMPILER=${CAI_C_COMPILER}" "-DCMAKE_PREFIX_PATH=${prefixes}"
+  "-Dcai_app_server_DIR=${root}/wrong-server"
+  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE errors)
+if(result EQUAL 0 OR NOT errors MATCHES "matching cai_app_server release")
+  message(FATAL_ERROR "combined SDK accepted a different private backend release: ${output}\n${errors}")
+endif()
 execute_process(COMMAND "${CMAKE_COMMAND}" -S "${root}/source" -B "${root}/consumer"
   -G Ninja "-DCMAKE_C_COMPILER=${CAI_C_COMPILER}"
   "-DCMAKE_PREFIX_PATH=${prefixes}" -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON

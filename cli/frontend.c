@@ -1013,16 +1013,29 @@ static int actions(frontend *f) {
   } else if (strncmp(line, "/theme ", 7U) == 0 ||
              strncmp(line, "/t ", 3U) == 0) {
     cai_cli_theme selected;
-    const char *why = cai_cli_theme_parse(strchr(line, ' ') + 1U, &selected);
+    char *argument = strchr(f->action, ' ') + 1U;
+    char *end;
+    const char *why;
+    /* Slash arguments allow surrounding whitespace; theme identifiers do not.
+     * Normalize the owned action, preserving the strict settings parser. */
+    argument += strspn(argument, " \t");
+    end = argument + strlen(argument);
+    while (end > argument && (end[-1] == ' ' || end[-1] == '\t'))
+      *--end = '\0';
+    why = cai_cli_theme_parse(argument, &selected);
     if (why != NULL)
       rc = notice(f, why);
     else if (cai_cli_presenter_set_theme(f->ui, &selected, &f->error) != CAI_OK)
       return -1;
     else {
       char message[256];
-      snprintf(message, sizeof(message), "Theme changed to %s:%s.\n",
+      snprintf(message, sizeof(message), "Theme changed to %s:%s.\n%s",
                cai_cli_theme_prompt_name(&selected),
-               selected.ascii ? "ascii" : selected.markdown);
+               selected.ascii ? "ascii" : selected.markdown,
+               cai_environment_get(f->options->environment, "NO_COLOR") != NULL
+                   ? "\n`NO_COLOR` keeps the prompt plain and Markdown ANSI "
+                     "colors disabled.\n"
+                   : "");
       rc = markdown(f, message, strlen(message));
     }
     if (why == NULL && rc == 0)
@@ -2803,6 +2816,8 @@ int cai_app_terminal_run(const cai_app_config *application,
     int configured =
         cai_cli_configure_at(argc + 1, arguments, &options, &configuration,
                              application, &context, error);
+    if (configured == 1 && cai_cli_theme_validate(&options, error) != CAI_OK)
+      configured = -1;
     if (configured != 1)
       rc = configured == 0 ? CAI_OK : CAI_ERR_INVALID;
     else if (strcmp(options.directory, target->workspace) != 0 ||

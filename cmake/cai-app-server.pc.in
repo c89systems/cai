@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/@CAI_PC_PREFIX_FROM_PKGCONFIG@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+Name: cai-app-server
+Description: Terminal-independent CAI application workspace server
+Version: @CAI_PACKAGE_VERSION@
+Requires: cai pslog = @CAI_PSLOG_VERSION@
+Requires.private: lockdc = @CAI_LOCKDC_VERSION@@CAI_APP_SERVER_LUA_PC@
+Libs: -L${libdir} -lcai_app_server
+Cflags: -I${includedir}

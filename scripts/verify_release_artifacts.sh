@@ -504,7 +504,7 @@ verify_linux_runpath() {
       printf '%s\n' "$dynamic" >&2
       fail "shared library links sanitizer runtime: $so"
     fi
-  done < <(find "$root_dir/lib" -maxdepth 1 -type f \( -name 'libcai.so*' -o -name 'libcai_app.so*' \) -print)
+  done < <(find "$root_dir/lib" -maxdepth 1 -type f \( -name 'libcai.so*' -o -name 'libcai_app.so*' -o -name 'libcai_app_server.so*' \) -print)
 }
 
 diagnostic_fail() {
@@ -1111,6 +1111,13 @@ verify_shared_exports() {
     [[ -n "$library" ]] || fail "missing application shared library: $root_dir/lib"
     "$repo_root/tests/shared_export_policy_test.sh" \
       "$nm" "$library" "$repo_root/cmake/cai_app.exports" "$platform"
+    library=$(find "$root_dir/lib" -maxdepth 1 -type f -name 'libcai_app_server.so.*' -print -quit)
+    [[ -n "$library" ]] || fail "missing application server shared library: $root_dir/lib"
+    new_workspace server-exports
+    LC_ALL=C sort -u "$repo_root/cmake/cai_app_server.exports" \
+      "$repo_root/cmake/cai_app_server_private.exports" >"$workspace_path/server.exports"
+    "$repo_root/tests/shared_export_policy_test.sh" \
+      "$nm" "$library" "$workspace_path/server.exports" "$platform"
   fi
 }
 
@@ -1120,7 +1127,11 @@ verify_application_sdk() {
   for path in include/cai/app.h lib/libcai_app.a lib/libcai_app.so \
       lib/pkgconfig/cai-app.pc lib/cmake/cai_app/cai_app-config.cmake \
       share/cai_app/dependencies.json share/doc/libcai_app/embedding.md \
-      share/doc/libcai_app/examples/app.c share/doc/libcai_app/examples/app.lua; do
+      share/doc/libcai_app/examples/app.c share/doc/libcai_app/examples/app.lua \
+      include/cai/app_server.h include/cai/app_types.h \
+      lib/libcai_app_server.a lib/libcai_app_server.so \
+      lib/pkgconfig/cai-app-server.pc lib/cmake/cai_app_server/cai_app_server-config.cmake \
+      share/cai_app_server/dependencies.json share/doc/libcai_app_server/application-server.md; do
     require_file "$root_dir/$path"
   done
 }

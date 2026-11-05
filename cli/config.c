@@ -1,3 +1,5 @@
+/** @file Capture and resolve application configuration without rendering or
+ * installing environment/cwd state into the embedding process. */
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #include "config.h"
@@ -5,7 +7,6 @@
 #include "identity.h"
 #include "status.h"
 #include "stores.h"
-#include "theme.h"
 #include <cai/models.h>
 #include <cai/version.h>
 #include <errno.h>
@@ -940,14 +941,6 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
                  : -1;
     if (early.version)
       puts(CAI_VERSION_STRING);
-    if (early.list_themes) {
-      cai_sink *sink = NULL;
-      int written = cai_sink_stdout(&sink, error);
-      if (written == CAI_OK)
-        written = cai_cli_theme_list(sink, error);
-      cai_sink_close(sink);
-      return written == CAI_OK ? 0 : -1;
-    }
     return rc;
   }
   if (application != NULL) {
@@ -1309,12 +1302,6 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
     return -1;
   if (cai_cli_validate_options(options) < 0)
     return -1;
-  {
-    cai_cli_theme theme;
-    const char *reason = cai_cli_theme_parse(options->theme, &theme);
-    if (reason != NULL)
-      return fail(error, options->theme, reason);
-  }
   {
     cai_cli_status_fields selection;
     const char *reason =
