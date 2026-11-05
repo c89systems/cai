@@ -120,6 +120,15 @@ static int pouch_cut_publish(cai_cli_pouch *pouch, lc_collection *collection,
      * the SDK has changed the visible history. The caller holds journal_lock.
      */
     if ((written == LC_OK || result.published) &&
+        strcmp(pouch->transcript_index_session, session->id) == 0 &&
+        !pouch->transcript_index_failed &&
+        cai_cli_replay_cut(pouch->transcript_index, cut->plan.request, NULL) !=
+            CAI_OK) {
+      cai_cli_replay_close(pouch->transcript_index);
+      pouch->transcript_index = NULL;
+      pouch->transcript_index_failed = 1;
+    }
+    if ((written == LC_OK || result.published) &&
         pouch->journal_observer != NULL)
       pouch->journal_observer(
           pouch->journal_observer_context, session->id,

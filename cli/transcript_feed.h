@@ -18,7 +18,8 @@ int cai_cli_transcript_feed_open(cai_cli_pouch *, const char *workspace,
 int cai_cli_transcript_feed_request(cai_cli_transcript_publisher *,
                                     uint64_t attachment, uint64_t stream,
                                     const char *collection, uint64_t after,
-                                    uint64_t sequence, cai_error *);
+                                    uint64_t sequence, long long replay_turns,
+                                    cai_error *);
 void cai_cli_transcript_feed_cancel(cai_cli_transcript_publisher *, uint64_t,
                                     uint64_t stream);
 void cai_cli_transcript_feed_detach(cai_cli_transcript_publisher *, uint64_t);

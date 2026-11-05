@@ -747,7 +747,8 @@ int cai_app_client_save_prompt(cai_app_client *c, uint64_t request,
 int cai_app_client_subscribe(cai_app_client *c, uint64_t request,
                              uint64_t conversation, const char *session,
                              const char *collection, uint64_t after,
-                             uint64_t sequence, cai_error *error) {
+                             uint64_t sequence, long long replay_turns,
+                             cai_error *error) {
   cai_cli_transcript_message m;
   int rc = valid(c, error);
   if (rc != CAI_OK)
@@ -761,7 +762,8 @@ int cai_app_client_subscribe(cai_app_client *c, uint64_t request,
       request <= c->stream_high ||
       ((after != 0U || sequence != 0U) &&
        (collection == NULL || collection[0] == '\0')) ||
-      (after == 0U && sequence != 0U))
+      (after == 0U && sequence != 0U) || replay_turns < -1LL ||
+      (after != 0U && replay_turns != -1LL))
     return cai_cli_error(
         error, CAI_ERR_INVALID,
         "Connected client and verified transcript cursor required");
@@ -774,6 +776,7 @@ int cai_app_client_subscribe(cai_app_client *c, uint64_t request,
   m.event.collection = collection;
   m.event.position = after;
   m.event.sequence = sequence;
+  m.replay_turns = replay_turns;
   rc = send_transcript(c, &m, error);
   if (rc == CAI_OK) {
     c->wanted_stream = c->stream_high = request;

@@ -171,12 +171,15 @@ int cai_app_client_save_prompt(cai_app_client *, uint64_t request,
  * increase per attachment, independently of input/control IDs. Replacing a
  * subscription discards its unfinished candidate, never model input. Replay
  * ends at the captured watermark, then ordered live events follow. ERROR
- * requires explicit resubscription; no automatic retry or missing-data skip. */
+ * requires explicit resubscription; no automatic retry or missing-data skip.
+ * replay_turns selects the newest initial presentation entries: -1 all, 0
+ * none, positive count. Cursor continuation requires -1 and never reapplies a
+ * tail limit, so work performed while detached is not silently skipped. */
 int cai_app_client_subscribe(cai_app_client *, uint64_t request,
                              uint64_t conversation, const char *session,
                              const char *expected_collection,
                              uint64_t after_position, uint64_t after_sequence,
-                             cai_error *);
+                             long long replay_turns, cai_error *);
 /** End only this transcript subscription, keeping input and attachment alive.
  * The terminal ERROR span targets its original stream identity. */
 int cai_app_client_unsubscribe(cai_app_client *, cai_error *);

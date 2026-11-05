@@ -6,6 +6,7 @@
 typedef struct cai_cli_transcript_message {
   cai_protocol_header header;
   cai_transcript_event event;
+  int64_t replay_turns;
 } cai_cli_transcript_message;
 typedef struct cai_cli_transcript_decoder cai_cli_transcript_decoder;
 int cai_cli_transcript_decoder_open(cai_cli_transcript_decoder **, cai_error *);

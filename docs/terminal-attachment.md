@@ -79,11 +79,25 @@ can be applied atomically. Initial historical replay and another producer's
 actions never execute on the attaching terminal. A parked attachment's cursor
 continuation only applies its own previously undisplayed actions.
 
+Initial replay applies the frontend's configured last-ten-entry limit on the
+owner, with zero and replay-all overrides. The owner reuses restoration/append
+metadata and starts a native range read at the selected event; it does not scan
+the entire journal for each attachment. This selection never truncates model
+context. Returning to a parked workspace continues its accepted cursor without
+reapplying the initial limit. Native trims remove those ranges from the owner's
+index as well as storage; later attachments cannot redisplay the deleted entries.
+Append bursts preserve ordered live delivery by switching a slow ring to native
+catch-up through the existing reader worker. The normal path stays direct;
+neither ring capacity nor the number of reader workers grows with output.
+Reviewer reasoning uses the same incremental Markdown path during live display
+and replay. Manual review headers come from the accepted backend command;
+model-invoked review tools use the shared formatter's lifecycle presentation.
+
 ## Remaining cutover work
 
 This is a working terminal/socket composition, not a claim of complete feature
 parity. Remaining key bindings, pager/layout delegates, review progress parity,
-default replay-tail selection, concurrent first-launch
+concurrent first-launch
 reconciliation, immediate live command-progress events and explicit
 startup-configuration compatibility still require
 integration. Discovery currently runs before editor construction; a slow identity

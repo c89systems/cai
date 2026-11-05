@@ -81,7 +81,7 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
   lc_error detail;
   lonejson_config config = lonejson_default_config();
   unsigned char random[16];
-  unsigned long long previous = 0U, line_number = 0U, position = 0U;
+  unsigned long long previous = 0U, position = 0U;
   struct timespec now;
   size_t i;
   int ch, created = 0, rc = CAI_OK;
@@ -159,19 +159,21 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
       if (error->code != CAI_OK)
         rc = error->code;
     }
-    ++line_number;
     if (rc == CAI_OK &&
         ((strcmp(record.record_type, "event") != 0 &&
           strcmp(record.record_type, "commit") != 0) ||
-         (strcmp(record.record_type, "event") == 0 && record.sequence == 0U)))
+         (strcmp(record.record_type, "event") == 0 && record.sequence == 0U) ||
+         (strcmp(record.record_type, "commit") == 0 &&
+          record.commit_created_at_ns == 0U)))
       rc = cai_cli_error(
           error, CAI_ERR_INVALID,
           "native journal identity headers must precede payloads");
     if (strcmp(record.record_type, "event") == 0)
       snprintf(append_id, sizeof(append_id), "event-%020llu", record.sequence);
     else
-      snprintf(append_id, sizeof(append_id), "commit-import-%020llu",
-               line_number);
+      snprintf(append_id, sizeof(append_id), "commit-%020llu-%020llu",
+               (unsigned long long)record.commit_created_at_ns,
+               (unsigned long long)record.applied_event_sequence);
     if (rc == CAI_OK)
       rc = journal_append_source(pouch, &session, collection, append_id, source,
                                  &position, error);

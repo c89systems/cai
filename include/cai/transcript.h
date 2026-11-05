@@ -32,6 +32,9 @@ typedef struct cai_transcript_event {
   cai_transcript_kind kind;
   uint64_t stream, conversation, sequence, timestamp_ns, position, offset,
       watermark, visibility;
+  /** Older presentation entries omitted by a selected initial replay. Zero
+   * for cursor continuation, full replay and prompt recall. */
+  uint64_t omitted;
   int64_t utc_offset_seconds;
   const char *session, *collection, *type;
   const void *data;

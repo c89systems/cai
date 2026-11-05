@@ -164,10 +164,10 @@ static void publisher(cai_cli_pouch *pouch) {
   assert(cai_cli_transcript_feed_open(pouch, "/transcript", "stream", 1U,
                                       &duplicate, NULL) == CAI_ERR_INVALID &&
          duplicate == NULL);
-  assert(cai_cli_transcript_feed_request(feed, 1U, 1U, NULL, 0U, 0U, NULL) ==
-         CAI_OK);
-  assert(cai_cli_transcript_feed_request(feed, 2U, 2U, NULL, 0U, 0U, NULL) ==
-         CAI_OK);
+  assert(cai_cli_transcript_feed_request(feed, 1U, 1U, NULL, 0U, 0U, -1LL,
+                                         NULL) == CAI_OK);
+  assert(cai_cli_transcript_feed_request(feed, 2U, 2U, NULL, 0U, 0U, -1LL,
+                                         NULL) == CAI_OK);
   fd.fd = cai_cli_transcript_feed_fd(feed);
   fd.events = POLLIN;
   assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
@@ -210,7 +210,7 @@ static void publisher(cai_cli_pouch *pouch) {
     assert(poll(&fd, 1U, 1000) >= 0);
   }
   assert(cai_cli_transcript_feed_request(feed, 1U, 3U, collection, position,
-                                         sequence, NULL) == CAI_OK);
+                                         sequence, -1LL, NULL) == CAI_OK);
   replay = 0U;
   while (replay == 0U) {
     cai_cli_transcript_feed_drain(feed);
@@ -228,6 +228,49 @@ static void publisher(cai_cli_pouch *pouch) {
   }
   /* The real durable-cut hook invalidates all subscribed views. Exercising
    * its consumer contract here avoids inventing a model-context fixture. */
+  {
+    size_t received[2] = {0U, 0U}, bytes[2] = {0U, 0U};
+    unsigned int peer;
+    int extended = 0;
+    char *large = malloc(192U * 1024U + 1U);
+    assert(large != NULL);
+    memset(large, 'b', 192U * 1024U);
+    large[192U * 1024U] = '\0';
+    /* Burst beyond both live rings, including one event larger than a ring.
+     * Catch-up must preserve accepted prefixes and remain a live stream. */
+    for (i = 44U; i <= 123U; ++i)
+      append(pouch, i, "burst output");
+    append(pouch, 124U, large);
+    free(large);
+    while (received[0] != 82U || received[1] != 82U) {
+      cai_cli_transcript_feed_drain(feed);
+      for (peer = 0U; peer < 2U; ++peer)
+        while (cai_cli_transcript_feed_next(feed, peer + 1U, &frame)) {
+          const cai_transcript_event *e = &frame.event;
+          assert(e->kind == CAI_TRANSCRIPT_EVENT_BEGIN ||
+                 e->kind == CAI_TRANSCRIPT_DATA ||
+                 e->kind == CAI_TRANSCRIPT_EVENT_END);
+          assert(e->sequence == 44U + received[peer]);
+          if (e->kind == CAI_TRANSCRIPT_EVENT_BEGIN)
+            bytes[peer] = 0U;
+          else if (e->kind == CAI_TRANSCRIPT_DATA)
+            bytes[peer] += e->length;
+          else {
+            if (e->sequence == 124U)
+              assert(bytes[peer] == 192U * 1024U);
+            ++received[peer];
+            if (!extended && received[peer] >= 20U) {
+              /* Extend the target while a native catch-up read is active. */
+              append(pouch, 125U, "after captured catch-up window");
+              extended = 1;
+            }
+          }
+        }
+      if (received[0] != 82U || received[1] != 82U)
+        assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
+               (uint64_t)now.tv_sec < until && poll(&fd, 1U, 1000) >= 0);
+    }
+  }
   pthread_mutex_lock(&pouch->journal_lock);
   pouch->journal_observer(pouch->journal_observer_context, "stream", 0U, NULL);
   pthread_mutex_unlock(&pouch->journal_lock);
@@ -240,8 +283,8 @@ static void publisher(cai_cli_pouch *pouch) {
          0); /* Idle is quiescent, including after errors. */
   /* Closing a context cancels a producer even when its history ring is full.
    * No drain, frontend acknowledgement or one-second timeout is required. */
-  assert(cai_cli_transcript_feed_request(feed, 1U, 4U, NULL, 0U, 0U, NULL) ==
-         CAI_OK);
+  assert(cai_cli_transcript_feed_request(feed, 1U, 4U, NULL, 0U, 0U, -1LL,
+                                         NULL) == CAI_OK);
   while (!cai_cli_transcript_feed_ready(feed, 1U, &failed))
     assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
            (uint64_t)now.tv_sec < until && poll(&fd, 1U, 1000) >= 0);

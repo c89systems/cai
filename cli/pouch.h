@@ -3,6 +3,7 @@
 
 #include "options.h"
 #include "pouch_stream.h"
+#include "replay.h"
 #include "transcript.h"
 #include <cai/agent_runtime.h>
 #include <cai/blob_store.h>
@@ -86,6 +87,12 @@ typedef struct cai_cli_pouch {
   size_t event_position_count, event_position_capacity, event_position_stride;
   char event_position_session[CAI_AGENT_SESSION_ID_MAX];
   unsigned long long event_last_sequence, event_last_position;
+  /** Owner's transient turn/range index, populated by the existing restoration
+   * pass and durable appends. Protected by journal_lock once serving clients.
+   * Stores identities only; never transcript text or a second SDK receiver. */
+  cai_cli_replay *transcript_index;
+  char transcript_index_session[CAI_AGENT_SESSION_ID_MAX];
+  int transcript_index_failed;
 } cai_cli_pouch;
 
 int cai_cli_pouch_open_options(cai_cli_pouch *pouch,

@@ -40,6 +40,7 @@ typedef struct frontend_view {
   cai_cli_transcript_presenter *transcript;
   cai_cli_replay_tools *tools;
   cai_cli_completions completions;
+  cai_cli_reasoning child_reasoning;
   char session[129];
   unsigned long long producer, epoch;
   sl_watch_id_t socket_watch, boot_watch, timer_watch, wake_watch;
@@ -519,27 +520,47 @@ static int transcript(void *context, const cai_transcript_event *event,
         cai_cli_presenter_set_theme_scope(f->ui, review ? 2 : 0, error) !=
             CAI_OK)
       return CAI_ERR_TRANSPORT;
-    if (review && !f->review_open) {
-      f->review_open = 1;
-      if (markdown(f, "**Review started.**\n\n",
-                   strlen("**Review started.**\n\n")) != 0 ||
-          cai_cli_presenter_finish_response(f->ui) != 0)
+    /* /review's accepted command already carries its shared start/end
+     * documents. Only the model-invoked tool needs local lifecycle headings. */
+  }
+  if (event->kind == CAI_TRANSCRIPT_REPLAY_BEGIN) {
+    f->replaying = 1;
+    if (event->omitted != 0U && f->options->replay_turns != 0L) {
+      char message[160];
+      snprintf(message, sizeof(message),
+               "Showing the latest %ld turns. %llu earlier entries omitted.",
+               f->options->replay_turns, (unsigned long long)event->omitted);
+      if (notice(f, message) != 0)
         return CAI_ERR_TRANSPORT;
     }
-  }
-  if (event->kind == CAI_TRANSCRIPT_REPLAY_BEGIN)
-    f->replaying = 1;
-  else if (event->kind == CAI_TRANSCRIPT_REPLAY_END) {
+  } else if (event->kind == CAI_TRANSCRIPT_REPLAY_END) {
     f->replaying = 0;
     f->resume_actions = 0;
     f->resume_collection[0] = '\0';
     f->resume_position = f->resume_sequence = 0U;
   }
   if (event->kind == CAI_TRANSCRIPT_ERROR) {
-    f->subscribed = 0;
+    /* A malformed cursor or unavailable index must not trigger an unbounded
+     * replay-from-zero loop. Context handoff binds its new stream separately.
+     * An acknowledged trim can continue after the last accepted native cursor;
+     * the collection keeps those permanent positions even across deletion. */
     if (event->failure == CAI_TRANSCRIPT_CONTEXT_CLOSED) {
+      f->subscribed = 0;
       cai_cli_transcript_presenter_reset(f->transcript);
       return CAI_OK;
+    }
+    cai_cli_transcript_presenter_reset(f->transcript);
+    f->replaying = 0;
+    if (event->failure == CAI_TRANSCRIPT_HISTORY_CHANGED) {
+      const cai_app_transcript_state *cursor;
+      if (cai_app_client_get_state(f->client, &f->state, error) != CAI_OK)
+        return error != NULL ? error->code : CAI_ERR_INVALID;
+      cursor = &f->state.transcript;
+      snprintf(f->resume_collection, sizeof(f->resume_collection), "%s",
+               cursor->collection);
+      f->resume_position = cursor->position;
+      f->resume_sequence = cursor->sequence;
+      f->subscribed = 0;
     }
     return notice(f, event->reason != NULL ? event->reason
                                            : "Transcript unavailable") == 0
@@ -693,9 +714,23 @@ static int execution_body(void *context, const cai_app_execution_event *event,
       rc = cai_cli_presenter_finish_response(f->ui);
   } else if (event->subagent && strcmp(r->kind, "review_markdown_delta") == 0)
     rc = markdown(f, r->data, length);
+  else if (event->subagent &&
+           strcmp(r->kind, "reasoning_summary_started") == 0) {
+    if (r->final) {
+      rc = cai_cli_presenter_finish_response(f->ui);
+      if (rc == 0)
+        rc = cai_cli_presenter_finish_reasoning(f->ui);
+      cai_cli_reasoning_reset(&f->current->child_reasoning);
+    }
+  } else if (event->subagent && strcmp(r->kind, "reasoning_summary") == 0)
+    rc = cai_cli_reasoning_feed(&f->current->child_reasoning, r->data, length,
+                                cai_cli_presenter_reasoning_body, f->ui);
   else if (event->subagent && strcmp(r->kind, "review_markdown_end") == 0) {
     rc = cai_cli_presenter_finish_response(f->ui);
     if (rc == 0)
+      rc = cai_cli_presenter_finish_reasoning(f->ui);
+    if (rc == 0 && (r->parent_call_id == NULL ||
+                    strcmp(r->parent_call_id, "/review") != 0))
       rc = markdown(f, "**Review finished.**\n",
                     strlen("**Review finished.**\n"));
     if (rc == 0)
@@ -704,9 +739,12 @@ static int execution_body(void *context, const cai_app_execution_event *event,
   } else if (event->subagent && strcmp(r->kind, "assistant_text_delta") == 0 &&
              (r->subagent == NULL || strcmp(r->subagent, "review") != 0))
     rc = cai_cli_presenter_text(f->ui, r->data, length);
-  else if (event->subagent && strcmp(r->kind, "assistant_text_end") == 0)
+  else if (event->subagent && strcmp(r->kind, "assistant_text_end") == 0) {
     rc = cai_cli_presenter_finish_response(f->ui);
-  else if (strcmp(r->kind, "turn.cancelled") == 0) {
+    if (rc == 0)
+      rc = cai_cli_presenter_finish_reasoning(f->ui);
+    cai_cli_reasoning_end(&f->current->child_reasoning);
+  } else if (strcmp(r->kind, "turn.cancelled") == 0) {
     rc = cai_cli_presenter_finish_response(f->ui);
     if (rc == 0)
       rc = cai_cli_presenter_finish_reasoning(f->ui);
@@ -919,6 +957,8 @@ static int startup_input(frontend *f) {
   sl_queue_request_t request;
   sl_queue_request_id_t id;
   if (!f->ready || !f->subscribed || f->replaying || f->startup_request != 0U ||
+      !f->state.transcript.active || f->state.transcript.subscribing ||
+      f->state.transcript.replaying ||
       f->state.transport.controller != f->state.transport.attachment ||
       f->startup_stage >= 5)
     return 0;
@@ -928,7 +968,8 @@ static int startup_input(frontend *f) {
       if (f->options->new_session) {
         prefix = "/new";
         value = "";
-      } else if (f->options->resume_id != NULL) {
+      } else if (f->options->resume_id != NULL &&
+                 strcmp(f->options->resume_id, f->state.session) != 0) {
         prefix = "/resume ";
         value = f->options->resume_id;
       }
@@ -1052,7 +1093,9 @@ static int service(frontend *f) {
           f->client, ++f->subscribe_request, f->state.conversation,
           f->state.session,
           f->resume_collection[0] != '\0' ? f->resume_collection : NULL,
-          f->resume_position, f->resume_sequence, &f->error);
+          f->resume_position, f->resume_sequence,
+          f->resume_collection[0] != '\0' ? -1LL : f->options->replay_turns,
+          &f->error);
       if (rc != CAI_OK)
         return -1;
       f->subscribed = 1;
@@ -1281,6 +1324,7 @@ static int select_view(frontend *f, const char *session) {
         cai_cli_presenter_renderer_create(f->ui, &f->ui->render_theme,
                                           &f->ui->renderer,
                                           &f->error) != CAI_OK ||
+        cai_cli_presenter_geometry(f->ui) != 0 ||
         cai_cli_presenter_tool_display_init(f->ui, &f->error) != CAI_OK ||
         cai_cli_transcript_presenter_open(f->ui, &f->transcript, &f->error) !=
             CAI_OK)

@@ -1110,11 +1110,11 @@ static void typed_server(int argc, char **argv) {
   typed_open(&b, 0U, NULL);
   original = a.state;
   assert(cai_app_client_subscribe(a.client, 1U, a.state.conversation,
-                                  a.state.session, NULL, 0U, 0U,
+                                  a.state.session, NULL, 0U, 0U, -1LL,
                                   NULL) == CAI_OK);
   typed_wait(&a, &a.replay_ends, 1U);
   assert(cai_app_client_subscribe(b.client, 1U, b.state.conversation,
-                                  b.state.session, NULL, 0U, 0U,
+                                  b.state.session, NULL, 0U, 0U, -1LL,
                                   NULL) == CAI_OK);
   typed_wait(&b, &b.replay_ends, 1U);
   assert(a.state.transport.controller == a.state.transport.attachment &&
@@ -1139,7 +1139,7 @@ static void typed_server(int argc, char **argv) {
   a.transcript_sequence = cursor.sequence;
   assert(cai_app_client_subscribe(a.client, 1U, a.state.conversation,
                                   a.state.session, cursor.collection,
-                                  cursor.position, cursor.sequence,
+                                  cursor.position, cursor.sequence, -1LL,
                                   NULL) == CAI_OK);
   typed_wait(&a, &a.replay_ends, 1U);
   assert(a.state.transcript.active &&
@@ -1161,7 +1161,7 @@ static void typed_server(int argc, char **argv) {
          a.execution_chunks != 0U);
   cursor = a.state.transcript;
   assert(cai_app_client_subscribe(a.client, 2U, a.state.conversation,
-                                  "not-the-active-session", NULL, 0U, 0U,
+                                  "not-the-active-session", NULL, 0U, 0U, -1LL,
                                   NULL) == CAI_OK);
   typed_wait(&a, &a.transcript_failures, 1U);
   assert(!a.state.transcript.active && !a.state.transcript.subscribing &&
@@ -1169,7 +1169,7 @@ static void typed_server(int argc, char **argv) {
   a.transcript_sequence = cursor.sequence;
   assert(cai_app_client_subscribe(a.client, 3U, a.state.conversation,
                                   a.state.session, cursor.collection,
-                                  cursor.position, cursor.sequence,
+                                  cursor.position, cursor.sequence, -1LL,
                                   NULL) == CAI_OK);
   typed_wait(&a, &a.replay_ends, 2U);
   assert(cai_app_client_unsubscribe(a.client, NULL) == CAI_OK);
@@ -1291,7 +1291,7 @@ static void server_commands(int argc, char **argv) {
     free(large);
   }
   assert(cai_app_client_subscribe(a->client, 2U, a->state.conversation,
-                                  a->state.session, NULL, 0U, 0U,
+                                  a->state.session, NULL, 0U, 0U, -1LL,
                                   NULL) == CAI_OK);
   typed_wait(a, &a->replay_ends, 1U);
   typed_offer(a, 1U, "Exercise command boundaries");
@@ -1361,7 +1361,7 @@ static void server_commands(int argc, char **argv) {
     typed_wait(a, &a->snapshots, snapshots + 1U);
     a->transcript_sequence = 0U;
     assert(cai_app_client_subscribe(a->client, 4U, a->state.conversation,
-                                    a->state.session, NULL, 0U, 0U,
+                                    a->state.session, NULL, 0U, 0U, -1LL,
                                     NULL) == CAI_OK);
     typed_wait(a, &a->replay_ends, ends + 1U);
     assert(a->command_completed == completed + 1U &&

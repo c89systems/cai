@@ -296,7 +296,7 @@ int main(int argc, char **argv) {
       cai_input_request request;
       cai_input_scope scope;
       assert(cai_app_client_subscribe(v->client, 1U, v->state.conversation,
-                                      v->state.session, NULL, 0U, 0U,
+                                      v->state.session, NULL, 0U, 0U, -1LL,
                                       &v->error) == CAI_OK);
       while (!v->replayed)
         step(v);

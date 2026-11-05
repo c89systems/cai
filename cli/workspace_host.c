@@ -288,9 +288,10 @@ static int transcript_request(host_peer *peer, const cai_protocol_event *event,
     rc = cai_cli_error(&local, CAI_ERR_INVALID,
                        "Transcript conversation changed");
   if (rc == CAI_OK)
-    rc = cai_cli_transcript_feed_request(
-        peer->host->history, peer->attachment, m->header.request,
-        m->event.collection, m->event.position, m->event.sequence, &local);
+    rc = cai_cli_transcript_feed_request(peer->host->history, peer->attachment,
+                                         m->header.request, m->event.collection,
+                                         m->event.position, m->event.sequence,
+                                         m->replay_turns, &local);
   if (rc == CAI_OK)
     peer->stream = peer->stream_high = m->header.request;
   else

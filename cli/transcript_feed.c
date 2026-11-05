@@ -17,8 +17,15 @@ typedef struct ring {
 typedef struct subscriber {
   uint64_t attachment, stream, token, after, sequence, watermark, progress;
   char expected[21], *cursor;
+  cai_cli_replay *selection;
+  long long replay_turns;
   ring *history, *live;
   int pending, prepared, active, replaying, error;
+  /** Direct live delivery is the fast path. A burst switches only this peer
+   * to native catch-up after its already queued complete events have drained.
+   */
+  int catchup, catchup_started;
+  uint64_t live_position, live_sequence, catchup_target;
   unsigned int limit;
   cai_transcript_failure failure;
   int code;
@@ -46,7 +53,11 @@ typedef struct job {
       progress;
   char *cursor;
   int prepared;
+  int emit;
+  cai_cli_replay *selection;
+  long long replay_turns;
   int prompts;
+  int catchup;
   unsigned int limit;
 } job;
 static void wake(cai_cli_transcript_publisher *f) {
@@ -101,6 +112,7 @@ static void push(ring *r, const cai_transcript_event *e) {
 static void failure(cai_cli_transcript_publisher *f, subscriber *s,
                     cai_transcript_failure why, int code, const char *message) {
   s->active = s->pending = 0;
+  s->catchup = s->catchup_started = 0;
   s->error = 1;
   if (s->token != UINT64_MAX)
     ++s->token;
@@ -113,6 +125,8 @@ static void failure(cai_cli_transcript_publisher *f, subscriber *s,
     s->live->count = s->live->start = 0U;
   free(s->cursor);
   s->cursor = NULL;
+  cai_cli_replay_close(s->selection);
+  s->selection = NULL;
   pthread_cond_broadcast(&f->condition);
   wake(f);
 }
@@ -168,11 +182,13 @@ static int read_event(void *context, const cai_cli_transcript_event *source,
           error, CAI_ERR_PROTOCOL,
           "transcript cursor sequence does not match position");
     j->offset = 0U;
+    j->emit = j->selection == NULL ||
+              cai_cli_replay_contains(j->selection, source->sequence);
     e.kind = CAI_TRANSCRIPT_EVENT_BEGIN;
     e.type = source->type;
     e.has_data = source->has_data;
   } else if (source->kind == CAI_CLI_TRANSCRIPT_DATA) {
-    if (source->length == 0U)
+    if (source->length == 0U || !j->emit)
       return CAI_OK;
     if (source->length > CAI_CLI_TRANSCRIPT_CHUNK ||
         source->length > UINT64_MAX - j->offset)
@@ -188,7 +204,7 @@ static int read_event(void *context, const cai_cli_transcript_event *source,
     e.offset = j->offset;
     j->sequence = source->sequence;
   }
-  return add(j, &e, error);
+  return j->emit ? add(j, &e, error) : CAI_OK;
 }
 static void observe(void *context, const char *session,
                     unsigned long long position,
@@ -215,6 +231,26 @@ static void observe(void *context, const char *session,
     if (!have_length) {
       length = source->data != NULL ? strlen(source->data) : 0U;
       have_length = 1;
+    }
+    if (s->catchup ||
+        length / CAI_CLI_TRANSCRIPT_CHUNK +
+                (length % CAI_CLI_TRANSCRIPT_CHUNK != 0U) >
+            FRAMES - 2U ||
+        s->live->count + 2U + length / CAI_CLI_TRANSCRIPT_CHUNK +
+                (length % CAI_CLI_TRANSCRIPT_CHUNK != 0U) >
+            FRAMES) {
+      /* Admit whole events to the ring. Never abandon a provisional prefix or
+       * allocate a larger buffer. Later appends extend one native read target;
+       * the retained worker starts after the preceding direct events drain. */
+      s->catchup_target = position;
+      if (!s->catchup) {
+        s->catchup = 1;
+        if (!s->replaying)
+          s->pending = 1;
+        pthread_cond_broadcast(&f->condition);
+        wake(f);
+      }
+      continue;
     }
     memset(&e, 0, sizeof(e));
     e.stream = s->stream;
@@ -250,6 +286,8 @@ static void observe(void *context, const char *session,
     e.data = NULL;
     e.length = 0U;
     push(s->live, &e);
+    s->live_position = position;
+    s->live_sequence = source->sequence;
     wake(f);
     continue;
   overflow:
@@ -263,6 +301,7 @@ static int prepare(job *j, cai_error *error) {
   lc_collection_head_res head;
   lc_error detail;
   cai_transcript_event e;
+  uint64_t omitted = 0U;
   int rc;
   lc_error_init(&detail);
   /* Lock order is journal -> feed, as in observe. Capturing W and installing
@@ -271,6 +310,42 @@ static int prepare(job *j, cai_error *error) {
   rc = f->reader->collection->head(f->reader->collection, &head, &detail);
   if (rc != LC_OK)
     rc = cai_cli_lc_error(error, &detail);
+  /* The complete index is metadata built during restoration/append, not
+   * another pass over history. Freeze only this subscriber's selected ranges.
+   * Native append-ID lookup jumps directly to its first selected event. */
+  if (rc == CAI_OK && j->after == 0U && j->replay_turns >= 0LL) {
+    unsigned long long first = 0U;
+    if (j->replay_turns != 0LL) {
+      if (strcmp(f->pouch->transcript_index_session, f->session) != 0 ||
+          f->pouch->transcript_index_failed)
+        rc =
+            cai_cli_error(error, CAI_ERR_INVALID,
+                          "Replay selection unavailable; reopen the workspace");
+      else
+        rc = cai_cli_replay_select(f->pouch->transcript_index, j->replay_turns,
+                                   &j->selection, error);
+      if (rc == CAI_OK) {
+        first = cai_cli_replay_first(j->selection);
+        omitted = cai_cli_replay_omitted(j->selection);
+      }
+    }
+    if (rc == CAI_OK && first != 0U) {
+      char id[64];
+      lc_collection_append_status_res status;
+      snprintf(id, sizeof(id), "event-%020llu", first);
+      if (f->reader->collection->append_status(f->reader->collection, id,
+                                               &status, &detail) != LC_OK)
+        rc = cai_cli_lc_error(error, &detail);
+      else if (status.state != LC_COLLECTION_APPEND_COMMITTED ||
+               status.entry.position == 0U)
+        rc = cai_cli_error(error, CAI_ERR_INVALID,
+                           "Replay boundary is no longer visible");
+      else
+        j->after = status.entry.position - 1U;
+    } else if (rc == CAI_OK)
+      j->after = head.upper_position;
+    j->progress = j->after;
+  }
   pthread_mutex_lock(&f->lock);
   if (rc == CAI_OK && current(j)) {
     if (j->after > head.upper_position ||
@@ -280,6 +355,8 @@ static int prepare(job *j, cai_error *error) {
                          "Transcript collection or cursor no longer matches");
     else {
       j->watermark = j->peer->watermark = head.upper_position;
+      j->peer->live_position = head.upper_position;
+      j->peer->live_sequence = j->sequence;
       j->peer->prepared = 1;
     }
   } else if (!current(j))
@@ -295,6 +372,7 @@ static int prepare(job *j, cai_error *error) {
   e.collection = head.collection_id;
   e.watermark = head.upper_position;
   e.visibility = head.recovery_revision;
+  e.omitted = omitted;
   return add(j, &e, error);
 }
 static int prompt_event(void *context, uint64_t position, const char *prompt,
@@ -377,6 +455,16 @@ static void *worker(void *context) {
         subscriber *s = &f->peers[index];
         if (!s->active || !s->pending)
           continue;
+        if (index < PEERS && !s->replaying && s->catchup &&
+            !s->catchup_started) {
+          if (s->history->count != 0U || s->live->count != 0U)
+            continue;
+          s->catchup_started = 1;
+          s->after = s->progress = s->live_position;
+          s->sequence = s->live_sequence;
+          s->watermark = s->catchup_target;
+          s->prepared = 1;
+        }
         j.peer = s;
         j.attachment = s->attachment;
         j.token = s->token;
@@ -387,9 +475,13 @@ static void *worker(void *context) {
         j.progress = s->progress;
         j.prepared = s->prepared;
         j.prompts = index >= PEERS;
+        j.catchup = !j.prompts && !s->replaying && s->catchup;
         j.limit = s->limit;
         j.cursor = s->cursor;
         s->cursor = NULL;
+        j.selection = s->selection;
+        s->selection = NULL;
+        j.replay_turns = s->replay_turns;
         s->pending = 0;
         f->next = (index + 1U) % (2U * PEERS);
         found = 1;
@@ -419,7 +511,7 @@ static void *worker(void *context) {
     options.cursor = j.cursor;
     options.cancelled = cancelled;
     options.cancel_context = &j;
-    if (rc == CAI_OK && j.prompts && j.after >= j.watermark)
+    if (rc == CAI_OK && j.after >= j.watermark)
       result.last_examined_position = j.watermark;
     else if (rc == CAI_OK)
       rc = j.prompts
@@ -432,7 +524,8 @@ static void *worker(void *context) {
          result.checkpoint_cursor == NULL))
       rc = cai_cli_error(&error, CAI_ERR_PROTOCOL,
                          "Transcript read made no resumable progress");
-    if (rc == CAI_OK && result.last_examined_position >= j.watermark) {
+    if (rc == CAI_OK && !j.catchup &&
+        result.last_examined_position >= j.watermark) {
       cai_transcript_event end;
       memset(&end, 0, sizeof(end));
       end.kind = CAI_TRANSCRIPT_REPLAY_END;
@@ -447,7 +540,23 @@ static void *worker(void *context) {
                 error.message != NULL ? error.message
                                       : "Transcript read failed");
       else if (result.last_examined_position >= j.watermark) {
-        s->replaying = 0;
+        if (j.catchup) {
+          s->live_position = result.last_examined_position;
+          s->live_sequence = j.sequence;
+          if (s->catchup_target > result.last_examined_position) {
+            s->after = s->progress = result.last_examined_position;
+            s->sequence = j.sequence;
+            s->watermark = s->catchup_target;
+            s->pending = 1;
+          } else {
+            s->pending = 0;
+            s->catchup = s->catchup_started = 0;
+          }
+        } else {
+          s->replaying = 0;
+          if (s->catchup)
+            s->pending = 1;
+        }
         wake(f);
       } else {
         s->prepared = 1;
@@ -456,12 +565,15 @@ static void *worker(void *context) {
         s->cursor = result.checkpoint_cursor;
         result.checkpoint_cursor = NULL;
         s->sequence = j.sequence;
+        s->selection = j.selection;
+        j.selection = NULL;
         s->progress = result.last_examined_position;
         s->pending = 1;
       }
     }
     pthread_mutex_unlock(&f->lock);
     free(j.cursor);
+    cai_cli_replay_close(j.selection);
     lc_collection_read_res_cleanup(&result);
     cai_error_cleanup(&error);
   }
@@ -543,14 +655,16 @@ fail_pipe:
 int cai_cli_transcript_feed_request(cai_cli_transcript_publisher *f,
                                     uint64_t attachment, uint64_t stream,
                                     const char *collection, uint64_t after,
-                                    uint64_t sequence, cai_error *error) {
+                                    uint64_t sequence, long long replay_turns,
+                                    cai_error *error) {
   subscriber *s;
   size_t i;
   if (f == NULL || attachment == 0U || stream == 0U ||
       (collection != NULL && strlen(collection) > 20U) ||
       ((after != 0U || sequence != 0U) &&
        (collection == NULL || collection[0] == '\0')) ||
-      (after == 0U && sequence != 0U))
+      (after == 0U && sequence != 0U) || replay_turns < -1LL ||
+      (after != 0U && replay_turns != -1LL))
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "Verified transcript cursor required");
   pthread_mutex_lock(&f->lock);
@@ -584,8 +698,13 @@ int cai_cli_transcript_feed_request(cai_cli_transcript_publisher *f,
   s->after = after;
   s->progress = after;
   s->sequence = sequence;
+  s->replay_turns = replay_turns;
+  cai_cli_replay_close(s->selection);
+  s->selection = NULL;
   s->active = s->pending = s->replaying = 1;
   s->prepared = s->error = 0;
+  s->catchup = s->catchup_started = 0;
+  s->live_position = s->live_sequence = s->catchup_target = 0U;
   s->history->count = s->history->start = s->live->count = s->live->start = 0U;
   snprintf(s->expected, sizeof(s->expected), "%s",
            collection != NULL ? collection : "");
@@ -619,6 +738,7 @@ void cai_cli_transcript_feed_detach(cai_cli_transcript_publisher *f,
     free(s->history);
     free(s->live);
     free(s->cursor);
+    cai_cli_replay_close(s->selection);
     memset(s, 0, sizeof(*s));
     s->token = token;
     pthread_cond_broadcast(&f->condition);
@@ -629,6 +749,7 @@ void cai_cli_transcript_feed_detach(cai_cli_transcript_publisher *f,
     free(s->history);
     free(s->live);
     free(s->cursor);
+    cai_cli_replay_close(s->selection);
     memset(s, 0, sizeof(*s));
     s->token = token;
     pthread_cond_broadcast(&f->condition);
@@ -715,6 +836,7 @@ void cai_cli_transcript_feed_close(cai_cli_transcript_publisher *f) {
     free(f->peers[i].history);
     free(f->peers[i].live);
     free(f->peers[i].cursor);
+    cai_cli_replay_close(f->peers[i].selection);
   }
   close(f->descriptors[0]);
   close(f->descriptors[1]);

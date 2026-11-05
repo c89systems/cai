@@ -107,7 +107,7 @@ static int transcript_observed(void *context, const cai_transcript_event *event,
     ++f->record_ends;
     if (f->replace_transcript)
       assert(cai_app_client_subscribe(f->client, 2U, 11U, "session", NULL, 0U,
-                                      0U, NULL) == CAI_OK);
+                                      0U, -1LL, NULL) == CAI_OK);
   }
   return CAI_OK;
 }
@@ -182,7 +182,7 @@ static int execution_observed(void *context, const cai_app_execution_event *e,
   ++f->executions;
   if (f->replace_execution)
     assert(cai_app_client_subscribe(f->client, 2U, 11U, "session", NULL, 0U, 0U,
-                                    NULL) == CAI_OK);
+                                    -1LL, NULL) == CAI_OK);
   /* Replacement must not free the borrowed metadata before callback return. */
   assert(strcmp(e->record->call_id, "call") == 0);
   return f->reject_execution ? CAI_ERR_CANCELLED : CAI_OK;
@@ -318,7 +318,7 @@ static void *wrong_owner(void *context) {
   assert(cai_app_client_shutdown(f->client, 1U, 1U, NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_cancel(f->client, 1U, 1U, NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_subscribe(f->client, 1U, 0U, "session", NULL, 0U, 0U,
-                                  NULL) == CAI_ERR_INVALID);
+                                  -1LL, NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_unsubscribe(f->client, NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_detach(f->client, NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_directory(f->client) == NULL);
@@ -357,7 +357,7 @@ static void transcript_send(fixture *f, cai_cli_transcript_message *m) {
 static void subscribe(fixture *f) {
   assert(exchange(f) == CAI_OK);
   assert(cai_app_client_subscribe(f->client, 1U, 11U, "session", NULL, 0U, 0U,
-                                  NULL) == CAI_OK);
+                                  -1LL, NULL) == CAI_OK);
   assert(exchange(f) == CAI_OK && f->subscriptions == 1U &&
          state(f).transcript.subscribing && !state(f).bound);
 }
@@ -445,9 +445,9 @@ static void transcript_tests(const char *runtime, const char *workspace) {
   open_fixture(f, runtime, workspace);
   subscribe(f);
   assert(cai_app_client_subscribe(f->client, 1U, 11U, "session", NULL, 0U, 0U,
-                                  NULL) == CAI_ERR_INVALID);
+                                  -1LL, NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_subscribe(f->client, 2U, 11U, "session", NULL, 9U, 8U,
-                                  NULL) == CAI_ERR_INVALID);
+                                  -1LL, NULL) == CAI_ERR_INVALID);
   transcript_message(&m, CAI_PROTOCOL_REPLAY_BEGIN);
   transcript_send(f, &m);
   assert(exchange(f) == CAI_OK);
@@ -470,7 +470,7 @@ static void transcript_tests(const char *runtime, const char *workspace) {
    * no old subscription alive. It preserves the accepted cursor for recovery.
    */
   assert(cai_app_client_subscribe(f->client, 2U, 11U, "session", "collection",
-                                  10U, 8U, NULL) == CAI_OK);
+                                  10U, 8U, -1LL, NULL) == CAI_OK);
   assert(exchange(f) == CAI_OK);
   transcript_message(&m, CAI_PROTOCOL_STREAM_BEGIN);
   transcript_send(f, &m);
@@ -815,7 +815,7 @@ static void execution_tests(const char *runtime, const char *workspace) {
       f->replace_transcript = scenario == 10U;
       if (scenario == 5U)
         assert(cai_app_client_subscribe(f->client, 2U, 11U, "session", NULL, 0U,
-                                        0U, NULL) == CAI_OK);
+                                        0U, -1LL, NULL) == CAI_OK);
       else {
         transcript_message(&m, CAI_PROTOCOL_STREAM_END);
         m.event.offset = offset;

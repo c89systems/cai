@@ -3,6 +3,22 @@ source "$(dirname "$0")/cli_test_common.sh"
 scope=${1:-full}
 export LOG_LEVEL=info
 peer_start
+owner=
+runtime_root=
+if [[ $scope == remote || $scope == embed ]]; then
+  runtime_root=$(mktemp -d "$support/../build/rep.XXXXXX")
+  base+=(--runtime-dir "$runtime_root")
+  replay_cleanup() {
+    local result=$?
+    if [[ -n "$owner" ]]; then
+      kill -TERM "$owner" 2>/dev/null || true
+      wait "$owner" 2>/dev/null || true
+    fi
+    if [[ $result == 0 ]]; then rm -rf -- "$runtime_root"; fi
+    cleanup "$result"
+  }
+  trap replay_cleanup EXIT
+fi
 config="$root/config/cai/config.ini"
 for value in '' -2 junk 1.5 999999999999999999999999; do
   run --replay-turns "$value" --list; bad
@@ -59,16 +75,28 @@ jq -L "$support/fixtures" -cs '
 ' "$seed" >"$root/long.jsonl"
 run --import "$root/long.jsonl"; ok
 id=$(stdout_text)
+if [[ $scope == remote || $scope == embed ]]; then
+  owner_base=("${base[@]}")
+  "${owner_base[@]}" -x --resume "$id" >"$root/owner.out" 2>"$root/owner.log" & owner=$!
+  wait_for has "$root/owner.log" 'Workspace server ready'
+  if [[ $scope == embed ]]; then
+    base=("$(realpath "$2")" "$runtime_root" "$work" "${base[@]:1}")
+  fi
+fi
 before=$(requests)
 terminal_start --resume "$id"
 expect ANSWER24; expect PARTB
 contains "$term/text" 'Showing the latest 10 turns.'
 absent "$term/text" PROMPT14; absent "$term/text" ANSWER14
 contains "$term/text" PROMPT15; contains "$term/text" ANSWER15
-[[ $(grep -c 'ANSWER[0-9][0-9] PARTA PARTB' "$term/text") == 10 ]]
+replay_output="$term/text"
+if [[ $scope == remote || $scope == embed ]]; then replay_output="$term/feed"; fi
+[[ $(grep -c 'ANSWER[0-9][0-9] PARTA PARTB' "$replay_output") == 10 ]]
 terminal_close
 [[ $(requests) == "$before" ]]
-jq -se '[.[] | select(.event == "assistant_text_delta" and .replay == true)] | length == 50' "$root/cache/cai/$id.log" >/dev/null
+replay_log="$root/cache/cai/$id.log"
+if [[ $scope == remote || $scope == embed ]]; then replay_log="$root/owner.log"; fi
+jq -se '[.[] | select(.event == "assistant_text_delta" and .replay == true)] | length == 50' "$replay_log" >/dev/null
 for limit in 0 1 -1 30; do
   terminal_start --resume "$id" --replay-turns "$limit"
   if [[ "$limit" == 0 ]]; then
@@ -86,6 +114,35 @@ for limit in 0 1 -1 30; do
   terminal_close
 done
 [[ $(requests) == "$before" ]]
+if [[ $scope == remote || $scope == embed ]]; then
+  # Replay suppression changes presentation, not restored model context or
+  # future live output. The same owner serves different frontend preferences.
+  terminal_start --replay-turns 0
+  plan '{"plan":["LIVE AFTER EMPTY REPLAY"]}'
+  prompt 'verify the entire restored context' 'LIVE AFTER EMPTY REPLAY'
+  tail -1 "$root/peer/requests.jsonl" >"$root/request"
+  contains "$root/request" PROMPT00; contains "$root/request" ANSWER00
+  contains "$root/request" PROMPT24; contains "$root/request" ANSWER24
+  send '/trim 1\r'; expect 'Trimmed 1'
+  send '/status\r'; expect 'Session ID'
+  terminal_close
+  # The acknowledged native cut updates the live index. No deleted answer
+  # reappears, and no automatic subscription loop replays from the beginning.
+  terminal_start --replay-turns 1
+  expect ANSWER24
+  absent "$term/feed" 'LIVE AFTER EMPTY REPLAY'
+  absent "$term/feed" ANSWER23
+  terminal_close
+  kill -TERM "$owner"; wait "$owner"; owner=
+  "${owner_base[@]}" -x --resume "$id" >"$root/owner.out" 2>"$root/owner.log" & owner=$!
+  wait_for has "$root/owner.log" 'Workspace server ready'
+  terminal_start --replay-turns 1
+  expect ANSWER24
+  absent "$term/feed" 'LIVE AFTER EMPTY REPLAY'
+  absent "$term/feed" ANSWER23
+  terminal_close
+  exit 0
+fi
 run --export "$id"; ok
 json "$root/data/cai/exports/$id/$id.jsonl" 'select(.record_type == "event" and .type == "turn_submitted" and .data == "PROMPT00") | .sequence == 2'
 # Runtime restoration is complete even when console replay is suppressed.

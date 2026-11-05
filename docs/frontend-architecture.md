@@ -370,8 +370,10 @@ The attach procedure is:
    tail for a fresh view or the acknowledged durable cursor for reconnection.
 3. Report the replay boundary, then deliver newly committed events after W.
    Events arriving while history is being read are retained only in bounded
-   subscriber storage; if it overflows, the client resynchronizes from the
-   journal. Do not lose the events between installing the subscription and W.
+   subscriber storage. When a burst exceeds it, the retained reader catches up
+   from the journal after queued complete records drain; a failed/stalled read
+   requires explicit client resynchronization. Do not lose the events between
+   installing the subscription and W.
 4. A client acknowledges only complete accepted frames/record boundaries.
    Reconnection deduplicates by stable record identity and offsets; a partially
    rendered document can be reconstructed from its declared boundary.
@@ -427,8 +429,10 @@ A disconnected/slow frontend cannot withhold an INPUT_BOUNDARY acknowledgement,
 delay goal continuation, stop a command or cause model cancellation.
 
 Subscription queues have explicit byte and frame caps. Durable transcript
-overflow produces a resync-required outcome with a safe cursor and closes or
-pauses that subscription. The journal supplies missing records. Coalesce
+bursts switch to bounded native journal catch-up after queued complete events.
+If that reader fails or stops draining, publish a resync-required outcome with a
+safe cursor and close or pause that subscription. The journal supplies missing
+records. Coalesce
 replaceable status snapshots; do not drop unacknowledged input results or
 approval state without an explicit resync signal. Recovery of one subscriber
 does not allocate a second unbounded backlog or pin the whole journal in RAM.

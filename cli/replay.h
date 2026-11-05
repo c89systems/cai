@@ -21,6 +21,19 @@ int cai_cli_replay_child_text_visible(const cai_cli_replay *replay,
                                       unsigned long long source_sequence);
 void cai_cli_replay_close(cai_cli_replay *replay);
 
+/** Conversation-lifetime sequence metadata for attached replay. No event
+ * bodies or child reports are retained/decoded. Feed at the existing recovery
+ * and durable append seams; callers serialize access with the journal lock. */
+int cai_cli_replay_index_open(cai_cli_replay **, cai_error *);
+/** Copy only the selected sequence ranges for an independent reader window.
+ * -1 selects all indexed entries; zero selects none. No journal read. */
+int cai_cli_replay_select(const cai_cli_replay *, long long, cai_cli_replay **,
+                          cai_error *);
+/** Apply an acknowledged atomic cut to metadata. On failure discard the index
+ * rather than serving a stale selection. Event identities are never reused. */
+int cai_cli_replay_cut(cai_cli_replay *, const cai_agent_session_trim_request *,
+                       cai_error *);
+
 /* Presentation order for durable input journals. Only pending prompt text is
  * retained; assistant/shell events pass directly to the renderer. */
 typedef struct cai_cli_replay_order cai_cli_replay_order;

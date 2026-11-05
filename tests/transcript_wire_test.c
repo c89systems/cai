@@ -121,6 +121,8 @@ static void message(cai_cli_transcript_message *m, cai_protocol_kind kind) {
   m->event.type = "assistant_text_delta";
   m->event.watermark = UINT64_MAX;
   m->event.visibility = 256U;
+  m->event.omitted = UINT64_MAX;
+  m->replay_turns = -1LL;
   m->event.timestamp_ns = 1793780000000000000ULL;
   m->event.utc_offset_seconds = -12600;
   m->event.has_data = 1;
@@ -132,6 +134,7 @@ static void message(cai_cli_transcript_message *m, cai_protocol_kind kind) {
   m->event.reason = "resynchronize";
 }
 static void roundtrips(void) {
+  static const int64_t limits[] = {-1, 0, 1, 10, INT64_MAX};
   static const cai_protocol_kind kinds[] = {
       CAI_PROTOCOL_SUBSCRIBE,         CAI_PROTOCOL_HISTORY_GET,
       CAI_PROTOCOL_UNSUBSCRIBE,       CAI_PROTOCOL_REPLAY_BEGIN,
@@ -160,7 +163,10 @@ static void roundtrips(void) {
              got->position == m.event.position && got->sequence == UINT64_MAX);
     if (kinds[i] == CAI_PROTOCOL_REPLAY_BEGIN)
       assert(strcmp(got->collection, m.event.collection) == 0 &&
-             got->watermark == UINT64_MAX && got->visibility == 256U);
+             got->watermark == UINT64_MAX && got->visibility == 256U &&
+             got->omitted == UINT64_MAX);
+    if (kinds[i] == CAI_PROTOCOL_SUBSCRIBE)
+      assert(f->complete->replay_turns == -1LL);
     if (kinds[i] == CAI_PROTOCOL_STREAM_BEGIN)
       assert(got->timestamp_ns == m.event.timestamp_ns &&
              got->utc_offset_seconds == -12600 && got->has_data &&
@@ -192,6 +198,14 @@ static void roundtrips(void) {
            !f->complete->event.has_data);
     close_fixture(f);
   }
+  for (i = 0U; i < sizeof(limits) / sizeof(limits[0]); ++i) {
+    message(&m, CAI_PROTOCOL_SUBSCRIBE);
+    m.event.position = m.event.sequence = 0U;
+    m.replay_turns = limits[i];
+    open_fixture(f);
+    assert(send(f, &m) == CAI_OK && f->complete->replay_turns == limits[i]);
+    close_fixture(f);
+  }
   message(&m, CAI_PROTOCOL_STREAM_CHUNK);
   open_fixture(f);
   assert(send(f, &m) == CAI_OK && f->complete->event.length == 0U);
@@ -213,7 +227,7 @@ static void rejected(void) {
   assert(f != NULL);
   memset(oversized, 'x', sizeof(oversized) - 1U);
   oversized[sizeof(oversized) - 1U] = '\0';
-  for (i = 0U; i < 13U; ++i) {
+  for (i = 0U; i < 15U; ++i) {
     message(&m, CAI_PROTOCOL_STREAM_BEGIN);
     switch (i) {
     case 0U:
@@ -259,6 +273,15 @@ static void rejected(void) {
     case 12U:
       message(&m, CAI_PROTOCOL_SUBSCRIPTION_ERROR);
       m.event.reason = oversized;
+      break;
+    case 13U:
+      message(&m, CAI_PROTOCOL_SUBSCRIBE);
+      m.event.position = m.event.sequence = 0U;
+      m.replay_turns = -2;
+      break;
+    case 14U:
+      message(&m, CAI_PROTOCOL_SUBSCRIBE);
+      m.replay_turns = 1; /* A cursor must preserve all missed work. */
       break;
     }
     open_fixture(f);

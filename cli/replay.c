@@ -10,7 +10,7 @@ typedef struct replay_range {
   unsigned long long first, last;
 } replay_range;
 typedef struct replay_entry {
-  struct replay_entry *next;
+  struct replay_entry *next, *previous;
   replay_range *ranges;
   size_t count;
 } replay_entry;
@@ -31,6 +31,7 @@ struct cai_cli_replay {
   size_t limit, count, omitted;
   unsigned long long through;
   int journal_v2, merge_shell;
+  int index_only;
 };
 
 static int child_feed(cai_cli_replay *r, const cai_agent_session_event *event,
@@ -96,6 +97,7 @@ static int entry_begin(cai_cli_replay *r, cai_error *error) {
   replay_entry *entry = calloc(1U, sizeof(*entry));
   if (entry == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "index console replay entry");
+  entry->previous = r->last;
   if (r->last != NULL)
     r->last->next = entry;
   else
@@ -104,6 +106,7 @@ static int entry_begin(cai_cli_replay *r, cai_error *error) {
   if (r->count == r->limit) {
     entry = r->first;
     r->first = entry->next;
+    r->first->previous = NULL;
     entry_free(entry);
     r->omitted++;
   } else
@@ -145,6 +148,7 @@ int cai_cli_replay_open(size_t limit, cai_cli_replay **out, cai_error *error) {
 }
 int cai_cli_replay_feed(cai_cli_replay *r, const cai_agent_session_event *event,
                         cai_error *error) {
+  cai_agent_session_event projected;
   const char *type = event->type;
   replay_input *input, **link;
   int turn = strcmp(type, "turn_submitted") == 0 ||
@@ -153,9 +157,19 @@ int cai_cli_replay_feed(cai_cli_replay *r, const cai_agent_session_event *event,
   int steering = strcmp(type, "steering_queued") == 0;
   int rc = CAI_OK;
   r->through = event->sequence;
-  rc = child_feed(r, event, error);
+  rc = r->index_only ? CAI_OK : child_feed(r, event, error);
   if (rc != CAI_OK)
     return rc;
+  if (strcmp(type, "input_queue_delivery") == 0) {
+    rc = cai_agent_session_event_project_input(event, &projected, error);
+    if (rc != CAI_OK)
+      return rc;
+    /* Delivery is already at the controller's admitted boundary. Its durable
+     * receipt is not an old-style speculative queued input. */
+    if (strcmp(projected.type, "steering_queued") != 0 || r->last == NULL)
+      rc = entry_begin(r, error);
+    return rc == CAI_OK ? entry_add(r, event->sequence, error) : rc;
+  }
   if (strcmp(type, "replay_event_omitted") == 0)
     return CAI_OK;
   if (strcmp(type, "input_journal_v2") == 0)
@@ -220,6 +234,135 @@ int cai_cli_replay_feed(cai_cli_replay *r, const cai_agent_session_event *event,
        strcmp(type, "subagent") == 0 || strcmp(type, "execution") == 0))
     rc = entry_begin(r, error);
   return rc == CAI_OK ? entry_add(r, event->sequence, error) : rc;
+}
+int cai_cli_replay_index_open(cai_cli_replay **out, cai_error *error) {
+  int rc = cai_cli_replay_open((size_t)-1, out, error);
+  if (rc == CAI_OK)
+    (*out)->index_only = 1;
+  return rc;
+}
+int cai_cli_replay_select(const cai_cli_replay *r, long long limit,
+                          cai_cli_replay **out, cai_error *error) {
+  const replay_entry *entry;
+  cai_cli_replay *selected;
+  size_t skip, count;
+  int rc;
+  *out = NULL;
+  if (r == NULL || limit < -1LL)
+    return cai_cli_error(error, CAI_ERR_INVALID, "valid replay index required");
+  rc = cai_cli_replay_index_open(&selected, error);
+  if (rc != CAI_OK)
+    return rc;
+  skip = limit < 0LL || (unsigned long long)limit >= r->count
+             ? 0U
+             : r->count - (size_t)limit;
+  selected->omitted = skip;
+  selected->through = r->through;
+  entry = r->last;
+  count = r->count - skip;
+  if (count == 0U)
+    entry = NULL;
+  else
+    while (count-- > 1U)
+      entry = entry->previous;
+  for (; entry != NULL && rc == CAI_OK; entry = entry->next) {
+    rc = entry_begin(selected, error);
+    if (rc == CAI_OK && entry->count != 0U) {
+      selected->last->ranges = malloc(entry->count * sizeof(*entry->ranges));
+      if (selected->last->ranges == NULL)
+        rc = cai_cli_error(error, CAI_ERR_NOMEM, "copy replay selection");
+      else {
+        memcpy(selected->last->ranges, entry->ranges,
+               entry->count * sizeof(*entry->ranges));
+        selected->last->count = entry->count;
+      }
+    }
+  }
+  if (rc != CAI_OK)
+    cai_cli_replay_close(selected);
+  else
+    *out = selected;
+  return rc;
+}
+/** Subtract one inclusive cut without changing the identity of retained
+ * entries. A split adds just one metadata range, never any stored text. */
+static int range_cut(replay_entry *entry, unsigned long long first,
+                     unsigned long long last, cai_error *error) {
+  size_t i = 0U;
+  while (i < entry->count) {
+    replay_range *range = &entry->ranges[i], *next;
+    if (first > range->last || last < range->first) {
+      ++i;
+      continue;
+    }
+    if (first <= range->first && last >= range->last) {
+      memmove(range, range + 1U, (--entry->count - i) * sizeof(*range));
+      continue;
+    }
+    if (first <= range->first)
+      range->first = last + 1U;
+    else if (last >= range->last)
+      range->last = first - 1U;
+    else {
+      if (entry->count == (size_t)-1 / sizeof(*range))
+        return cai_cli_error(error, CAI_ERR_LIMIT, "replay range limit");
+      next = realloc(entry->ranges, (entry->count + 1U) * sizeof(*range));
+      if (next == NULL)
+        return cai_cli_error(error, CAI_ERR_NOMEM, "split replay range");
+      entry->ranges = next;
+      range = next + i;
+      memmove(range + 2U, range + 1U, (entry->count - i - 1U) * sizeof(*range));
+      range[1].first = last + 1U;
+      range[1].last = range->last;
+      range->last = first - 1U;
+      ++entry->count;
+      ++i;
+    }
+    ++i;
+  }
+  return CAI_OK;
+}
+int cai_cli_replay_cut(cai_cli_replay *r,
+                       const cai_agent_session_trim_request *cut,
+                       cai_error *error) {
+  replay_entry **link = &r->first, *entry;
+  replay_input **input = &r->inputs, *pending;
+  size_t i;
+  int rc;
+  r->last = NULL;
+  r->count = 0U;
+  while ((entry = *link) != NULL) {
+    rc = range_cut(entry, cut->first_sequence, cut->through_sequence, error);
+    for (i = 0U; rc == CAI_OK && i < cut->range_count; ++i)
+      rc = range_cut(entry, cut->ranges[i].first, cut->ranges[i].last, error);
+    if (rc != CAI_OK)
+      return rc;
+    if (entry->count == 0U) {
+      *link = entry->next;
+      entry_free(entry);
+    } else {
+      entry->previous = r->last;
+      r->last = entry;
+      ++r->count;
+      link = &entry->next;
+    }
+  }
+  r->inputs_last = NULL;
+  while ((pending = *input) != NULL) {
+    int removed = pending->sequence >= cut->first_sequence &&
+                  pending->sequence <= cut->through_sequence;
+    for (i = 0U; !removed && i < cut->range_count; ++i)
+      removed = pending->sequence >= cut->ranges[i].first &&
+                pending->sequence <= cut->ranges[i].last;
+    if (removed) {
+      *input = pending->next;
+      free(pending);
+    } else {
+      r->inputs_last = pending;
+      input = &pending->next;
+    }
+  }
+  return CAI_OK;
 }
 int cai_cli_replay_finish(cai_cli_replay *r, cai_error *error) {
   replay_input *input;

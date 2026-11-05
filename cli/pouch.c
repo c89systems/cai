@@ -1094,6 +1094,32 @@ int cai_cli_pouch_set_retention(cai_cli_pouch *pouch, const char *id, long days,
 
 #include "pouch_journal_context.inc"
 #include "pouch_prompt.inc"
+
+/** Index failures affect presentation availability, never acknowledgement of
+ * already durable model input. A failed index stays unavailable until reopen.
+ */
+static void transcript_index_begin(cai_cli_pouch *pouch, const char *id) {
+  cai_cli_replay_close(pouch->transcript_index);
+  pouch->transcript_index = NULL;
+  snprintf(pouch->transcript_index_session,
+           sizeof(pouch->transcript_index_session), "%s", id);
+  pouch->transcript_index_failed =
+      cai_cli_replay_index_open(&pouch->transcript_index, NULL) != CAI_OK;
+}
+static void transcript_index_event(cai_cli_pouch *pouch, const char *id,
+                                   const cai_agent_session_event *event) {
+  if (strcmp(pouch->transcript_index_session, id) != 0)
+    transcript_index_begin(pouch, id);
+  if (pouch->transcript_index_failed)
+    return;
+  if (event->sequence <= cai_cli_replay_last(pouch->transcript_index))
+    return; /* An acknowledged idempotent append is not another turn. */
+  if (cai_cli_replay_feed(pouch->transcript_index, event, NULL) != CAI_OK) {
+    cai_cli_replay_close(pouch->transcript_index);
+    pouch->transcript_index = NULL;
+    pouch->transcript_index_failed = 1;
+  }
+}
 #include "pouch_trim.inc"
 
 static int commit_mode(void *context, const char *scope, const char *id,
@@ -1731,6 +1757,8 @@ static int append_event(void *context, const char *scope, const char *id,
   if (rc == CAI_OK)
     rc = journal_append_source(pouch, &journal->session, journal->collection,
                                name, source, &position, error);
+  if (rc == CAI_OK && scope_indexed(scope))
+    transcript_index_event(pouch, id, event);
   if (rc == CAI_OK && pouch->journal_observer != NULL)
     pouch->journal_observer(pouch->journal_observer_context, id, position,
                             event);
@@ -1997,6 +2025,13 @@ collection_event_boundary(void *context,
     event.utc_offset_seconds = read->record.utc_offset_seconds;
     event.type = read->limited ? "replay_event_omitted" : read->record.type;
     event.data = read->limited ? NULL : read->record.data;
+    if (read->index_positions) {
+      cai_agent_session_event indexed = event;
+      /* The already parsed type is sufficient for oversized output. Only a
+       * delivery whose provenance cannot be decoded makes selection fail. */
+      indexed.type = read->record.type != NULL ? read->record.type : event.type;
+      transcript_index_event(read->pouch, read->id, &indexed);
+    }
     if (sequence > read->after &&
         (read->through == 0U || sequence <= read->through) &&
         (read->select_event == NULL ||
@@ -2131,6 +2166,7 @@ static int read_events(void *context, const char *scope, const char *id,
       pouch->replay_scope != NULL && strcmp(scope, pouch->replay_scope) == 0;
   read.index_positions = read.observe && after == 0U;
   if (read.index_positions) {
+    transcript_index_begin(pouch, id);
     pouch->event_position_count = pouch->event_position_stride = 0U;
     pouch->event_last_sequence = pouch->event_last_position = 0U;
     snprintf(pouch->event_position_session,
@@ -2728,6 +2764,8 @@ void cai_cli_pouch_close(cai_cli_pouch *pouch) {
   cai_cli_pouch_client **link, *entry;
   cai_cli_pouch_prompt_close(pouch);
   free(pouch->event_positions);
+  cai_cli_replay_close(pouch->transcript_index);
+  pouch->transcript_index = NULL;
   pouch->event_positions = NULL;
   cai_cli_pouch_end_use(pouch);
   if (pouch->ownership_initialized) {

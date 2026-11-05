@@ -130,6 +130,74 @@ static void test_review_ranges(cai_error *error) {
   assert(!cai_cli_replay_child_text_visible(r, "steered", 22U));
   cai_cli_replay_close(r);
 }
+static void test_selections(cai_error *error) {
+  cai_cli_replay *index = NULL, *one = NULL, *all = NULL, *empty = NULL;
+  cai_agent_session_trim_request cut;
+  cai_agent_session_event_range extra;
+  unsigned long long i;
+  assert(cai_cli_replay_index_open(&index, error) == CAI_OK);
+  feed(index, 1U, "input_journal_v2", NULL, error);
+  feed(index, 2U, "input_queue_delivery", "L\n1\ns\n1\n0\nfirst", error);
+  feed(index, 3U, "input_consumed", "2", error);
+  feed(index, 4U, "assistant_text_delta", "first answer", error);
+  feed(index, 5U, "input_queue_delivery", "L\n1\ns\n2\n1\nsteer", error);
+  feed(index, 6U, "input_consumed", "5", error);
+  feed(index, 7U, "assistant_text_end", NULL, error);
+  feed(index, 8U, "input_queue_delivery", "L\n1\ns\n3\n2\nsecond", error);
+  feed(index, 9U, "input_consumed", "8", error);
+  feed(index, 10U, "subagent", "not decoded by metadata index", error);
+  feed(index, 11U, "assistant_text_delta", "second answer", error);
+  feed(index, 12U, "assistant_text_end", NULL, error);
+  assert(cai_cli_replay_select(index, 1LL, &one, error) == CAI_OK);
+  assert(cai_cli_replay_first(one) == 8U && cai_cli_replay_omitted(one) == 1U);
+  for (i = 1U; i <= 12U; ++i)
+    assert(cai_cli_replay_contains(one, i) == (i >= 8U));
+  assert(cai_cli_replay_select(index, -1LL, &all, error) == CAI_OK);
+  assert(cai_cli_replay_first(all) == 2U && cai_cli_replay_contains(all, 5U));
+  assert(cai_cli_replay_select(index, 0LL, &empty, error) == CAI_OK &&
+         cai_cli_replay_first(empty) == 0U &&
+         cai_cli_replay_omitted(empty) == 2U);
+  cai_cli_replay_close(empty);
+  empty = NULL;
+  assert(cai_cli_replay_select(index, -2LL, &empty, error) == CAI_ERR_INVALID &&
+         empty == NULL);
+  /* A selection owns only its ranges: later appends and cuts cannot alter a
+   * reader already streaming it. Controller receipts never become turns. */
+  feed(index, 13U, "input_queue_offer", "not a turn", error);
+  feed(index, 14U, "input_queue_delivery", "L\n1\ns\n4\n0\nthird", error);
+  feed(index, 15U, "assistant_text_delta", "third answer", error);
+  assert(cai_cli_replay_contains(one, 12U) &&
+         !cai_cli_replay_contains(one, 14U));
+  memset(&cut, 0, sizeof(cut));
+  cut.first_sequence = 8U;
+  cut.through_sequence = 15U;
+  extra.first = extra.last = 5U;
+  cut.ranges = &extra;
+  cut.range_count = 1U;
+  assert(cai_cli_replay_cut(index, &cut, error) == CAI_OK);
+  assert(cai_cli_replay_select(index, 10LL, &empty, error) == CAI_OK);
+  for (i = 1U; i <= 15U; ++i)
+    assert(cai_cli_replay_contains(empty, i) ==
+           (i >= 2U && i <= 7U && i != 5U));
+  assert(cai_cli_replay_omitted(empty) == 0U &&
+         cai_cli_replay_contains(one, 8U));
+  cai_cli_replay_close(empty);
+  cai_cli_replay_close(one);
+  cai_cli_replay_close(all);
+  /* An old v2 queued input belongs to its consumed turn, not the response
+   * during which it was queued. Native reads may skip the intervening ranges.
+   */
+  feed(index, 16U, "turn_queued", "old-format queued", error);
+  feed(index, 17U, "assistant_text_delta", "earlier answer", error);
+  feed(index, 18U, "input_consumed", "16", error);
+  feed(index, 19U, "assistant_text_delta", "later answer", error);
+  assert(cai_cli_replay_select(index, 1LL, &one, error) == CAI_OK);
+  assert(
+      cai_cli_replay_first(one) == 16U && !cai_cli_replay_contains(one, 17U) &&
+      cai_cli_replay_contains(one, 18U) && cai_cli_replay_contains(one, 19U));
+  cai_cli_replay_close(one);
+  cai_cli_replay_close(index);
+}
 int main(void) {
   cai_cli_replay *r = NULL;
   cai_error error;
@@ -138,6 +206,7 @@ int main(void) {
   cai_error_init(&error);
   test_order(&error);
   test_review_ranges(&error);
+  test_selections(&error);
   assert(cai_cli_replay_open(0U, &r, &error) == CAI_ERR_INVALID && r == NULL);
   cai_error_cleanup(&error);
   assert(cai_cli_replay_open((size_t)LONG_MAX, &r, &error) == CAI_OK);

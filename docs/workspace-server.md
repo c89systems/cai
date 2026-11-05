@@ -37,8 +37,8 @@ remaining cutover work, [workspace process handoff](workspace-process.md) for
 executable ownership, and [command execution](workspace-commands.md) for backend
 admission/delegation. The confirmed decisions and specification below remain
 the target contract; an implemented boundary is not a claim of complete feature
-parity. In particular, the synchronous receiver, batch/temp composition, default
-replay selection, some terminal delegates, asynchronous Lua observations and
+parity. In particular, the synchronous receiver, batch/temp composition,
+some terminal delegates, asynchronous Lua observations and
 optional frontend packaging remain unfinished.
 
 Submitted prompts belong to the libmdf feed. Complete native inputs and
@@ -490,8 +490,10 @@ twice, construct a full response, or add recurring full snapshots. Context
 restoration belongs to server startup, never attachment.
 
 Bound subscriptions by both count and bytes. A slow reader cannot block agent
-execution. On overflow, close its live subscription with a synchronization
-requirement and cursor; preserve admission outcomes and accepted work. A
+execution. On a burst, drain queued complete events and use the retained reader
+for bounded native catch-up. If it fails or stops draining, close that live
+subscription with a synchronization requirement and cursor; preserve admission
+outcomes and accepted work. A
 reconnecting client requests a consistent snapshot/replay, and distinguishes
 server restart from a transient transport loss. Do not silently skip output
 and continue as if its transcript were complete.

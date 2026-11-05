@@ -10,11 +10,11 @@ typedef struct field {
 } field;
 struct cai_cli_transcript_decoder {
   cai_cli_transcript_message message;
-  field fields[4];
+  field fields[5];
   const char *format;
   size_t index, offset;
   int phase;
-  char strings[4][193];
+  char strings[5][193];
   unsigned char data[CAI_CLI_TRANSCRIPT_CHUNK];
 };
 static int invalid(cai_error *error) {
@@ -23,12 +23,13 @@ static int invalid(cai_error *error) {
 static const char *shape(cai_protocol_kind kind) {
   switch (kind) {
   case CAI_PROTOCOL_SUBSCRIBE:
+    return "ssuui";
   case CAI_PROTOCOL_HISTORY_GET:
     return "ssuu";
   case CAI_PROTOCOL_UNSUBSCRIBE:
     return "";
   case CAI_PROTOCOL_REPLAY_BEGIN:
-    return "ssuu";
+    return "ssuuu";
   case CAI_PROTOCOL_STREAM_BEGIN:
     return "uisb";
   case CAI_PROTOCOL_STREAM_CHUNK:
@@ -71,6 +72,10 @@ static int pack(const cai_cli_transcript_message *m, field *f,
   const cai_transcript_event *e = &m->event;
   switch (m->header.kind) {
   case CAI_PROTOCOL_SUBSCRIBE:
+    if (m->replay_turns < -1 || (e->position != 0U && m->replay_turns != -1))
+      return invalid(error);
+    f[4].integer = m->replay_turns;
+    /* fall through */
   case CAI_PROTOCOL_HISTORY_GET:
     f[0].bytes = e->session;
     f[1].bytes = e->collection;
@@ -84,6 +89,7 @@ static int pack(const cai_cli_transcript_message *m, field *f,
     f[1].bytes = e->collection;
     f[2].value = e->watermark;
     f[3].value = e->visibility;
+    f[4].value = e->omitted;
     break;
   case CAI_PROTOCOL_STREAM_BEGIN:
     f[0].value = e->timestamp_ns;
@@ -125,6 +131,11 @@ static int unpack(cai_cli_transcript_decoder *d, cai_error *error) {
   e->sequence = d->message.header.sequence;
   switch (d->message.header.kind) {
   case CAI_PROTOCOL_SUBSCRIBE:
+    d->message.replay_turns = f[4].integer;
+    if (d->message.replay_turns < -1 ||
+        (f[2].value != 0U && d->message.replay_turns != -1))
+      return invalid(error);
+    /* fall through */
   case CAI_PROTOCOL_HISTORY_GET:
     e->session = f[0].bytes;
     e->collection = f[1].bytes;
@@ -139,6 +150,7 @@ static int unpack(cai_cli_transcript_decoder *d, cai_error *error) {
     e->collection = f[1].bytes;
     e->watermark = f[2].value;
     e->visibility = f[3].value;
+    e->omitted = f[4].value;
     break;
   case CAI_PROTOCOL_STREAM_BEGIN:
     e->kind = CAI_TRANSCRIPT_EVENT_BEGIN;
@@ -313,7 +325,7 @@ static int token(const cai_cli_input_wire_output *out, cai_cbor_type kind,
 int cai_cli_transcript_write(const cai_cli_input_wire_output *out,
                              const cai_cli_transcript_message *m,
                              cai_error *error) {
-  field f[4];
+  field f[5];
   const char *format;
   size_t i, n;
   uint32_t length;
