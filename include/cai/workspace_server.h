@@ -82,6 +82,12 @@ int cai_workspace_server_prepare(cai_workspace_server *server,
  * disconnects its peer. */
 int cai_workspace_server_pump(cai_workspace_server *server, uint64_t now_ms,
                               cai_error *error);
+/** Make bounded nonblocking progress on already queued output only. Does not
+ * accept/read connections, advance lifetime/authority or invoke host callbacks.
+ * Use outside pump callbacks when an application producer yields output before
+ * continuing synchronous work. A failed peer is marked for the next ordinary
+ * pump; other peers keep progressing. Backpressure never waits. */
+int cai_workspace_server_flush(cai_workspace_server *server, cai_error *error);
 int cai_workspace_server_get_state(cai_workspace_server *server,
                                    cai_attachment_state *out, cai_error *error);
 int cai_workspace_server_authorize(cai_workspace_server *server,

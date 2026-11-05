@@ -120,8 +120,8 @@ model-invoked review tools use the shared formatter's lifecycle presentation.
 
 This is a working terminal/socket composition, not a claim of complete feature
 parity. Remaining key bindings, pager/layout delegates, review progress parity,
-immediate live command-progress events, full startup-control parity and
-validation of extended configuration outside the startup inventory still require
+full startup-control parity and validation of extended configuration outside
+the startup inventory still require
 integration. Automatic executable-path discovery currently
 uses Linux `/proc/self/exe`. Batch/temp and the original synchronous app receiver
 still use their existing composition. These remain part of the active goal.

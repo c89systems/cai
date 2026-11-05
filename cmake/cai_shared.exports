@@ -646,6 +646,7 @@ cai_workspace_server_config_init
 cai_workspace_server_directory
 cai_workspace_server_disconnect
 cai_workspace_server_end
+cai_workspace_server_flush
 cai_workspace_server_get_state
 cai_workspace_server_instance
 cai_workspace_server_open

@@ -4,6 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+static int progress(cai_cli_documents *d, cai_error *error) {
+  d->progress_bytes = 0U;
+  return d->progress != NULL ? d->progress(d->progress_context, error) : CAI_OK;
+}
 static int document_record(cai_cli_documents *d, const char *kind,
                            const char *field, const char *text, int code,
                            long long http_status, cai_error *error) {
@@ -27,6 +31,8 @@ static int document_record(cai_cli_documents *d, const char *kind,
   if (rc == CAI_OK)
     rc = cai_agent_execution_finish(writer, error);
   cai_agent_execution_close(writer);
+  if (rc == CAI_OK)
+    rc = progress(d, error);
   if (rc != CAI_OK)
     cai_cli_error(&d->error, rc, "persist command record");
   return rc;
@@ -36,6 +42,8 @@ int cai_cli_documents_finish(cai_cli_documents *d) {
   int rc = d->error.code;
   if (rc == CAI_OK && d->writer != NULL)
     rc = cai_agent_execution_finish(d->writer, &d->error);
+  if (rc == CAI_OK && d->writer != NULL)
+    rc = progress(d, &d->error);
   cai_agent_execution_close(d->writer);
   d->writer = NULL;
   return rc == CAI_OK ? 0 : -1;
@@ -96,6 +104,14 @@ int cai_cli_documents_write(cai_cli_documents *d, const void *bytes,
   }
   if (rc == CAI_OK)
     rc = cai_agent_execution_write(d->writer, bytes, length, &d->error);
+  if (rc == CAI_OK) {
+    /* Small formatting writes do not justify a socket pass before the native
+     * execution writer can have emitted a chunk. Finish always flushes. */
+    if (length >= CAI_EXECUTION_CHUNK_BYTES - d->progress_bytes)
+      rc = progress(d, &d->error);
+    else
+      d->progress_bytes += length;
+  }
   return rc == CAI_OK ? 0 : -1;
 }
 

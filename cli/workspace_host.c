@@ -604,15 +604,17 @@ static int release_peer(host_peer *peer, cai_error *error) {
   }
   return rc;
 }
-static int output_one(host_peer *peer, cai_error *error) {
+static int output_one(host_peer *peer, int *produced, cai_error *error) {
   cai_input_observation *o;
   cai_cli_input_wire_message m;
   int rc;
+  *produced = 0;
   if (peer->input == NULL)
     return CAI_OK;
   rc = cai_input_connection_poll(peer->input, &o, error);
   if (rc != CAI_OK || o == NULL)
     return rc;
+  *produced = 1;
   memset(&m, 0, sizeof(m));
   m.observation = *o;
   m.header.conversation = o->conversation;
@@ -812,6 +814,62 @@ int cai_cli_workspace_host_ready(cai_cli_workspace_host *host,
   }
   return rc == CAI_OK ? publish(host, error) : rc;
 }
+/** A single bounded transcript span, shared by ordinary dispatch and output
+ * continuation. Readiness is advisory; next() owns the atomic dequeue. */
+static int output_transcript(host_peer *peer, int *produced, cai_error *error) {
+  cai_cli_transcript_frame frame;
+  size_t pending;
+  int failed, rc;
+  *produced = 0;
+  if (peer->stream == 0U || !cai_cli_transcript_feed_ready(
+                                peer->host->history, peer->attachment, &failed))
+    return CAI_OK;
+  rc = cai_workspace_server_pending(peer->host->server, peer->attachment,
+                                    &pending, error);
+  if (rc != CAI_OK || (!failed && pending > 65536U))
+    return rc;
+  if (!cai_cli_transcript_feed_next(peer->host->history, peer->attachment,
+                                    &frame))
+    return CAI_OK;
+  *produced = 1;
+  rc = send_transcript(peer, &frame.event, error);
+  if (frame.event.kind == CAI_TRANSCRIPT_ERROR)
+    peer->stream = 0U;
+  return rc;
+}
+int cai_cli_workspace_host_progress(cai_cli_workspace_host *host,
+                                    cai_error *error) {
+  size_t i;
+  int rc;
+  if (host == NULL)
+    return CAI_OK;
+  rc = cai_workspace_server_flush(host->server, error);
+  for (i = 0U; rc == CAI_OK && i < CAI_ATTACHMENT_LIMIT; ++i) {
+    host_peer *peer = &host->peers[i];
+    cai_error local;
+    unsigned int spans;
+    if (peer->attachment == 0U || peer->detached)
+      continue;
+    cai_error_init(&local);
+    /* Never wait for storage, readers or socket credit. At most 64 existing
+     * bounded spans per subscriber; ordinary dispatch handles any remainder. */
+    for (spans = 0U; spans < 64U; ++spans) {
+      int produced;
+      size_t pending;
+      if (cai_workspace_server_pending(host->server, peer->attachment, &pending,
+                                       &local) != CAI_OK ||
+          pending > 65536U || output_one(peer, &produced, &local) != CAI_OK)
+        break;
+      /* Claim/removal receipts precede the accepted command presentation;
+       * the editor must stop offering an already executing item for edits. */
+      if (!produced &&
+          (output_transcript(peer, &produced, &local) != CAI_OK || !produced))
+        break;
+    }
+    cai_error_cleanup(&local);
+  }
+  return rc == CAI_OK ? cai_workspace_server_flush(host->server, error) : rc;
+}
 int cai_cli_workspace_host_prepare(cai_cli_workspace_host *host,
                                    struct pollfd *fds, size_t capacity,
                                    size_t *count, long *timeout,
@@ -946,25 +1004,18 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
                                           &pending, &local);
       }
     }
-    if (rc == CAI_OK && pending <= 65536U)
-      rc = output_one(peer, &local);
+    if (rc == CAI_OK && pending <= 65536U) {
+      int produced;
+      rc = output_one(peer, &produced, &local);
+    }
     if (rc == CAI_OK && catalog_pending(peer) &&
         cai_workspace_server_pending(host->server, peer->attachment, &pending,
                                      &local) == CAI_OK &&
         pending <= 65536U)
       rc = output_catalog(peer, &local);
-    if (rc == CAI_OK && peer->stream != 0U) {
-      cai_cli_transcript_frame frame;
-      int failed;
-      if (cai_cli_transcript_feed_ready(host->history, peer->attachment,
-                                        &failed) &&
-          (failed || pending <= 65536U) &&
-          cai_cli_transcript_feed_next(host->history, peer->attachment,
-                                       &frame)) {
-        rc = send_transcript(peer, &frame.event, &local);
-        if (frame.event.kind == CAI_TRANSCRIPT_ERROR)
-          peer->stream = 0U;
-      }
+    if (rc == CAI_OK) {
+      int produced;
+      rc = output_transcript(peer, &produced, &local);
     }
     if (rc != CAI_OK) {
       cai_cli_log_error(host->logger, "workspace input output", &local);

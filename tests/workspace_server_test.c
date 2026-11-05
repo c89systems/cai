@@ -25,7 +25,7 @@ typedef struct host {
   cai_workspace_server *server;
   size_t attached, detached, errors, completed, tokens;
   uint64_t admitted;
-  int reject;
+  int reject, expect_flush_error;
 } host;
 static int observed(void *context, const cai_protocol_event *event,
                     cai_error *error) {
@@ -87,9 +87,15 @@ static int host_event(void *context, const cai_workspace_server_event *event,
     ++state->detached;
   if (event->type == CAI_WORKSPACE_PEER_ERROR) {
     assert(event->error != NULL && event->error->code != CAI_OK);
+    if (state->expect_flush_error) {
+      assert(strcmp(event->error->message, "Write wire socket") == 0);
+      assert(event->error->detail != NULL && event->error->detail[0] != '\0');
+      state->expect_flush_error = 0;
+    }
     ++state->errors;
   }
   if (event->type == CAI_WORKSPACE_MESSAGE) {
+    assert(cai_workspace_server_flush(state->server, NULL) == CAI_ERR_INVALID);
     assert(cai_workspace_server_disconnect(state->server, event->attachment,
                                            NULL) == CAI_ERR_INVALID);
     if (event->message->type == CAI_PROTOCOL_PAYLOAD)
@@ -376,6 +382,122 @@ static void output_chunk(host *state, test_client *client, size_t length,
   free(bytes);
   assert(rc == expected);
 }
+static void output_progress(const char *runtime, const char *workspace) {
+  cai_workspace_server_config config;
+  cai_workspace_endpoint *endpoint;
+  cai_protocol_header header;
+  cai_cbor_token value;
+  unsigned char half[512];
+  test_client owner, observer, newcomer;
+  host state;
+  struct pollfd fds[CAI_WORKSPACE_SERVER_FDS];
+  uint64_t deadline;
+  size_t count, pending, i, errors;
+  int eof, buffer = 4096;
+  memset(&state, 0, sizeof(state));
+  cai_workspace_server_config_init(&config);
+  config.workspace = workspace;
+  config.runtime_directory = runtime;
+  config.lifetime.persist = 1;
+  config.event = host_event;
+  config.context = &state;
+  config.backlog_limit = 262144U;
+  assert(cai_workspace_server_flush(NULL, NULL) == CAI_ERR_INVALID);
+  assert(cai_workspace_server_open(&config, &state.server, NULL) == CAI_OK);
+  assert(cai_workspace_server_ready(state.server, 1U, NULL) == CAI_OK);
+  assert(cai_workspace_endpoint_open(runtime, workspace, &endpoint, NULL) ==
+         CAI_OK);
+  connect_client(endpoint, &owner);
+  greeting(&owner, workspace, CAI_WORKSPACE_SCHEMA);
+  exchange(&state, &owner, 1U);
+  connect_client(endpoint, &observer);
+  greeting(&observer, workspace, CAI_WORKSPACE_SCHEMA);
+  exchange(&state, &observer, 2U);
+  assert(state.attached == 2U && state.completed == 0U);
+  assert(cai_workspace_server_prepare(state.server, fds,
+                                      CAI_WORKSPACE_SERVER_FDS, &count,
+                                      &deadline, NULL) == CAI_OK);
+  assert(count == 3U);
+  assert(setsockopt(fds[1].fd, SOL_SOCKET, SO_SNDBUF, &buffer,
+                    sizeof(buffer)) == 0);
+  /* Pending input and an unaccepted connection must remain untouched. */
+  command(&observer, CAI_PROTOCOL_REQUEST, observer.generation);
+  assert(cai_wire_peer_flush(observer.wire, 0U, NULL) == CAI_OK);
+  connect_client(endpoint, &newcomer);
+  greeting(&newcomer, workspace, CAI_WORKSPACE_SCHEMA);
+  assert(cai_wire_peer_flush(newcomer.wire, 0U, NULL) == CAI_OK);
+  /* Flush an incomplete CBOR value: producer bytes reach the consumer before
+   * the rest of the value or its record boundary has even been supplied. */
+  memset(&header, 0, sizeof(header));
+  header.kind = CAI_PROTOCOL_STREAM_CHUNK;
+  header.stream = 42U;
+  assert(cai_workspace_server_begin(state.server, owner.attachment, &header,
+                                    1027U, NULL) == CAI_OK);
+  memset(&value, 0, sizeof(value));
+  value.type = CAI_CBOR_BYTES;
+  value.argument = 1024U;
+  assert(cai_workspace_server_write(state.server, owner.attachment, &value,
+                                    NULL) == CAI_OK);
+  memset(half, 'a', sizeof(half));
+  value.type = CAI_CBOR_DATA;
+  value.argument = 0U;
+  value.data = half;
+  value.length = sizeof(half);
+  assert(cai_workspace_server_write(state.server, owner.attachment, &value,
+                                    NULL) == CAI_OK);
+  assert(cai_workspace_server_flush(state.server, NULL) == CAI_OK);
+  assert(cai_wire_peer_read(owner.wire, 0U, &eof, NULL) == CAI_OK);
+  assert(owner.chunks == 0U && owner.bytes == sizeof(half));
+  assert(cai_workspace_server_write(state.server, owner.attachment, &value,
+                                    NULL) == CAI_OK);
+  value.type = CAI_CBOR_END;
+  value.argument = CAI_CBOR_BYTES;
+  value.data = NULL;
+  value.length = 0U;
+  assert(cai_workspace_server_write(state.server, owner.attachment, &value,
+                                    NULL) == CAI_OK);
+  assert(cai_workspace_server_end(state.server, owner.attachment, NULL) ==
+         CAI_OK);
+  assert(cai_workspace_server_flush(state.server, NULL) == CAI_OK);
+  assert(cai_wire_peer_read(owner.wire, 0U, &eof, NULL) == CAI_OK);
+  assert(owner.chunks == 1U && owner.bytes == 1024U);
+  assert(state.attached == 2U && state.completed == 0U);
+  assert(snapshot(&state).controller == owner.attachment);
+  /* An unread peer builds bounded backlog without delaying another peer. */
+  for (i = 0U; i < 128U; ++i) {
+    output_chunk(&state, &owner, 1024U, CAI_OK);
+    assert(cai_workspace_server_flush(state.server, NULL) == CAI_OK);
+  }
+  assert(cai_workspace_server_pending(state.server, owner.attachment, &pending,
+                                      NULL) == CAI_OK);
+  assert(pending > 0U && pending < config.backlog_limit);
+  output_chunk(&state, &observer, 1024U, CAI_OK);
+  assert(cai_workspace_server_flush(state.server, NULL) == CAI_OK);
+  assert(cai_wire_peer_read(observer.wire, 0U, &eof, NULL) == CAI_OK);
+  assert(observer.chunks == 1U && state.attached == 2U &&
+         snapshot(&state).controller == owner.attachment);
+  for (i = 0U; i < 1024U && owner.chunks < 129U; ++i) {
+    assert(cai_workspace_server_flush(state.server, NULL) == CAI_OK);
+    assert(cai_wire_peer_read(owner.wire, 0U, &eof, NULL) == CAI_OK);
+  }
+  assert(owner.chunks == 129U && owner.bytes == 129U * 1024U);
+  /* Output failure is observed only at the next ordinary input boundary. */
+  output_chunk(&state, &owner, 1024U, CAI_OK);
+  close_client(&owner);
+  errors = state.errors;
+  state.expect_flush_error = 1;
+  assert(cai_workspace_server_flush(state.server, NULL) == CAI_OK);
+  assert(state.errors == errors && state.detached == 0U);
+  exchange(&state, &observer, 3U);
+  assert(state.errors == errors + 1U && state.detached == 1U);
+  assert(!state.expect_flush_error);
+  exchange(&state, &observer, 3U);
+  assert(state.errors == errors + 1U);
+  close_client(&observer);
+  close_client(&newcomer);
+  cai_workspace_endpoint_close(endpoint);
+  cai_workspace_server_close(state.server);
+}
 static void transport_failures(const char *runtime, const char *workspace) {
   cai_workspace_server_config config;
   cai_workspace_endpoint *endpoint;
@@ -557,6 +679,7 @@ static void *worker(void *unused) {
   run(runtime, workspace, 0);
   run(runtime, workspace, 1);
   failures(runtime, workspace);
+  output_progress(runtime, workspace);
   transport_failures(runtime, workspace);
   producer_backlog(runtime, workspace);
   dir = opendir(runtime);

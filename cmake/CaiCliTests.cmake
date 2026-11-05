@@ -114,7 +114,19 @@
     set_tests_properties(cai_cli_attach_boot PROPERTIES TIMEOUT 30
       LABELS "cli;local;offline"
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+    add_executable(cai_cli_progress_owner tests/cli_catalog_client_fixture.c
+      cli/main.c cli/process.c cli/bootstrap.c cli/spawn.c cli/attach.c)
+    target_link_libraries(cai_cli_progress_owner PRIVATE cai_app_static)
+    target_link_options(cai_cli_progress_owner PRIVATE -Wl,--wrap=cai_client_open)
+    cai_configure_cli_target(cai_cli_progress_owner)
     foreach(_cai_compat_mode native embed)
+      add_test(NAME cai_cli_command_progress_${_cai_compat_mode} COMMAND bash
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_command_progress_test.sh"
+        "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_app_terminal_host>"
+        "${_cai_compat_mode}" "$<TARGET_FILE:cai_cli_progress_owner>")
+      set_tests_properties(cai_cli_command_progress_${_cai_compat_mode} PROPERTIES
+        TIMEOUT 40 LABELS "cli;local;offline"
+        ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
       add_test(NAME cai_startup_controls_${_cai_compat_mode} COMMAND bash
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_startup_controls_test.sh"
         "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_app_terminal_host>"

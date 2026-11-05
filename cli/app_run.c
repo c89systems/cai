@@ -236,6 +236,10 @@ static int cli_session_log(cli_state *state, const char *id, cai_error *error) {
 static int cli_advance_automation(cli_state *state, cai_error *error);
 static int cli_messages_process(cli_state *state, int at_boundary,
                                 cai_error *error);
+static int cli_document_progress(void *context, cai_error *error) {
+  cli_state *state = context;
+  return cai_cli_workspace_host_progress(state->workspace_host, error);
+}
 static int cli_dispatch_command(cli_state *state, const char *line,
                                 const cai_input_claim *claim, cai_error *error,
                                 int *handled);
@@ -5204,6 +5208,8 @@ static int cli_dispatch_command(cli_state *state, const char *line,
   }
   if (state->controller) {
     *handled = 1;
+    state->documents.progress = cli_document_progress;
+    state->documents.progress_context = state;
     rc = cai_cli_documents_begin(&state->documents, claim, error);
     if (rc == CAI_OK)
       rc = cli_command_input(state, line) == 0 ? CAI_OK : CAI_ERR_TRANSPORT;

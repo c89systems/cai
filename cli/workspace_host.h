@@ -49,6 +49,10 @@ int cai_cli_workspace_host_prepare(cai_cli_workspace_host *, struct pollfd *,
                                    long *timeout, cai_error *);
 int cai_cli_workspace_host_pump(cai_cli_workspace_host *, int *stopping,
                                 cai_error *);
+/** Bounded output-only progress from an application document producer. Never
+ * dispatch socket input or reenter application commands. Slow subscribers
+ * retain the ordinary bounded backlog and native catch-up behavior. */
+int cai_cli_workspace_host_progress(cai_cli_workspace_host *, cai_error *);
 void cai_cli_workspace_host_admission(cai_cli_workspace_host *,
                                       cai_input_controller_config *);
 void cai_cli_workspace_host_stop(cai_cli_workspace_host *);

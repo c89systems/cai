@@ -9,6 +9,10 @@ typedef struct cai_cli_documents {
   cai_error error;
   char call[256];
   int active;
+  /** Optional owner-thread output continuation; never dispatches new input. */
+  int (*progress)(void *, cai_error *);
+  void *progress_context;
+  size_t progress_bytes;
 } cai_cli_documents;
 int cai_cli_documents_bind(cai_cli_documents *, cai_agent_runtime *,
                            cai_error *);

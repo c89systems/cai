@@ -25,6 +25,7 @@ typedef struct server_peer {
   role_notice notices[ROLE_NOTICES];
   size_t notice_head, notice_count;
   int greeted, detach, failed, writing, probe, rejected;
+  cai_error deferred_error;
 } server_peer;
 /** Owner-thread workspace listener and attachment authority.
  * Owns endpoint/peer lifetimes; callbacks borrow messages and must not reenter
@@ -578,7 +579,32 @@ static void drop(server_peer *peer, int announce) {
   }
   cai_wire_peer_close(peer->wire);
   cai_protocol_decoder_close(peer->protocol);
+  cai_error_cleanup(&peer->deferred_error);
   memset(peer, 0, sizeof(*peer));
+}
+int cai_workspace_server_flush(cai_workspace_server *server, cai_error *error) {
+  size_t i;
+  int rc = valid(server, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (server->pumping)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "workspace output flush requires the owner boundary");
+  for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
+    server_peer *peer = &server->peers[i];
+    if (peer->wire != NULL && !peer->failed && !peer->detach) {
+      cai_error local;
+      cai_error_init(&local);
+      rc = cai_wire_peer_flush(peer->wire, 0U, &local);
+      if (rc != CAI_OK) {
+        peer->failed = rc;
+        peer->deferred_error = local;
+        cai_error_init(&local);
+      }
+      cai_error_cleanup(&local);
+    }
+  }
+  return CAI_OK;
 }
 int cai_workspace_server_pump(cai_workspace_server *server, uint64_t now,
                               cai_error *error) {
@@ -597,10 +623,14 @@ int cai_workspace_server_pump(cai_workspace_server *server, uint64_t now,
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
     server_peer *peer = &server->peers[i];
     cai_error local;
-    int eof = 0;
+    int eof = 0, deferred = peer->deferred_error.code != CAI_OK;
     if (peer->wire == NULL)
       continue;
     cai_error_init(&local);
+    if (deferred) {
+      local = peer->deferred_error;
+      cai_error_init(&peer->deferred_error);
+    }
     rc = peer->failed;
     if (rc == CAI_OK && peer->deadline != 0U && now >= peer->deadline)
       rc = cai_set_error(&local, CAI_ERR_LIMIT, "workspace greeting timed out");
@@ -627,7 +657,7 @@ int cai_workspace_server_pump(cai_workspace_server *server, uint64_t now,
       peer->detach = 1;
     if (rc != CAI_OK && local.code == CAI_OK)
       cai_set_error(&local, rc, "workspace subscriber processing failed");
-    if (rc != CAI_OK && !peer->failed)
+    if (rc != CAI_OK && (!peer->failed || deferred))
       (void)notify(peer, CAI_WORKSPACE_PEER_ERROR, NULL, &local, NULL);
     if (rc != CAI_OK || eof || peer->detach) {
       changed |= peer->attachment != 0U;

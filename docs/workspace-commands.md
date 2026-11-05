@@ -24,6 +24,23 @@ Large documents flow in bounded UTF-8 chunks without a complete document or
 JSON accumulator. The runtime's existing journal serialization owns sequence
 assignment and persistence; there is no second store or writer lease.
 
+The document producer continues output after the accepted input record, at
+execution-chunk boundaries and at document completion. This lets the frontend
+show `/model` before its synchronous catalog request returns. The continuation
+consumes at most 64 already-ready transcript spans per subscriber and attempts
+nonblocking socket writes. It never reads requests, accepts peers, advances
+authority/lifetime or dispatches another command. A slow subscriber keeps
+ordinary bounded backpressure and ordered catch-up; production does not wait
+for storage readers or socket credit. Short formatting fragments share the
+execution writer's 4 KiB cadence instead of repeatedly flushing sockets.
+Already-produced queue receipts precede transcript spans, so an executing
+command disappears from the editable queue before its input is displayed.
+
+Core hosts can use `cai_workspace_server_flush` for the same output-only
+boundary. Flush failures mark only the affected peer; ordinary pumping reports
+and detaches it. Application callbacks do not run inside this flush. Normal
+`prepare`/`pump` still owns input, deadlines and lifetime changes.
+
 Frontend-local theme/output preferences, quit, pager and terminal handoff are
 delegated instead of executed by the server. A frontend may act only on a live
 record addressed to its own producer, after verifying its current connection
@@ -61,3 +78,13 @@ response, settings held until a request boundary, failures followed by
 successful commands, observer rejection, frontend delegation, shell and review
 completion, and a `/new` reply replayed from the new conversation. Store-client
 open counts must remain constant through these operations.
+
+`cai_cli_command_progress_native` and `cai_cli_command_progress_embed` gate a real
+catalog response twice, verify the command receipt and editable draft before
+release, and then verify the results and subsequent status queries. Only the
+catalog parser policy is enabled for the loopback fixture; the owner, journal,
+socket and both frontend entry points are production implementations.
+`cai_workspace_server` separately proves output progress without admitting a
+waiting connection/request, slow-peer isolation, ordered drain, deferred
+write-error reporting and refusal to flush reentrantly on a default-stack
+worker.
