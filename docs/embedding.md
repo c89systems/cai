@@ -335,7 +335,9 @@ from the received monotonic anchor, without a provider call or server poll.
 Unavailable metadata invalidates only the view. After disconnect the last view
 remains explicitly stale and its durations no longer advance. ROLE still owns
 control authority. See the [status contract](workspace-wire-status.md).
-Terminal consumption and Lua socket-client bindings remain pending.
+The Softline adapter consumes this status channel. Lua applications use
+[`cai.app.client`](lua-workspace-client.md) for the same typed socket client,
+including streamed transcript/execution, queue, recall and catalog callbacks.
 
 An idle controller stays open until STOP. After observing shutdown, call
 `cai_app_join` outside UI/owner callbacks, then close or start the receiver

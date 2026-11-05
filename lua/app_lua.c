@@ -3,6 +3,7 @@
  * thread; observers reenter Lua only there, never from native tool workers.
  * Application strings/settings are copied by open; native logger interop is
  * retained until close. No application-private headers are required. */
+#include "app_client_lua.h"
 #include "todo_lua.h"
 #include <cai/app.h>
 #include <dlfcn.h>
@@ -803,5 +804,6 @@ int luaopen_cai_app(lua_State *L) {
   lua_setfield(L, -2, "open");
   lua_pushcfunction(L, open_kanban);
   lua_setfield(L, -2, "kanban");
+  cai_lua_app_client_register(L);
   return 1;
 }

@@ -28,7 +28,7 @@ target_compile_options(cai_lua PRIVATE -std=c89 -Wall -Wextra -Werror
   -Wshadow -Wpointer-arith -Wcast-qual -Wwrite-strings -Wdeclaration-after-statement)
 cai_apply_export_policy(cai_lua "${CMAKE_CURRENT_LIST_DIR}/cai_lua.exports")
 if(CAI_APP_FOUND)
-  add_library(cai_app_lua MODULE app_lua.c todo_lua.c)
+  add_library(cai_app_lua MODULE app_lua.c app_client_lua.c todo_lua.c)
   set_target_properties(cai_app_lua PROPERTIES OUTPUT_NAME app PREFIX ""
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/cai")
   target_include_directories(cai_app_lua PRIVATE "${CAI_LUA_INCLUDE_DIR}" "${CAI_PSLOG_LUA_INCLUDE_DIR}")

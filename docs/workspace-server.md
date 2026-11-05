@@ -38,8 +38,12 @@ executable ownership, and [command execution](workspace-commands.md) for backend
 admission/delegation. The confirmed decisions and specification below remain
 the target contract; an implemented boundary is not a claim of complete feature
 parity. In particular, the synchronous receiver, batch/temp composition,
-some terminal delegates, asynchronous Lua observations and
+some terminal delegates, asynchronous Lua owner lifecycle/observations and
 optional frontend packaging remain unfinished.
+
+The optional [Lua workspace client](lua-workspace-client.md) exposes the typed
+C client channels and explicit scopes. Lua drives prepare/pump (or an explicit
+blocking wait); callbacks stay on that Lua thread and copy bounded spans.
 
 Submitted prompts belong to the libmdf feed. Complete native inputs and
 arbitrarily fragmented socket spans now use the same literal adapter inside

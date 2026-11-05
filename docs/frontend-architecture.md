@@ -18,7 +18,9 @@ Native editors keep their drafts and presentation. `/new` and `/resume` leave
 pending work with its conversation; `/workspace` retains each visited owner's
 attachment and editor without carrying inputs into another workspace. Every
 in-flight request keeps its original session, producer, epoch and generation.
-The synchronous `cai_app.run` composition, asynchronous Lua observations and
+The [Lua socket client](lua-workspace-client.md) now exposes typed attachment
+observations without opening a runtime or store. The synchronous `cai_app.run`
+composition, asynchronous Lua owner observations and
 optional frontend packaging still require cutover. These boundaries are not
 proof of complete feature parity.
 

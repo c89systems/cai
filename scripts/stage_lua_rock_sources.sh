@@ -60,6 +60,7 @@ files=(
   docs/embedding.md
   docs/workspace-server.md
   docs/terminal-attachment.md
+  docs/lua-workspace-client.md
   docs/workspace-wire-queue.md
   docs/workspace-wire-history.md
   docs/workspace-wire-catalog.md
@@ -81,6 +82,8 @@ files=(
   cmake/cai-export-policy.cmake
   lua/cai_lua.c
   lua/app_lua.c
+  lua/app_client_lua.c
+  lua/app_client_lua.h
   lua/todo_lua.c
   lua/todo_lua.h
   lua/cai_app.exports
