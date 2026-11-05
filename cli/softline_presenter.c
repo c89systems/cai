@@ -502,8 +502,7 @@ static int cai_cli_presenter_prompt_token(cai_cli_presenter *state,
 }
 
 /* The native path supplies a complete accepted prompt. User prompts have
- * literal semantics; reasoning uses ordinary Markdown. Replace this escaped
- * TEXT path with write_literal when that public libmdf method is released.
+ * literal semantics through write_literal; reasoning uses ordinary Markdown.
  * Word-based emission is intentional: socket spans must not force wrapping
  * decisions or quote boundaries, or accumulate into a whole prompt here. */
 static int cai_cli_presenter_prompt_prepare(cai_cli_presenter *state) {

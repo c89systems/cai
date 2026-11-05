@@ -23,6 +23,15 @@ static void resize_signal(int signo) {
   (void)signo;
   resized = 1;
 }
+/** Keep resize/stop handling installed across repeated PTY actions. Under
+ * strict X/Open feature selection, signal() can reset after its first use. */
+static int install_signal(int signo, void (*handler)(int)) {
+  struct sigaction action;
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = handler;
+  sigemptyset(&action.sa_mask);
+  return sigaction(signo, &action, NULL);
+}
 static int write_all(int fd, const char *data, size_t size) {
   ssize_t n;
   while (size) {
@@ -188,9 +197,14 @@ int main(int argc, char **argv) {
   }
   close(slave);
   close(diagnostics);
-  signal(SIGUSR1, resize_signal);
-  signal(SIGTERM, stop_signal);
-  signal(SIGINT, stop_signal);
+  if (install_signal(SIGUSR1, resize_signal) != 0 ||
+      install_signal(SIGTERM, stop_signal) != 0 ||
+      install_signal(SIGINT, stop_signal) != 0) {
+    kill(child, SIGKILL);
+    while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {
+    }
+    return 1;
+  }
   while (alive && !stopped) {
     frame_changed = 0;
     if (resized) {

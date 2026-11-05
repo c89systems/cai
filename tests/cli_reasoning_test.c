@@ -938,6 +938,83 @@ static int test_literal_tokens(void) {
   return rc;
 }
 
+static int test_literal_fragments(void) {
+  static const char input[] =
+      "prefix **stars** _path_ `tick` [name](url) &amp; \\x café λ🚀\n"
+      "controls\0\033\xc2\x9b end\xc3";
+  static const char expected[] =
+      "prefix **stars** _path_ `tick` [name](url) &amp; \\x café λ🚀\n"
+      "controls   end?";
+  event_log_capture *capture = calloc(1U, sizeof(*capture));
+  cai_cli_literal literal;
+  mdf_options options;
+  mdf_sink sink;
+  mdf *renderer = NULL;
+  size_t span, at;
+  char actual[512], wanted[512], reference[512];
+  int rc = 1;
+  if (capture == NULL)
+    return 1;
+  mdf_options_init(&options);
+  options.width = 240;
+  options.boring = 1;
+  options.ansi_mode = MDF_ANSI_OFF;
+  if (mdf_create(MDF_FORMAT_ANSI, &options, &renderer) != MDF_OK)
+    goto done;
+  sink.userdata = capture;
+  sink.write = literal_capture_write;
+  if (renderer->set_sink(renderer, &sink) != MDF_OK)
+    goto done;
+  cai_cli_literal_init(&literal, renderer);
+  if (cai_cli_literal_feed(&literal, input, sizeof(input) - 1U) != 0 ||
+      cai_cli_literal_finish(&literal) != 0 ||
+      renderer->finish(renderer) != MDF_OK ||
+      capture->length >= sizeof(reference))
+    goto done;
+  memcpy(reference, capture->bytes, capture->length + 1U);
+  without_spaces(wanted, expected);
+  for (span = 1U; span <= 7U; ++span) {
+    memset(capture, 0, sizeof(*capture));
+    cai_cli_literal_init(&literal, renderer);
+    for (at = 0U; at < sizeof(input) - 1U;) {
+      size_t n = sizeof(input) - 1U - at;
+      if (n > span)
+        n = span;
+      if (cai_cli_literal_feed(&literal, input + at, n) != 0)
+        goto done;
+      at += n;
+    }
+    /* Complete words flow before field completion, without Markdown escapes
+     * or interpreting literal stars/entities/links at fragment boundaries. */
+    if (strstr(capture->bytes, "**stars**") == NULL ||
+        cai_cli_literal_finish(&literal) != 0 ||
+        renderer->finish(renderer) != MDF_OK)
+      goto done;
+    without_spaces(actual, capture->bytes);
+    if (strcmp(capture->bytes, reference) != 0 || strcmp(actual, wanted) != 0 ||
+        strchr(capture->bytes, '\033') != NULL ||
+        cai_cli_literal_feed(&literal, "late", 4U) != -1 ||
+        cai_cli_literal_finish(&literal) != -1)
+      goto done;
+  }
+  capture->length = sizeof(capture->bytes) - 1U;
+  cai_cli_literal_init(&literal, renderer);
+  if (cai_cli_literal_feed(&literal, "sink failure\n", 13U) != -1)
+    goto done;
+  capture->length = 0U;
+  if (cai_cli_literal_feed(&literal, "retry", 5U) != -1 ||
+      cai_cli_literal_finish(&literal) != -1 || capture->length != 0U)
+    goto done;
+  rc = 0;
+done:
+  if (rc != 0)
+    fprintf(stderr, "fragmented literal rendering failed\n");
+  if (renderer != NULL)
+    renderer->destroy(renderer);
+  free(capture);
+  return rc;
+}
+
 static int test_reasoning_replay(void) {
   static const char *const types[] = {
       "assistant_text_delta",      "reasoning_summary_started",
@@ -1188,9 +1265,10 @@ int main(void) {
   if (test_command_queue_modes() != 0 || test_goal_handoff() != 0 ||
       test_command_timer_boundary() != 0 || test_shared_auth() != 0 ||
       test_event_logging() != 0 || test_reasoning_sections() != 0 ||
-      test_literal_tokens() != 0 || test_reasoning_quotes() != 0 ||
-      test_reasoning_replay() != 0 || test_timestamps() != 0 ||
-      test_streaming_tables() != 0 || test_deferred_command_spacing() != 0)
+      test_literal_tokens() != 0 || test_literal_fragments() != 0 ||
+      test_reasoning_quotes() != 0 || test_reasoning_replay() != 0 ||
+      test_timestamps() != 0 || test_streaming_tables() != 0 ||
+      test_deferred_command_spacing() != 0)
     return 1;
   memset(&state, 0, sizeof(state));
   if (!cai_cli_quota_due(0, start, start, 0) ||

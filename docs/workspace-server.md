@@ -49,28 +49,23 @@ Lua streaming observers attach through the client; inline observers remain a
 synchronous receiver facility and are rejected by asynchronous start.
 
 Submitted prompts belong to the libmdf feed. Complete native inputs and
-arbitrarily fragmented socket spans now use the same literal adapter inside
-public blockquote/text tokens. It carries UTF-8 and complete inline escape units
-across spans; only source newlines and the actual input end close semantic
-boundaries. Interrupted fields discard their unprinted suffix. Libmdf owns
-quote layout, wrapping, margins and theme colors. Softline receives rendered
-bytes and owns the editor and queue.
+arbitrarily fragmented socket spans use the same terminal-safety adapter into
+libmdf 0.22.0's `write_literal` method inside its blockquote context. The adapter
+repairs invalid UTF-8 and filters terminal controls, retaining only a bounded
+chunk and an incomplete character. It does not escape Markdown. User prompts
+remain literal; thinking uses the normal Markdown feed.
 
-The selected remote prompt path is libmdf's forthcoming `write_literal` method
-inside its blockquote context. User prompts remain literal; thinking uses the
-normal Markdown feed. CAI must not escape input before `write_literal`, invent
-delimiters at transport boundaries, or request emission before libmdf has made
-its word/wrapping decision. Source newlines and the actual prompt end provide
-the semantic boundaries. Socket fragments retain the same renderer state.
+Source newlines and the actual prompt end provide the semantic boundaries;
+transport fragments retain the same renderer state and never introduce
+delimiters. Interrupted fields discard their unprinted suffix. Libmdf owns
+word decisions, quote layout, wrapping, margins and theme colors. Softline
+receives rendered bytes and owns the editor and queue.
 
 The accepted upstream contract caps word RAM at 4 KiB by default (configurable
 through 64 KiB), with optional temporary-file spooling up to 1 MiB and prefix
 truncation at the storage cap. This word decision storage is explicitly
 accepted; it is not a reason to collect complete remote prompts in CAI. The
-earlier partial-word emission request is withdrawn. These public methods are
-not yet in CAI's pinned libmdf 0.21.0. Keep the existing rendering adapter while
-finishing the server/client work; adopting `write_literal` is a later adapter
-change and does not gate the remaining architecture. No Softline quote API is
+earlier partial-word emission request is withdrawn. No Softline quote API is
 required.
 
 ## Confirmed product decisions

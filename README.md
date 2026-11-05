@@ -207,7 +207,7 @@ settings. An old conversation does not implicitly approve its workspace.
 The musl SDK presets build the terminal coding agent as a statically linked
 Linux x86_64, aarch64 or armhf executable. The `cai` convenience preset selects
 the same x86_64 musl producer. It adds pinned softline 0.16.0 for the prompt and
-[libmdf 0.21.0](https://github.com/c89systems/libmdf) for streamed Markdown
+[libmdf 0.22.0](https://github.com/c89systems/libmdf) for streamed Markdown
 rendering and its public theme palette, and liblockdc 0.27.0 with
 [liblql 0.4.1](https://github.com/c89systems/liblql) for durable storage.
 It uses libpslog 0.13.0 for logging.
@@ -682,10 +682,10 @@ Offsets requiring Unicode chart symbols, or having no listed code, use `J`
 `CAI_UTC=true`, `[ui] utc=true`, or the application `ui.utc` setting selects
 Zulu time; `--no-utc` restores local display. Batch stdout stays unchanged.
 Replay uses original event times; entries without recorded times stay unstamped.
-Submitted prompts are rendered through libmdf's blockquote and escaped text
-tokens; Softline receives the rendered bytes and owns the editor and queue.
-The selected replacement is libmdf's forthcoming `write_literal` method for
-user prompts; thinking blockquotes keep normal Markdown interpretation. Word
+Submitted prompts use libmdf's `write_literal` method inside blockquote tokens;
+Softline receives the rendered bytes and owns the editor and queue. The bounded
+adapter filters terminal controls and repairs UTF-8 without escaping Markdown;
+thinking blockquotes keep normal Markdown interpretation. Word
 decisions may span input chunks, and transport boundaries never force output.
 Prompt stamps beside `>` still need presentation support in that libmdf feed
 path. Presentation text never enters drafts, prompt history, or model context.

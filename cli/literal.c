@@ -2,14 +2,9 @@
 #include "../src/cai_utf8.h"
 #include <string.h>
 
-static int literal_token(cai_cli_literal *state, int kind, const char *data,
+static int literal_bytes(cai_cli_literal *state, const char *data,
                          size_t length) {
-  mdf_token token;
-  memset(&token, 0, sizeof(token));
-  token.type = (mdf_token_type)kind;
-  token.text = data;
-  token.len = length;
-  if (state->renderer->write_token(state->renderer, &token) != MDF_OK) {
+  if (state->renderer->write_literal(state->renderer, data, length) != MDF_OK) {
     state->failed = 1;
     return -1;
   }
@@ -17,29 +12,19 @@ static int literal_token(cai_cli_literal *state, int kind, const char *data,
 }
 
 static int literal_flush(cai_cli_literal *state) {
-  if (state->used != 0U &&
-      literal_token(state, MDF_TOKEN_TEXT, state->chunk, state->used) != 0)
+  if (state->used != 0U && literal_bytes(state, state->chunk, state->used) != 0)
     return -1;
   state->used = 0U;
   return 0;
 }
 
-/** Escape complete ASCII units together: libmdf recognizes inline escapes
- * even inside manual TEXT tokens. Network fragmentation must not split them. */
+/** Filter terminal controls without escaping or interpreting Markdown. The
+ * literal API owns word decisions and newline layout across all fragments. */
 static int literal_ascii(cai_cli_literal *state, unsigned char ch) {
-  if ((ch == '\n' || state->used + 5U > sizeof(state->chunk)) &&
-      literal_flush(state) != 0)
+  if (state->used == sizeof(state->chunk) && literal_flush(state) != 0)
     return -1;
-  if (ch == '\n')
-    return literal_token(state, MDF_TOKEN_NEWLINE, NULL, 0U);
-  if (ch == '&') {
-    memcpy(state->chunk + state->used, "&amp;", 5U);
-    state->used += 5U;
-  } else {
-    if (ch != 0U && strchr("\\`*_{}[]()#+-.!<>|", (int)ch) != NULL)
-      state->chunk[state->used++] = '\\';
-    state->chunk[state->used++] = ch < 32U || ch == 127U ? ' ' : (char)ch;
-  }
+  state->chunk[state->used++] =
+      (ch < 32U && ch != '\n') || ch == 127U ? ' ' : (char)ch;
   return 0;
 }
 
@@ -71,9 +56,9 @@ static int literal_runes(cai_cli_literal *state, int ending) {
       /* C1 controls are valid UTF-8 but invalid terminal feed contents. */
       if (need == 2U && (unsigned char)rune[0] == 0xc2U &&
           (unsigned char)rune[1] < 0xa0U) {
-        if (literal_token(state, MDF_TOKEN_TEXT, " ", 1U) != 0)
+        if (literal_bytes(state, " ", 1U) != 0)
           return -1;
-      } else if (literal_token(state, MDF_TOKEN_TEXT, rune, consumed) != 0)
+      } else if (literal_bytes(state, rune, consumed) != 0)
         return -1;
     }
     state->pending -= consumed;
@@ -108,7 +93,7 @@ int cai_cli_literal_feed(cai_cli_literal *state, const void *bytes,
         return -1;
     }
   }
-  return 0;
+  return literal_flush(state);
 }
 
 int cai_cli_literal_finish(cai_cli_literal *state) {

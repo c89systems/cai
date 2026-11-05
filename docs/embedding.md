@@ -567,19 +567,19 @@ host's local timezone at that instant unless UTC is selected. Missing original
 times are omitted, not replaced with the replay clock. Noninteractive output
 is unaffected. Feed timestamps use gray without additional dimming;
 slash-command replies share the command input's timestamp. Submitted prompts
-use libmdf blockquote and escaped text tokens. Independently styled timestamps
-beside `>` remain pending presentation support in that feed path; they do not
+use libmdf's `write_literal` method inside blockquote tokens. Independently
+styled timestamps beside `>` remain pending presentation support in that feed path; they do not
 require a Softline quote API. Softline receives rendered bytes and retains
 editor and queue ownership.
-The planned literal-method cutover replaces escaped prompt text with libmdf's
-`write_literal` once released. It does not change thinking blockquotes, which
-use normal Markdown. Word-based emission and the agreed bounded word
-RAM/spooling policy belong to libmdf; no fragment boundary closes a quote or
+The bounded adapter repairs UTF-8 and filters terminal controls without
+escaping Markdown. Thinking blockquotes use normal Markdown. Word-based
+emission and the agreed bounded word RAM/spooling policy belong to libmdf;
+no fragment boundary closes a quote or
 inserts synthetic whitespace.
 The completed status message includes its DTG but shares Softline's status
 style until an independently styled status metadata slot is available.
 
-`/tools` uses the normal full-table layout. libmdf 0.21.0 automatically switches
+`/tools` uses the normal full-table layout. libmdf automatically switches
 the current table to row streaming at 64 KiB or 1024 retained rows, emitting
 buffered rows once before continuing. Descriptions are retained in full, and
 small tables preserve widths calculated from the complete table. The ordinary

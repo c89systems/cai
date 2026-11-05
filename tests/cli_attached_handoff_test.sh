@@ -133,6 +133,20 @@ send '/takeover\r'; wait_for not_observing
 send '/status\r'; expect 'Session ID'
 [[ $(requests) == 6 ]]
 
+# The fallback viewer redraws after a second terminal resize, then restores
+# the same editor/attachment without injecting pager keys as agent input.
+pager_offset=$(wc -c <"$term/raw")
+send '/log -p\r'; wait_for pager_opened
+pager_frame_offset=$pager_offset
+pager_drawn() { tail -c +$((pager_frame_offset+1)) "$term/raw" | grep -E '[0-9]+%' >/dev/null; }
+wait_for pager_drawn
+pager_frame_offset=$(wc -c <"$term/raw")
+resize 83
+wait_for pager_drawn
+send q; expect 'Pager closed.'
+send '/status\r'; expect 'Session ID'
+[[ $(requests) == 6 ]]
+
 # Owner loss must cancel the finite viewer and restore its terminal, rather
 # than leaving a dead pager waiting for a key with no working attachment.
 pager_offset=$(wc -c <"$term/raw")
