@@ -4,7 +4,7 @@
 #ifndef CAI_WORKSPACE_CLAIMS_H
 #define CAI_WORKSPACE_CLAIMS_H
 #include <stddef.h>
-#define CAI_WORKSPACE_CLAIM_LIMIT 128U
+#define CAI_WORKSPACE_CLAIM_LIMIT 512U
 #define CAI_WORKSPACE_CLAIM_NAME 80U
 #define CAI_WORKSPACE_CLAIM_DIGEST 32U
 /** Named opaque fingerprint; the application defines its meaning and hashing.

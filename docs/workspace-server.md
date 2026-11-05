@@ -68,7 +68,8 @@ The [typed client package](application-client.md) can now be built and installed
 without terminal/storage dependencies. The [workspace owner SDK](application-server.md)
 likewise builds without Softline/libmdf and does not select Lua by default.
 The combined facade uses that same backend, including one process-wide store
-registry. Extended configuration admission validation remains unfinished.
+registry. The startup requirement inventory also validates supplemental schema
+fields, named connections and effective environment settings before attachment.
 
 The optional [Lua workspace client](lua-workspace-client.md) exposes the typed
 C client channels and explicit scopes. Lua drives prepare/pump (or an explicit
@@ -287,7 +288,8 @@ server is already running and which setting conflicts. Do not silently start
 a second owner or mutate config.ini.
 The implemented [startup requirement inventory](workspace-wire-claims.md)
 validates these identities before admission, without publishing configuration
-values in discovery. Full runtime startup-control parity remains unfinished.
+values in discovery. Mutable invocation controls use ordered acknowledgements;
+other backend settings constrain attachment through per-field fingerprints.
 
 ## CLI contract
 

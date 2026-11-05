@@ -2778,7 +2778,7 @@ int cai_app_terminal_run(const cai_app_config *application,
                          cai_error *error) {
   cai_app_config defaults;
   cai_cli_options options;
-  cai_cli_workspace_claims requirements;
+  cai_cli_workspace_claims requirements = {0};
   cai_config_context context;
   cai_config *configuration = NULL;
   cai_environment *environment = NULL;
@@ -2848,6 +2848,7 @@ int cai_app_terminal_run(const cai_app_config *application,
       *exit_code = 0;
   }
   cai_environment_close(environment);
+  cai_cli_workspace_claims_cleanup(&requirements);
   cai_config_close(configuration);
   for (i = 0; i <= argc; ++i)
     free(arguments[i]);

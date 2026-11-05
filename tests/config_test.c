@@ -151,6 +151,56 @@ static void origin_test(void) {
   config->close(config);
   cai_error_cleanup(&error);
 }
+typedef struct visit_check {
+  size_t calls;
+  int stop;
+} visit_check;
+static int visit_entry(void *context, const char *section, const char *key,
+                       const cai_config_field *field, const char *const *values,
+                       size_t count, cai_error *error) {
+  visit_check *v = context;
+  (void)error;
+  ++v->calls;
+  if (v->stop)
+    return CAI_ERR_CANCELLED;
+  if (strcmp(section, "env") == 0) {
+    assert(field == NULL && strcmp(key, "VISITOR_TOKEN") == 0 && count == 1U);
+    assert(strcmp(values[0], "private") == 0);
+  } else if (strcmp(section, "mcp.team") == 0) {
+    assert(field != NULL && strcmp(field->section, "mcp.*") == 0);
+    assert(strcmp(key, "timeout_ms") == 0 && count == 1U &&
+           !strcmp(values[0], "123"));
+  } else {
+    assert(field != NULL && strcmp(section, "review") == 0);
+    assert(strcmp(key, "allowed_models") == 0 && count == 2U);
+    assert(strcmp(values[0], "first") == 0 && strcmp(values[1], "second") == 0);
+  }
+  return CAI_OK;
+}
+static void visitor_test(void) {
+  cai_config *cfg;
+  visit_check v = {0U, 0};
+  assert(cai_config_open(NULL, 0U, NULL, &cfg, NULL) == CAI_OK);
+  assert(cai_config_visit(cfg, visit_entry, &v, NULL) == CAI_OK && !v.calls);
+  assert(cai_config_visit(NULL, visit_entry, &v, NULL) == CAI_ERR_INVALID);
+  assert(cai_config_visit(cfg, NULL, &v, NULL) == CAI_ERR_INVALID);
+  assert(cai_config_set(cfg, "env", "VISITOR_TOKEN", "private", NULL) ==
+         CAI_OK);
+  assert(cai_config_set(cfg, "mcp.team", "timeout_ms", "123", NULL) == CAI_OK);
+  assert(cai_config_set(cfg, "review", "allowed_models", "first", NULL) ==
+         CAI_OK);
+  assert(cai_config_set(cfg, "review", "allowed_models", "second", NULL) ==
+         CAI_OK);
+  assert(cai_config_set_default(cfg, "client", "timeout_ms", "42", NULL) ==
+         CAI_OK);
+  assert(cai_config_visit(cfg, visit_entry, &v, NULL) == CAI_OK &&
+         v.calls == 3U);
+  v.calls = 0U;
+  v.stop = 1;
+  assert(cai_config_visit(cfg, visit_entry, &v, NULL) == CAI_ERR_CANCELLED &&
+         v.calls == 1U);
+  cai_config_close(cfg);
+}
 int main(int argc, char **argv) {
   cai_config *config, *again;
   cai_error error;
@@ -217,6 +267,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   origin_test();
+  visitor_test();
   cai_error_init(&error);
   assert(cai_config_open(NULL, 0U, NULL, &config, &error) == CAI_OK);
   for (i = 1U; i <= 16U; i *= 2U) {

@@ -196,9 +196,9 @@ external-first selection. Preferences belong to each frontend attachment.
 ## Remaining cutover work
 
 This is a working terminal/socket composition, not a claim of complete feature
-parity. Full startup-control parity and validation of extended configuration outside
-the startup inventory still require
-integration. Automatic executable-path discovery currently
+parity. Startup controls use ordered acknowledgements, and supplemental schema
+configuration uses the same pre-admission inventory as resolved CLI settings.
+Automatic executable-path discovery currently
 uses Linux `/proc/self/exe`. Batch prompts, standalone goals, reviews, slash
 commands, pipe-shell commands and combined goal-plus-prompt startup use the
 owner/socket adapter. Plain redirected input without `-i` now shares that

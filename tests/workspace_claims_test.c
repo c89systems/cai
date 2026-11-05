@@ -117,9 +117,11 @@ static void codec(void) {
 int main(void) {
   char temporary[] = "cai-claims-XXXXXX", workspace[4096];
   char *root;
-  cai_workspace_claim claims[CAI_WORKSPACE_CLAIM_LIMIT],
-      requested[CAI_WORKSPACE_CLAIM_LIMIT];
-  char names[CAI_WORKSPACE_CLAIM_LIMIT][32];
+  cai_workspace_claim *claims =
+      calloc(CAI_WORKSPACE_CLAIM_LIMIT, sizeof(*claims));
+  cai_workspace_claim *requested =
+      calloc(CAI_WORKSPACE_CLAIM_LIMIT, sizeof(*requested));
+  char (*names)[32] = calloc(CAI_WORKSPACE_CLAIM_LIMIT, sizeof(*names));
   cai_workspace_server_config config;
   cai_workspace_server *server;
   cai_workspace_client *c, *controller;
@@ -127,6 +129,7 @@ int main(void) {
   DIR *directory;
   struct dirent *entry_file;
   size_t i;
+  assert(claims != NULL && requested != NULL && names != NULL);
   codec();
   assert(mkdtemp(temporary));
   root = realpath(temporary, NULL);
@@ -143,13 +146,13 @@ int main(void) {
   config.claims = claims;
   config.claim_count = CAI_WORKSPACE_CLAIM_LIMIT;
   assert(cai_workspace_server_open(&config, &server, NULL) == CAI_OK);
-  memcpy(requested, claims, sizeof(claims));
+  memcpy(requested, claims, CAI_WORKSPACE_CLAIM_LIMIT * sizeof(*claims));
   claims[0].digest[0] ^= 1U; /* Owner must retain its original copy. */
   assert(cai_workspace_server_get_state(server, &before, NULL) == CAI_OK);
   for (i = 0U; i < 2U; ++i) {
     requested[CAI_WORKSPACE_CLAIM_LIMIT - 1U].digest[31] ^= 1U;
     c = client(root, workspace, requested, CAI_WORKSPACE_CLAIM_LIMIT, (int)i);
-    connect(server, c, 1, "setting.127");
+    connect(server, c, 1, names[CAI_WORKSPACE_CLAIM_LIMIT - 1U]);
     unchanged(server, &before);
     cai_workspace_client_close(c);
     requested[CAI_WORKSPACE_CLAIM_LIMIT - 1U].digest[31] ^= 1U;
@@ -190,5 +193,8 @@ int main(void) {
   closedir(directory);
   assert(rmdir(root) == 0);
   free(root);
+  free(claims);
+  free(requested);
+  free(names);
   return 0;
 }

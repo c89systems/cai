@@ -1,3 +1,5 @@
+#include "../cli/app_internal.h"
+#include "../cli/config.h"
 #include "../cli/goal_input.h"
 #include "../cli/input_wire.h"
 #include "../cli/startup.h"
@@ -46,7 +48,7 @@ static void owner_inventory(void) {
       CAI_CLI_OWNER_FIELDS(FIELD)
 #undef FIELD
   };
-  cai_cli_workspace_claims owner, requested;
+  cai_cli_workspace_claims owner = {0}, requested = {0};
   cai_cli_options defaults, selected;
   cai_config *cfg;
   size_t i, j;
@@ -55,7 +57,7 @@ static void owner_inventory(void) {
   assert(cai_config_open(NULL, 0U, NULL, &cfg, NULL) == CAI_OK);
   assert(cai_cli_workspace_claims_build(&defaults, cfg, 0, &owner, NULL) ==
          CAI_OK);
-  assert(owner.count == CAI_CLI_OWNER_COUNT && owner.count > 64U);
+  assert(owner.count >= CAI_CLI_OWNER_COUNT && owner.count > 64U);
   assert(cai_cli_workspace_claims_build(&defaults, cfg, 1, &requested, NULL) ==
          CAI_OK);
   assert(requested.count == 0U);
@@ -98,8 +100,195 @@ static void owner_inventory(void) {
                   CAI_WORKSPACE_CLAIM_DIGEST));
   }
   cfg->close(cfg);
+  cai_cli_workspace_claims_cleanup(&owner);
+  cai_cli_workspace_claims_cleanup(&requested);
+}
+static const cai_workspace_claim *find_claim(const cai_cli_workspace_claims *c,
+                                             const char *name) {
+  size_t i;
+  for (i = 0U; i < c->count; ++i)
+    if (!strcmp(c->values[i].name, name))
+      return c->values + i;
+  return NULL;
+}
+static void supplemental_inventory(void) {
+  cai_cli_workspace_claims owner = {0}, requested = {0};
+  cai_cli_options options;
+  cai_config *a, *b;
+  const cai_workspace_claim *x, *y;
+  const char *const names[] = {"client.timeout_ms", "client.ca_bundle_path",
+                               "mcp.team.endpoint", "review.allowed_models",
+                               "client_limits.max_spend_usd"};
+  size_t i;
+  cai_cli_options_init(&options);
+  options.no_config = 1;
+  assert(cai_cli_app_schema(&a, NULL) == 1 &&
+         cai_cli_app_schema(&b, NULL) == 1);
+  assert(cai_config_set(a, "client", "timeout_ms", "00042", NULL) == CAI_OK);
+  assert(cai_config_set(a, "client", "ca_bundle_path", "/selected/ca.pem",
+                        NULL) == CAI_OK);
+  assert(cai_config_set(a, "mcp.team", "endpoint", "https://mcp.invalid",
+                        NULL) == CAI_OK);
+  assert(cai_config_set(a, "review", "allowed_models", "first", NULL) ==
+         CAI_OK);
+  assert(cai_config_set(a, "review", "allowed_models", "second", NULL) ==
+         CAI_OK);
+  assert(cai_config_set(a, "client_limits", "max_spend_usd", "1.50", NULL) ==
+         CAI_OK);
+  assert(cai_cli_workspace_claims_build(&options, a, 0, &owner, NULL) ==
+         CAI_OK);
+  /* Only the requested subset matters, including numeric equivalence. */
+  assert(cai_config_set(b, "client", "timeout_ms", "42", NULL) == CAI_OK);
+  assert(cai_config_set(b, "client", "ca_bundle_path", "/selected/ca.pem",
+                        NULL) == CAI_OK);
+  assert(cai_config_set(b, "mcp.team", "endpoint", "https://mcp.invalid",
+                        NULL) == CAI_OK);
+  assert(cai_config_set(b, "review", "allowed_models", "first", NULL) ==
+         CAI_OK);
+  assert(cai_config_set(b, "review", "allowed_models", "second", NULL) ==
+         CAI_OK);
+  assert(cai_config_set(b, "client_limits", "max_spend_usd", "1.5", NULL) ==
+         CAI_OK);
+  assert(cai_config_set(b, "ui", "theme", "dracula", NULL) == CAI_OK);
+  assert(cai_config_set(b, "agent", "model", "another", NULL) == CAI_OK);
+  assert(cai_cli_workspace_claims_build(&options, b, 1, &requested, NULL) ==
+         CAI_OK);
+  assert(requested.count == sizeof(names) / sizeof(names[0]));
+  for (i = 0U; i < requested.count; ++i) {
+    x = find_claim(&owner, names[i]);
+    y = find_claim(&requested, names[i]);
+    assert(x != NULL && y != NULL &&
+           !memcmp(x->digest, y->digest, sizeof(x->digest)));
+  }
+  assert(cai_config_set(b, "client", "timeout_ms", "43", NULL) == CAI_OK);
+  assert(cai_cli_workspace_claims_build(&options, b, 1, &requested, NULL) ==
+         CAI_OK);
+  x = find_claim(&owner, "client.timeout_ms");
+  y = find_claim(&requested, "client.timeout_ms");
+  assert(memcmp(x->digest, y->digest, sizeof(x->digest)));
+  /* List order is semantic and named-section defaults are published. */
+  assert(cai_config_set(b, "mcp.team", "timeout_ms", "30000", NULL) == CAI_OK);
+  assert(cai_cli_workspace_claims_build(&options, b, 1, &requested, NULL) ==
+         CAI_OK);
+  x = find_claim(&owner, "mcp.team.timeout_ms");
+  y = find_claim(&requested, "mcp.team.timeout_ms");
+  assert(x != NULL && y != NULL &&
+         !memcmp(x->digest, y->digest, sizeof(x->digest)));
+  assert(cai_config_set(b, "review", "allowed_models", "third", NULL) ==
+         CAI_OK);
+  assert(cai_cli_workspace_claims_build(&options, b, 1, &requested, NULL) ==
+         CAI_OK);
+  x = find_claim(&owner, "review.allowed_models");
+  y = find_claim(&requested, "review.allowed_models");
+  assert(memcmp(x->digest, y->digest, sizeof(x->digest)));
+  cai_cli_workspace_claims_cleanup(&owner);
+  cai_cli_workspace_claims_cleanup(&requested);
+  assert(owner.values == NULL && owner.count == 0U && owner.capacity == 0U);
+  cai_config_close(a);
+  cai_config_close(b);
+}
+static void inventory_limit(void) {
+  cai_cli_workspace_claims claims = {0};
+  cai_cli_options options;
+  cai_config *cfg;
+  char key[48];
+  size_t i;
+  cai_cli_options_init(&options);
+  assert(cai_config_open(NULL, 0U, NULL, &cfg, NULL) == CAI_OK);
+  for (i = 0U; i < CAI_WORKSPACE_CLAIM_LIMIT; ++i) {
+    snprintf(key, sizeof(key), "CAI_LIMIT_%04u", (unsigned int)i);
+    assert(cai_config_set(cfg, "env", key, "value", NULL) == CAI_OK);
+  }
+  assert(cai_cli_workspace_claims_build(&options, cfg, 1, &claims, NULL) ==
+         CAI_OK);
+  assert(claims.count == CAI_WORKSPACE_CLAIM_LIMIT);
+  assert(cai_config_set(cfg, "env", "CAI_LIMIT_OVERFLOW", "value", NULL) ==
+         CAI_OK);
+  assert(cai_cli_workspace_claims_build(&options, cfg, 1, &claims, NULL) ==
+         CAI_ERR_LIMIT);
+  assert(claims.values == NULL && claims.count == 0U && claims.capacity == 0U);
+  cai_cli_workspace_claims_cleanup(&claims);
+  cai_config_close(cfg);
 }
 
+static void environment_inventory(void) {
+  static const char *const entries[] = {"CAI_CLAIM_ENV=effective", NULL};
+  cai_environment *environment;
+  cai_config_context context;
+  cai_config *a, *b;
+  cai_cli_options options;
+  cai_cli_workspace_claims owner = {0}, requested = {0};
+  const cai_workspace_claim *x, *y;
+  cai_cli_options_init(&options);
+  options.no_config = 1;
+  options.api_key_env = "CAI_CLAIM_ENV";
+  options.owner_explicit[CAI_CLI_OWNER_api_key_env] = 1U;
+  assert(cai_environment_open(entries, &environment, NULL) == CAI_OK);
+  context.directory = NULL;
+  context.environment = environment;
+  assert(cai_config_open(NULL, 0U, &context, &a, NULL) == CAI_OK);
+  assert(cai_config_open(NULL, 0U, &context, &b, NULL) == CAI_OK);
+  cai_environment_close(environment);
+  assert(cai_config_set(b, "env", "CAI_CLAIM_ENV", "ignored", NULL) == CAI_OK);
+  assert(cai_cli_workspace_claims_build(&options, a, 0, &owner, NULL) ==
+         CAI_OK);
+  assert(cai_cli_workspace_claims_build(&options, b, 1, &requested, NULL) ==
+         CAI_OK);
+  x = find_claim(&owner, "env.CAI_CLAIM_ENV");
+  y = find_claim(&requested, "env.CAI_CLAIM_ENV");
+  assert(x != NULL && y != NULL &&
+         !memcmp(x->digest, y->digest, sizeof(x->digest)));
+  assert(cai_config_set(b, "", "config_env_has_precedence", "true", NULL) ==
+         CAI_OK);
+  assert(cai_cli_workspace_claims_build(&options, b, 1, &requested, NULL) ==
+         CAI_OK);
+  y = find_claim(&requested, "env.CAI_CLAIM_ENV");
+  assert(y != NULL && memcmp(x->digest, y->digest, sizeof(x->digest)));
+  x = find_claim(&owner, "client.api_key_env");
+  y = find_claim(&requested, "client.api_key_env");
+  assert(x != NULL && y != NULL &&
+         memcmp(x->digest, y->digest, sizeof(x->digest)));
+  cai_cli_workspace_claims_cleanup(&owner);
+  cai_cli_workspace_claims_cleanup(&requested);
+  cai_config_close(a);
+  cai_config_close(b);
+}
+static void provider_ini_inventory(void) {
+  cai_cli_options options;
+  cai_config *cfg;
+  cai_cli_workspace_claims first = {0}, second = {0};
+  const cai_workspace_claim *x, *y;
+  cai_cli_options_init(&options);
+  options.no_config = 1;
+  assert(options.endpoint == NULL && options.api_key_env == NULL);
+  assert(cai_cli_app_schema(&cfg, NULL) == 1);
+  assert(cai_cli_workspace_claims_build(&options, cfg, 0, &first, NULL) ==
+         CAI_OK);
+  assert(cai_config_set(cfg, "client", "base_url", "", NULL) == CAI_OK);
+  options.owner_explicit[CAI_CLI_OWNER_endpoint] = 1U;
+  assert(cai_cli_workspace_claims_build(&options, cfg, 1, &second, NULL) ==
+         CAI_OK);
+  x = find_claim(&first, "client.base_url");
+  y = find_claim(&second, "client.base_url");
+  assert(x != NULL && y != NULL &&
+         !memcmp(x->digest, y->digest, sizeof(x->digest)));
+  assert(cai_config_set(cfg, "client", "base_url", "https://first.invalid",
+                        NULL) == CAI_OK);
+  assert(cai_cli_workspace_claims_build(&options, cfg, 0, &first, NULL) ==
+         CAI_OK);
+  assert(cai_config_set(cfg, "client", "base_url", "https://second.invalid",
+                        NULL) == CAI_OK);
+  options.owner_explicit[CAI_CLI_OWNER_endpoint] = 1U;
+  assert(cai_cli_workspace_claims_build(&options, cfg, 1, &second, NULL) ==
+         CAI_OK);
+  x = find_claim(&first, "client.base_url");
+  y = find_claim(&second, "client.base_url");
+  assert(x != NULL && y != NULL &&
+         memcmp(x->digest, y->digest, sizeof(x->digest)));
+  cai_cli_workspace_claims_cleanup(&first);
+  cai_cli_workspace_claims_cleanup(&second);
+  cai_config_close(cfg);
+}
 int main(void) {
   cai_cli_options options, defaults;
   cai_cli_startup cursor = {0};
@@ -154,6 +343,10 @@ int main(void) {
   char *background[3], *no_foreground[2];
   char *mappings[5];
   owner_inventory();
+  supplemental_inventory();
+  inventory_limit();
+  environment_inventory();
+  provider_ini_inventory();
   copy_args(args, input, sizeof(args) / sizeof(args[0]));
   copy_args(disabled, disabled_input, sizeof(disabled) / sizeof(disabled[0]));
   copy_args(background, background_input, 3U);

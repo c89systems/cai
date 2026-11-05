@@ -156,6 +156,7 @@ int cai_cli_existing_frontend(const cai_app_config *app, cai_app_bridge *bridge,
   cai_workspace_discovery_close(f->query);
   if (f->epoll >= 0)
     close(f->epoll);
+  cai_cli_workspace_claims_cleanup(&f->requirements);
   free(f);
   return rc;
 }

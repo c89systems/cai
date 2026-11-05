@@ -225,6 +225,7 @@ cai_config_section_at
 cai_config_section_count
 cai_config_set
 cai_config_set_default
+cai_config_visit
 cai_config_write_template
 cai_conversation_destroy
 cai_conversation_from_id

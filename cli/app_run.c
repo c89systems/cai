@@ -3943,7 +3943,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   if (server != NULL) {
     cai_attachment_config selected = *server;
     cai_cli_options identity = state->options;
-    cai_cli_workspace_claims claims;
+    cai_cli_workspace_claims claims = {0};
     if (!lifetime_explicit)
       selected.persist = state->options.server_persist;
     identity.server_persist = selected.persist;
@@ -3955,6 +3955,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
           state->options.workspace_name, claims.values, claims.count, &selected,
           application != NULL ? &application->input : NULL, state->bridge,
           cli_logger(state), &state->workspace_host, &error);
+    cai_cli_workspace_claims_cleanup(&claims);
     if (rc != CAI_OK) {
       cli_print_error(state, "open workspace server", &error);
       goto cleanup;

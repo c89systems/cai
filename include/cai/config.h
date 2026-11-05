@@ -133,6 +133,19 @@ size_t cai_config_section_count(const cai_config *self);
 const char *cai_config_section_at(const cai_config *self, size_t index);
 const cai_config_field *cai_config_field_at(const cai_config *self,
                                             size_t index);
+/** Visit explicitly configured keys once, including named sections and [env].
+ * Values/list order and field metadata are borrowed only during the callback;
+ * field is NULL for [env]. Template defaults are not explicit entries. The
+ * callback must not mutate/close self. Its first nonzero result stops traversal
+ * and is returned unchanged. No values are logged or copied, including secrets.
+ */
+typedef int (*cai_config_entry_fn)(void *context, const char *section,
+                                   const char *key,
+                                   const cai_config_field *field,
+                                   const char *const *values, size_t count,
+                                   cai_error *error);
+int cai_config_visit(const cai_config *, cai_config_entry_fn, void *context,
+                     cai_error *error);
 /** Incrementally read source, borrowing it without closing. Entire-file
  * buffering is avoided; resulting settings are materialized and owned.
  * Failure preserves prior settings. Lines/values are limited to 1 MiB.

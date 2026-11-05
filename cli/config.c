@@ -1091,6 +1091,10 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
     defaults.owner_explicit[CAI_CLI_OWNER_##member] = 1U;
   CAI_CLI_OWNER_FIELDS(CAI_CLI_OWNER_CONFIG)
 #undef CAI_CLI_OWNER_CONFIG
+  if (cfg->get(cfg, "runtime", "shell_context_max_lines") != NULL)
+    defaults.owner_explicit[CAI_CLI_OWNER_shell_context_max_lines] = 1U;
+  if (cfg->get(cfg, "runtime", "shell_context_max_bytes") != NULL)
+    defaults.owner_explicit[CAI_CLI_OWNER_shell_context_max_bytes] = 1U;
   for (i = 0U; i < cfg->section_count(cfg); ++i)
     if (strncmp(cfg->section_at(cfg, i), "store.", 6U) == 0)
       defaults.owner_explicit[CAI_CLI_OWNER_sessions_store] =
@@ -1253,18 +1257,15 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
     optional_string(cfg, "client", "base_url", &defaults.endpoint);
     optional_string(cfg, "client", "api_key_env", &defaults.api_key_env);
   }
-  {
-    static const char *const sections[] = {"client",   "client",   "terminal",
-                                           "terminal", "terminal", "chrome",
-                                           "searxng",  "revgeo"};
-    static const char *const keys[] = {
-        "ca_bundle_path",     "ca_path",           "root_path",
-        "default_workdir",    "shell_path",        "socket_directory",
-        "response_spool_dir", "response_spool_dir"};
-    for (i = 0U; i < sizeof(keys) / sizeof(keys[0]); i++)
-      if (cai_config_resolve_path(cfg, sections[i], keys[i], &resolved,
-                                  error) != CAI_OK)
-        return -1;
+  /* Resolve the complete selected schema, including supplemental SDK paths,
+   * before either runtime application or attachment identity projection. Named
+   * store paths have their own shared resolver below. */
+  for (i = 0U; i < cai_config_field_count(cfg); ++i) {
+    const cai_config_field *f = cai_config_field_at(cfg, i);
+    if ((f->flags & CAI_CONFIG_PATH) != 0U && strchr(f->section, '*') == NULL &&
+        cai_config_resolve_path(cfg, f->section, f->key, &resolved, error) !=
+            CAI_OK)
+      return -1;
   }
   rc = cai_cli_read_options(argc, argv, &defaults, options);
   if (rc <= 0)

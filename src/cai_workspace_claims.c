@@ -59,7 +59,7 @@ int cai_workspace_claim_copy(const cai_workspace_claim *in, size_t n,
 }
 /** Lengths come from validated bounded fields, never a sizing serialization. */
 uint32_t cai_workspace_claim_size(const cai_workspace_claim *claims, size_t n) {
-  uint32_t size = n < 24U ? 1U : 2U;
+  uint32_t size = n < 24U ? 1U : n <= 255U ? 2U : 3U;
   size_t i;
   for (i = 0U; i < n; ++i) {
     size_t length = strlen(claims[i].name);

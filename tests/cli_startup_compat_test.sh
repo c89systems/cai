@@ -107,3 +107,44 @@ reject storage.sessions_store --config "$root/team.ini"
 kill -TERM "$owner_pid"
 wait "$owner_pid"
 owner_pid=
+
+# Supplementary INI values are checked per field, rather than fingerprinting
+# an entire profile: a matching partial profile must attach successfully.
+profile="$root/config/cai/config.ini"
+printf '[client]\ntimeout_ms=12345\nca_bundle_path=trust/ca.pem\napi_key=owner-private-token\n[mcp.team]\nenabled=false\nendpoint=http://127.0.0.1:1/mcp\ntimeout_ms=24000\n[review]\nallowed_models=first\nallowed_models=second\n[env]\nCAI_COMPAT_PRIVATE=owner-environment\n' >"$profile"
+"${owner_base[@]}" -x -N --shell-context-max-lines 7000 >"$root/extended.out" 2>"$root/extended.log" & owner_pid=$!
+wait_for has "$root/extended.log" 'Workspace server ready'
+printf '[client]\ntimeout_ms=00012345\nca_bundle_path=trust/ca.pem\n[ui]\ntheme=gruvbox\n' >"$profile"
+terminal_start
+send '/status\r'; expect 'Session ID'
+terminal_close
+printf '[client]\ntimeout_ms=12346\n' >"$profile"
+reject client.timeout_ms
+printf '[runtime]\nshell_context_max_lines=5000\n' >"$profile"
+reject agent.shell_context_max_lines
+printf '[client]\nca_bundle_path=other/ca.pem\n' >"$profile"
+reject client.ca_bundle_path
+printf '[client]\napi_key=other-private-token\n' >"$profile"
+reject client.api_key
+absent "$term/stderr" owner-private-token
+absent "$term/stderr" other-private-token
+printf '[mcp.team]\nendpoint=http://127.0.0.1:2/mcp\n' >"$profile"
+reject mcp.team.endpoint
+printf '[mcp.team]\ntimeout_ms=24001\n' >"$profile"
+reject mcp.team.timeout_ms
+printf '[mcp.unknown]\nendpoint=http://127.0.0.1:1/mcp\n' >"$profile"
+reject mcp.unknown.endpoint
+printf '[review]\nallowed_models=second\nallowed_models=first\n' >"$profile"
+reject review.allowed_models
+printf '[env]\nCAI_COMPAT_PRIVATE=other-environment\n' >"$profile"
+reject env.CAI_COMPAT_PRIVATE
+absent "$term/stderr" owner-environment
+absent "$term/stderr" other-environment
+# Empty optional paths/default numeric fields compare like the owner's schema.
+printf '[client]\nca_path=""\nhttp_2_disabled=false\n[runtime]\nshell_context_max_lines=7000\n[env]\nCAI_COMPAT_PRIVATE=owner-environment\n[mcp.team]\ntimeout_ms=24000\n' >"$profile"
+terminal_start
+send '/status\r'; expect 'Session ID'
+terminal_close
+kill -TERM "$owner_pid"
+wait "$owner_pid"
+owner_pid=

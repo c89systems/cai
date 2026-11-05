@@ -266,6 +266,7 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
                                   exit_code, error);
 done:
   cai_cli_attach_boot_close(startup);
+  cai_cli_workspace_claims_cleanup(&requirements);
   cai_environment_close(environment);
   cai_config_close(configuration);
   return rc;

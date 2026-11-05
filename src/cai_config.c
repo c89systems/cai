@@ -842,6 +842,24 @@ const cai_config_field *cai_config_field_at(const cai_config *self,
              ? &IMPL(self)->fields[index].field
              : NULL;
 }
+int cai_config_visit(const cai_config *self, cai_config_entry_fn visit,
+                     void *context, cai_error *error) {
+  const config_impl *impl;
+  size_t i;
+  if (self == NULL || visit == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "configuration and entry callback required");
+  impl = IMPL(self);
+  for (i = 0U; i < impl->count; ++i) {
+    const config_entry *e = &impl->entries[i];
+    int rc =
+        visit(context, e->section, e->key, find_field(impl, e->section, e->key),
+              (const char *const *)e->values, e->count, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
+  return CAI_OK;
+}
 static int config_open(const cai_config_field *extensions, size_t count,
                        int sdk_schema, const cai_config_context *context,
                        cai_config **out, cai_error *error) {

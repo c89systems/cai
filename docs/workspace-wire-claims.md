@@ -10,7 +10,7 @@ HELLO is a definite `[workspace, schema, expected_instance, requirements]`.
 PROBE is a definite `[workspace, schema, requirements]`. Requirements are a
 definite array of definite `[name, digest]` pairs, strictly increasing by name.
 Names are ASCII letters/digits, dots, hyphens and underscores, 1–80 bytes;
-digests are exactly 32 bytes. At most 128 pairs are accepted. Empty requirements
+digests are exactly 32 bytes. At most 512 pairs are accepted. Empty requirements
 are the default. This is one current schema, with no legacy greeting parser or
 protocol-version negotiation.
 
@@ -81,13 +81,32 @@ Requirements are scoped to that initial target. A later explicit `/workspace`
 selection verifies its own directory/instance and does not inherit the first
 workspace's store/tool configuration or startup instructions.
 
-Full startup-control parity and extended native configuration outside this
-shared inventory remain part of the client/server cutover. In particular,
-this boundary does not claim that every runtime-setting flag has already been
-mapped to its live backend control.
+Supplemental schema fields also supply per-field requirements: client TLS and
+transport settings, usage limits, named MCP/store definitions, review allowlists
+and other accepted backend settings. The owner publishes declared defaults for
+ordinary fields and each configured named section. Clients constrain only their
+explicit subset, so a matching partial native profile can attach without copying
+the owner's full configuration. Integer and real spellings are normalized;
+list order remains meaningful. Empty optional strings match absent values.
+All declared paths resolve before fingerprinting. Names/arrays are heap-owned,
+bounded to the wire limit, and released after the transport copies them.
+
+`cai_config_visit` exposes explicit scalar/list entries and named sections
+without constructing a configuration document. For `[env]`, requirements use
+the captured effective value, respecting config precedence; owners publish the
+corresponding inherited/configured identifier names. Only names and opaque
+digests cross this boundary, including for secret fields. Changing configuration
+after an owner starts cannot silently select different TLS trust or MCP endpoints
+when attaching to it. Frontend preferences and acknowledged mutable controls
+remain outside this immutable inventory.
 
 Verification covers fragmented names/digests, duplicate/invalid names, inventory
 limits and owned copies; STARTING/READY mismatch, probes, unknown settings,
 nonpersistent grace and existing-controller invariants; actual CLI/native
 terminal attachment; explicit-default flags; instruction values resembling
 flags; matching config/theme settings; and changed named-store definitions.
+The CLI/native compatibility fixtures also check partial profiles, TLS paths,
+changed secrets without diagnostic disclosure, named MCP defaults/mismatches,
+list order and effective environment values. The maximum-size greeting exercises
+the three-byte CBOR array-length header; limit failures discard the partial
+owned inventory.

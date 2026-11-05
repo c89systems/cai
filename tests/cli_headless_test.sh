@@ -22,6 +22,9 @@ export LOG_LEVEL=info
 start_server_with_persistence() {
   local persistent=$1
   shift
+  # The background shell may not open its redirection before our first read.
+  # Remove the preceding launch's READY synchronously, before forking.
+  : >"$root/server.log"
   "${base[@]}" --runtime-dir "$runtime_root" "$@" </dev/null >"$root/server.out" 2>"$root/server.log" & server_pid=$!
   wait_for has "$root/server.log" 'Workspace server ready'
   [[ ! -s "$root/server.out" ]]
