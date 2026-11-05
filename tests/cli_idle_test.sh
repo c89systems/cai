@@ -27,7 +27,7 @@ for cycle in 1 2; do
     sleep .05
   done
   [[ "$flushed" == 1 ]] || fail 'No background session-index publication while idle'
-  send '/status\r'; expect 'Reasoning effort'
+  send '/status\r'; expect_table 1 'Reasoning effort'
 done
 terminal_close
 terminal_start
