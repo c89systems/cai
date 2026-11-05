@@ -7,7 +7,7 @@ set(cai_LONEJSON_VERSION "@CAI_LONEJSON_VERSION@")
 set(cai_LONEJSON_ABI_VERSION "@CAI_LONEJSON_ABI_VERSION@")
 set(cai_LONEJSON_TARGET "@CAI_TARGET_ID@")
 set(cai_LONEJSON_URL
-    "https://github.com/sa6mwa/lonejson/releases/download/v@CAI_LONEJSON_VERSION@/liblonejson-@CAI_LONEJSON_VERSION@-@CAI_TARGET_ID@.tar.gz")
+    "https://github.com/c89systems/lonejson/releases/download/v@CAI_LONEJSON_VERSION@/liblonejson-@CAI_LONEJSON_VERSION@-@CAI_TARGET_ID@.tar.gz")
 set(cai_LONEJSON_SHA256 "@CAI_LONEJSON_PKG_SHA256_FOR_PACKAGE@")
 set(cai_CPKT_VERSION "@CAI_CPKT_VERSION@")
 set(cai_CPKT_TARGET "@CAI_TARGET_ID@")

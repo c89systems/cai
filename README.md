@@ -210,7 +210,7 @@ the same x86_64 musl producer. It adds pinned softline 0.16.0 for the prompt and
 [libmdf 0.21.0](https://github.com/c89systems/libmdf) for streamed Markdown
 rendering and its public theme palette, and liblockdc 0.27.0 with
 [liblql 0.4.1](https://github.com/c89systems/liblql) for durable storage.
-It uses libpslog 0.12.0 for logging.
+It uses libpslog 0.13.0 for logging.
 The native dependency SDK is cpkt 0.6.1 from
 [c89systems/cpkt](https://github.com/c89systems/cpkt). CAI consumes liblockdc's
 core archive; its separate PostgreSQL provider is excluded. cpktmisc 0.2.0
@@ -2129,9 +2129,9 @@ make lua-test
 The LuaRock depends on the `lonejson` Lua rock and links against an installed
 `libcai` discovered through `pkg-config cai`; the local test target installs
 the current debug build into `build/luarocks/cai-prefix` first. `lonejson`
-0.45.0 is not assumed to exist on LuaRocks.org: `make lua-rock` installs it
+0.46.0 is not assumed to exist on LuaRocks.org: `make lua-rock` installs it
 from the official release source rock at
-`https://github.com/sa6mwa/lonejson/releases/download/v0.45.0/lonejson-0.45.0-1.src.rock`
+`https://github.com/c89systems/lonejson/releases/download/v0.46.0/lonejson-0.46.0-1.src.rock`
 when needed. Lua projects can use the rock as a facade over the C library,
 while Vectis can still call the C API directly where that fits its performance
 and integration needs better.
@@ -2143,7 +2143,7 @@ For manual LuaRock installation, install the matching lonejson source rock
 first because this version is served from the GitHub release, not LuaRocks.org:
 
 ```sh
-luarocks install https://github.com/sa6mwa/lonejson/releases/download/v0.45.0/lonejson-0.45.0-1.src.rock
+luarocks install https://github.com/c89systems/lonejson/releases/download/v0.46.0/lonejson-0.46.0-1.src.rock
 luarocks install cai-<version>-1.src.rock
 ```
 
