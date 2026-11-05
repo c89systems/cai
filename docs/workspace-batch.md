@@ -72,8 +72,8 @@ Standalone batch discovers or quietly launches the owner; `-s SELECTOR`
 attaches to an existing one. Native `run()` uses the same calling-thread owner
 and a default-stack batch adapter. Temporary runs share this composition;
 noninteractive cleanup never asks a terminal question. Direct `--review` and
-slash `-i` commands use the same adapter. Combined `-g` plus `-i` startup and
-shell `-i` instructions still use the old receiver, so its removal and
+slash `-i` commands and explicit pipe-shell instructions use the same adapter.
+Combined `-g` plus `-i` startup still uses the old receiver, so its removal and
 terminal-independent packaging remain cutover work.
 
 Slash commands finish at `command.settled`, after all command error fields.
@@ -149,6 +149,42 @@ both must publish the original identity. `cai_app_workspace_server` checks the
 accepted OFFER's exact identity at the typed client's completed-turn boundary,
 including producer reconnection and approval after an edit lease is released.
 These prove correlation, not the subsequent batch adapter cutover.
+
+## Shell batch cutover contract
+
+Explicit `!COMMAND` instructions use the existing owner-side pipe runner,
+with `/dev/null` input and merged stdout/stderr. They are user commands, not
+model prompts. Interactive `/shell`, `!sh` and pager actions still require a
+terminal attachment. The child receives the owner's captured workspace
+environment and directory; the embedding process is not modified.
+
+The admitted command identity precedes the shell-start journal event. Launch
+acknowledgement does not complete work. A separate correlated terminal record
+follows pipe EOF, child exit, retained-context persistence and live-output END.
+Nonzero exit fails the batch and prevents later instructions. Disconnect or
+authority loss means unknown outcome, not permission to reexecute.
+
+Output uses existing live shell spans, with no whole-output buffer or spool.
+The pipe runner retains at most one 4 KiB chunk until the current controlling
+subscriber can accept it. That subscriber's existing bounded ring supplies
+backpressure; observers cannot stall execution. With no subscribed controller,
+execution continues and the existing retained shell tail remains replayable.
+An attachment joining an already-running shell receives its retained tail,
+not a transient suffix whose beginning it missed. Only a shell start beyond
+that subscription's replay watermark can open its live output lane.
+Cancellation and transport progress remain available while a chunk is pending.
+An empty command output still has a live END. Earlier shell output is activity
+on stderr; the last shell instruction writes its process bytes directly to
+stdout. A following model instruction instead supplies the final stdout result.
+
+`cai_cli_batch_shell` exercises real owners, early output before exit, a 1 MiB
+binary stream under a slow consumer despite a 1 KiB retained tail, empty output,
+failure ordering, configured environment, disconnected attachments and owners,
+shared/unshared context and quiet autostart cleanup. `cai_app_run_batch` covers
+the embedding path. The runner test verifies bounded rejection/retry, child
+reaping, descriptor isolation and closed standard descriptors on a default
+pthread stack. The publisher test proves atomic backpressure and observer
+independence. Existing live-shell tests cover cancellation during a burst.
 
 ## Streaming final-response projection
 

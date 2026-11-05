@@ -106,6 +106,9 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_batch_test.sh" "$<TARGET_FILE:cai_cli>"
       "$<TARGET_FILE:cai_cli_headless_client_test>")
     set_tests_properties(cai_cli_batch PROPERTIES TIMEOUT 30)
+    add_test(NAME cai_cli_batch_shell COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_batch_shell_test.sh" "$<TARGET_FILE:cai_cli>")
+    set_tests_properties(cai_cli_batch_shell PROPERTIES TIMEOUT 30 LABELS "cli;local;offline")
     add_executable(cai_cli_attach_boot_test tests/cli_attach_boot_test.c
       cli/attach.c cli/spawn.c cli/bootstrap.c)
     target_link_libraries(cai_cli_attach_boot_test PRIVATE cai_app_static)

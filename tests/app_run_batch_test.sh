@@ -39,6 +39,10 @@ kept=$(jq -sr '[.[] | select(.event == "temp_workspace_kept") | .workspace] | la
 absent "$root/stdout" '[y/N]'
 
 # Failure before READY wakes the adapter and tears down its owned endpoint.
+run -ni '!printf "%s" "$CAI_RUN_ENV"'; ok
+[[ $(cat "$root/stdout") == configured && $(requests) == 5 ]]
+jq -e '.calls == 0 and .ready == 1' "$CAI_RUN_REPORT" >/dev/null
+[[ -z $(find "$runtime_root" -name 'ws-*.info' -print -quit) ]]
 export CAI_RUN_FAIL_START=1
 run -Nni 'MUST NOT REACH INFERENCE'; bad
 [[ ! -s "$root/stdout" && $(requests) == 5 ]]

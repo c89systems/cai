@@ -48,6 +48,10 @@ typedef struct batch {
   size_t header_offset;
   FILE *destination;
   int owns_destination;
+  /** Live shell bytes are borrowed once, never reconstructed from the tail. */
+  uint64_t shell_sequence, shell_offset;
+  int shell_command, shell_started, shell_end, shell_done, shell_code,
+      shell_last;
 } batch;
 
 int cai_cli_batch_mode(const cai_cli_options *o) {
@@ -61,7 +65,7 @@ int cai_cli_batch_mode(const cai_cli_options *o) {
     return 0;
   for (i = 0U; i < o->instruction_count; ++i) {
     const char *text = cai_cli_instruction_at(o, i);
-    if (text == NULL || (!o->review && text[0] == '!'))
+    if (text == NULL)
       return 0;
   }
   return 1;
@@ -113,8 +117,15 @@ static int execution(void *context, const cai_app_execution_event *e,
     return cai_cli_error(error, e->code != CAI_OK ? e->code : CAI_ERR_PROTOCOL,
                          e->reason != NULL ? e->reason
                                            : "invalid execution history");
-  if (b->pending && b->command && !e->subagent && r->call_id != NULL &&
-      strcmp(r->call_id, b->call) == 0) {
+  if (b->pending && (b->command || b->shell_command) && !e->subagent &&
+      r->call_id != NULL && strcmp(r->call_id, b->call) == 0) {
+    if (b->shell_command && strcmp(r->kind, "command.shell_started") == 0)
+      b->shell_started = 1;
+    if (b->shell_command && strcmp(r->kind, "command.shell_settled") == 0 &&
+        r->final) {
+      b->shell_done = 1;
+      b->shell_code = (int)r->code;
+    }
     if (strcmp(r->kind, "command.handoff") == 0) {
       b->handoff = 1;
       b->old_conversation = e->boundary->conversation;
@@ -249,6 +260,27 @@ static int transcript(void *context, const cai_transcript_event *e,
                          e->reason != NULL ? e->reason
                                            : "batch transcript unavailable");
   }
+  if (b->pending && b->shell_command && b->shell_sequence != 0U &&
+      e->sequence == b->shell_sequence &&
+      (e->kind == CAI_TRANSCRIPT_SHELL_OUTPUT ||
+       e->kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END)) {
+    if (b->shell_end || e->offset != b->shell_offset)
+      return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                           "batch shell output lost its ordered span");
+    if (e->kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END)
+      b->shell_end = 1;
+    else {
+      if (b->shell_last) {
+        if (fwrite(e->data, 1U, e->length, stdout) != e->length ||
+            fflush(stdout) != 0)
+          return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                               "write batch shell output");
+      } else if (!b->shared_logger)
+        cai_cli_log_message(b->log->logger, PSLOG_LEVEL_INFO, "shell_output",
+                            "user", e->data, e->length, NULL, 0U);
+      b->shell_offset += e->length;
+    }
+  }
   if (b->selection != NULL) {
     rc = cai_transcript_selection_event(b->selection, e, error);
     if (rc != CAI_OK)
@@ -276,6 +308,9 @@ static int transcript(void *context, const cai_transcript_event *e,
                         assistant ? "assistant" : "user", e->data, e->length,
                         &field, 1U);
   } else if (e->kind == CAI_TRANSCRIPT_EVENT_END) {
+    if (b->pending && b->shell_command && b->shell_started &&
+        b->shell_sequence == 0U && strcmp(b->type, "user_shell_started") == 0)
+      b->shell_sequence = e->sequence;
     b->at.position = e->position;
     b->at.sequence = e->sequence;
     b->entry_open = 0;
@@ -476,19 +511,31 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
   if (b->command_done) {
     b->command_done = b->handoff = 0;
     b->command = 0;
-    if (!b->goal_command && !b->review_command)
+    if (!b->goal_command && !b->review_command && !b->shell_command)
       b->pending = 0;
     if (b->command_code != CAI_OK)
       return cai_cli_error(
           error, b->command_code,
           "batch startup command failed; instructions not submitted");
-    if (!b->startup_control && !b->goal_command && !b->review_command) {
+    if (!b->startup_control && !b->goal_command && !b->review_command &&
+        !b->shell_command) {
       rc = cai_cli_batch_document_finish(&b->command_document, CAI_OK, error);
       if (rc != CAI_OK)
         return rc;
       b->output = b->command_document;
       b->output_document = 1;
       b->selected_review = b->has_result = 0;
+    }
+  }
+  if (b->shell_done) {
+    if (!b->shell_end)
+      return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                           "batch shell settled without complete live output");
+    b->pending = b->shell_done = 0;
+    b->has_result = b->output_document = b->selected_review = 0;
+    if (b->shell_code != CAI_OK) {
+      b->work_failed = 1;
+      b->startup.stage = CAI_CLI_STARTUP_DONE;
     }
   }
   if (b->review_done) {
@@ -526,6 +573,10 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
                        strncmp(text, "/review-and-fix", 15U) == 0);
     b->review_command = b->command && (strcmp(text, "/review") == 0 ||
                                        strncmp(text, "/review ", 8U) == 0);
+    b->shell_command = text[0] == '!';
+    b->shell_started = b->shell_end = b->shell_done = 0;
+    b->shell_sequence = b->shell_offset = 0U;
+    b->shell_last = b->startup.instruction == o->instruction_count;
     b->review_session[0] = '\0';
     memset(&b->review_json, 0, sizeof(b->review_json));
     b->pending = 1;

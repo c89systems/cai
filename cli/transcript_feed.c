@@ -26,7 +26,7 @@ typedef struct subscriber {
    */
   int catchup, catchup_started;
   uint64_t live_position, live_sequence, catchup_target;
-  uint64_t output_sequence, output_offset;
+  uint64_t output_sequence, output_offset, shell_candidate;
   int output_failed;
   unsigned int limit;
   cai_transcript_failure failure;
@@ -230,6 +230,11 @@ static void observe(void *context, const char *session,
     }
     if (!s->prepared || position <= s->watermark)
       continue;
+    /* A new attachment has no transient prefix. Only shell starts appended
+     * beyond its replay watermark can open live output on this subscription.
+     * Catch-up retains that start before any guarded output is released. */
+    if (source->type != NULL && strcmp(source->type, "user_shell_started") == 0)
+      s->shell_candidate = source->sequence;
     if (!have_length) {
       length = source->data != NULL ? strlen(source->data) : 0U;
       have_length = 1;
@@ -708,6 +713,7 @@ int cai_cli_transcript_feed_request(cai_cli_transcript_publisher *f,
   s->catchup = s->catchup_started = 0;
   s->live_position = s->live_sequence = s->catchup_target = 0U;
   s->output_sequence = s->output_offset = 0U;
+  s->shell_candidate = 0U;
   s->output_failed = 0;
   s->history->count = s->history->start = s->live->count = s->live->start = 0U;
   snprintf(s->expected, sizeof(s->expected), "%s",
@@ -771,23 +777,40 @@ void cai_cli_transcript_feed_drain(cai_cli_transcript_publisher *f) {
   pthread_mutex_unlock(&f->lock);
 }
 int cai_cli_transcript_feed_shell(cai_cli_transcript_publisher *f,
-                                  uint64_t sequence, uint64_t offset,
-                                  const void *bytes, size_t length, int final,
+                                  uint64_t guard, uint64_t sequence,
+                                  uint64_t offset, const void *bytes,
+                                  size_t length, int final, int *accepted,
                                   cai_error *error) {
   size_t i;
+  if (accepted == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID, "missing shell receipt");
+  *accepted = 0;
   if (sequence == 0U || length > CAI_CLI_TRANSCRIPT_CHUNK ||
       length > UINT64_MAX - offset || (final ? length != 0U : length == 0U) ||
       (length != 0U && bytes == NULL))
     return cai_cli_error(error, CAI_ERR_INVALID, "invalid live shell span");
-  if (f == NULL)
+  if (f == NULL) {
+    *accepted = 1;
     return CAI_OK;
+  }
   pthread_mutex_lock(&f->lock);
+  if (guard != 0U) {
+    subscriber *s = find(f, guard);
+    if (s != NULL && s->active && s->shell_candidate == sequence &&
+        (offset == 0U ||
+         (s->output_sequence == sequence && !s->output_failed)) &&
+        (!s->prepared || s->replaying || s->catchup || s->live == NULL ||
+         s->live_sequence < sequence || s->live->count == FRAMES)) {
+      pthread_mutex_unlock(&f->lock);
+      return CAI_OK;
+    }
+  }
   for (i = 0U; i < PEERS; ++i) {
     subscriber *s = &f->peers[i];
     cai_transcript_event e;
-    if (!s->active)
+    if (!s->active || s->shell_candidate != sequence)
       continue;
-    if (!final && offset == 0U && s->output_sequence != sequence) {
+    if (offset == 0U && s->output_sequence != sequence) {
       s->output_sequence = sequence;
       s->output_offset = 0U;
       s->output_failed = 0;
@@ -815,6 +838,7 @@ int cai_cli_transcript_feed_shell(cai_cli_transcript_publisher *f,
       s->output_failed = 1; /* Exactly one terminal marker. */
     wake(f);
   }
+  *accepted = 1;
   pthread_mutex_unlock(&f->lock);
   return CAI_OK;
 }

@@ -32,10 +32,13 @@ void cai_cli_transcript_feed_drain(cai_cli_transcript_publisher *);
 /** Live-only bounded raw spans. Ordered after their durable shell-start event
  * in each existing live ring, never persisted or accumulated. A peer that
  * misses any chunk receives no later chunks/end for that recording; its
- * ordinary journal stream still carries the saved tail. final has no data. */
+ * ordinary journal stream still carries the saved tail. final has no data.
+ * A subscribed guard supplies backpressure: accepted=0 means no peer was
+ * modified and this exact span must be retried. Zero guard is best effort. */
 int cai_cli_transcript_feed_shell(cai_cli_transcript_publisher *,
-                                  uint64_t sequence, uint64_t offset,
-                                  const void *, size_t, int final, cai_error *);
+                                  uint64_t guard, uint64_t sequence,
+                                  uint64_t offset, const void *, size_t,
+                                  int final, int *accepted, cai_error *);
 int cai_cli_transcript_feed_ready(cai_cli_transcript_publisher *, uint64_t,
                                   int *failed);
 int cai_cli_transcript_feed_next(cai_cli_transcript_publisher *, uint64_t,

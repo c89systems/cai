@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 #include <sys/timerfd.h>
 #include <sys/wait.h>
 #include <termios.h>
@@ -71,15 +72,27 @@ static void *shell_wait(void *context) {
   shell_waiter *waiter = context;
   int status, result;
   pid_t waited;
+  siginfo_t info;
+  int rc;
+  /* Keep the zombie reserving its PID while removing descendants. Reaping
+   * first would allow a recycled process group to receive this signal. */
   do {
-    waited = waitpid(waiter->pid, &status, 0);
-  } while (waited < 0 && errno == EINTR);
-  result = waited < 0           ? -errno
-           : waiter->raw_status ? status
-           : WIFEXITED(status)  ? WEXITSTATUS(status)
-                                : 128 + WTERMSIG(status);
-  if (waited > 0)
+    rc = waitid(P_PID, (id_t)waiter->pid, &info, WEXITED | WNOWAIT);
+  } while (rc < 0 && errno == EINTR);
+  if (rc == 0)
     (void)kill(-waiter->pid, SIGKILL);
+  if (!waiter->raw_status) {
+    /* Pipe runners reap on owner close, after joining this waiter. Until
+     * then cancel may still run, so the PID must remain reserved. */
+    result = rc < 0                       ? -errno
+             : info.si_code == CLD_EXITED ? info.si_status
+                                          : 128 + info.si_status;
+  } else {
+    do {
+      waited = waitpid(waiter->pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    result = waited < 0 ? -errno : status;
+  }
   while (write(waiter->fd, &result, sizeof(result)) < 0 && errno == EINTR) {
   }
   close(waiter->fd);
@@ -402,6 +415,8 @@ void cai_cli_shell_close(cai_cli_shell *shell) {
   if (shell->waiter_started) {
     cai_cli_shell_cancel(shell);
     pthread_join(shell->waiter, NULL);
+    while (waitpid(shell->pid, &status, 0) < 0 && errno == EINTR) {
+    }
   } else if (shell->pid > 0 && !shell->exited) {
     cai_cli_shell_cancel(shell);
     while (waitpid(shell->pid, &status, 0) < 0 && errno == EINTR) {
@@ -416,26 +431,76 @@ void cai_cli_shell_close(cai_cli_shell *shell) {
   cai_cli_shell_init(shell);
 }
 
+/** Keep child plumbing outside 0..2 even when an embedding host closed them. */
+static int shell_private_fd(int fd) {
+  int copy, saved;
+  if (fd < 0 || fd >= 3)
+    return fd;
+  copy = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+  saved = errno;
+  close(fd);
+  errno = saved;
+  return copy;
+}
+static void shell_environment_free(char **entries) {
+  size_t i;
+  if (entries == NULL)
+    return;
+  for (i = 0U; entries[i] != NULL; ++i)
+    free(entries[i]);
+  free(entries);
+}
 int cai_cli_shell_start(cai_cli_shell *shell, const char *command,
-                        const char *directory, cai_error *error) {
+                        const char *directory, cai_environment *environment,
+                        cai_error *error) {
   int pipes[2], notification[2], input, saved;
   shell_waiter *waiter;
   struct itimerspec timeout;
   struct sigaction action;
-  const char *path = getenv("SHELL");
+  const char *path;
+  const char *const *entries;
+  char **child_environment;
+  size_t i, count;
+  long descriptor_limit;
   pid_t pid;
   if (shell->pid > 0)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "a user shell command is running");
+  if (environment == NULL || command == NULL || directory == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID, "missing shell inputs");
+  path = cai_environment_get(environment, "SHELL");
+  entries = cai_environment_entries(environment);
+  count = cai_environment_count(environment);
+  child_environment = calloc(count + 1U, sizeof(*child_environment));
+  if (child_environment == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate shell environment");
+  for (i = 0U; i < count; ++i) {
+    child_environment[i] = strdup(entries[i]);
+    if (child_environment[i] == NULL) {
+      shell_environment_free(child_environment);
+      return cai_cli_error(error, CAI_ERR_NOMEM, "copy shell environment");
+    }
+  }
+  descriptor_limit = sysconf(_SC_OPEN_MAX);
+  if (descriptor_limit < 0)
+    descriptor_limit = 1024;
   if (path == NULL || path[0] != '/')
     path = "/bin/sh";
-  if (pipe2(pipes, O_CLOEXEC) != 0)
-    return shell_error(error, "cannot create shell output pipe", errno);
-  input = open("/dev/null", O_RDONLY | O_CLOEXEC);
-  if (input < 0) {
+  if (pipe2(pipes, O_CLOEXEC) != 0) {
+    saved = errno;
+    shell_environment_free(child_environment);
+    return shell_error(error, "cannot create shell output pipe", saved);
+  }
+  pipes[0] = shell_private_fd(pipes[0]);
+  pipes[1] = shell_private_fd(pipes[1]);
+  input = shell_private_fd(open("/dev/null", O_RDONLY | O_CLOEXEC));
+  if (input < 0 || pipes[0] < 0 || pipes[1] < 0) {
     saved = errno;
     close(pipes[0]);
     close(pipes[1]);
+    if (input >= 0)
+      close(input);
+    shell_environment_free(child_environment);
     return shell_error(error, "cannot open shell stdin", saved);
   }
   memset(&action, 0, sizeof(action));
@@ -443,12 +508,13 @@ int cai_cli_shell_start(cai_cli_shell *shell, const char *command,
   sigemptyset(&action.sa_mask);
   pid = fork();
   if (pid == 0) {
+    static const int signals[] = {SIGINT,  SIGQUIT, SIGTERM, SIGHUP,  SIGPIPE,
+                                  SIGCHLD, SIGTSTP, SIGTTIN, SIGTTOU, SIGWINCH};
     sigset_t mask;
     close(pipes[0]);
     (void)setpgid(0, 0);
-    (void)sigaction(SIGINT, &action, NULL);
-    (void)sigaction(SIGTERM, &action, NULL);
-    (void)sigaction(SIGPIPE, &action, NULL);
+    for (i = 0U; i < sizeof(signals) / sizeof(signals[0]); ++i)
+      (void)sigaction(signals[i], &action, NULL);
     sigemptyset(&mask);
     (void)sigprocmask(SIG_SETMASK, &mask, NULL);
     if (chdir(directory) != 0) {
@@ -463,11 +529,24 @@ int cai_cli_shell_start(cai_cli_shell *shell, const char *command,
     }
     close(input);
     close(pipes[1]);
-    execl(path, path, "-c", command, (char *)NULL);
+    /* Descriptor flags change only in the child, never in the host. */
+#ifndef CLOSE_RANGE_CLOEXEC
+#define CLOSE_RANGE_CLOEXEC (1U << 2)
+#endif
+#ifdef SYS_close_range
+    if (syscall(SYS_close_range, 3U, ~0U, CLOSE_RANGE_CLOEXEC) != 0)
+#endif
+    {
+      int fd;
+      for (fd = 3; fd < descriptor_limit; ++fd)
+        (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
+    execle(path, path, "-c", command, (char *)NULL, child_environment);
     shell_child_error(STDERR_FILENO, "Cannot execute user shell ", path, errno);
     _exit(127);
   }
   saved = errno;
+  shell_environment_free(child_environment);
   close(input);
   close(pipes[1]);
   if (pid < 0) {
@@ -516,12 +595,11 @@ int cai_cli_shell_start(cai_cli_shell *shell, const char *command,
   return CAI_OK;
 }
 
-int cai_cli_shell_pump(cai_cli_shell *shell, cai_cli_shell_output_fn output,
+int cai_cli_shell_pump(cai_cli_shell *shell, cai_cli_shell_consume_fn output,
                        void *context, cai_error *error) {
-  char bytes[4096];
   size_t budget = 65536U;
   ssize_t count;
-  int status, rc;
+  int status, rc, accepted;
   unsigned long long timer;
   if (shell->pid <= 0)
     return CAI_OK;
@@ -541,9 +619,21 @@ int cai_cli_shell_pump(cai_cli_shell *shell, cai_cli_shell_output_fn output,
                            "shell completion pipe failed");
     }
   }
-  while (!shell->eof && budget != 0U) {
-    count = read(shell->output_fd, bytes,
-                 budget < sizeof(bytes) ? budget : sizeof(bytes));
+  while (shell->pending_length != 0U || (!shell->eof && budget != 0U)) {
+    if (shell->pending_length != 0U) {
+      accepted = 0;
+      rc = output(context, shell->pending, shell->pending_length, &accepted,
+                  error);
+      if (rc != CAI_OK || !accepted)
+        return rc;
+      budget -= shell->pending_length;
+      shell->pending_length = 0U;
+      if (budget == 0U)
+        break;
+    }
+    count =
+        read(shell->output_fd, shell->pending,
+             budget < sizeof(shell->pending) ? budget : sizeof(shell->pending));
     if (count == 0) {
       shell->eof = 1;
       break;
@@ -556,10 +646,7 @@ int cai_cli_shell_pump(cai_cli_shell *shell, cai_cli_shell_output_fn output,
       return cai_cli_error(error, CAI_ERR_TRANSPORT,
                            "cannot read shell output");
     }
-    rc = output(context, bytes, (size_t)count, error);
-    if (rc != CAI_OK)
-      return rc;
-    budget -= (size_t)count;
+    shell->pending_length = (size_t)count;
   }
   return CAI_OK;
 }

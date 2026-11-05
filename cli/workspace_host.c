@@ -981,10 +981,18 @@ static int output_transcript(host_peer *peer, int *produced, cai_error *error) {
 int cai_cli_workspace_host_shell(cai_cli_workspace_host *host,
                                  uint64_t sequence, uint64_t offset,
                                  const void *bytes, size_t length, int final,
-                                 cai_error *error) {
+                                 int *accepted, cai_error *error) {
+  cai_attachment_state state;
+  uint64_t guard = 0U;
+  if (host != NULL) {
+    int rc = cai_workspace_server_get_state(host->server, &state, error);
+    if (rc != CAI_OK)
+      return rc;
+    guard = state.controller;
+  }
   return cai_cli_transcript_feed_shell(host != NULL ? host->history : NULL,
-                                       sequence, offset, bytes, length, final,
-                                       error);
+                                       guard, sequence, offset, bytes, length,
+                                       final, accepted, error);
 }
 int cai_cli_workspace_host_progress(cai_cli_workspace_host *host,
                                     cai_error *error) {

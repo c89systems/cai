@@ -202,6 +202,8 @@ typedef struct cli_state {
   int list_line_start;
   cai_cli_shell shell;
   unsigned long long shell_sequence, shell_offset;
+  char shell_call[256];
+  int shell_stream_ended, shell_stopping;
   sl_watch_id_t shell_watches[3];
   int shell_watched[3];
   char workspace[PATH_MAX];
@@ -559,32 +561,25 @@ static int cli_shell_literal(void *context, const char *bytes, size_t length,
 }
 
 static int cli_shell_output(void *context, const char *bytes, size_t length,
-                            cai_error *error) {
+                            int *accepted, cai_error *error) {
   cli_state *state = context;
-  int rc =
-      cai_agent_runtime_user_shell_write(state->runtime, bytes, length, error);
-  if (rc != CAI_OK)
-    return rc;
-  if (state->controller) {
-    size_t at = 0U;
+  int rc;
+  *accepted = 1;
+  if (state->controller && !state->shell_stopping) {
     if (length > ULLONG_MAX - state->shell_offset)
       return cai_cli_error(error, CAI_ERR_LIMIT, "live shell offset overflow");
-    while (at < length) {
-      size_t n = length - at;
-      if (n > 4096U)
-        n = 4096U;
-      rc = cai_cli_workspace_host_shell(
-          state->workspace_host, state->shell_sequence, state->shell_offset,
-          bytes + at, n, 0, error);
-      if (rc != CAI_OK)
-        return rc;
-      state->shell_offset += n;
-      at += n;
-    }
-    /* The shell already progresses through the owner's descriptor loop.
-     * Publish into its existing ring without a per-chunk socket flush. */
-    return CAI_OK;
+    rc = cai_cli_workspace_host_shell(
+        state->workspace_host, state->shell_sequence, state->shell_offset,
+        bytes, length, 0, accepted, error);
+    if (rc != CAI_OK || !*accepted)
+      return rc;
   }
+  rc = cai_agent_runtime_user_shell_write(state->runtime, bytes, length, error);
+  if (rc != CAI_OK)
+    return rc;
+  state->shell_offset += length;
+  if (state->controller)
+    return CAI_OK;
   if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0)
     return cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "cannot finish output before shell text");
@@ -603,6 +598,7 @@ static void cli_shell_unwatch(cli_state *state) {
 
 static int cli_shell_pump(cli_state *state, cai_error *error) {
   char message[160];
+  int accepted = 1;
   int rc = cai_cli_shell_pump(&state->shell, cli_shell_output, state, error);
   if (rc != CAI_OK)
     return rc;
@@ -615,18 +611,38 @@ static int cli_shell_pump(cli_state *state, cai_error *error) {
     state->shell_watched[0] = 0;
   }
   if (state->shell.exited && state->shell.eof) {
-    rc = state->controller
+    rc = state->controller && !state->shell_stopping &&
+                 !state->shell_stream_ended
              ? cai_cli_workspace_host_shell(
                    state->workspace_host, state->shell_sequence,
-                   state->shell_offset, NULL, 0U, 1, error)
+                   state->shell_offset, NULL, 0U, 1, &accepted, error)
+         : state->controller
+             ? CAI_OK
              : cai_cli_shell_plain(&state->shell.text, NULL, 0U, 1,
                                    cli_shell_literal, state, error);
+    if (rc != CAI_OK || !accepted)
+      return rc;
+    state->shell_stream_ended = 1;
     if (rc == CAI_OK)
       rc = cai_agent_runtime_user_shell_finish(
           state->runtime, state->shell.exit_code,
           cai_cli_shell_elapsed(&state->shell), error);
     if (rc != CAI_OK)
       return rc;
+    if (state->controller && state->shell_call[0] != '\0') {
+      char status[32];
+      snprintf(status, sizeof(status), "%d", state->shell.exit_code);
+      rc = cai_cli_documents_operation(
+          &state->documents, state->shell_call, "command.shell_settled",
+          "exit_code", status,
+          state->shell_stopping         ? CAI_ERR_CANCELLED
+          : state->shell.exit_code == 0 ? CAI_OK
+                                        : CAI_ERR_TRANSPORT,
+          error);
+      if (rc != CAI_OK)
+        return rc;
+      state->shell_call[0] = '\0';
+    }
     snprintf(message, sizeof(message), "**Shell command exited %d** (%.3fs).",
              state->shell.exit_code,
              (double)cai_cli_shell_elapsed(&state->shell) / 1000.0);
@@ -643,6 +659,9 @@ static int cli_shell_pump(cli_state *state, cai_error *error) {
 
 static int cli_shell_stop(cli_state *state, cai_error *error) {
   int rc;
+  /* Shutdown must join its child even if the departing controller stopped
+   * reading. Preserve the retained tail while discarding transient delivery. */
+  state->shell_stopping = 1;
   cai_cli_shell_cancel(&state->shell);
   while (state->shell.pid > 0) {
     struct pollfd fd;
@@ -684,6 +703,17 @@ static int cli_shell_start(cli_state *state, const char *command,
         "a shell command is running; cancel it with Ctrl-C first");
   while (*command == ' ' || *command == '\t')
     command++;
+  state->shell_stopping = state->shell_stream_ended = 0;
+  state->shell_call[0] = '\0';
+  if (state->controller && state->documents.active) {
+    snprintf(state->shell_call, sizeof(state->shell_call), "%s",
+             state->documents.call);
+    rc = cai_cli_documents_operation(&state->documents, state->shell_call,
+                                     "command.shell_started", NULL, NULL,
+                                     CAI_OK, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
   rc = cai_agent_runtime_user_shell_begin(state->runtime, command,
                                           state->options.shell_context, error);
   if (rc != CAI_OK)
@@ -696,7 +726,8 @@ static int cli_shell_start(cli_state *state, const char *command,
     if (rc != CAI_OK)
       return rc;
   }
-  rc = cai_cli_shell_start(&state->shell, command, state->workspace, error);
+  rc = cai_cli_shell_start(&state->shell, command, state->workspace,
+                           state->options.environment, error);
   if (rc != CAI_OK) {
     cai_error record_error;
     cai_error_init(&record_error);
@@ -3804,7 +3835,9 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
         return rc;
     }
     descriptors[7].fd =
-        state->controller && !state->shell.eof ? state->shell.output_fd : -1;
+        state->controller && !state->shell.eof && !state->shell.pending_length
+            ? state->shell.output_fd
+            : -1;
     descriptors[8].fd =
         state->controller && !state->shell.exited ? state->shell.exit_fd : -1;
     descriptors[9].fd = state->controller ? state->shell.timer_fd : -1;
@@ -4516,12 +4549,13 @@ static int cli_review_wakeup(sl_t *sl, const sl_watch_event_t *event,
       rc = cai_agent_runtime_finish_review(state->runtime,
                                            state->review_runtime, &error);
     if (rc == CAI_OK && state->review_call[0] != '\0')
-      rc = cai_cli_documents_review_complete(
-          &state->documents, state->review_call,
-          run_state == CAI_AGENT_COMPLETED   ? CAI_OK
-          : run_state == CAI_AGENT_CANCELLED ? CAI_ERR_CANCELLED
-                                             : CAI_ERR_PROTOCOL,
-          &error);
+      rc = cai_cli_documents_operation(&state->documents, state->review_call,
+                                       "command.review_settled", NULL, NULL,
+                                       run_state == CAI_AGENT_COMPLETED ? CAI_OK
+                                       : run_state == CAI_AGENT_CANCELLED
+                                           ? CAI_ERR_CANCELLED
+                                           : CAI_ERR_PROTOCOL,
+                                       &error);
     if (rc == CAI_OK) {
       state->last_review_metrics = metrics;
       state->has_review_metrics = 1;

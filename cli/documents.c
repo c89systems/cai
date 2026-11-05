@@ -43,10 +43,10 @@ static int document_record(cai_cli_documents *d, const char *kind,
   return call_record(d, d->active ? d->call : NULL, kind, field, text, code,
                      http_status, error);
 }
-int cai_cli_documents_review_complete(cai_cli_documents *d, const char *call,
-                                      int code, cai_error *error) {
-  return call_record(d, call, "command.review_settled", NULL, NULL, code, 0,
-                     error);
+int cai_cli_documents_operation(cai_cli_documents *d, const char *call,
+                                const char *kind, const char *field,
+                                const char *text, int code, cai_error *error) {
+  return call_record(d, call, kind, field, text, code, 0, error);
 }
 
 int cai_cli_documents_finish(cai_cli_documents *d) {

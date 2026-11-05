@@ -198,7 +198,9 @@ This is a working terminal/socket composition, not a claim of complete feature
 parity. Full startup-control parity and validation of extended configuration outside
 the startup inventory still require
 integration. Automatic executable-path discovery currently
-uses Linux `/proc/self/exe`. Batch invocations still use the combined receiver.
+uses Linux `/proc/self/exe`. Batch prompts, standalone goals, reviews, slash
+commands and pipe-shell commands use the owner/socket adapter; combined
+goal-plus-prompt startup still uses the older receiver.
 Maintenance uses the separate [utility dispatcher](application-utilities.md);
 its remaining process-global logging/browser environment boundary is explicit.
 These remain part of the active goal.

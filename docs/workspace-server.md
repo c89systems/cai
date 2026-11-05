@@ -28,8 +28,10 @@ preserve host controls and callback affinity without installing process state.
 Direct `--review` and slash `-i` commands now use that owner and batch adapter.
 Review completion is correlated with the admitted command through the child
 journal and durable handoff; output is projected from bounded journal ranges.
-Combined `-g`/`-i` startup and shell `-i` instructions still use the older
-receiver; their cutover remains unfinished. Maintenance now
+Explicit `!COMMAND` instructions also use the owner's pipe runner and bounded
+live output, with correlated real completion rather than launch acknowledgement.
+Combined `-g`/`-i` startup still uses the older receiver; its cutover remains
+unfinished. Maintenance now
 has its own [utility dispatcher](application-utilities.md), retaining the serialized
 environment wrapper for its remaining process-owned helpers. Owner and batch
 logging now resolve `LOG_` settings from captured views through public libpslog
@@ -52,7 +54,7 @@ remaining cutover work, [workspace process handoff](workspace-process.md) for
 executable ownership, and [command execution](workspace-commands.md) for backend
 admission/delegation. The confirmed decisions and specification below remain
 the target contract; an implemented boundary is not a claim of complete feature
-parity. In particular, dependent goal/prompt and shell batch composition,
+parity. In particular, dependent goal/prompt composition,
 extended startup parity and optional frontend packaging remain unfinished.
 
 The optional [Lua workspace client](lua-workspace-client.md) exposes the typed

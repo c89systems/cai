@@ -72,12 +72,12 @@ static int visit(void *context, const cai_cli_transcript_event *event,
   }
   return CAI_OK;
 }
-static void append(cai_cli_pouch *pouch, unsigned long long sequence,
-                   const char *text) {
+static void append_typed(cai_cli_pouch *pouch, unsigned long long sequence,
+                         const char *type, const char *text) {
   cai_agent_session_event event;
   cai_error error;
   memset(&event, 0, sizeof(event));
-  event.type = "tool_result";
+  event.type = type;
   event.sequence = sequence;
   event.timestamp_ns = 1793780000000000000ULL + sequence;
   event.utc_offset_seconds = 3600;
@@ -86,6 +86,27 @@ static void append(cai_cli_pouch *pouch, unsigned long long sequence,
   assert(pouch->store.append_event(pouch, "/transcript", "stream", &event,
                                    &error) == CAI_OK);
   cai_error_cleanup(&error);
+}
+static void append(cai_cli_pouch *pouch, unsigned long long sequence,
+                   const char *text) {
+  append_typed(pouch, sequence, "tool_result", text);
+}
+/** Consume the actual causal start on both subscribed streams, rather than
+ * injecting raw spans with an invented journal anchor. */
+static void publisher_shell_start(cai_cli_pouch *pouch,
+                                  cai_cli_transcript_publisher *feed,
+                                  unsigned long long sequence) {
+  cai_cli_transcript_frame frame;
+  unsigned int peer, count;
+  append_typed(pouch, sequence, "user_shell_started", "true");
+  for (peer = 1U; peer <= 2U; ++peer)
+    for (count = 0U; count < 3U; ++count) {
+      assert(cai_cli_transcript_feed_next(feed, peer, &frame));
+      assert(frame.event.sequence == sequence);
+      assert(frame.event.kind == (count == 0U   ? CAI_TRANSCRIPT_EVENT_BEGIN
+                                  : count == 1U ? CAI_TRANSCRIPT_DATA
+                                                : CAI_TRANSCRIPT_EVENT_END));
+    }
 }
 static size_t source_read(void *context, void *bytes, size_t capacity,
                           cai_error *error) {
@@ -232,27 +253,39 @@ static void publisher(cai_cli_pouch *pouch) {
   {
     unsigned char bytes[4096];
     size_t fast = 0U, stalled = 0U;
+    int accepted;
     memset(bytes, 'p', sizeof(bytes));
     bytes[0] = 0U;
-    assert(cai_cli_transcript_feed_shell(feed, 0U, 0U, bytes, 1U, 0, NULL) ==
-           CAI_ERR_INVALID);
-    assert(cai_cli_transcript_feed_shell(feed, 43U, UINT64_MAX, bytes, 1U, 0,
+    /* A shell that predates this subscription has no live prefix here. */
+    assert(cai_cli_transcript_feed_shell(feed, 2U, 43U, 0U, bytes, 1U, 0,
+                                         &accepted, NULL) == CAI_OK &&
+           accepted);
+    assert(!cai_cli_transcript_feed_next(feed, 2U, &frame));
+    publisher_shell_start(pouch, feed, 44U);
+    assert(cai_cli_transcript_feed_shell(feed, 0U, 0U, 0U, bytes, 1U, 0,
+                                         &accepted, NULL) == CAI_ERR_INVALID);
+    assert(cai_cli_transcript_feed_shell(feed, 0U, 43U, UINT64_MAX, bytes, 1U,
+                                         0, &accepted,
                                          NULL) == CAI_ERR_INVALID);
-    assert(cai_cli_transcript_feed_shell(feed, 43U, 0U, NULL, 1U, 0, NULL) ==
-           CAI_ERR_INVALID);
+    assert(cai_cli_transcript_feed_shell(feed, 0U, 43U, 0U, NULL, 1U, 0,
+                                         &accepted, NULL) == CAI_ERR_INVALID);
     for (i = 0U; i < 64U; ++i) {
-      assert(cai_cli_transcript_feed_shell(feed, 43U, i * sizeof(bytes), bytes,
-                                           sizeof(bytes), 0, NULL) == CAI_OK);
+      assert(cai_cli_transcript_feed_shell(feed, 0U, 44U, i * sizeof(bytes),
+                                           bytes, sizeof(bytes), 0, &accepted,
+                                           NULL) == CAI_OK &&
+             accepted);
       assert(cai_cli_transcript_feed_next(feed, 2U, &frame));
       assert(frame.event.kind == CAI_TRANSCRIPT_SHELL_OUTPUT &&
-             frame.event.sequence == 43U && frame.event.position == 0U &&
+             frame.event.sequence == 44U && frame.event.position == 0U &&
              frame.event.offset == i * sizeof(bytes) &&
              frame.event.length == sizeof(bytes) &&
              memcmp(frame.event.data, bytes, sizeof(bytes)) == 0);
       ++fast;
     }
-    assert(cai_cli_transcript_feed_shell(feed, 43U, 64U * sizeof(bytes), NULL,
-                                         0U, 1, NULL) == CAI_OK);
+    assert(cai_cli_transcript_feed_shell(feed, 0U, 44U, 64U * sizeof(bytes),
+                                         NULL, 0U, 1, &accepted,
+                                         NULL) == CAI_OK &&
+           accepted);
     assert(cai_cli_transcript_feed_next(feed, 2U, &frame) &&
            frame.event.kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END &&
            frame.event.offset == 64U * sizeof(bytes));
@@ -263,6 +296,48 @@ static void publisher(cai_cli_pouch *pouch) {
     }
     assert(stalled == 32U && fast == 64U &&
            cai_test_storage_open_count() == opens);
+    publisher_shell_start(pouch, feed, 45U);
+    /* The controller's full ring rejects atomically without advancing any
+     * output offset. Retrying after credit preserves every binary byte. The
+     * observer stays blocked throughout and cannot stall the controller. */
+    for (i = 0U; i < 32U; ++i)
+      assert(cai_cli_transcript_feed_shell(feed, 2U, 45U, i * sizeof(bytes),
+                                           bytes, sizeof(bytes), 0, &accepted,
+                                           NULL) == CAI_OK &&
+             accepted);
+    assert(cai_cli_transcript_feed_shell(feed, 2U, 45U, 32U * sizeof(bytes),
+                                         bytes, sizeof(bytes), 0, &accepted,
+                                         NULL) == CAI_OK &&
+           !accepted);
+    for (i = 0U; i < 32U; ++i) {
+      assert(cai_cli_transcript_feed_next(feed, 2U, &frame));
+      assert(frame.event.offset == i * sizeof(bytes) &&
+             memcmp(frame.event.data, bytes, sizeof(bytes)) == 0);
+    }
+    assert(cai_cli_transcript_feed_shell(feed, 2U, 45U, 32U * sizeof(bytes),
+                                         bytes, sizeof(bytes), 0, &accepted,
+                                         NULL) == CAI_OK &&
+           accepted);
+    assert(cai_cli_transcript_feed_next(feed, 2U, &frame) &&
+           frame.event.offset == 32U * sizeof(bytes));
+    assert(cai_cli_transcript_feed_shell(feed, 2U, 45U, 33U * sizeof(bytes),
+                                         NULL, 0U, 1, &accepted,
+                                         NULL) == CAI_OK &&
+           accepted);
+    assert(cai_cli_transcript_feed_next(feed, 2U, &frame) &&
+           frame.event.kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END);
+    while (cai_cli_transcript_feed_next(feed, 1U, &frame))
+      assert(frame.event.kind == CAI_TRANSCRIPT_SHELL_OUTPUT);
+    /* Empty output still closes its own live stream. */
+    publisher_shell_start(pouch, feed, 46U);
+    assert(cai_cli_transcript_feed_shell(feed, 2U, 46U, 0U, NULL, 0U, 1,
+                                         &accepted, NULL) == CAI_OK &&
+           accepted);
+    assert(cai_cli_transcript_feed_next(feed, 2U, &frame) &&
+           frame.event.kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END &&
+           frame.event.offset == 0U);
+    while (cai_cli_transcript_feed_next(feed, 1U, &frame))
+      assert(frame.event.kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END);
   }
   /* The real durable-cut hook invalidates all subscribed views. Exercising
    * its consumer contract here avoids inventing a model-context fixture. */
@@ -276,9 +351,9 @@ static void publisher(cai_cli_pouch *pouch) {
     large[192U * 1024U] = '\0';
     /* Burst beyond both live rings, including one event larger than a ring.
      * Catch-up must preserve accepted prefixes and remain a live stream. */
-    for (i = 44U; i <= 123U; ++i)
+    for (i = 47U; i <= 126U; ++i)
       append(pouch, i, "burst output");
-    append(pouch, 124U, large);
+    append(pouch, 127U, large);
     free(large);
     while (received[0] != 82U || received[1] != 82U) {
       cai_cli_transcript_feed_drain(feed);
@@ -288,18 +363,18 @@ static void publisher(cai_cli_pouch *pouch) {
           assert(e->kind == CAI_TRANSCRIPT_EVENT_BEGIN ||
                  e->kind == CAI_TRANSCRIPT_DATA ||
                  e->kind == CAI_TRANSCRIPT_EVENT_END);
-          assert(e->sequence == 44U + received[peer]);
+          assert(e->sequence == 47U + received[peer]);
           if (e->kind == CAI_TRANSCRIPT_EVENT_BEGIN)
             bytes[peer] = 0U;
           else if (e->kind == CAI_TRANSCRIPT_DATA)
             bytes[peer] += e->length;
           else {
-            if (e->sequence == 124U)
+            if (e->sequence == 127U)
               assert(bytes[peer] == 192U * 1024U);
             ++received[peer];
             if (!extended && received[peer] >= 20U) {
               /* Extend the target while a native catch-up read is active. */
-              append(pouch, 125U, "after captured catch-up window");
+              append(pouch, 128U, "after captured catch-up window");
               extended = 1;
             }
           }

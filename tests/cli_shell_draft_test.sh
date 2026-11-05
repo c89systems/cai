@@ -7,6 +7,7 @@ cat >"$SHELL" <<'SH'
 #!/bin/sh
 if [ "$1" != -i ]; then exec /bin/sh "$@"; fi
 test -t 0 && test -t 1 && test -t 2 || exit 77
+stty -a | grep -E '(^|[;[:space:]])icanon([;[:space:]]|$)' >/dev/null || exit 78
 printf x >>"$CAI_TEST_SHELL_LAUNCHES"
 printf 'DRAFT_SHELL_READY\n'
 exec /bin/sh -i
@@ -17,7 +18,7 @@ terminal_start -N
 send 'SHELL-STASH\033k'
 # Preserve a multiline Unicode draft and its cursor across terminal resize.
 send 'keep å€\012second tail\033[D\033[D\033[D\033[D\033s'
-expect DRAFT_SHELL_READY; wait_for canonical 1
+expect DRAFT_SHELL_READY; wait_for canonical 0
 [[ $(requests) == 0 ]]
 resize 64
 send 'printf ALT_S_LOCAL_ONLY; stty size; exit\r'
@@ -32,25 +33,29 @@ send '\033j'; expect_prompt SHELL-STASH
 send '\033n'
 # Cursor movement starts a distinct edit group before X. Undo must survive a
 # failed shell, not just a successful one, without submitting the draft.
-send 'undo draft\033[D\033[CX\033s'; expect DRAFT_SHELL_READY; wait_for canonical 1
-send 'exit 7\r'; expect 'interactive shell exited 7'; wait_for canonical 0
+send 'undo draft\033[D\033[CX\033s'; expect DRAFT_SHELL_READY; wait_for canonical 0
+send 'exit 7\r'; expect 'Shell exited 7.'; wait_for canonical 0
 plan '{"plan":["UNDO PRESERVED"]}'
 send '\037\r'; expect_turn "$send_offset" 'UNDO PRESERVED'
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
 json "$root/request" 'any(.. | objects; .text? == "undo draft")'
-# Busy shortcut attempts leave the editor and active turn intact.
+# Local shellout lends only the attachment's terminal. The owner continues
+# generating and its unseen suffix appears on return with the draft intact.
 plan '{"plan":[{"pause":true,"pause_text":"BUSY WAITING\n","text":"BUSY DONE"}]}'
 send 'work\r'; expect BUSY
 before=$(requests)
-send 'retained busy\033s'; expect 'Shell is available only between turns.'
+send 'retained busy\033s'; expect DRAFT_SHELL_READY
+[[ $(wc -c <"$root/launches") == 3 && $(requests) == "$before" ]]
+release
+wait_for assistant_logged 'BUSY DONE'
+send 'exit\r'; expect 'Shell exited 0.'; expect 'BUSY DONE'
 expect_prompt 'retained busy'
-[[ $(wc -c <"$root/launches") == 2 && $(requests) == "$before" ]]
-send '\025'; release; expect_turn "$send_offset" 'BUSY DONE'
+send '\025'
 terminal_close
 # An executable failure must return to the same draft as well.
 export SHELL="$root/missing-shell"
 terminal_start -N
-send 'failure draft\033s'; expect 'interactive shell exited 127'
+send 'failure draft\033s'; expect 'execute local terminal program'
 wait_for canonical 0; expect_prompt 'failure draft'
 [[ $(requests) == "$before" ]]
 terminal_close
