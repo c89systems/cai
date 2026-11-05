@@ -32,6 +32,10 @@ typedef struct cai_execution_record {
   const char *parent_call_id;
   const char *subagent;
   const char *tool_name;
+  /** Tool-call identity, or queued turn provenance on lifecycle records:
+   * input:SESSION:PRODUCER:REQUEST:ITEM. The numbers identify the original
+   * accepted OFFER, even after editing. Unowned/direct turns leave this NULL;
+   * a steer joining a turn does not change its owner's identity. */
   const char *call_id;
   const char *field;
   const char *model;

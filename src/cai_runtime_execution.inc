@@ -174,6 +174,9 @@ cai_runtime_execution_error_locked(cai_agent_runtime *runtime, const char *kind,
   fields[2] = failure != NULL ? failure->server_code : NULL;
   fields[3] = failure != NULL ? failure->request_id : NULL;
   cai_error_init(&local);
+  if (call == NULL && strcmp(kind, "turn.failed") == 0 &&
+      runtime->active_input_call[0] != '\0')
+    call = runtime->active_input_call;
   cai_runtime_execution_init(&s, runtime, kind, tool, call, NULL);
   s.record.code = failure != NULL ? failure->code : CAI_ERR_PROTOCOL;
   s.record.http_status = failure != NULL ? failure->http_status : 0L;
@@ -277,6 +280,12 @@ static int cai_runtime_execution_lifecycle_locked(cai_agent_runtime *runtime,
   if (!runtime->record_transcript || kind == NULL)
     return CAI_OK;
   cai_runtime_execution_init(&s, runtime, kind, NULL, NULL, NULL);
+  if ((type == CAI_AGENT_EVENT_RUN_STARTED ||
+       type == CAI_AGENT_EVENT_RUN_COMPLETED ||
+       type == CAI_AGENT_EVENT_RUN_CANCELLED ||
+       type == CAI_AGENT_EVENT_RESPONSE_COMPLETED) &&
+      runtime->active_input_call[0] != '\0')
+    s.record.call_id = runtime->active_input_call;
   if ((type == CAI_AGENT_EVENT_GOAL_CHANGED ||
        type == CAI_AGENT_EVENT_REQUEST_RETRY ||
        type == CAI_AGENT_EVENT_MCP_UPDATED) &&

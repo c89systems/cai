@@ -6,6 +6,13 @@ additional journal or per-client runtime. Both controllers and observers may
 subscribe without opening a queue producer. Context restoration runs on the
 server, never on attachment.
 
+Queued turn lifecycle records retain the original accepted input's
+[work identity](workspace-batch.md) in the existing execution `call_id`. This
+survives the ordinary execution decoder and typed client callback unchanged;
+there is no additional wire field or protocol version. Clients can match their
+own terminal record without interpreting assistant text or treating an idle
+status as acknowledgement.
+
 Payloads are definite CBOR arrays. Integers are unsigned except the signed UTC
 offset and replay limit. Session/type byte strings are limited to 128 bytes, collection identities
 to 20, and error reasons to 191; those strings cannot contain NUL. Data chunks

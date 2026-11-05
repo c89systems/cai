@@ -5,7 +5,7 @@ static int cai_runtime_enqueue_input_origin(cai_agent_runtime *, const char *,
                                             cai_runtime_input_kind, int *,
                                             const char *, unsigned long long,
                                             const unsigned long long *, size_t,
-                                            cai_error *);
+                                            const char *, cai_error *);
 static int cai_runtime_replay_journal_event(void *,
                                             const cai_agent_session_event *,
                                             cai_error *);
@@ -51,14 +51,23 @@ static void cai_runtime_queue_cleanup(cai_agent_runtime *runtime) {
   cai_input_queue_close(runtime->input_queue);
   runtime->input_queue = NULL;
 }
-static cai_runtime_input_dispatch *
-cai_runtime_dispatch_new(const char *text, const char *target,
-                         cai_runtime_input_kind kind,
-                         const unsigned long long *input_events,
-                         size_t input_event_count, cai_error *error) {
+static cai_runtime_input_dispatch *cai_runtime_dispatch_new(
+    const char *text, const char *target, cai_runtime_input_kind kind,
+    const unsigned long long *input_events, size_t input_event_count,
+    const char *session, const cai_input_entry *source, cai_error *error) {
   cai_runtime_input_dispatch *entry = cai_alloc(NULL, sizeof(*entry));
   if (entry != NULL) {
+    int n;
     memset(entry, 0, sizeof(*entry));
+    n = snprintf(entry->call_id, sizeof(entry->call_id),
+                 "input:%s:%llu:%llu:%llu", session, source->client_id,
+                 source->request_id, source->id);
+    if (n < 0 || (size_t)n >= sizeof(entry->call_id)) {
+      cai_free_mem(NULL, entry);
+      cai_set_error(error, CAI_ERR_LIMIT,
+                    "queued input identity exceeds limit");
+      return NULL;
+    }
     entry->text = cai_strdup(NULL, text);
     entry->target = cai_strdup(NULL, target);
     entry->kind = kind;
@@ -138,9 +147,10 @@ static int cai_runtime_queue_persist(void *context,
     dispatch = cai_runtime_dispatch_new(
         record->entry.text,
         child != NULL ? child->session_id : runtime->session_id, delivery,
-        record->input_events, record->input_event_count, error);
+        record->input_events, record->input_event_count, runtime->session_id,
+        &record->entry, error);
     if (dispatch == NULL)
-      rc = CAI_ERR_NOMEM;
+      rc = error != NULL && error->code != CAI_OK ? error->code : CAI_ERR_NOMEM;
     else {
       dispatch->pinned_child = child;
       if (child != NULL)
@@ -322,6 +332,7 @@ static int cai_runtime_queue_replay(cai_agent_runtime *runtime,
                     : runtime->turn_head;
         for (; input != NULL; input = input->next)
           if (input->journal_sequence == event->sequence) {
+            memcpy(input->call_id, entry->call_id, sizeof(input->call_id));
             input->input_events = entry->input_events;
             input->input_event_count = entry->input_event_count;
             entry->input_events = NULL;
@@ -397,11 +408,12 @@ static int cai_runtime_queue_replay(cai_agent_runtime *runtime,
         rc = cai_input_queue_input_events(runtime->input_queue, record.entry.id,
                                           &events, &count, error);
       if (rc == CAI_OK) {
-        dispatch = cai_runtime_dispatch_new(pending.text, target,
-                                            (cai_runtime_input_kind)kind,
-                                            events, count, error);
+        dispatch = cai_runtime_dispatch_new(
+            pending.text, target, (cai_runtime_input_kind)kind, events, count,
+            runtime->session_id, &record.entry, error);
         if (dispatch == NULL)
-          rc = CAI_ERR_NOMEM;
+          rc = error != NULL && error->code != CAI_OK ? error->code
+                                                      : CAI_ERR_NOMEM;
         else
           dispatch->sequence = event->sequence;
       }
@@ -466,7 +478,8 @@ next_delivery:
     rc = cai_runtime_enqueue_input_origin(
         destination, entry->text, entry->kind, NULL, runtime->session_id,
         entry->sequence, destination == runtime ? entry->input_events : NULL,
-        destination == runtime ? entry->input_event_count : 0U, error);
+        destination == runtime ? entry->input_event_count : 0U,
+        destination == runtime ? entry->call_id : NULL, error);
     pthread_mutex_lock(&runtime->lock);
     entry->inflight = 0;
     if (rc == CAI_ERR_INVALID || rc == CAI_ERR_LIMIT) {

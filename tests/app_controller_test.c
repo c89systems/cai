@@ -837,6 +837,8 @@ typedef struct typed_view {
   size_t roles, snapshots, results, disconnected;
   size_t statuses;
   size_t execution_chunks;
+  size_t input_completed;
+  char input_call[256];
   size_t command_inputs, command_completed, command_failed, command_frontend;
   size_t command_handoffs, shell_ended, review_ended, review_finished;
   size_t streaming_seen;
@@ -987,6 +989,13 @@ static int typed_execution(void *context, const cai_app_execution_event *event,
   assert(cai_app_client_get_state(v->client, &state, NULL) == CAI_OK &&
          state.transcript.position < event->boundary->position);
   ++v->execution_chunks;
+  if (strcmp(event->record->kind, "turn.completed") == 0 &&
+      event->record->call_id != NULL &&
+      strncmp(event->record->call_id, "input:", 6U) == 0) {
+    ++v->input_completed;
+    snprintf(v->input_call, sizeof(v->input_call), "%s",
+             event->record->call_id);
+  }
   if (strcmp(event->record->kind, "command.input") == 0) {
     if (v->command_text == NULL) {
       v->command_text = malloc(16384U);
@@ -1169,12 +1178,21 @@ static void typed_server(int argc, char **argv) {
   typed_request(&a, 1U, CAI_INPUT_OFFER, "Background work finished",
                 original.transport.generation);
   assert(a.result.outcome == CAI_INPUT_ACCEPTED && a.state.last_request == 2U);
-  typed_request(&a, 3U, CAI_INPUT_APPROVE, NULL, a.state.transport.generation);
-  assert(a.result.outcome == CAI_INPUT_ACCEPTED);
-  wait_count(&h, 1, 0);
-  typed_wait(&a, &a.assistant_seen, 1U);
-  assert(a.transcript_failures == 0U && a.transcript_ends != 0U &&
-         a.execution_chunks != 0U);
+  {
+    char expected_call[256];
+    snprintf(expected_call, sizeof(expected_call), "input:%s:%llu:%llu:%llu",
+             a.state.session, a.entry.client_id, a.entry.request_id,
+             a.entry.id);
+    typed_request(&a, 3U, CAI_INPUT_APPROVE, NULL,
+                  a.state.transport.generation);
+    assert(a.result.outcome == CAI_INPUT_ACCEPTED);
+    wait_count(&h, 1, 0);
+    typed_wait(&a, &a.assistant_seen, 1U);
+    assert(a.transcript_failures == 0U && a.transcript_ends != 0U &&
+           a.execution_chunks != 0U);
+    typed_wait(&a, &a.input_completed, 1U);
+    assert(strcmp(a.input_call, expected_call) == 0);
+  }
   cursor = a.state.transcript;
   assert(cai_app_client_subscribe(a.client, 2U, a.state.conversation,
                                   "not-the-active-session", NULL, 0U, 0U, -1LL,

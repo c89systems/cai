@@ -10242,7 +10242,9 @@ static void
 mock_scripted_openai_child(int pipe_fd,
                            const mock_http_expectation *expectations,
                            size_t expectation_count) {
-  char request[65536];
+  /* This fixture can be forked from a default-stack musl worker. */
+  const size_t request_capacity = 65536U;
+  char *request = malloc(request_capacity);
   struct sockaddr_in addr;
   socklen_t addr_len;
   int server_fd;
@@ -10251,6 +10253,8 @@ mock_scripted_openai_child(int pipe_fd,
   size_t i;
   const mock_http_expectation *expectation;
 
+  if (request == NULL)
+    _exit(13);
   signal(SIGALRM, mock_child_timeout_handler);
   alarm(10U);
   server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -10296,7 +10300,7 @@ mock_scripted_openai_child(int pipe_fd,
       close(client_fd);
       _exit(12);
     }
-    if (mock_read_request(client_fd, request, sizeof(request)) != 0) {
+    if (mock_read_request(client_fd, request, request_capacity) != 0) {
       close(client_fd);
       _exit(8);
     }
@@ -10339,6 +10343,7 @@ mock_scripted_openai_child(int pipe_fd,
   }
   close(server_fd);
   alarm(0U);
+  free(request);
   _exit(0);
 }
 
@@ -26939,6 +26944,7 @@ static int test_runtime_input_boundary(void *context,
 #include "runtime_goal_continuation_test.inc"
 #include "runtime_goal_restart_test.inc"
 #include "runtime_input_ack_test.inc"
+#include "runtime_input_identity_test.inc"
 #include "runtime_queue_test.inc"
 #include "runtime_responsiveness_test.inc"
 
@@ -54825,6 +54831,7 @@ static const test_entry test_entries[] = {
     {"agent_runtime_resume", test_agent_runtime_resume},
     {"agent_runtime_input_ack", test_agent_runtime_input_ack},
     {"agent_runtime_pending_input", test_agent_runtime_pending_input},
+    {"agent_runtime_input_identity", test_agent_runtime_input_identity},
     {"agent_runtime_responsiveness", test_agent_runtime_responsiveness},
     {"agent_runtime_markdown_export", test_agent_runtime_markdown_export},
     {"goal_tools", test_goal_tools},

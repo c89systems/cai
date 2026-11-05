@@ -42,6 +42,8 @@ static void test_agent_runtime_pending_input(test_state *state) {
   static const mock_http_expectation script[] = {
       {"POST /v1/responses HTTP/", required, 1U, NULL, 0U, 200, "OK",
        "text/event-stream", NULL, response},
+      {"POST /v1/responses HTTP/", required, 1U, NULL, 0U, 200, "OK",
+       "text/event-stream", NULL, response},
       {"POST /v1/responses HTTP/", NULL, 0U, NULL, 0U, 200, "OK",
        "text/event-stream", NULL, review_response},
       {"POST /v1/responses HTTP/", NULL, 0U, NULL, 0U, 200, "OK",
@@ -68,6 +70,8 @@ static void test_agent_runtime_pending_input(test_state *state) {
   mcp_sink_state *captured = NULL;
   http_mock_client mock;
   cai_error error;
+  input_identity_trace identity;
+  char input_call[256];
   int i, trimmed_payload = 0;
   if (http_mock_client_open_script(state, "pending_input", script,
                                    sizeof(script) / sizeof(script[0]),
@@ -85,6 +89,7 @@ static void test_agent_runtime_pending_input(test_state *state) {
   config.session_scope = "pending-input-fixture";
   config.session_id = "conversation-A";
   config.session_store = &store;
+  config.record_transcript = 1;
   config.disable_web_search = config.disable_chrome = config.disable_terminal =
       1;
   QUEUE_REQUIRE(
@@ -144,6 +149,9 @@ static void test_agent_runtime_pending_input(test_state *state) {
   QUEUE_REQUIRE(cai_input_queue_set_ready(queue, item.id, 1, &error) == CAI_OK);
   QUEUE_REQUIRE(cai_input_queue_claim(queue, item.id, item.revision, &claim,
                                       &error) == CAI_OK);
+  snprintf(input_call, sizeof(input_call), "input:%s:%llu:%llu:%llu",
+           "conversation-A", claim.entry.client_id, claim.entry.request_id,
+           claim.entry.id);
   cai_input_claim_cleanup(&claim);
   cai_input_queue_client_close(attachment);
   attachment = NULL;
@@ -169,6 +177,24 @@ static void test_agent_runtime_pending_input(test_state *state) {
              CAI_AGENT_COMPLETED);
   cai_agent_runtime_close(runtime);
   runtime = NULL;
+  memset(&identity, 0, sizeof(identity));
+  QUEUE_REQUIRE(store.load_events_after(
+                    store.context, config.session_scope, "conversation-A", 0U,
+                    input_identity_collect, &identity, &error) == CAI_OK);
+  expect_int(state, "pending_input_recovered_claim_identity",
+             input_identity_count(&identity, "turn.completed", input_call), 1L);
+  QUEUE_REQUIRE(input_identity_cut_delivery(root, config.session_scope) == 0);
+  QUEUE_REQUIRE(
+      cai_agent_runtime_open(mock.client, &config, &runtime, &error) == CAI_OK);
+  memset(&identity, 0, sizeof(identity));
+  QUEUE_REQUIRE(input_identity_wait(runtime, &store, config.session_scope,
+                                    "conversation-A", &identity, 1,
+                                    &error) == CAI_OK);
+  cai_agent_runtime_close(runtime);
+  runtime = NULL;
+  expect_int(state, "pending_input_recovered_delivery_identity",
+             input_identity_count(&identity, "turn.completed", input_call), 1L);
+  config.record_transcript = 0;
   QUEUE_REQUIRE(
       cai_agent_runtime_open(mock.client, &config, &runtime, &error) == CAI_OK);
   QUEUE_REQUIRE(cai_agent_runtime_pump(runtime, 10L, &error) == CAI_OK);

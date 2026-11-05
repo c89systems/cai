@@ -433,6 +433,8 @@ cai_runtime_subagent_result_cleanup(cai_runtime_subagent_result *result);
 
 typedef struct cai_runtime_input_node {
   char *text;
+  /** Original accepted queue identity; empty for direct/unowned input. */
+  char call_id[256];
   unsigned long long *input_events;
   size_t input_event_count, input_event_cursor;
   unsigned long long journal_sequence;
@@ -461,6 +463,7 @@ typedef enum cai_runtime_input_kind {
 typedef struct cai_runtime_input_dispatch {
   struct cai_runtime_input_dispatch *next;
   char *text, *target;
+  char call_id[256];
   unsigned long long sequence;
   cai_runtime_input_kind kind;
   cai_agent_runtime *pinned_child;
@@ -680,6 +683,9 @@ struct cai_agent_runtime {
   cai_runtime_input_dispatch *input_dispatch;
   cai_runtime_input_dispatch *input_history_pending;
   cai_runtime_input_origin *input_origins;
+  /** Worker-owned turn provenance, observed only under lock by execution
+   * writers. Steering cannot replace the queued turn's original identity. */
+  char active_input_call[256];
   unsigned long long input_checkpoint_after;
   unsigned long long input_checkpoint_through;
   cai_input_checkpoint_restore *input_checkpoint_reader;
@@ -6074,6 +6080,8 @@ static void *cai_runtime_worker(void *context) {
     if (input != NULL)
       runtime->goal_paused_during_turn = 0;
     if (input != NULL) {
+      memcpy(runtime->active_input_call, input->call_id,
+             sizeof(runtime->active_input_call));
       runtime->goal_turn_automatic = input->goal_continuation;
       runtime->goal_turn_has_activity = 0;
       runtime->goal_utf8_remaining = 0;
@@ -6110,6 +6118,7 @@ static void *cai_runtime_worker(void *context) {
     if (rc != CAI_OK) {
       cai_runtime_input_node_free(input);
       pthread_mutex_lock(&runtime->lock);
+      runtime->active_input_call[0] = '\0';
       runtime->turn_cancel_requested = 0;
       runtime->turn_cancel_armed = 0;
       pthread_mutex_unlock(&runtime->lock);
@@ -6152,12 +6161,14 @@ static void *cai_runtime_worker(void *context) {
       runtime->turn_cancel_armed = 0;
       runtime->state = CAI_AGENT_FAILED;
       cai_runtime_turn_finish_locked(runtime);
-      if (runtime->event_callback != NULL &&
-          cai_runtime_enqueue_locked(runtime, CAI_AGENT_EVENT_RUN_FAILED,
-                                     message, sizeof(message) - 1U, NULL, NULL,
-                                     runtime->state, &error) == CAI_OK) {
+      if (rc == CAI_OK)
+        rc = cai_set_error(&error, CAI_ERR_LIMIT, message);
+      if (cai_runtime_enqueue_failure_locked(
+              runtime, &error, message, runtime->state, &error) == CAI_OK &&
+          runtime->event_callback != NULL) {
         runtime->terminal_event_pending = 1;
       }
+      runtime->active_input_call[0] = '\0';
       pthread_cond_broadcast(&runtime->condition);
       pthread_mutex_unlock(&runtime->lock);
       cai_runtime_input_node_free(input);
@@ -6583,6 +6594,7 @@ static void *cai_runtime_worker(void *context) {
      * lock order. Publish quiescence only after final records and observations
      * exist, so an owner cannot close the child midway through publication. */
     runtime->state = final_state;
+    runtime->active_input_call[0] = '\0';
     if (runtime->event_callback != NULL)
       cai_runtime_wakeup_notify_locked(runtime);
     pthread_cond_broadcast(&runtime->condition);
@@ -8858,7 +8870,7 @@ static int cai_runtime_enqueue_input_origin(
     cai_agent_runtime *runtime, const char *text, cai_runtime_input_kind kind,
     int *started, const char *origin_session,
     unsigned long long origin_sequence, const unsigned long long *input_events,
-    size_t input_event_count, cai_error *error) {
+    size_t input_event_count, const char *input_call, cai_error *error) {
   cai_runtime_input_node *node;
   cai_runtime_event_node *event_node;
   cai_agent_run_state previous_state;
@@ -8881,6 +8893,15 @@ static int cai_runtime_enqueue_input_origin(
                          "failed to allocate agent input");
   }
   memset(node, 0, sizeof(*node));
+  if (input_call != NULL) {
+    size_t call_length = strlen(input_call);
+    if (call_length >= sizeof(node->call_id)) {
+      cai_runtime_input_node_free(node);
+      return cai_set_error(error, CAI_ERR_LIMIT,
+                           "queued input identity exceeds limit");
+    }
+    memcpy(node->call_id, input_call, call_length + 1U);
+  }
   event_node = NULL;
   node->text = cai_strdup(NULL, text);
   if (node->text == NULL) {
@@ -8962,7 +8983,7 @@ static int cai_runtime_enqueue_input_origin(
       pthread_mutex_unlock(&runtime->lock);
       rc = cai_runtime_enqueue_input_origin(child, text,
                                             CAI_RUNTIME_INPUT_STEERING, started,
-                                            NULL, 0U, NULL, 0U, error);
+                                            NULL, 0U, NULL, 0U, NULL, error);
       pthread_mutex_lock(&runtime->lock);
       runtime->child_input_users--;
       pthread_cond_broadcast(&runtime->condition);
@@ -9195,7 +9216,7 @@ static int cai_runtime_enqueue_input(cai_agent_runtime *runtime,
                                      cai_runtime_input_kind kind, int *started,
                                      cai_error *error) {
   return cai_runtime_enqueue_input_origin(runtime, text, kind, started, NULL,
-                                          0U, NULL, 0U, error);
+                                          0U, NULL, 0U, NULL, error);
 }
 
 int cai_agent_runtime_pending_input(cai_agent_runtime *runtime,

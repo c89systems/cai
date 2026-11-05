@@ -21,7 +21,9 @@ environment/directory views; configuration does not install `[env]` into the
 process. Interactive synchronous run now composes this owner and socket
 frontend while retaining callbacks on the calling thread. Temporary interactive
 runs use that same composition, with an ephemeral owner and cleanup after join.
-Batch composition still owns legacy process scaffolding. Maintenance now has
+Batch composition still owns legacy process scaffolding; its next cutover uses
+[durable queued-work identity](workspace-batch.md) to match each accepted input
+to its outcome through the typed socket client. Maintenance now has
 its own [utility dispatcher](application-utilities.md), retaining the serialized
 environment/logging wrapper until the upstream lookup API is available. Native library
 controller startup never forks or installs signal handlers.
