@@ -12,7 +12,6 @@
 #include "input_adapter.h"
 #include "literal.h"
 #include "log.h"
-#include "login.h"
 #include "mcp.h"
 #include "messages.h"
 #include "options.h"
@@ -203,7 +202,7 @@ typedef struct cli_state {
   sl_watch_id_t shell_watches[3];
   int shell_watched[3];
   char workspace[PATH_MAX];
-  char operation_paths[4][PATH_MAX];
+  char output_path[PATH_MAX];
   char workspace_approval_root[PATH_MAX];
   int workspace_approval_pending;
   char message_queue_override[129];
@@ -5645,8 +5644,6 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   const char *auth_file;
   char *metadata_json;
   char *line;
-  pslog_level default_log_level;
-  int utility_mode;
   int parsed;
   int rc;
   int result;
@@ -5669,11 +5666,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       result = 2;
       goto cleanup;
     }
-    if (valid <= 0 || early.chrome_setup || early.chrome_remove ||
-        early.login || early.list || early.list_all || early.resume_list ||
-        early.delete_list || early.delete_id != NULL ||
-        early.export_id != NULL || early.import_file != NULL ||
-        early.install_skill != NULL || early.message != NULL || early.review ||
+    if (valid <= 0 || cai_cli_options_utility(&early) || early.review ||
         early.non_interactive) {
       cai_cli_error(&error, CAI_ERR_INVALID,
                     "controller startup accepts agent options, not utility or "
@@ -5685,43 +5678,6 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       cai_cli_error(&error, CAI_ERR_CANCELLED, "startup was stopped");
       goto cleanup;
     }
-  }
-  if (argc > 1 && (strncmp(argv[1], "chrome-extension://", 19U) == 0 ||
-                   strcmp(argv[1], "--chrome-native-host") == 0)) {
-    int explicit_mode = strcmp(argv[1], "--chrome-native-host") == 0;
-    /* Native messaging owns stdout; LOG_OUTPUT cannot redirect diagnostics
-     * there. */
-    (void)unsetenv("LOG_OUTPUT");
-    if (cai_cli_log_new(&state->log, PSLOG_LEVEL_WARN, 0,
-                        application != NULL ? application->logger : NULL,
-                        &error) != CAI_OK)
-      goto cleanup;
-    if (argc != (explicit_mode ? 3 : 2))
-      rc = cai_cli_error(&error, CAI_ERR_INVALID,
-                         "Invalid Chrome native host arguments");
-    else {
-      /* Chrome only supplies its origin. Resolve the host's own identity and
-       * startup config without treating the origin as an agent argument. */
-      rc = cai_cli_configure(1, argv, &state->options, &state->configuration,
-                             application, &error);
-      if (rc == 1) {
-        const char *directory = state->configuration->get(
-            state->configuration, "chrome", "socket_directory");
-        rc = state->configuration->apply_environment(state->configuration,
-                                                     &error);
-        if (rc == CAI_OK)
-          rc = cai_cli_private_directory(directory, &error);
-        if (rc == CAI_OK)
-          rc = cai_chrome_native_host_run_at(argv[explicit_mode ? 2 : 1],
-                                             directory, state->log->logger,
-                                             &error);
-      } else
-        rc = CAI_ERR_INVALID;
-    }
-    if (rc != CAI_OK)
-      cai_cli_log_error(state->log->logger, "Chrome native host", &error);
-    result = rc == CAI_OK ? 0 : 1;
-    goto cleanup;
   }
   if (prepared != NULL) {
     state->configuration = prepared->configuration;
@@ -5791,17 +5747,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   snprintf(state->welcome, sizeof(state->welcome),
            "Welcome to %s. Send /help for usage.", state->options.program_name);
   state->batch = state->options.review || state->options.non_interactive;
-  utility_mode =
-      state->options.chrome_setup || state->options.chrome_remove ||
-      state->options.login || state->options.list || state->options.list_all ||
-      state->options.resume_list || state->options.delete_list ||
-      state->options.delete_id != NULL || state->options.export_id != NULL ||
-      state->options.import_file != NULL ||
-      state->options.install_skill != NULL || state->options.message != NULL;
-  default_log_level = utility_mode ? PSLOG_LEVEL_WARN : PSLOG_LEVEL_TRACE;
-  if (cai_cli_log_new(&state->log, default_log_level,
-                      !state->batch && !utility_mode &&
-                          (!state->controller || server != NULL),
+  if (cai_cli_log_new(&state->log, PSLOG_LEVEL_TRACE,
+                      !state->batch && (!state->controller || server != NULL),
                       application != NULL ? application->logger : NULL,
                       &error) != CAI_OK)
     goto cleanup;
@@ -5833,30 +5780,13 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       goto cleanup;
     }
   }
-  {
-    const char **paths[4];
-    size_t path_index;
-    paths[0] = &state->options.out;
-    paths[1] = &state->options.import_file;
-    paths[2] = &state->options.install_skill;
-    paths[3] = &state->options.chrome_manifest;
-    for (path_index = 0U; path_index < sizeof(paths) / sizeof(paths[0]);
-         ++path_index) {
-      if (*paths[path_index] == NULL)
-        continue;
-      if (cai_cli_workspace_path(state->operation_paths[path_index], PATH_MAX,
-                                 state->workspace, *paths[path_index],
-                                 &error) != CAI_OK)
-        goto cleanup;
-      *paths[path_index] = state->operation_paths[path_index];
-    }
+  if (state->options.out != NULL) {
+    if (cai_cli_workspace_path(state->output_path, PATH_MAX, state->workspace,
+                               state->options.out, &error) != CAI_OK)
+      goto cleanup;
+    state->options.out = state->output_path;
   }
-  if (state->options.install_skill != NULL) {
-    result = cai_cli_install_skill(&state->options, state->log->logger);
-    goto cleanup;
-  }
-  if (!state->batch && !utility_mode &&
-      (!state->controller || server != NULL)) {
+  if (!state->batch && (!state->controller || server != NULL)) {
     rc = cai_cli_log_file_at(state->log, state->options.log_dir,
                              !state->controller, &error);
     if (rc == CAI_OK)
@@ -5873,24 +5803,9 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
                         "temp_workspace_opened", "diagnostic",
                         "Temporary workspace created", 27U, &field, 1U);
   }
-  if (state->options.chrome_setup || state->options.chrome_remove) {
-    rc = cai_chrome_native_host_setup_at(
-        state->options.program_name, state->options.chrome_manifest,
-        state->options.chrome_remove,
-        state->configuration->get(state->configuration, "chrome",
-                                  "socket_directory"),
-        state->log->logger, &error);
-    if (rc != CAI_OK)
-      cli_print_error(state, "Chrome registration", &error);
-    result = rc == CAI_OK ? 0 : 1;
-    goto cleanup;
-  }
   {
     cai_cli_options selected;
-    const char *name = state->options.login ? state->normal_options.auth_store
-                       : state->options.message != NULL
-                           ? state->normal_options.messaging_store
-                           : state->normal_options.sessions_store;
+    const char *name = state->normal_options.sessions_store;
     rc = state->options.temporary
              ? (selected = state->options, CAI_OK)
              : cai_cli_store_options(state->configuration,
@@ -5907,99 +5822,6 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   state->store = state->pouch.store;
   rc = cli_host_process(state, &error);
   if (rc != CAI_OK || state->host_stopped) {
-    result = rc == CAI_OK ? 0 : 1;
-    goto cleanup;
-  }
-  if (state->options.message != NULL) {
-    cai_sink *destination = NULL;
-    rc = cai_sink_stdout(&destination, &error);
-    if (rc == CAI_OK)
-      rc = cai_cli_messages_send_once(&state->pouch, state->options.send_queue,
-                                      state->options.message, destination,
-                                      &error);
-    if (rc == CAI_OK)
-      rc = cai_sink_write(destination, "\n", 1U, &error);
-    cai_sink_close(destination);
-    if (rc != CAI_OK)
-      cli_print_error(state, "send message", &error);
-    result = rc == CAI_OK ? 0 : 1;
-    if (cli_host_process(state, &error) != CAI_OK)
-      result = 1;
-    goto cleanup;
-  }
-  if (state->options.login) {
-    result = cai_cli_login(&state->pouch.credentials, state->log->logger,
-                           bridge != NULL ? bridge->fd : -1,
-                           cli_terminal_shell_stop, state);
-    if (cli_host_process(state, &error) != CAI_OK)
-      result = 1;
-    goto cleanup;
-  }
-  if (state->options.list || state->options.list_all ||
-      state->options.resume_list || state->options.delete_list) {
-    cai_sink *destination;
-    destination = NULL;
-    rc = cai_cli_pouch_list(&state->pouch,
-                            state->options.list_all ? NULL : state->workspace,
-                            &state->sessions, &state->session_count, &error);
-    if (rc == CAI_OK && state->options.delete_list)
-      rc = cai_cli_sessions_deletable(&state->pouch, state->sessions,
-                                      &state->session_count, &error);
-    if (rc == CAI_OK)
-      rc = cai_sink_stdout(&destination, &error);
-    if (rc == CAI_OK)
-      rc =
-          cai_cli_sessions_print(destination, state->sessions,
-                                 state->session_count, !state->options.list_all,
-                                 mdf_terminal_width(STDOUT_FILENO, 80), &error);
-    cai_sink_close(destination);
-    if (rc != CAI_OK)
-      cli_print_error(state, "list conversations", &error);
-    result = rc == CAI_OK ? 0 : 1;
-    goto cleanup;
-  }
-  if (state->options.delete_id != NULL) {
-    cai_cli_pouch *messaging = cli_named_store(
-        state, state->normal_options.messaging_store, 0, &error);
-    char id[CAI_AGENT_SESSION_ID_MAX];
-    rc = messaging == NULL
-             ? error.code
-             : cai_cli_session_delete(&state->pouch, messaging, &state->options,
-                                      state->workspace,
-                                      state->options.delete_id, id, &error);
-    if (rc != CAI_OK)
-      cli_print_error(state, "delete conversation", &error);
-    else if (fprintf(stdout, "Deleted conversation %s.\n", id) < 0 ||
-             fflush(stdout) != 0)
-      rc = CAI_ERR_TRANSPORT;
-    result = rc == CAI_OK ? 0 : 1;
-    if (cli_host_process(state, &error) != CAI_OK)
-      result = 1;
-    goto cleanup;
-  }
-  if (state->options.export_id != NULL) {
-    cai_sink *destination;
-    destination = NULL;
-    rc = cai_sink_stdout(&destination, &error);
-    if (rc == CAI_OK)
-      rc = cai_cli_session_export(&state->pouch, state->options.export_id,
-                                  state->workspace, state->options.export_dir,
-                                  state->options.export_out, NULL, destination,
-                                  &error);
-    cai_sink_close(destination);
-    if (rc != CAI_OK)
-      cli_print_error(state, "export conversation", &error);
-    result = rc == CAI_OK ? 0 : 1;
-    goto cleanup;
-  }
-  if (state->options.import_file != NULL) {
-    char id[CAI_AGENT_SESSION_ID_MAX];
-    rc = cai_cli_pouch_import(&state->pouch, state->options.import_file,
-                              state->workspace, id, sizeof(id), &error);
-    if (rc == CAI_OK)
-      puts(id);
-    else
-      cli_print_error(state, "import conversation", &error);
     result = rc == CAI_OK ? 0 : 1;
     goto cleanup;
   }

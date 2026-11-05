@@ -170,6 +170,10 @@ int cai_cli_read_options(int argc, char *const *argv,
                          const cai_cli_options *defaults,
                          cai_cli_options *options);
 int cai_cli_validate_options(cai_cli_options *options);
+/** Maintenance selections never open an agent owner or terminal frontend.
+ * Help/version/invalid argv and raw Chrome entry points are classified by the
+ * invocation dispatcher before there is a valid options object. */
+int cai_cli_options_utility(const cai_cli_options *);
 const char *cai_cli_instruction_at(const cai_cli_options *options,
                                    size_t index);
 

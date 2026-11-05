@@ -703,10 +703,17 @@ immutable array of long flags, short flags, argument types, descriptions,
 repeatability and negative aliases. `app->write_help` writes CAI's formatter to
 a caller-owned sink. Neither method loads configuration, logs in or starts UI.
 
-The host must run on its main thread and serialize process-global state use.
-CAI temporarily owns stdin/stdout and may change environment, locale and
-signal handlers. These are restored on return, including invalid options and
-runtime failures. No concurrent or recursive application runs are permitted.
+Interactive `run` keeps the common controller and host callbacks on the calling
+thread, with one default-stack terminal adapter worker. The caller may itself
+be a host worker. Give the adapter exclusive terminal ownership; its terminal
+modes and signal dispositions are restored before return. Batch and maintenance
+utilities still require serialized process-resource use: configured environment
+and locale state are restored after their synchronous invocation, including
+failures. Maintenance has a separate dispatcher and cannot run an agent loop or
+open a workspace owner/editor; its offline export helper still restores saved
+context read-only. See [application utilities](application-utilities.md) for the
+remaining logging/browser environment boundary. One run per receiver may be
+active; recursive invocation is rejected.
 Workspace selection, configuration and temporary workspaces leave the host cwd
 unchanged. Relative CLI paths use the selected workspace, while INI paths use
 the configuration file's directory; only subprocesses enter their workdir.

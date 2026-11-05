@@ -225,8 +225,9 @@ typedef struct cai_app cai_app;
  * temporary terminal/signal modes are restored before return, including
  * failures. Temporary runs use an ephemeral owner, joined before a plain
  * default-no workspace cleanup question; host STOP interrupts that question.
- * Batch and utility modes still use the legacy
- * resource-saving composition and must be serialized with other
+ * Batch mode still uses the combined receiver; maintenance utilities have a
+ * separate dispatcher. Both retain the process-resource wrapper for configured
+ * logging/environment behavior and must be serialized with other
  * process-resource users. Repeated runs are supported; one run per instance may
  * be active. start selects an independent terminal-free owner. Borrowed loggers
  * can receive calls from native workers and must be thread-safe. */

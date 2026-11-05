@@ -2699,12 +2699,8 @@ int cai_app_terminal_run(const cai_app_config *application,
       rc = configured == 0 ? CAI_OK : CAI_ERR_INVALID;
     else if (strcmp(options.directory, target->workspace) != 0 ||
              options.server != NULL || options.headless || options.temporary ||
-             options.list || options.list_all || options.resume_list ||
-             options.delete_list || options.delete_id != NULL ||
-             options.export_id != NULL || options.import_file != NULL ||
-             options.login || options.chrome_setup || options.chrome_remove ||
-             options.install_skill != NULL || options.message != NULL ||
-             options.non_interactive || options.review)
+             cai_cli_options_utility(&options) || options.non_interactive ||
+             options.review)
       rc = cai_cli_error(error, CAI_ERR_INVALID,
                          "terminal receiver accepts frontend options for its "
                          "explicit workspace only");

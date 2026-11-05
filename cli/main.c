@@ -65,11 +65,7 @@ int main(int argc, char **argv) {
                               (const char *const *)(argv + 1), &code, &error);
   else if (rc > 0 && isatty(STDIN_FILENO) && isatty(STDOUT_FILENO) &&
            !options.non_interactive && !options.review && !options.temporary &&
-           !options.list && !options.list_all && !options.resume_list &&
-           !options.delete_list && options.delete_id == NULL &&
-           options.export_id == NULL && options.import_file == NULL &&
-           !options.login && !options.chrome_setup && !options.chrome_remove &&
-           options.install_skill == NULL && options.message == NULL)
+           !cai_cli_options_utility(&options))
     rc = cai_cli_attach_run(&config, argc, argv, &code, &error);
   else {
     rc = cai_app_open(&config, &app, &error);

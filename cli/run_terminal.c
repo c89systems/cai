@@ -30,10 +30,7 @@ typedef struct terminal_run {
 
 static int agent_mode(const cai_cli_options *o) {
   return !o->headless && o->server == NULL && !o->non_interactive &&
-         !o->review && !o->list && !o->list_all && !o->resume_list &&
-         !o->delete_list && o->delete_id == NULL && o->export_id == NULL &&
-         o->import_file == NULL && !o->login && !o->chrome_setup &&
-         !o->chrome_remove && o->install_skill == NULL && o->message == NULL;
+         !o->review && !cai_cli_options_utility(o);
 }
 static int prepare(void *context, struct pollfd *fd, uint64_t *deadline,
                    cai_error *error) {

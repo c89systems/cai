@@ -88,10 +88,18 @@ terminal_start -N
 parent=$(session_id)
 prompt 'Delegate a fixture review' 'REVIEW PARENT DONE'
 plan "$(jq -n --arg report "$report" '{plan:[$report]}')"
-send '/review Inspect the fixture\r'; expect 'Fix parser'; expect 'Worked for'
+send '/review Inspect the fixture\r'; expect 'Fix parser'; expect 'Review finished'
 run -l; ok
-[[ $(wc -l <"$root/stdout") == 3 ]]
+[[ $(wc -l <"$root/stdout") == 1 ]]
+# Internal children are deliberately absent from the workspace latest/list
+# index. Check their actual collections through their saved runtime identities.
+logs
+mapfile -t children < <(jq -sr '[.[] | select(.msg == "cai.agent.runtime.opened" and .review == 1) | .session_id] | unique[]' "$root/logs.jsonl")
+[[ ${#children[@]} == 2 ]]
 terminal_close
 run --delete "$parent"; ok
+for child in "${children[@]}"; do
+  run --export "$child"; bad; contains "$root/stderr" 'was not found'
+done
 run -l; ok; contains "$root/stdout" 'No conversations.'
 [[ $(requests) == 5 ]]

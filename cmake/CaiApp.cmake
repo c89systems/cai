@@ -1,4 +1,4 @@
-add_library(cai_app_objects OBJECT cli/app.c cli/app_client.c cli/input_socket.c cli/frontend.c cli/terminal_program.c cli/run_terminal.c cli/app_run.c cli/kanban.c)
+add_library(cai_app_objects OBJECT cli/app.c cli/app_client.c cli/input_socket.c cli/frontend.c cli/terminal_program.c cli/run_terminal.c cli/utility.c cli/app_run.c cli/kanban.c)
 target_link_libraries(cai_app_objects PRIVATE cai_cli_support)
 cai_configure_c_target(cai_app_objects)
 add_library(cai_app_static STATIC $<TARGET_OBJECTS:cai_app_objects>
@@ -92,6 +92,14 @@ if(CAI_BUILD_TESTS)
   target_link_libraries(cai_app_terminal_host PRIVATE cai_app_static)
   target_link_options(cai_app_terminal_host PRIVATE -Wl,--wrap=lc_client_open)
   cai_configure_cli_target(cai_app_terminal_host)
+  add_executable(cai_app_utility_host tests/app_utility_host.c)
+  target_link_libraries(cai_app_utility_host PRIVATE cai_app_static)
+  target_link_options(cai_app_utility_host PRIVATE
+    -Wl,--wrap=cai_agent_runtime_open -Wl,--wrap=cai_workspace_server_open
+    -Wl,--wrap=cai_agent_runtime_pump -Wl,--wrap=cai_agent_runtime_pump_bounded
+    -Wl,--wrap=sl_create_with_config -Wl,--wrap=mdf_create)
+  target_compile_options(cai_app_utility_host PRIVATE -UNDEBUG)
+  cai_configure_cli_target(cai_app_utility_host)
   add_executable(cai_input_socket_test tests/input_socket_test.c)
   target_link_libraries(cai_input_socket_test PRIVATE cai_app_static)
   target_link_options(cai_input_socket_test PRIVATE -Wl,--wrap=lc_client_open)

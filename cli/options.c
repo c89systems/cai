@@ -779,6 +779,14 @@ int cai_cli_read_options(int argc, char *const *argv,
   return cli_read_options(argc, argv, defaults, options, 0U, NULL);
 }
 
+int cai_cli_options_utility(const cai_cli_options *o) {
+  return o->chrome_setup || o->chrome_remove || o->login || o->list ||
+         o->list_all || o->resume_list || o->delete_list ||
+         o->delete_id != NULL || o->export_id != NULL ||
+         o->import_file != NULL || o->install_skill != NULL ||
+         o->message != NULL;
+}
+
 int cai_cli_validate_options(cai_cli_options *options) {
   static const char *const providers[] = {"chatgpt", "openai", "openrouter",
                                           "berget",  "custom", NULL};

@@ -189,8 +189,10 @@ This is a working terminal/socket composition, not a claim of complete feature
 parity. Full startup-control parity and validation of extended configuration outside
 the startup inventory still require
 integration. Automatic executable-path discovery currently
-uses Linux `/proc/self/exe`. Batch and utility invocations still use their
-existing composition. These remain part of the active goal.
+uses Linux `/proc/self/exe`. Batch invocations still use the combined receiver.
+Maintenance uses the separate [utility dispatcher](application-utilities.md);
+its remaining process-global logging/browser environment boundary is explicit.
+These remain part of the active goal.
 
 Softline 0.16's unconditional trigger stripping also needs a pre-activation
 eligibility API: typed shell words starting with `$` (when skills are loaded)
