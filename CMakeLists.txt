@@ -1259,6 +1259,12 @@ if(CAI_BUILD_LUA)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua/app_test.lua")
       set_tests_properties(cai_app_lua PROPERTIES LABELS "cli;local;offline" TIMEOUT 10
         ENVIRONMENT "${CAI_LUA_TEST_ENV}")
+      add_test(NAME cai_app_lua_owner COMMAND bash
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua/owner_test.sh"
+        "${CAI_LUA_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua/owner_test.lua")
+      set_tests_properties(cai_app_lua_owner PROPERTIES
+        LABELS "cli;local;offline" TIMEOUT 45 ENVIRONMENT "${CAI_LUA_TEST_ENV}")
       if(TARGET cai_cli)
         add_test(NAME cai_app_lua_workspace_client COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua/workspace_client_test.sh"

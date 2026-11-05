@@ -21,7 +21,7 @@ All unsigned 64-bit identities, revisions, positions and times are decimal
 strings on output. Inputs accept those strings or nonnegative Lua integers;
 floats, negative values and overflow are rejected. Lua integers represent
 ordinary enum/status codes, signed offsets and entry counts. Enum fields keep
-their public C numeric values. The module exports `CLIENT_*`, `WORKSPACE_*`,
+their public C numeric values. The module exports `CLIENT_*`, `WORKSPACE_*`, `ATTACHMENT_*`,
 `TRANSCRIPT_*`, `INPUT_OBSERVATION_*`, `INPUT_ACCEPTED/REJECTED/UNKNOWN` and
 `CATALOG_*` constants for comparing those fields. `operation` accepts the
 public queue operation
@@ -68,6 +68,6 @@ request and receive a rejection; an old queue request retains its old authority
 scope. Taking control after detachment requires observing the new generation
 before explicitly choosing that scope. The binding never refreshes it for you.
 
-This provides the client side of Lua embedding. Asynchronous Lua owner
-lifecycle/observer dispatch and conversion of the synchronous `app:run`
-composition remain separate cutover work.
+The [Lua owner lifecycle](lua-workspace-owner.md) can start the native owner in
+the same host; streaming observations remain on this client pump thread.
+Conversion of the synchronous `app:run` composition remains cutover work.

@@ -882,18 +882,20 @@ Text/reasoning observations have at most 1024 payload bytes, splitting complete
 UTF-8 scalars at chunk boundaries. Their durable provider deltas are unchanged.
 
 `app->control(app, type, text, &id, &error)` is safe from other host threads
-while the app remains alive. It copies input into a FIFO of at most 64 waiting
-commands and wakes the app loop. Calls with no ready runtime, invalid arguments,
-or a full queue fail immediately, with `id` set to zero. STOP is also accepted
-during startup and utility runs, without a ready runtime, and is handled when
-the app reaches its control boundary.
+while the app remains alive. It copies ordinary input into a FIFO of at most
+64 waiting commands and wakes the app loop. Calls with no ready runtime,
+invalid arguments, or a full ordinary queue fail immediately, with `id` set
+to zero. STOP has one reserved allocation-free command: it is accepted during
+startup, utility runs and at ordinary capacity. Repeating pending STOP returns
+its original ID. Application acknowledgements remain ordered, including
+cancellation of commands that cannot apply before shutdown.
 
 | Type | Text | Behavior |
 | --- | --- | --- |
 | `CAI_APP_QUEUE_PROMPT` | Required | Interactive: inject into softline's editable approval queue, using the existing autoqueue setting. Batch: enqueue the next turn. |
 | `CAI_APP_STEER` | Required | Submit steering to the active turn at the next runtime safe boundary. Reject if no turn can accept it. |
 | `CAI_APP_CANCEL_TURN` | None | Cooperatively cancel the current turn and durably pause an active goal. This leaves an interactive app open; ordinary user turns work while paused. |
-| `CAI_APP_STOP` | None | Stop the application, discard unstarted work, and wait for worker shutdown before returning. The host process stays alive. |
+| `CAI_APP_STOP` | None | Request orderly shutdown and discard unstarted work. Run/join completion waits for workers; the host process stays alive. |
 | `CAI_APP_REPLACE_GOAL` | Required | Replace the goal with an unbudgeted objective and pursue it, as `/goal new TEXT` does. |
 | `CAI_APP_PAUSE_GOAL` | None | Pause an active goal at a safe boundary. |
 | `CAI_APP_RESUME_GOAL` | None | Resume a resumable goal and pursue it. |
@@ -1072,6 +1074,12 @@ and `control_error`. Lua callbacks may queue controls or query status; they
 cannot close or recursively run the active application. Native custom-tool
 functions remain a C-only hook because their handlers execute on workers.
 `state` is the numeric C `cai_agent_run_state` value (see `<cai/agent_runtime.h>`).
+For a terminal-free host, use the [Lua owner lifecycle](lua-workspace-owner.md):
+`start`/`start_server`, copied status notifications, controls and join/close.
+Server snapshots include `has_server`, binary `server_instance`, and a
+`server` table retaining phase, stop reason, persistence and attachment state.
+Streaming Lua observers run on the [typed client](lua-workspace-client.md)
+pump thread; inline `on_event`/`on_replay` remain synchronous `run` facilities.
 In Lua, `metrics.session_usage` contains token counters directly alongside
 `estimated_spend_usd`, `estimated_spend_eur`, and `limit_exceeded`; it does not
 have the C accounting struct's nested `usage` member. `app:options()` returns

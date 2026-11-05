@@ -138,7 +138,7 @@ static void *worker(void *context) {
       int i;
       for (i = 0; i < 64; i++)
         send_control(h, CAI_APP_STEER, "queued steering");
-      assert(h->app->control(h->app, CAI_APP_STOP, NULL, &id, &error) ==
+      assert(h->app->control(h->app, CAI_APP_STEER, "overflow", &id, &error) ==
              CAI_ERR_INVALID);
       assert(id == 0U);
     } else {

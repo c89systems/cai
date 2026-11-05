@@ -1,19 +1,24 @@
 #define _POSIX_C_SOURCE 200809L
 /* Lua 5.5 facade over the public cai_app receiver. run() owns the calling
- * thread; observers reenter Lua only there, never from native tool workers.
+ * thread; inline observers reenter Lua only there. Asynchronous owners expose
+ * status/control, with streamed observations on the typed client pump thread.
  * Application strings/settings are copied by open; native logger interop is
  * retained until close. No application-private headers are required. */
 #include "app_client_lua.h"
 #include "todo_lua.h"
 #include <cai/app.h>
+#include <cai/environment.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <lauxlib.h>
 #include <limits.h>
 #include <lua.h>
+#include <poll.h>
 #include <pslog_lua.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define APP_MT "cai.app"
 /* Facade bindings reference only the installed public configuration struct. */
@@ -44,6 +49,7 @@ typedef struct app_lua {
   pslog_lua_logger_ref logger;
   int has_logger;
   int running;
+  int asynchronous, has_observers;
   cai_app_setting *settings;
   char **values;
   size_t setting_count;
@@ -79,8 +85,31 @@ static void staging_close(app_lua *ud) {
 static int close_app(lua_State *L) {
   app_lua *ud = luaL_testudata(L, 1, APP_MT);
   if (ud != NULL) {
-    if (ud->running)
+    if (ud->running && !ud->asynchronous)
       return failure(L, "cannot close a running application");
+    if (ud->asynchronous) {
+      cai_error error;
+      unsigned long long id;
+      int code, rc;
+      cai_error_init(&error);
+      /* No Lua observers can be installed for this owner. Shutdown/join can
+       * therefore finish even during scope close or garbage collection. */
+      rc = cai_app_control(ud->app, CAI_APP_STOP, NULL, &id, NULL);
+      /* With valid STOP arguments, INVALID means the invocation has already
+       * ended. It still needs joining, without allocating a status snapshot. */
+      if (rc != CAI_OK && rc != CAI_ERR_INVALID) {
+        return failure(L, "could not request native owner shutdown");
+      }
+      cai_error_cleanup(&error);
+      rc = cai_app_join(ud->app, &code, &error);
+      if (rc != CAI_OK) {
+        failure(L, error.message);
+        cai_error_cleanup(&error);
+        return 2;
+      }
+      cai_error_cleanup(&error);
+      ud->running = ud->asynchronous = 0;
+    }
     cai_app_close(ud->app);
     ud->app = NULL;
     if (ud->has_logger)
@@ -411,6 +440,7 @@ static int open_app(lua_State *L) {
     if (!lua_isnil(L, -1) && !lua_isfunction(L, -1))
       return failure(L, "on_event must be a function");
     if (lua_isfunction(L, -1)) {
+      ud->has_observers = 1;
       config.event_callback = observe_event;
       config.event_context = ud;
     }
@@ -419,6 +449,7 @@ static int open_app(lua_State *L) {
     if (!lua_isnil(L, -1) && !lua_isfunction(L, -1))
       return failure(L, "on_replay must be a function");
     if (lua_isfunction(L, -1)) {
+      ud->has_observers = 1;
       config.replay_callback = observe_replay;
       config.replay_context = ud;
     }
@@ -443,31 +474,54 @@ static int open_app(lua_State *L) {
   cai_error_cleanup(&error);
   return 1;
 }
+/** The synchronous receiver and native lifecycle consume exactly the same
+ * argument array contract. Its temporary vector stays in Lua-owned storage. */
+static int read_arguments(lua_State *L, const char ***out, size_t *out_count) {
+  const char **argv;
+  size_t i, count;
+  if (!lua_isnoneornil(L, 2) && !lua_istable(L, 2)) {
+    failure(L, "arguments must be an array without a program name");
+    return 0;
+  }
+  count = lua_istable(L, 2) ? lua_rawlen(L, 2) : 0U;
+  if (count >= INT_MAX || count > (size_t)-1 / sizeof(*argv) - 1U) {
+    failure(L, "too many application arguments");
+    return 0;
+  }
+  argv = lua_newuserdatauv(L, (count + 1U) * sizeof(*argv), 0);
+  for (i = 0U; i < count; i++) {
+    lua_rawgeti(L, 2, (lua_Integer)i + 1);
+    if (lua_type(L, -1) != LUA_TSTRING) {
+      failure(L, "each application argument must be a string");
+      return 0;
+    }
+    argv[i] = plain_string(L, -1);
+    if (argv[i] == NULL) {
+      failure(L, "application arguments cannot contain NUL bytes");
+      return 0;
+    }
+    lua_pop(L, 1);
+  }
+  argv[count] = NULL;
+  *out = argv;
+  *out_count = count;
+  return 1;
+}
 static int run_app(lua_State *L) {
   app_lua *ud = luaL_testudata(L, 1, APP_MT);
   const char **argv;
-  size_t i, count;
+  size_t count;
   cai_error error;
   int rc, code = 1;
   if (ud == NULL || ud->app == NULL)
     return failure(L, "application is closed");
   if (ud->running)
-    return failure(L, "application is already running");
-  if (!lua_isnoneornil(L, 2) && !lua_istable(L, 2))
-    return failure(L, "arguments must be an array without a program name");
-  count = lua_istable(L, 2) ? lua_rawlen(L, 2) : 0U;
-  if (count >= INT_MAX || count > (size_t)-1 / sizeof(*argv))
-    return failure(L, "too many application arguments");
-  argv = lua_newuserdatauv(L, (count + 1U) * sizeof(*argv), 0);
-  for (i = 0U; i < count; i++) {
-    lua_rawgeti(L, 2, (lua_Integer)i + 1);
-    if (lua_type(L, -1) != LUA_TSTRING)
-      return failure(L, "each application argument must be a string");
-    argv[i] = plain_string(L, -1);
-    if (argv[i] == NULL)
-      return failure(L, "application arguments cannot contain NUL bytes");
-    lua_pop(L, 1);
-  }
+    return failure(
+        L, ud->asynchronous
+               ? "application has an unjoined owner; call join before run"
+               : "application is already running");
+  if (!read_arguments(L, &argv, &count))
+    return 2;
   cai_error_init(&error);
   ud->state = L;
   lua_pushvalue(L, 1);
@@ -550,6 +604,27 @@ static int push_status(lua_State *L) {
   lua_newtable(L);
   boolean_field(L, "running", s->running);
   boolean_field(L, "runtime_ready", s->runtime_ready);
+  boolean_field(L, "has_server", s->has_server);
+  if (s->has_server) {
+    char number[32];
+    lua_pushlstring(L, (const char *)s->server_instance,
+                    sizeof(s->server_instance));
+    lua_setfield(L, -2, "server_instance");
+    lua_newtable(L);
+    integer_field(L, "phase", s->server.phase);
+    integer_field(L, "stop_reason", s->server.stop_reason);
+    integer_field(L, "count", (lua_Integer)s->server.count);
+    boolean_field(L, "persist", s->server.persist);
+#define SERVER_ID(member)                                                      \
+  snprintf(number, sizeof(number), "%llu",                                     \
+           (unsigned long long)s->server.member);                              \
+  text_field(L, #member, number)
+    SERVER_ID(controller);
+    SERVER_ID(generation);
+    SERVER_ID(deadline_ms);
+#undef SERVER_ID
+    lua_setfield(L, -2, "server");
+  }
   text_field(L, "outcome", outcomes[s->outcome]);
   integer_field(L, "state", s->state);
   integer_field(L, "exit_code", s->exit_code);
@@ -607,7 +682,7 @@ static int push_status(lua_State *L) {
   lua_setfield(L, -2, "control_error");
   return 1;
 }
-static int status(lua_State *L) {
+static int status_read(lua_State *L, int drain) {
   app_lua *ud = luaL_testudata(L, 1, APP_MT);
   cai_app_status snapshot;
   cai_error error;
@@ -616,7 +691,8 @@ static int status(lua_State *L) {
     return failure(L, "application is closed");
   cai_app_status_init(&snapshot);
   cai_error_init(&error);
-  rc = ud->app->get_status(ud->app, &snapshot, &error);
+  rc = drain ? cai_app_observe_status(ud->app, &snapshot, &error)
+             : cai_app_get_status(ud->app, &snapshot, &error);
   if (rc != CAI_OK) {
     failure(L, error.message);
     cai_error_cleanup(&error);
@@ -629,6 +705,9 @@ static int status(lua_State *L) {
   cai_error_cleanup(&error);
   return rc == LUA_OK ? 1 : lua_error(L);
 }
+static int status(lua_State *L) { return status_read(L, 0); }
+static int observe_status(lua_State *L) { return status_read(L, 1); }
+#include "app_owner_lua.inc"
 static int control(lua_State *L) {
   static const char *const names[] = {
       "queue_prompt", "steer",      "cancel_turn", "stop",
@@ -794,8 +873,16 @@ int luaopen_cai_app(lua_State *L) {
       {"run", run_app},     {"options", options},   {"help", help},
       {"control", control}, {"get_status", status}, {"close", close_app},
       {"__gc", close_app},  {"__close", close_app}, {NULL, NULL}};
+  static const luaL_Reg lifecycle[] = {{"start", start_app},
+                                       {"start_server", start_server},
+                                       {"join", join_app},
+                                       {"status_fd", status_fd},
+                                       {"observe_status", observe_status},
+                                       {"wait_status", wait_status},
+                                       {NULL, NULL}};
   luaL_newmetatable(L, APP_MT);
   luaL_setfuncs(L, methods, 0);
+  luaL_setfuncs(L, lifecycle, 0);
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");
   lua_pop(L, 1);

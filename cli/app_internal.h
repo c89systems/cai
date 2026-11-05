@@ -14,8 +14,10 @@ typedef struct cai_app_bridge {
   int accepting;
   int failed;
   int stop_requested;
-  size_t count;
+  size_t count; /* Ordinary commands; the reserved STOP does not consume it. */
   unsigned long long next_id;
+  /** Reserved shutdown command: no capacity or allocation dependency. */
+  cai_app_command stop;
   cai_app_command *head, *tail;
   cai_app_status status;
   const cai_app_config *config;

@@ -246,9 +246,13 @@ struct cai_app {
    * prompt, steering and goal replacement, and is copied before return.
    * Interactive prompts enter softline's approval/edit queue; batch prompts
    * enter the runtime FIFO. CAI_OK means accepted, with a nonzero id; inspect
-   * the acknowledgement for application errors. Queue capacity is 64; a full
-   * queue rejects explicitly. STOP requests orderly shutdown, cancelling active
-   * work and waiting for workers; it does not terminate the host process. */
+   * the acknowledgement for application errors. Ordinary queue capacity is 64;
+   * a full queue rejects explicitly. STOP has one reserved allocation-free
+   * command, accepted even during startup or at capacity. Repeating pending
+   * STOP returns its original ID. Accepted ordinary commands that cannot
+   * apply before shutdown receive negative acknowledgements.
+   * STOP requests orderly shutdown, cancelling active work. Run/join completion
+   * waits for workers; the host process stays alive. */
   int (*control)(cai_app *self, cai_app_control_type type, const char *text,
                  unsigned long long *id, cai_error *error);
   /** Thread-safe copied status and final run result; no file/log parsing.
@@ -297,8 +301,9 @@ int cai_app_start(cai_app *self, const cai_config_context *context, int argc,
  * native STOP. No fork, signal handler, terminal, or second runtime/store is
  * created. Socket identity, role, lifetime, model input and queue operations
  * are bound. Transcript subscriptions and queue payloads use the typed
- * app_client.h binding. Application command presentation remains pending;
- * native controls remain available. The executable owns --headless process
+ * app_client.h binding, including command execution records and frontend
+ * delegation to the originating attachment. The owner creates no renderer.
+ * The executable owns --headless process
  * logging/signals; native hosts call this API instead of passing that
  * process-mode flag to the synchronous terminal run.
  * Start success is asynchronous; observe status for readiness or failure.

@@ -20,8 +20,10 @@ attachment and editor without carrying inputs into another workspace. Every
 in-flight request keeps its original session, producer, epoch and generation.
 The [Lua socket client](lua-workspace-client.md) now exposes typed attachment
 observations without opening a runtime or store. The synchronous `cai_app.run`
-composition, asynchronous Lua owner observations and
-optional frontend packaging still require cutover. These boundaries are not
+composition and optional frontend packaging still require cutover. Lua uses
+the [native owner lifecycle](lua-workspace-owner.md) for startup/status and the
+typed client for streamed observations; owner workers do not enter Lua.
+These boundaries are not
 proof of complete feature parity.
 
 The product requirement is one embeddable agent application that can run with

@@ -143,6 +143,7 @@ void cai_app_bridge_begin(cai_app_bridge *b) {
   b->accepting = 1;
   b->failed = 0;
   b->stop_requested = 0;
+  memset(&b->stop, 0, sizeof(b->stop));
   b->next_id = 0U;
   status_wake(b);
   pthread_mutex_unlock(&b->lock);
@@ -160,20 +161,33 @@ int cai_app_bridge_control(cai_app_bridge *b, cai_app_control_type type,
       type > CAI_APP_CLEAR_GOAL ||
       (needs_text ? text == NULL || text[0] == '\0' : text != NULL))
     return cai_cli_error(error, CAI_ERR_INVALID, "invalid host control");
-  c = calloc(1U, sizeof(*c));
-  if (c == NULL || (needs_text && (c->text = strdup(text)) == NULL)) {
-    free(c);
-    return cai_cli_error(error, CAI_ERR_NOMEM, "copy host control");
+  c = NULL;
+  if (type != CAI_APP_STOP) {
+    c = calloc(1U, sizeof(*c));
+    if (c == NULL || (needs_text && (c->text = strdup(text)) == NULL)) {
+      free(c);
+      return cai_cli_error(error, CAI_ERR_NOMEM, "copy host control");
+    }
+    c->type = type;
   }
-  c->type = type;
   pthread_mutex_lock(&b->lock);
   if (!b->accepting || (!b->status.runtime_ready && type != CAI_APP_STOP) ||
-      b->count == 64U) {
+      (type != CAI_APP_STOP && b->count >= 64U)) {
     pthread_mutex_unlock(&b->lock);
-    free(c->text);
+    if (c != NULL)
+      free(c->text);
     free(c);
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "host control requires a ready run and queue space");
+  }
+  if (type == CAI_APP_STOP) {
+    if (b->stop_requested) {
+      *id = b->stop.id;
+      pthread_mutex_unlock(&b->lock);
+      return CAI_OK;
+    }
+    c = &b->stop;
+    c->type = CAI_APP_STOP;
   }
   /* Signal while holding the queue lock: the owner cannot consume the wakeup
    * before the corresponding command becomes visible. */
@@ -183,8 +197,10 @@ int cai_app_bridge_control(cai_app_bridge *b, cai_app_control_type type,
     if (errno == EAGAIN)
       break;
     pthread_mutex_unlock(&b->lock);
-    free(c->text);
-    free(c);
+    if (c != &b->stop) {
+      free(c->text);
+      free(c);
+    }
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "wake host control queue");
   }
   *id = c->id = ++b->next_id;
@@ -193,7 +209,8 @@ int cai_app_bridge_control(cai_app_bridge *b, cai_app_control_type type,
   else
     b->head = c;
   b->tail = c;
-  b->count++;
+  if (type != CAI_APP_STOP)
+    b->count++;
   if (type == CAI_APP_STOP)
     b->stop_requested = 1;
   pthread_mutex_unlock(&b->lock);
@@ -237,7 +254,8 @@ cai_app_command *cai_app_bridge_take(cai_app_bridge *b) {
     b->head = c->next;
     if (b->head == NULL)
       b->tail = NULL;
-    b->count--;
+    if (c != &b->stop)
+      b->count--;
   }
   pthread_mutex_unlock(&b->lock);
   return c;
@@ -255,7 +273,8 @@ void cai_app_bridge_ack(cai_app_bridge *b, cai_app_command *c, int status,
     b->config->control_callback(b->config->control_context, c->id, status,
                                 error);
   free(c->text);
-  free(c);
+  if (c != &b->stop)
+    free(c);
 }
 int cai_app_bridge_status(cai_app_bridge *b, cai_app_status *out,
                           cai_error *error) {
