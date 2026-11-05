@@ -399,6 +399,10 @@ int cai_cli_presenter_text(cai_cli_presenter *state, const char *data,
     return -1;
   if (length == 0U)
     return 0;
+  if (state->response_open &&
+      state->response_tool != (state->tool_result_body != 0) &&
+      cai_cli_presenter_finish_response(state) != 0)
+    return -1;
   if (cai_cli_presenter_finish_reasoning(state) != 0) {
     return -1;
   }
@@ -413,6 +417,7 @@ int cai_cli_presenter_text(cai_cli_presenter *state, const char *data,
     if (cai_cli_presenter_timestamp_header(state) != 0)
       return -1;
     state->response_open = 1;
+    state->response_tool = state->tool_result_body != 0;
   }
   return cai_cli_presenter_mdf_status(
       state, state->renderer->feed(state->renderer, data, length));

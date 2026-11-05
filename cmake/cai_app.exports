@@ -4,6 +4,7 @@ cai_app_client_close
 cai_app_client_config_init
 cai_app_client_detach
 cai_app_client_directory
+cai_app_client_get_shell_result
 cai_app_client_get_state
 cai_app_client_get_view
 cai_app_client_manage_delivery
@@ -14,6 +15,7 @@ cai_app_client_pump
 cai_app_client_request
 cai_app_client_save_prompt
 cai_app_client_settled
+cai_app_client_shell
 cai_app_client_shutdown
 cai_app_client_subscribe
 cai_app_client_takeover

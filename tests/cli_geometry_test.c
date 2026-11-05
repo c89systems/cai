@@ -436,6 +436,66 @@ static int transcript_cases(void) {
   CHECK(strcmp(capture, reference) == 0);
   CHECK(ui->presentation_timestamp_ns == 0U && ui->presentation_event == 1);
   CHECK(strcmp(sl_buffer(editor), "Unsent draft") == 0);
+  captured = 0U;
+  capture[0] = '\0';
+  CHECK(transcript_record(p, "user_shell_started", "echo output", 11U, 1U,
+                          7000U, 0U) == 0);
+  CHECK(transcript_record(p, "user_shell_output_hex", "c2", 2U, 1U, 7001U,
+                          0U) == 0);
+  CHECK(transcript_record(p, "user_shell_output_hex", "9b", 2U, 1U, 7002U,
+                          0U) == 0);
+  CHECK(transcript_record(p, "user_shell_output_tail", "VISIBLE_TAIL\n", 13U,
+                          1U, 7003U, 0U) == 0);
+  CHECK(transcript_record(p, "user_shell_completed", NULL, 0U, 1U, 7004U, 0U) ==
+        0);
+  CHECK(strstr(capture, "echo output") != NULL &&
+        strstr(capture, "\\xc2\\x9b") != NULL &&
+        strstr(capture, "VISIBLE_TAIL") != NULL);
+  captured = 0U;
+  capture[0] = '\0';
+  cai_cli_transcript_presenter_skip_shell(p, 8000U, 8004U);
+  memset(&event, 0, sizeof(event));
+  event.kind = CAI_TRANSCRIPT_REPLAY_BEGIN;
+  event.stream = 1U;
+  CHECK(cai_cli_transcript_presenter_event(p, &event, NULL) == CAI_OK);
+  CHECK(transcript_record(p, "user_shell_started", "HIDDEN_COMMAND", 14U, 1U,
+                          8000U, 0U) == 0);
+  CHECK(transcript_record(p, "assistant_text_delta", "KEEPVISIBLE", 11U, 1U,
+                          8001U, 0U) == 0);
+  CHECK(transcript_record(p, "assistant_text_end", NULL, 0U, 1U, 8002U, 0U) ==
+        0);
+  CHECK(transcript_record(p, "user_shell_output_tail", "HIDDEN_TAIL", 11U, 1U,
+                          8003U, 0U) == 0);
+  CHECK(transcript_record(p, "user_shell_completed", NULL, 0U, 1U, 8004U, 0U) ==
+        0);
+  CHECK(transcript_record(p, "user_shell_output_tail", "AFTER_RANGE", 11U, 1U,
+                          8005U, 0U) == 0);
+  CHECK(strstr(capture, "HIDDEN") == NULL &&
+        strstr(capture, "KEEPVISIBLE") != NULL &&
+        strstr(capture, "AFTER_RANGE") != NULL);
+  cai_cli_transcript_presenter_skip_shell(p, 9000U, 0U);
+  CHECK(transcript_record(p, "user_shell_output_tail", "OPEN_HIDDEN", 11U, 1U,
+                          9001U, 0U) == 0);
+  CHECK(transcript_record(p, "user_shell_completed", NULL, 0U, 1U, 9002U, 0U) ==
+        0);
+  CHECK(transcript_record(p, "user_shell_output_tail", "OPEN_VISIBLE", 12U, 1U,
+                          9003U, 0U) == 0);
+  CHECK(strstr(capture, "OPEN_HIDDEN") == NULL &&
+        strstr(capture, "OPEN_VISIBLE") != NULL);
+  {
+    static const char table[] = "| Field |\n| --- |\n| TABLEVALUE |\n";
+    captured = 0U;
+    capture[0] = '\0';
+    ui->tool_result_body = 1;
+    CHECK(cai_cli_presenter_text(ui, table, sizeof(table) - 1U) == 0);
+    ui->tool_result_body = 0;
+    CHECK(transcript_record(p, "assistant_text_delta", "AFTERTABLE", 10U, 1U,
+                            9010U, 0U) == 0);
+    CHECK(transcript_record(p, "assistant_text_end", NULL, 0U, 1U, 9011U, 0U) ==
+          0);
+    CHECK(strstr(capture, "TABLEVALUE") != NULL &&
+          strstr(capture, "AFTERTABLE") != NULL);
+  }
   cai_cli_transcript_presenter_close(p);
   cai_cli_presenter_close(ui);
   sl_destroy(editor);

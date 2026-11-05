@@ -458,7 +458,8 @@ static int receive(void *context, const cai_protocol_event *event,
       header->kind != CAI_PROTOCOL_HISTORY_GET &&
       header->kind != CAI_PROTOCOL_HISTORY_APPEND &&
       header->kind != CAI_PROTOCOL_UNSUBSCRIBE &&
-      header->kind != CAI_PROTOCOL_INPUT_SETTLED)
+      header->kind != CAI_PROTOCOL_INPUT_SETTLED &&
+      header->kind != CAI_PROTOCOL_USER_SHELL)
     return cai_set_error(error, CAI_ERR_PROTOCOL,
                          "unsupported client message kind");
   return notify(peer, CAI_WORKSPACE_MESSAGE, event, NULL, error);

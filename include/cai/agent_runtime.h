@@ -1130,6 +1130,14 @@ int cai_agent_runtime_user_shell_finish(cai_agent_runtime *runtime,
                                         int exit_code,
                                         unsigned long long duration_ms,
                                         cai_error *error);
+/** Owner-thread metadata for a shell recording started during this runtime
+ * instance. first is its started event; last is zero until successful finish.
+ * No journal read or output copy occurs. Both are zero before any recording
+ * in this instance, or without a session journal. A later begin replaces them.
+ */
+int cai_agent_runtime_user_shell_range(cai_agent_runtime *,
+                                       unsigned long long *first,
+                                       unsigned long long *last, cai_error *);
 /** Return the current durable goal projection on the owner thread. */
 int cai_agent_runtime_get_goal(cai_agent_runtime *runtime,
                                cai_agent_goal_snapshot *out, cai_error *error);

@@ -94,10 +94,8 @@ int cai_cli_command_pager(const char *line) {
                                         : 0;
 }
 int cai_cli_command_frontend(const char *line) {
-  const char *arg, *name;
+  const char *name;
   size_t length = strcspn(line, " \t");
-  arg = line + length;
-  arg += strspn(arg, " \t");
   name = cai_cli_command_name(line, &length);
   return cai_cli_command_pager(line) != 0 || cai_cli_command_is_theme(line) ||
          cli_word_is(name, length, "/output") ||
@@ -105,11 +103,7 @@ int cai_cli_command_frontend(const char *line) {
          cli_word_is(name, length, "/exit") ||
          cli_word_is(name, length, "/shell") ||
          cli_word_is(name, length, "/shellshare") ||
-         cli_word_is(name, length, "!sh") ||
-         cli_word_is(name, length, "!sh+") ||
-         (cli_word_is(name, length, "/log") && arg[0] != '\0') ||
-         (cli_word_is(name, length, "/todo") &&
-          cli_word_is(arg, strcspn(arg, " \t"), "layout"));
+         cli_word_is(name, length, "!sh") || cli_word_is(name, length, "!sh+");
 }
 
 cli_command_boundary cai_cli_command_delivery(const char *line) {

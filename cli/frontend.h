@@ -11,7 +11,11 @@
  * EXISTING submits them through the frontend queue. Until ready, the initial
  * target is only the editor's provisional directory. NULL boot attaches
  * immediately to target; libraries never implicitly fork. */
-enum { CAI_CLI_FRONTEND_EXISTING = 1, CAI_CLI_FRONTEND_STARTED = 2 };
+enum {
+  CAI_CLI_FRONTEND_EXISTING = 1,
+  CAI_CLI_FRONTEND_STARTED = 2,
+  CAI_CLI_FRONTEND_STOPPED = 3
+};
 typedef struct cai_cli_frontend_boot {
   void *context;
   int (*prepare)(void *, struct pollfd *, uint64_t *, cai_error *);

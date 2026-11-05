@@ -32,6 +32,9 @@ typedef struct host_peer {
   uint64_t cancel_request, cancel_generation, cancel_conversation;
   int cancel_code;
   char cancel_reason[192];
+  cai_agent_runtime *shell_runtime;
+  uint64_t shell_id, shell_sequence, shell_high, shell_generation,
+      shell_conversation, shell_started;
   uint64_t catalog_revision, catalog_index;
   int catalog_phase;
 } host_peer;
@@ -358,6 +361,118 @@ static int authorize(void *context, uint64_t attachment, uint64_t generation,
                                    attachment, generation, error);
   return rc;
 }
+/** A recording belongs to this attachment/context, never to a replacement
+ * controller. Preserve its bounded tail on abandonment so it cannot hold
+ * newly submitted turns indefinitely. The runtime is still alive at unbind. */
+static int shell_abandon(host_peer *peer, cai_error *error) {
+  uint64_t now;
+  int rc;
+  if (peer->shell_runtime == NULL)
+    return CAI_OK;
+  rc = clock_ms(&now, error);
+  if (rc == CAI_OK)
+    rc = cai_agent_runtime_user_shell_finish(peer->shell_runtime, 129,
+                                             now - peer->shell_started, error);
+  if (rc == CAI_OK) {
+    peer->shell_runtime = NULL;
+    peer->shell_id = peer->shell_sequence = 0U;
+  }
+  return rc;
+}
+/** Each raw chunk is acknowledged after owner-thread capture. The sender
+ * waits before reading another PTY chunk: bounded end-to-end backpressure,
+ * with no second output journal and no raw bytes retained by the transport. */
+static int shell_request(host_peer *peer, const cai_cli_input_wire_message *m,
+                         cai_error *error) {
+  const cai_app_shell_request *s = &m->shell;
+  cai_cli_workspace_host *host = peer->host;
+  cai_cli_input_wire_message reply;
+  cai_agent_runtime *recording_runtime = peer->shell_runtime;
+  cai_error local;
+  unsigned long long epoch = 0U;
+  unsigned long long first = 0U, last = 0U;
+  uint64_t now = 0U;
+  int rc;
+  cai_error_init(&local);
+  rc = authorize(host, peer->attachment, m->header.generation, &local);
+  if (rc == CAI_OK)
+    rc = host->input != NULL && peer->input != NULL && !peer->binding
+             ? cai_input_controller_conversation(host->input, &epoch, &local)
+             : cai_cli_error(&local, CAI_ERR_INVALID,
+                             "bound shell recording context required");
+  if (rc == CAI_OK && (epoch != m->header.conversation ||
+                       m->header.request <= peer->shell_high))
+    rc = cai_cli_error(&local, CAI_ERR_INVALID,
+                       "shell recording context or request changed");
+  if (rc == CAI_OK) {
+    peer->shell_high = m->header.request;
+    if (s->operation == CAI_APP_SHELL_BEGIN) {
+      if (peer->shell_runtime != NULL || host->catalog_runtime == NULL ||
+          s->recording != 0U || s->sequence != 0U || s->length == 0U ||
+          s->length > 8192U || memchr(s->data, '\0', s->length) != NULL)
+        rc = cai_cli_error(&local, CAI_ERR_INVALID,
+                           "a new bounded shell command is required");
+      else {
+        rc = clock_ms(&now, &local);
+        if (rc == CAI_OK)
+          rc = cai_agent_runtime_user_shell_begin(host->catalog_runtime,
+                                                  s->data, 1, &local);
+        if (rc == CAI_OK) {
+          peer->shell_runtime = host->catalog_runtime;
+          recording_runtime = peer->shell_runtime;
+          peer->shell_id = m->header.request;
+          peer->shell_sequence = 0U;
+          peer->shell_generation = m->header.generation;
+          peer->shell_conversation = epoch;
+          peer->shell_started = now;
+        }
+      }
+    } else if (peer->shell_runtime == NULL || s->recording != peer->shell_id ||
+               peer->shell_generation != m->header.generation ||
+               peer->shell_conversation != epoch ||
+               peer->shell_sequence == UINT64_MAX ||
+               s->sequence != peer->shell_sequence + 1U ||
+               (s->operation == CAI_APP_SHELL_WRITE ? s->length > 4096U
+                                                    : s->length != 0U))
+      rc = cai_cli_error(&local, CAI_ERR_INVALID,
+                         "shell recording identity or sequence changed");
+    else {
+      rc = s->operation == CAI_APP_SHELL_WRITE
+               ? cai_agent_runtime_user_shell_write(peer->shell_runtime,
+                                                    s->data, s->length, &local)
+               : cai_agent_runtime_user_shell_finish(peer->shell_runtime,
+                                                     (int)s->exit_code,
+                                                     s->duration_ms, &local);
+      if (rc == CAI_OK) {
+        peer->shell_sequence = s->sequence;
+        if (s->operation == CAI_APP_SHELL_FINISH) {
+          peer->shell_runtime = NULL;
+          peer->shell_id = peer->shell_sequence = 0U;
+        }
+      }
+    }
+  }
+  if (rc == CAI_OK && recording_runtime != NULL)
+    rc = cai_agent_runtime_user_shell_range(recording_runtime, &first, &last,
+                                            &local);
+  memset(&reply, 0, sizeof(reply));
+  reply.header.kind = CAI_PROTOCOL_RESULT;
+  reply.header.request = m->header.request;
+  reply.header.conversation = m->header.conversation;
+  reply.category = CAI_CLI_INPUT_SHELL_RESULT;
+  reply.observation.result.item_revision = first;
+  reply.observation.result.edit_token = last;
+  reply.observation.result.code = rc;
+  reply.observation.result.outcome =
+      rc == CAI_OK ? CAI_INPUT_ACCEPTED : CAI_INPUT_REJECTED;
+  reply.observation.result.item_id =
+      s->operation == CAI_APP_SHELL_BEGIN ? m->header.request : s->recording;
+  snprintf(reply.observation.result.reason,
+           sizeof(reply.observation.result.reason), "%s",
+           local.message != NULL ? local.message : "");
+  cai_error_cleanup(&local);
+  return send_message(peer, &reply, error);
+}
 static int append_prompt(host_peer *peer, const cai_cli_input_wire_message *m,
                          cai_error *error) {
   cai_cli_workspace_host *host = peer->host;
@@ -536,6 +651,8 @@ static int message(void *context, const cai_workspace_server_event *event,
     return rc;
   if (m->header.kind == CAI_PROTOCOL_HISTORY_APPEND)
     return append_prompt(peer, m, error);
+  if (m->header.kind == CAI_PROTOCOL_USER_SHELL)
+    return shell_request(peer, m, error);
   if (m->header.kind == CAI_PROTOCOL_SYNCHRONIZE) {
     unsigned long long epoch = 0U;
     cai_error binding;
@@ -610,10 +727,13 @@ static int message(void *context, const cai_workspace_server_event *event,
   }
 }
 static int release_peer(host_peer *peer, cai_error *error) {
-  int rc = peer->host != NULL && peer->host->input != NULL
-               ? cai_input_controller_release_edits(peer->host->input,
-                                                    peer->attachment, error)
-               : CAI_OK;
+  int rc = shell_abandon(peer, error);
+  if (rc != CAI_OK)
+    return rc;
+  rc = peer->host != NULL && peer->host->input != NULL
+           ? cai_input_controller_release_edits(peer->host->input,
+                                                peer->attachment, error)
+           : CAI_OK;
   if (peer->host != NULL)
     cai_cli_transcript_feed_detach(peer->host->history, peer->attachment);
   if (peer->input != NULL) {
@@ -993,6 +1113,12 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
             host->input, host->peers[i].attachment, error);
         if (rc != CAI_OK)
           return rc;
+        if (host->peers[i].shell_runtime != NULL &&
+            host->peers[i].shell_generation != snapshot.generation) {
+          rc = shell_abandon(&host->peers[i], error);
+          if (rc != CAI_OK)
+            return rc;
+        }
         if (host->peers[i].input != NULL && host->peers[i].managed_delivery &&
             host->peers[i].attachment == snapshot.controller) {
           cai_input_scope scope;

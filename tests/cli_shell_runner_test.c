@@ -93,14 +93,14 @@ static void c1_literal(void) {
     cai_cli_shell_init(&shell);
     memset(&c, 0, sizeof(c));
     c.shell = &shell;
-    assert(cai_cli_shell_plain(&shell, input, split, 0, output, &c, &error) ==
-           CAI_OK);
-    assert(cai_cli_shell_plain(&shell, input + split, length - split, 0, output,
-                               &c, &error) == CAI_OK);
-    assert(cai_cli_shell_plain(&shell, NULL, 0U, 1, output, &c, &error) ==
+    assert(cai_cli_shell_plain(&shell.text, input, split, 0, output, &c,
+                               &error) == CAI_OK);
+    assert(cai_cli_shell_plain(&shell.text, input + split, length - split, 0,
+                               output, &c, &error) == CAI_OK);
+    assert(cai_cli_shell_plain(&shell.text, NULL, 0U, 1, output, &c, &error) ==
            CAI_OK);
     assert(strcmp(c.data, expected) == 0);
-    assert(shell.pending_length == 0U);
+    assert(shell.text.pending_length == 0U);
   }
   cai_error_cleanup(&error);
 }
@@ -215,14 +215,14 @@ int main(int argc, char **argv) {
       size_t length = sizeof(input) - 1U - i;
       if (length > split)
         length = split;
-      assert(cai_cli_shell_plain(&shell, input + i, length, 0, output, &c,
+      assert(cai_cli_shell_plain(&shell.text, input + i, length, 0, output, &c,
                                  &error) == CAI_OK);
     }
-    assert(cai_cli_shell_plain(&shell, NULL, 0U, 1, output, &c, &error) ==
+    assert(cai_cli_shell_plain(&shell.text, NULL, 0U, 1, output, &c, &error) ==
            CAI_OK);
     assert(strcmp(c.data, "**plain** #text & <tag>\n€🚀\\x00\\x1b\\xff\\xe2") ==
            0);
-    assert(shell.pending_length == 0U);
+    assert(shell.text.pending_length == 0U);
   }
   cai_error_cleanup(&error);
   return 0;

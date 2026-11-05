@@ -26,6 +26,9 @@ typedef struct cai_cli_presenter {
   unsigned short output_columns;
   unsigned short output_rows;
   int response_open;
+  /** Snapshot of the current document's producer. Tool/command Markdown must
+   * finish before assistant text can continue with a fresh parser document. */
+  int response_tool;
   int documents_rendered;
   int reasoning_open;
   int block_spacing_pending;

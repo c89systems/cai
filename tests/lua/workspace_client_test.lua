@@ -41,7 +41,7 @@ for _, extra in ipairs {
 } do rejected(app.client(config(extra))) end
 
 local event_count, catalogs, reentrant = 0, 0, false
-local receipts, history_results, controls = {}, {}, {}
+local receipts, history_results, controls, shell_results = {}, {}, {}, {}
 local raw_bytes, tool_bytes, replayed_execution = 0, 0, 0
 local multi_chunk = false
 local data_offsets, history = {}, {}
@@ -71,6 +71,8 @@ local callbacks = config {
       history_results[event.request] = event.input.result
     elseif event.type == app.CLIENT_CONTROL_RESULT then
       controls[event.request] = event.input.result
+    elseif event.type == app.CLIENT_SHELL_RESULT then
+      shell_results[event.request] = assert(c:get_shell_result())
     end
   end,
   on_catalog = function(event)
@@ -127,9 +129,31 @@ rejected(c:request {operation = 'offer', request_id = '1', conversation = s.conv
 rejected(c:subscribe {request_id = '2', session = s.session, replay_turns = -2})
 rejected(c:prompt_history {request_id = '2', session = s.session, limit = '4294967296'})
 rejected(c:wait(-2)); rejected(c:pump(-1))
-for _, method in ipairs {'bind', 'request', 'takeover', 'shutdown', 'cancel', 'save_prompt', 'subscribe', 'prompt_history'} do
+for _, method in ipairs {'bind', 'request', 'takeover', 'shutdown', 'cancel', 'save_prompt', 'subscribe', 'prompt_history', 'shell', 'settled'} do
   rejected(c[method](c, false))
 end
+rejected(c:manage_delivery()) -- Registration must precede binding.
+rejected(c:get_shell_result())
+for _, request in ipairs {
+  {operation='unknown'}, {operation='begin', data='bad\0command'},
+  {operation='write', recording='1', sequence='1', data=string.rep('x', 4097)},
+  {operation='finish', recording='1', sequence='1', exit_code='4294967296'},
+} do
+  request.request_id, request.conversation, request.generation = '100', s.conversation, s.transport.generation
+  rejected(c:shell(request))
+end
+local function shell(id, operation, extra)
+  extra = extra or {}
+  extra.request_id, extra.operation = id, operation
+  extra.conversation, extra.generation = s.conversation, s.transport.generation
+  assert(c:shell(extra))
+  drive(c, function() return shell_results[id] end)
+  assert(shell_results[id].code == 0 and shell_results[id].first_sequence ~= '0')
+  return shell_results[id]
+end
+assert(shell('100', 'begin', {data='explicit Lua capture'}).last_sequence == '0')
+shell('101', 'write', {recording='100', sequence='1', data='\0LUA_CAPTURE_TAIL\n'})
+assert(shell('102', 'finish', {recording='100', sequence='2'}).last_sequence ~= '0')
 
 -- Saving recall is not a model turn; result IDs are separate from input IDs.
 local draft = 'LUA UNSENT DRAFT ' .. string.rep('λ🚀', 1200)

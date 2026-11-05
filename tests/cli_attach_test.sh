@@ -67,7 +67,7 @@ expect ATTACHED
 expect 'STARTUP answer'
 plan '{"plan":[{"pause":true,"pause_text":"Waiting for cancellation. "}]}'
 send 'wait until I cancel\r'; expect 'Waiting for cancellation.'
-send '\033'; expect 'Turn cancelled.'
+send '\033'; expect 'WARN: Turn stopped.'
 plan '{"plan":[{"pause":true,"pause_text":"Before steer. ","tool":"read_file","arguments":{"path":"steer.txt"}},"AFTER STEER"]}'
 printf 'fixture content\n' >"$work/steer.txt"
 send 'verify steering\r'; expect 'Before steer.'

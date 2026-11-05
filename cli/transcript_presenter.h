@@ -25,5 +25,11 @@ int cai_cli_transcript_presenter_event(void *, const cai_transcript_event *,
  * from a document boundary, not blindly from the raw client's last cursor.
  * Already displayed bytes remain visible. Call before closing the presenter. */
 void cai_cli_transcript_presenter_reset(cai_cli_transcript_presenter *);
+/** Suppress only shell records already shown by this terminal's local PTY.
+ * Applied to the next catch-up stream; unrelated messages remain visible.
+ * last=0 ends suppression at that recording's completion. Reset outside a
+ * replay-begin discards the range. No journal events or cursors are removed. */
+void cai_cli_transcript_presenter_skip_shell(cai_cli_transcript_presenter *,
+                                             uint64_t first, uint64_t last);
 void cai_cli_transcript_presenter_close(cai_cli_transcript_presenter *);
 #endif

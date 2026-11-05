@@ -106,7 +106,7 @@ typedef struct frontend {
   int wake[2], timer;
   sl_watch_id_t socket_watch, boot_watch, timer_watch, wake_watch;
   int socket_fd, boot_fd, failed, quit, ready, bound, subscribed, replaying;
-  int action_field, shell, awaiting_bind, welcomed, control;
+  int action_field, shell, awaiting_bind, welcomed, control, greeting_resumed;
   int transcript_entry, presentation_parked;
   uint64_t bind_request, subscribe_request, control_request;
   unsigned long long startup_request, startup_producer;
@@ -121,6 +121,13 @@ typedef struct frontend {
   size_t action_length;
   char *action;
   char action_call[256], handoff_call[256];
+  cai_input_scope capture_scope;
+  uint64_t capture_id, capture_request, capture_sequence, capture_deadline;
+  uint64_t capture_first, capture_last;
+  int capture_waiting, capture_pending, capture_code;
+  char capture_reason[192];
+  char handoff_notice[512];
+  int handoff_notice_error;
   size_t command_length;
   char *command;
   cai_cli_tool_text tool_text;
@@ -404,6 +411,8 @@ static int status(frontend *f) {
              f->state.transport.controller != f->state.transport.attachment
                  ? "Observing workspace. /takeover acquires control. "
                    "Send /help for usage."
+             : f->greeting_resumed
+                 ? "Conversation resumed. Send /help for usage."
                  : "Conversation attached. Send /help for usage.");
     f->welcomed = 1;
   } else if (f->group->discovery != NULL || f->group->candidate != NULL)
@@ -415,7 +424,10 @@ static int status(frontend *f) {
   else if (f->bound &&
            (!f->skills_ready || f->skill_conversation != f->state.conversation))
     snprintf(message, sizeof(message), "Loading completions...");
-  else if (!f->ready)
+  else if (f->handoff_notice[0] != '\0') {
+    snprintf(message, sizeof(message), "Restoring input queue...");
+    busy = 1;
+  } else if (!f->ready)
     snprintf(message, sizeof(message), "Connecting to workspace server...");
   else if (f->state.transport.controller != f->state.transport.attachment)
     snprintf(message, sizeof(message),
@@ -436,6 +448,21 @@ static int observed(void *context, const cai_app_client_event *event,
                     cai_error *error) {
   frontend *f = context;
   f->state = *event->state;
+  if (event->type == CAI_APP_CLIENT_SHELL_RESULT &&
+      event->request == f->capture_request && f->capture_waiting) {
+    cai_app_shell_result result;
+    int rc = cai_app_client_get_shell_result(f->client, &result, error);
+    if (rc != CAI_OK)
+      return rc;
+    f->capture_waiting = 0;
+    f->capture_code = event->input->result.code;
+    if (result.code == CAI_OK) {
+      f->capture_first = result.first_sequence;
+      f->capture_last = result.last_sequence;
+    }
+    snprintf(f->capture_reason, sizeof(f->capture_reason), "%s",
+             event->input->result.reason);
+  }
   if (f->queue != NULL && !f->group->terminal_active) {
     int suppress = 0;
     size_t i;
@@ -801,8 +828,8 @@ static int execution_body(void *context, const cai_app_execution_event *event,
     if (rc == 0)
       rc = cai_cli_presenter_finish_reasoning(f->ui);
     if (rc == 0)
-      rc =
-          markdown(f, "**Turn cancelled.**\n", strlen("**Turn cancelled.**\n"));
+      rc = markdown(f, "**WARN: Turn stopped.**\n",
+                    strlen("**WARN: Turn stopped.**\n"));
     if (rc == 0)
       rc = cai_cli_presenter_finish_response(f->ui);
   }
@@ -900,7 +927,10 @@ static int actions(frontend *f) {
       }
     }
     if (rc == 0) {
-      snprintf(message, sizeof(message), "Theme offset: **%lld**.\n",
+      snprintf(message, sizeof(message), "%s theme offset: **%lld**.\n",
+               scope == 1   ? "Subagent"
+               : scope == 2 ? "Review"
+                            : "Parent",
                f->theme_offsets[scope]);
       rc = markdown(f, message, strlen(message));
     }
@@ -908,25 +938,39 @@ static int actions(frontend *f) {
     const char *argument = line + 7U;
     const char *message;
     argument += strspn(argument, " \t");
-    if (strcmp(argument, "full") == 0)
-      f->full_output = 1;
-    else if (strcmp(argument, "compact") == 0)
-      f->full_output = 0;
-    else if (*argument != '\0')
-      rc = notice(f, "Use /output compact or /output full.");
-    f->ui->tool_output = f->full_output ? "full" : "compact";
-    message = f->full_output ? "Tool output: **full**.\n"
-                             : "Tool output: **compact**.\n";
-    if (rc == 0)
-      rc = markdown(f, message, strlen(message));
+    if (*argument != '\0' && strcmp(argument, "full") != 0 &&
+        strcmp(argument, "compact") != 0)
+      rc = notice(f, "ERROR: use /output compact or /output full");
+    else {
+      if (*argument != '\0') {
+        f->full_output = strcmp(argument, "full") == 0;
+        rc = cai_tool_display_set_mode(f->ui->tool_display,
+                                       f->full_output ? CAI_TOOL_OUTPUT_FULL
+                                                      : CAI_TOOL_OUTPUT_COMPACT,
+                                       &f->error);
+      }
+      f->ui->tool_output = f->full_output ? "full" : "compact";
+      message = f->full_output ? "Tool output: **full**. Use `/output compact` "
+                                 "or `/output full`.\n"
+                               : "Tool output: **compact**. Use `/output "
+                                 "compact` or `/output full`.\n";
+      if (rc == 0)
+        rc = markdown(f, message, strlen(message));
+      if (rc == 0 && *argument != '\0') {
+        message = "**Tool output setting** applies from the next tool call.\n";
+        rc = markdown(f, message, strlen(message));
+      }
+    }
   } else if (strcmp(line, "/shell") == 0 || strcmp(line, "!sh") == 0)
     f->shell = 1;
+  else if (strcmp(line, "/shellshare") == 0 || strcmp(line, "!sh+") == 0)
+    f->shell = 4;
   else if (cai_cli_command_pager(line) == 2)
     f->shell = 2;
   else if (cai_cli_command_pager(line) == 1)
     f->shell = 3;
   else
-    rc = notice(f, "This frontend action is not connected yet.");
+    rc = notice(f, "Unsupported frontend action.");
   f->action_length = 0U;
   if (rc == 0)
     rc = cai_cli_presenter_finish_response(f->ui);
@@ -967,6 +1011,28 @@ static void editor_idle(sl_t *editor, void *context) {
       cai_cli_input_socket_idle(f->queue, editor, &f->error) != CAI_OK) {
     f->failed = f->quit = 1;
     (void)sl_suspend(editor);
+  }
+  if (!f->failed && f->handoff_notice[0] != '\0' && f->queue != NULL) {
+    sl_queue_backend_info_t info;
+    if (sl_queue_backend_info(editor, &info) != SL_OK) {
+      f->failed = f->quit = 1;
+      (void)sl_suspend(editor);
+    } else if (info.synchronized) {
+      char byte = 'h';
+      ssize_t n;
+      int rc = f->handoff_notice_error
+                   ? notice(f, f->handoff_notice)
+                   : markdown(f, f->handoff_notice, strlen(f->handoff_notice));
+      if (rc != 0 || cai_cli_presenter_finish_response(f->ui) != 0) {
+        f->failed = f->quit = 1;
+        (void)sl_suspend(editor);
+        return;
+      }
+      f->handoff_notice[0] = '\0';
+      do {
+        n = write(f->wake[1], &byte, 1U);
+      } while (n < 0 && errno == EINTR);
+    }
   }
 }
 static int watch(frontend *f, sl_watch_id_t *id, int *old,
@@ -1110,6 +1176,13 @@ static int service(frontend *f) {
         f->boot->pump(f->boot->context, clock_ms(), &target, &ready, &f->error);
     if (rc != CAI_OK)
       return -1;
+    if (ready == CAI_CLI_FRONTEND_STOPPED) {
+      f->expected_close = 1;
+      if (f->client == NULL) {
+        f->quit = 1;
+        return 0;
+      }
+    }
     if (ready && f->client == NULL) {
       char *workspace;
       if ((ready != CAI_CLI_FRONTEND_EXISTING &&
@@ -1147,6 +1220,10 @@ static int service(frontend *f) {
   }
   if (f->client != NULL) {
     rc = cai_app_client_pump(f->client, clock_ms(), &f->error);
+    if (rc != CAI_OK && f->expected_close) {
+      f->quit = 1;
+      return 0;
+    }
     if (rc != CAI_OK)
       return -1;
     (void)cai_app_client_get_state(f->client, &f->state, NULL);
@@ -1184,7 +1261,7 @@ static int service(frontend *f) {
         return -1;
       f->awaiting_bind = 1;
     }
-    if (f->bound && !f->subscribed) {
+    if (f->bound && !f->subscribed && f->handoff_notice[0] == '\0') {
       rc = cai_app_client_subscribe(
           f->client, ++f->subscribe_request, f->state.conversation,
           f->state.session,
@@ -1367,6 +1444,8 @@ static int select_view(frontend *f, const char *session) {
   frontend_view *v;
   sl_config_t config;
   int fresh = 0;
+  if (f->current != NULL || session != NULL)
+    f->greeting_resumed = session != NULL;
   if (f->current != NULL) {
     park_view(f);
     cai_cli_transcript_presenter_reset(f->transcript);
@@ -1499,6 +1578,7 @@ static frontend *frontend_open(frontend_group *group,
                              : NULL;
   f->application = application;
   f->options = options;
+  f->greeting_resumed = options->resume_id != NULL;
   f->target = *target;
   f->target.workspace = f->workspace;
   f->target.runtime_directory = f->runtime_directory;
@@ -1866,10 +1946,118 @@ static int terminal_service(void *context, int epoll_fd, int *timeout,
         *timeout = wait;
     }
   }
+  if (active->capture_id != 0U &&
+      (active->state.conversation != active->capture_scope.conversation ||
+       active->state.transport.generation != active->capture_scope.generation ||
+       active->state.transport.controller !=
+           active->state.transport.attachment))
+    return cai_cli_error(error, CAI_ERR_CANCELLED,
+                         "shared shell recording lost its original authority");
+  if (active->capture_waiting) {
+    int remaining;
+    now = clock_ms();
+    if (now >= active->capture_deadline)
+      return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                           "shared shell capture acknowledgement timed out");
+    remaining = (int)(active->capture_deadline - now);
+    if (*timeout < 0 || remaining < *timeout)
+      *timeout = remaining;
+  }
   return active->handoff_failed
              ? cai_cli_error(error, CAI_ERR_CANCELLED,
                              "workspace owner stopped during terminal handoff")
              : CAI_OK;
+}
+/** At most one bounded recording operation is outstanding. Its original
+ * generation/sequence is never upgraded or retried after an uncertain result.
+ */
+static int capture_send(frontend *f, cai_app_shell_operation operation,
+                        const void *data, size_t length, unsigned int code,
+                        uint64_t duration, cai_error *error) {
+  cai_app_shell_request request;
+  int rc;
+  if (f->control_request == UINT64_MAX || f->capture_waiting ||
+      (operation != CAI_APP_SHELL_BEGIN && f->capture_sequence == UINT64_MAX))
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "shared shell request is pending or exhausted");
+  memset(&request, 0, sizeof(request));
+  request.operation = operation;
+  request.recording = operation == CAI_APP_SHELL_BEGIN ? 0U : f->capture_id;
+  request.sequence =
+      operation == CAI_APP_SHELL_BEGIN ? 0U : f->capture_sequence + 1U;
+  request.data = data;
+  request.length = length;
+  request.exit_code = code;
+  request.duration_ms = duration;
+  f->capture_request = ++f->control_request;
+  rc = cai_app_client_shell(f->client, f->capture_request, &f->capture_scope,
+                            &request, error);
+  if (rc == CAI_OK) {
+    f->capture_waiting = 1;
+    f->capture_code = CAI_OK;
+    f->capture_reason[0] = '\0';
+    f->capture_deadline = clock_ms() + 10000U;
+  }
+  return rc;
+}
+static int capture_result(frontend *f, cai_error *error) {
+  return f->capture_code == CAI_OK
+             ? CAI_OK
+             : cai_cli_error(error, f->capture_code,
+                             f->capture_reason[0] != '\0'
+                                 ? f->capture_reason
+                                 : "shared shell capture failed");
+}
+static int capture_output(void *context, const void *bytes, size_t length,
+                          int *accepted, cai_error *error) {
+  frontend *f = context;
+  int rc;
+  *accepted = 0;
+  if (!f->capture_pending) {
+    rc = capture_send(f, CAI_APP_SHELL_WRITE, bytes, length, 0U, 0U, error);
+    if (rc == CAI_OK)
+      f->capture_pending = 1;
+    return rc;
+  }
+  if (f->capture_waiting)
+    return CAI_OK;
+  rc = capture_result(f, error);
+  if (rc == CAI_OK) {
+    ++f->capture_sequence;
+    f->capture_pending = 0;
+    *accepted = 1;
+  }
+  return rc;
+}
+/** Finite begin/finish handshake while the editor is suspended. All visited
+ * owners remain serviced; no Softline or renderer calls occur in this wait.
+ * Chunk acknowledgement uses the relay's descriptor loop instead. */
+static int capture_wait(frontend *f, cai_error *error) {
+  struct epoll_event events[32];
+  frontend *p;
+  int descriptor = epoll_create1(EPOLL_CLOEXEC), rc = CAI_OK;
+  if (descriptor < 0)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "watch shared shell recording");
+  /* terminal_service retains registrations between calls on one epoll only. */
+  for (p = f->group->first; p != NULL; p = p->next)
+    p->handoff_fd = -1;
+  while (f->capture_waiting) {
+    int timeout = -1;
+    rc = terminal_service(f, descriptor, &timeout, error);
+    if (rc != CAI_OK || !f->capture_waiting)
+      break;
+    if (epoll_wait(descriptor, events, 32, timeout) < 0 && errno != EINTR) {
+      rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "wait for shell recording");
+      break;
+    }
+  }
+  close(descriptor);
+  for (p = f->group->first; p != NULL; p = p->next)
+    p->handoff_fd = -1;
+  if (rc == CAI_OK)
+    rc = capture_result(f, error);
+  return rc;
 }
 /** Resolve a fixed local executable using the frontend's captured PATH and
  * selected workspace, including relative/empty PATH components. No shell. */
@@ -1978,9 +2166,10 @@ static int terminal_action(frontend *f, int kind) {
   const cai_app_view *view = NULL;
   const char *arguments[4], *shell;
   char *pager = NULL, *log = NULL, message[128];
-  int raw_status = 0, escaped = 0, rc, result = 0;
+  uint64_t capture_started = 0U;
+  int raw_status = 127 << 8, escaped = 0, rc, result = 0;
   if (f->group->discovery != NULL || f->group->candidate != NULL ||
-      f->exit_save != 0U || !f->ready) {
+      f->exit_save != 0U || !f->ready || f->handoff_notice[0] != '\0') {
     result =
         notice(f, "Finish the current workspace transition before handoff.");
     goto done;
@@ -2002,7 +2191,7 @@ static int terminal_action(frontend *f, int kind) {
     arguments[1] = "--";
     arguments[2] = log;
     arguments[3] = NULL;
-  } else if (kind == 1) {
+  } else if (kind == 1 || kind == 4) {
     shell = cai_environment_get(f->options->environment, "SHELL");
     arguments[0] = shell != NULL && shell[0] != '\0' ? shell : "/bin/sh";
     arguments[1] = "-i";
@@ -2039,15 +2228,78 @@ static int terminal_action(frontend *f, int kind) {
   cai_cli_transcript_presenter_reset(f->transcript);
   f->subscribed = 0;
   f->group->terminal_active = 1;
-  rc = kind == 3 || (kind == 2 && pager == NULL)
-           ? native_pager(f, log, kind == 3)
-           : cai_cli_terminal_program(f->ui->sl, arguments, f->workspace,
-                                      f->options->environment, terminal_service,
-                                      f, &raw_status, &escaped, &f->error);
+  f->capture_first = f->capture_last = 0U;
+  rc = CAI_OK;
+  if (kind == 4) {
+    f->capture_scope.conversation = f->state.conversation;
+    f->capture_scope.generation = f->state.transport.generation;
+    f->capture_sequence = 0U;
+    f->capture_pending = 0;
+    capture_started = clock_ms();
+    rc = capture_send(f, CAI_APP_SHELL_BEGIN, arguments[0],
+                      strlen(arguments[0]), 0U, 0U, &f->error);
+    if (rc == CAI_OK) {
+      f->capture_id = f->capture_request;
+      rc = capture_wait(f, &f->error);
+      if (rc != CAI_OK && !f->capture_waiting)
+        f->capture_id = 0U; /* Rejected BEGIN opened no recording. */
+    }
+  }
+  if (rc == CAI_OK) {
+    if (kind == 3 || (kind == 2 && pager == NULL))
+      rc = native_pager(f, log, kind == 3);
+    else if (sl_output_stream_end(f->ui->sl) != SL_OK)
+      rc = cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
+                         "release output before terminal relay");
+    else {
+      rc = cai_cli_terminal_program(f->ui->sl, arguments, f->workspace,
+                                    f->options->environment, terminal_service,
+                                    kind == 4 ? capture_output : NULL, f,
+                                    &raw_status, &escaped, &f->error);
+      /* Reopen only after the relay has restored descriptor flags. A large
+       * PTY burst can leave stdout backpressured; reopening the persistent
+       * stream while it is still nonblocking can fail its setup writes. */
+      if (sl_output_stream_begin(f->ui->sl) != SL_OK)
+        rc = cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
+                           "restore output after terminal relay");
+    }
+  }
+  if (kind == 4 && f->capture_id != 0U) {
+    if (rc == CAI_OK && f->capture_pending) {
+      rc = capture_wait(f, &f->error);
+      if (rc == CAI_OK) {
+        ++f->capture_sequence;
+        f->capture_pending = 0;
+      }
+    }
+    if (rc == CAI_OK) {
+      unsigned int code = WIFEXITED(raw_status)
+                              ? (unsigned int)WEXITSTATUS(raw_status)
+                              : (unsigned int)(128 + WTERMSIG(raw_status));
+      rc = capture_send(f, CAI_APP_SHELL_FINISH, NULL, 0U, code,
+                        clock_ms() - capture_started, &f->error);
+      if (rc == CAI_OK)
+        rc = capture_wait(f, &f->error);
+    }
+    if (rc != CAI_OK &&
+        f->state.conversation == f->capture_scope.conversation &&
+        f->state.transport.generation == f->capture_scope.generation) {
+      /* An unknown operation cannot be retried. Detach finalizes the owner
+       * recording rather than leaving new model turns held indefinitely. */
+      (void)cai_app_client_detach(f->client, NULL);
+      f->handoff_failed = 1;
+    }
+    f->capture_id = 0U;
+    f->capture_waiting = f->capture_pending = 0;
+  }
   f->group->terminal_active = 0;
   f->presentation_parked = f->transcript_entry = 0;
   f->ui->feed_breaks = f->ui->feed_ansi = 0;
   if (cai_cli_presenter_geometry(f->ui) != 0) {
+    cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
+                  sl_last_error(f->ui->sl) != NULL
+                      ? sl_last_error(f->ui->sl)
+                      : "restore terminal handoff geometry");
     result = -1;
     goto done;
   }
@@ -2088,13 +2340,18 @@ static int terminal_action(frontend *f, int kind) {
     goto done;
   }
   cai_cli_status_maybe_refresh_branch(&f->status, f->workspace);
+  if (f->capture_first != 0U &&
+      f->capture_scope.conversation == f->current->epoch)
+    cai_cli_transcript_presenter_skip_shell(f->transcript, f->capture_first,
+                                            f->capture_last);
   if (rc != CAI_OK) {
-    result =
-        notice(f, f->error.message != NULL ? f->error.message
-                                           : "Local terminal handoff failed.");
+    snprintf(f->handoff_notice, sizeof(f->handoff_notice), "%s",
+             f->error.message != NULL ? f->error.message
+                                      : "Local terminal handoff failed.");
+    f->handoff_notice_error = 1;
     cai_error_cleanup(&f->error);
   } else {
-    const char *name = kind == 1 ? "Shell" : "Pager";
+    const char *name = kind == 1 || kind == 4 ? "Shell" : "Pager";
     if (kind == 3 || (kind == 2 && pager == NULL))
       snprintf(message, sizeof(message), "**Pager closed.**\n");
     else if (escaped)
@@ -2105,9 +2362,8 @@ static int terminal_action(frontend *f, int kind) {
     else
       snprintf(message, sizeof(message), "**%s exited %d.**\n", name,
                WEXITSTATUS(raw_status));
-    result = markdown(f, message, strlen(message));
-    if (result == 0)
-      result = cai_cli_presenter_finish_response(f->ui);
+    snprintf(f->handoff_notice, sizeof(f->handoff_notice), "%s", message);
+    f->handoff_notice_error = 0;
   }
 done:
   if (result == 0 && f->presentation_parked) {
@@ -2217,8 +2473,9 @@ int cai_cli_frontend_run(const cai_app_config *application,
   if (f->failed)
     rc = cai_cli_error(
         error, f->error.code != CAI_OK ? f->error.code : CAI_ERR_TRANSPORT,
-        f->error.message != NULL ? f->error.message
-                                 : "terminal attachment failed");
+        f->error.message != NULL           ? f->error.message
+        : sl_last_error(f->ui->sl) != NULL ? sl_last_error(f->ui->sl)
+                                           : "terminal attachment failed");
 done:
   *exit_code = rc == CAI_OK ? 0 : 1;
   cai_workspace_discovery_close(group.discovery);

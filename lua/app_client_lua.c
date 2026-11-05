@@ -632,6 +632,81 @@ static int bind_client(lua_State *L) {
                                     session, &error),
                 &error);
 }
+static int manage_delivery(lua_State *L) {
+  client_lua *ud = check(L);
+  cai_error error;
+  cai_error_init(&error);
+  return result(L, cai_app_client_manage_delivery(ud->client, &error), &error);
+}
+static int settled(lua_State *L) {
+  client_lua *ud = check(L);
+  cai_input_scope scope;
+  uint64_t after;
+  cai_error error;
+  if (!lua_istable(L, 2))
+    return fail(L, CAI_ERR_INVALID, "settlement requires a request table");
+  READ(scope.conversation, "conversation", 1);
+  READ(scope.generation, "generation", 1);
+  READ(after, "after_request", 1);
+  cai_error_init(&error);
+  return result(L, cai_app_client_settled(ud->client, &scope, after, &error),
+                &error);
+}
+static int shell_result(lua_State *L) {
+  cai_app_shell_result r;
+  cai_error error;
+  int rc;
+  cai_error_init(&error);
+  rc = cai_app_client_get_shell_result(check(L)->client, &r, &error);
+  if (rc != CAI_OK)
+    return result(L, rc, &error);
+  cai_error_cleanup(&error);
+  lua_newtable(L);
+  identity(L, "request", r.request);
+  identity(L, "recording", r.recording);
+  identity(L, "first_sequence", r.first_sequence);
+  identity(L, "last_sequence", r.last_sequence);
+  integer(L, "code", r.code);
+  text(L, "reason", r.reason);
+  return 1;
+}
+static int shell_request(lua_State *L) {
+  client_lua *ud = check(L);
+  cai_app_shell_request r;
+  cai_input_scope scope;
+  uint64_t id, code = 0U;
+  const char *operation = NULL;
+  cai_error error;
+  if (!lua_istable(L, 2) || !field_text(L, 2, "operation", &operation, 1))
+    return fail(L, CAI_ERR_INVALID, "shell operation is required");
+  memset(&r, 0, sizeof(r));
+  if (strcmp(operation, "begin") == 0)
+    r.operation = CAI_APP_SHELL_BEGIN;
+  else if (strcmp(operation, "write") == 0)
+    r.operation = CAI_APP_SHELL_WRITE;
+  else if (strcmp(operation, "finish") == 0)
+    r.operation = CAI_APP_SHELL_FINISH;
+  else
+    return fail(L, CAI_ERR_INVALID, "unknown shell operation");
+  READ(id, "request_id", 1);
+  READ(scope.conversation, "conversation", 1);
+  READ(scope.generation, "generation", 1);
+  READ(r.recording, "recording", 0);
+  READ(r.sequence, "sequence", 0);
+  READ(r.duration_ms, "duration_ms", 0);
+  READ(code, "exit_code", 0);
+  if (code > 255U)
+    return fail(L, CAI_ERR_INVALID, "shell exit_code exceeds 255");
+  r.exit_code = (unsigned int)code;
+  lua_getfield(L, 2, "data");
+  if (!lua_isnil(L, -1) && lua_type(L, -1) != LUA_TSTRING)
+    return fail(L, CAI_ERR_INVALID, "shell data must be a byte string");
+  if (!lua_isnil(L, -1))
+    r.data = lua_tolstring(L, -1, &r.length);
+  cai_error_init(&error);
+  return result(L, cai_app_client_shell(ud->client, id, &scope, &r, &error),
+                &error);
+}
 static int request(lua_State *L) {
   static const char *const operations[] = {
       "offer",         "begin_edit",  "end_edit", "abort_edit", "approve",
@@ -918,6 +993,10 @@ void cai_lua_app_client_register(lua_State *L) {
                                      {"shutdown", shutdown_client},
                                      {"cancel", cancel},
                                      {"save_prompt", save_prompt},
+                                     {"manage_delivery", manage_delivery},
+                                     {"settled", settled},
+                                     {"shell", shell_request},
+                                     {"get_shell_result", shell_result},
                                      {"prompt_history", prompt_history},
                                      {"subscribe", subscribe},
                                      {"unsubscribe", unsubscribe},
@@ -940,6 +1019,7 @@ void cai_lua_app_client_register(lua_State *L) {
       {"CLIENT_STATUS", CAI_APP_CLIENT_STATUS},
       {"CLIENT_CONTROL_RESULT", CAI_APP_CLIENT_CONTROL_RESULT},
       {"CLIENT_HISTORY_RESULT", CAI_APP_CLIENT_HISTORY_RESULT},
+      {"CLIENT_SHELL_RESULT", CAI_APP_CLIENT_SHELL_RESULT},
       C(WORKSPACE_CONNECTING),
       C(WORKSPACE_GREETING),
       C(WORKSPACE_CONNECTED),

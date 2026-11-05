@@ -1,6 +1,6 @@
 #ifndef CAI_CLI_INPUT_WIRE_H
 #define CAI_CLI_INPUT_WIRE_H
-#include <cai/input_controller.h>
+#include <cai/app_client.h>
 #include <cai/protocol.h>
 #define CAI_CLI_INPUT_TEXT_MAX 66048U
 typedef enum cai_cli_input_result_kind {
@@ -8,7 +8,8 @@ typedef enum cai_cli_input_result_kind {
   CAI_CLI_INPUT_BIND_REJECTED,
   CAI_CLI_INPUT_RESET,
   CAI_CLI_INPUT_CONTROL_RESULT,
-  CAI_CLI_INPUT_HISTORY_RESULT
+  CAI_CLI_INPUT_HISTORY_RESULT,
+  CAI_CLI_INPUT_SHELL_RESULT
 } cai_cli_input_result_kind;
 typedef struct cai_cli_input_wire_message {
   cai_protocol_header header;
@@ -18,6 +19,7 @@ typedef struct cai_cli_input_wire_message {
   const char *session;
   unsigned long long delivery_after;
   int managed_delivery;
+  cai_app_shell_request shell;
   cai_cli_input_result_kind category;
 } cai_cli_input_wire_message;
 typedef struct cai_cli_input_wire_decoder cai_cli_input_wire_decoder;

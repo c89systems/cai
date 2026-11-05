@@ -23,5 +23,6 @@ wait_for has "$root/owner.log" 'Workspace server ready'
 HOME="$root/uncreated-client-home" "$lua" "$script" "$runtime_root" "$work"
 [[ ! -e "$root/uncreated-client-home" ]]
 [[ $(requests) == 2 ]]
+contains "$root/peer/requests.jsonl" LUA_CAPTURE_TAIL
 wait "$owner_pid"
 owner_pid=

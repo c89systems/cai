@@ -292,10 +292,55 @@ static void malformed(void) {
   close_fixture(f);
   free(f);
 }
+static void shell_roundtrips(void) {
+  fixture *f = calloc(1U, sizeof(*f));
+  cai_cli_input_wire_message message;
+  unsigned char bytes_with_nul[4096];
+  size_t i;
+  assert(f != NULL);
+  for (i = 0U; i < sizeof(bytes_with_nul); ++i)
+    bytes_with_nul[i] = (unsigned char)i;
+  memset(&message, 0, sizeof(message));
+  message.header.kind = CAI_PROTOCOL_USER_SHELL;
+  message.header.request = 17U;
+  message.header.conversation = 3U;
+  message.header.generation = 7U;
+  message.shell.operation = CAI_APP_SHELL_WRITE;
+  message.shell.recording = 12U;
+  message.shell.sequence = 255U;
+  message.shell.data = bytes_with_nul;
+  message.shell.length = sizeof(bytes_with_nul);
+  open_fixture(f);
+  assert(send(f, &message) == CAI_OK && f->complete != NULL);
+  assert(f->complete->shell.operation == CAI_APP_SHELL_WRITE &&
+         f->complete->shell.recording == 12U &&
+         f->complete->shell.sequence == 255U &&
+         f->complete->shell.length == sizeof(bytes_with_nul) &&
+         memcmp(f->complete->shell.data, bytes_with_nul,
+                sizeof(bytes_with_nul)) == 0);
+  close_fixture(f);
+  message.shell.operation = CAI_APP_SHELL_FINISH;
+  message.shell.data = NULL;
+  message.shell.length = 0U;
+  message.shell.exit_code = 137U;
+  message.shell.duration_ms = ~(unsigned long long)0;
+  open_fixture(f);
+  assert(send(f, &message) == CAI_OK && f->complete != NULL);
+  assert(f->complete->shell.exit_code == 137U &&
+         f->complete->shell.duration_ms == ~(unsigned long long)0 &&
+         f->complete->shell.length == 0U);
+  close_fixture(f);
+  message.header.request = 0U;
+  open_fixture(f);
+  assert(send(f, &message) == CAI_ERR_PROTOCOL && f->complete == NULL);
+  close_fixture(f);
+  free(f);
+}
 static void *run(void *unused) {
   (void)unused;
   roundtrips();
   malformed();
+  shell_roundtrips();
   return NULL;
 }
 int main(void) {

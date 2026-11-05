@@ -45,6 +45,17 @@ Methods follow C ownership and explicit request identities:
 | `directory()` | Canonical owner workspace. |
 | `close()` | Immediate idempotent local release, no implicit flush, retry or draft submission. |
 
+`manage_delivery()` opts an unbound producer into managed delivery before bind.
+`settled{conversation,generation,after_request}` announces its processed-request
+watermark after dependent requests/receipts settle, without transmitting draft
+state. Both follow the C producer-settlement contract.
+
+`shell{request_id,conversation,generation,operation,recording,sequence,data,exit_code,duration_ms}`
+supports `begin`, `write` and `finish`. Data is a bounded binary Lua string;
+each operation requires a `CLIENT_SHELL_RESULT` before the next chunk.
+`get_shell_result()` copies named status, recording and journal-range metadata.
+See [shell recording](workspace-wire-shell.md) for limits and failure semantics.
+
 Success returns true (or the documented value). Failure returns
 `nil, message, cai_status_code`. Callback exceptions fail that attachment and
 return through pump/wait; they do not escape through the C transport stack.

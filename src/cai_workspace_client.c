@@ -310,7 +310,8 @@ static int receive(void *context, const cai_protocol_event *event,
       h->kind == CAI_PROTOCOL_IDENTITY || h->kind == CAI_PROTOCOL_CANCEL ||
       h->kind == CAI_PROTOCOL_REJECT || h->kind == CAI_PROTOCOL_HISTORY_GET ||
       h->kind == CAI_PROTOCOL_HISTORY_APPEND ||
-      h->kind == CAI_PROTOCOL_INPUT_SETTLED)
+      h->kind == CAI_PROTOCOL_INPUT_SETTLED ||
+      h->kind == CAI_PROTOCOL_USER_SHELL)
     return invalid(error);
   if (h->kind == CAI_PROTOCOL_ROLE) {
     if (h->conversation != 0U || h->sequence != 0U || h->stream != 0U)
@@ -587,7 +588,8 @@ int cai_workspace_client_begin(cai_workspace_client *client,
        header->kind != CAI_PROTOCOL_CANCEL &&
        header->kind != CAI_PROTOCOL_HISTORY_GET &&
        header->kind != CAI_PROTOCOL_HISTORY_APPEND &&
-       header->kind != CAI_PROTOCOL_INPUT_SETTLED) ||
+       header->kind != CAI_PROTOCOL_INPUT_SETTLED &&
+       header->kind != CAI_PROTOCOL_USER_SHELL) ||
       (mutation && (client->state.phase != CAI_WORKSPACE_CONNECTED ||
                     client->state.controller != client->state.attachment ||
                     header->generation != client->state.generation)))

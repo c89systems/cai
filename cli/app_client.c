@@ -31,6 +31,7 @@ struct cai_app_client {
   char wanted_session[129], baseline_session[129];
   size_t index;
   int snapshot, pumping, managed_delivery;
+  cai_app_shell_result shell_result;
   uint64_t wanted_stream, wanted_conversation, wanted_position, wanted_sequence,
       stream_high, event_sequence, event_offset;
   char transcript_session[129], transcript_collection[21];
@@ -282,6 +283,17 @@ static int receive(void *context, const cai_protocol_event *event,
       client->state.last_request = o.last_request;
     break;
   case CAI_PROTOCOL_RESULT:
+    if (m->category == CAI_CLI_INPUT_SHELL_RESULT) {
+      client->shell_result.request = m->header.request;
+      client->shell_result.recording = o.result.item_id;
+      client->shell_result.first_sequence = o.result.item_revision;
+      client->shell_result.last_sequence = o.result.edit_token;
+      client->shell_result.code = o.result.code;
+      snprintf(client->shell_result.reason, sizeof(client->shell_result.reason),
+               "%s", o.result.reason);
+      return notify(client, CAI_APP_CLIENT_SHELL_RESULT, m->header.request, &o,
+                    error);
+    }
     if (m->category == CAI_CLI_INPUT_HISTORY_RESULT)
       return notify(client, CAI_APP_CLIENT_HISTORY_RESULT, m->header.request,
                     &o, error);
@@ -902,6 +914,52 @@ int cai_app_client_settled(cai_app_client *client, const cai_input_scope *scope,
   m.header.conversation = scope->conversation;
   m.header.generation = scope->generation;
   m.delivery_after = after_request;
+  return send(client, &m, error);
+}
+int cai_app_client_get_shell_result(cai_app_client *client,
+                                    cai_app_shell_result *out,
+                                    cai_error *error) {
+  int rc = valid(client, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (out == NULL || client->shell_result.request == 0U)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "shell acknowledgement required");
+  *out = client->shell_result;
+  return CAI_OK;
+}
+int cai_app_client_shell(cai_app_client *client, uint64_t request,
+                         const cai_input_scope *scope,
+                         const cai_app_shell_request *shell, cai_error *error) {
+  cai_cli_input_wire_message m;
+  int rc = valid(client, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (request == 0U || scope == NULL || shell == NULL || !client->state.ready ||
+      !client->state.bound ||
+      scope->conversation != client->state.conversation ||
+      scope->generation != client->state.transport.generation ||
+      client->state.transport.controller !=
+          client->state.transport.attachment ||
+      shell->operation < CAI_APP_SHELL_BEGIN ||
+      shell->operation > CAI_APP_SHELL_FINISH || shell->exit_code > 255U ||
+      (shell->length != 0U && shell->data == NULL) ||
+      (shell->operation == CAI_APP_SHELL_BEGIN
+           ? (shell->recording != 0U || shell->sequence != 0U ||
+              shell->length == 0U || shell->length > 8192U ||
+              memchr(shell->data, '\0', shell->length) != NULL)
+           : (shell->recording == 0U || shell->sequence == 0U ||
+              (shell->operation == CAI_APP_SHELL_WRITE ? shell->length > 4096U
+                                                       : shell->length != 0U))))
+    return cai_cli_error(
+        error, CAI_ERR_INVALID,
+        "current controller and bounded shell request required");
+  memset(&m, 0, sizeof(m));
+  m.header.kind = CAI_PROTOCOL_USER_SHELL;
+  m.header.request = request;
+  m.header.conversation = scope->conversation;
+  m.header.generation = scope->generation;
+  m.shell = *shell;
   return send(client, &m, error);
 }
 int cai_app_client_request(cai_app_client *client, const cai_input_scope *scope,

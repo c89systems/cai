@@ -39,7 +39,10 @@ typedef enum cai_app_client_event_type {
   CAI_APP_CLIENT_CONTROL_RESULT,
   /** Durable prompt save outcome; request IDs are independent of queue IDs.
    * input->result.item_id is the committed prompt collection position. */
-  CAI_APP_CLIENT_HISTORY_RESULT
+  CAI_APP_CLIENT_HISTORY_RESULT,
+  /** Shell capture outcome. item_id identifies its connection-local recording;
+   * this is not a durable input-queue receipt. */
+  CAI_APP_CLIENT_SHELL_RESULT
 } cai_app_client_event_type;
 typedef struct cai_app_client_event {
   cai_app_client_event_type type;
@@ -150,6 +153,45 @@ int cai_app_client_manage_delivery(cai_app_client *, cai_error *);
  * Announce again after each request or role change. */
 int cai_app_client_settled(cai_app_client *, const cai_input_scope *,
                            unsigned long long after_request, cai_error *);
+typedef enum cai_app_shell_operation {
+  CAI_APP_SHELL_BEGIN = 0,
+  CAI_APP_SHELL_WRITE,
+  CAI_APP_SHELL_FINISH
+} cai_app_shell_operation;
+/** Explicit opt-in capture of a frontend-owned shell. BEGIN supplies a command
+ * (1..8192 bytes, no NUL); its request ID becomes recording. WRITE supplies at
+ * most 4096 raw bytes, including NUL. FINISH has no data. Sequences start at 1
+ * after BEGIN and increase by exactly one. exit_code is 0..255. No execution
+ * occurs in the server; the existing runtime retains only its bounded tail.
+ * One request may be outstanding per recording. Wait for SHELL_RESULT before
+ * sending the next chunk. Failed/unknown operations are not replayed/retried;
+ * disconnect, takeover and context closure finalize the interrupted capture.
+ */
+typedef struct cai_app_shell_request {
+  cai_app_shell_operation operation;
+  uint64_t recording, sequence;
+  const void *data;
+  size_t length;
+  unsigned int exit_code;
+  unsigned long long duration_ms;
+} cai_app_shell_request;
+/** Owner-thread-only. Original scope/authority must still be current. A
+ * successful return queues one bounded record, not an acknowledgement. */
+int cai_app_client_shell(cai_app_client *, uint64_t request,
+                         const cai_input_scope *, const cai_app_shell_request *,
+                         cai_error *);
+typedef struct cai_app_shell_result {
+  uint64_t request, recording;
+  unsigned long long first_sequence, last_sequence;
+  int code;
+  char reason[192];
+} cai_app_shell_result;
+/** Copy the latest shell acknowledgement, including its exact journal range.
+ * Called on the owner thread, usually from SHELL_RESULT. The range lets a
+ * frontend avoid repeating output it just displayed locally during catch-up.
+ * Before the first acknowledgement, returns CAI_ERR_INVALID. */
+int cai_app_client_get_shell_result(cai_app_client *, cai_app_shell_result *,
+                                    cai_error *);
 /** Send original scope and request unchanged. Authority is checked by the
  * server after durable receipt lookup, including retries from an observer or
  * old generation. No blind retries, ID allocation or optimistic queue changes.

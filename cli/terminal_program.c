@@ -33,6 +33,9 @@ typedef struct terminal_program {
   const char *directory;
   long descriptor_limit;
   cai_cli_terminal_service_fn service;
+  cai_cli_terminal_capture_fn capture;
+  unsigned char capture_bytes[4096];
+  size_t capture_length;
   void *context;
   cai_error *error;
 } terminal_program;
@@ -211,6 +214,35 @@ static int relay(void *context, sl_terminal_event_t *e) {
   }
   case SL_TERMINAL_READ:
     e->transferred = 0U;
+    if (p->capture != NULL) {
+      int accepted = 0;
+      if (p->capture_length == 0U) {
+        size_t capacity = e->length < sizeof(p->capture_bytes)
+                              ? e->length
+                              : sizeof(p->capture_bytes);
+        n = read(p->master, p->capture_bytes, capacity);
+        if (n <= 0)
+          return n == 0 || errno == EIO ||
+                         (p->exited &&
+                          (errno == EAGAIN || errno == EWOULDBLOCK))
+                     ? SL_OK
+                 : errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK
+                     ? SL_ERROR_NOT_READY
+                     : SL_ERROR_IO;
+        p->capture_length = (size_t)n;
+      }
+      if (p->capture(p->context, p->capture_bytes, p->capture_length, &accepted,
+                     p->error) != CAI_OK)
+        return SL_ERROR_IO;
+      if (!accepted)
+        return SL_ERROR_NOT_READY;
+      if (p->capture_length > e->length)
+        return SL_ERROR_INVALID;
+      memcpy(e->data, p->capture_bytes, p->capture_length);
+      e->transferred = p->capture_length;
+      p->capture_length = 0U;
+      return SL_OK;
+    }
     if (p->exited && p->drain == 0U)
       return SL_OK;
     n = read(p->master, e->data,
@@ -269,7 +301,8 @@ static char **pointer_vector(const char *const *source) {
 }
 int cai_cli_terminal_program(sl_t *sl, const char *const *argv,
                              const char *directory, cai_environment *env,
-                             cai_cli_terminal_service_fn service, void *context,
+                             cai_cli_terminal_service_fn service,
+                             cai_cli_terminal_capture_fn capture, void *context,
                              int *status, int *escaped, cai_error *error) {
   terminal_program *p;
   struct sigaction child_action;
@@ -295,6 +328,7 @@ int cai_cli_terminal_program(sl_t *sl, const char *const *argv,
   p->completion[0] = p->completion[1] = p->started[0] = p->started[1] = -1;
   p->directory = directory;
   p->service = service;
+  p->capture = capture;
   p->context = context;
   p->error = error;
   p->descriptor_limit = sysconf(_SC_OPEN_MAX);

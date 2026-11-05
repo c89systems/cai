@@ -724,6 +724,8 @@ struct cai_agent_runtime {
   int user_shell_shared;
   int user_shell_merge_history;
   unsigned long long user_shell_start_sequence;
+  unsigned long long user_shell_finish_sequence;
+  unsigned long long user_shell_range_first_sequence;
   size_t user_shell_record_limit;
   int user_shell_tail_recorded;
   unsigned long long user_shell_tail_sequence;
@@ -12887,6 +12889,9 @@ int cai_agent_runtime_user_shell_begin(cai_agent_runtime *runtime,
           &runtime->user_shell_start_sequence, error);
     if (rc == CAI_OK) {
       runtime->user_shell_command = copy;
+      runtime->user_shell_range_first_sequence =
+          runtime->user_shell_start_sequence;
+      runtime->user_shell_finish_sequence = 0U;
       runtime->user_shell_shared = share_with_model != 0;
       runtime->user_shell_merge_history = runtime->history_turn_open;
       runtime->user_shell_bytes = 0U;
@@ -13084,6 +13089,7 @@ int cai_agent_runtime_user_shell_finish(cai_agent_runtime *runtime,
     }
     cai_free_mem(NULL, runtime->user_shell_command);
     runtime->user_shell_command = NULL;
+    runtime->user_shell_finish_sequence = sequence;
     cai_terminal_text_close(&runtime->user_shell_output);
     pthread_cond_broadcast(&runtime->condition);
   }
@@ -13096,6 +13102,22 @@ done:
   return rc;
 }
 
+int cai_agent_runtime_user_shell_range(cai_agent_runtime *runtime,
+                                       unsigned long long *first,
+                                       unsigned long long *last,
+                                       cai_error *error) {
+  int rc = cai_runtime_owner(runtime, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (first == NULL || last == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "shell range outputs required");
+  pthread_mutex_lock(&runtime->lock);
+  *first = runtime->user_shell_range_first_sequence;
+  *last = runtime->user_shell_finish_sequence;
+  pthread_mutex_unlock(&runtime->lock);
+  return CAI_OK;
+}
 void cai_agent_goal_request_init(cai_agent_goal_request *request) {
   if (request != NULL) {
     memset(request, 0, sizeof(*request));

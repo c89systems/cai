@@ -25,6 +25,8 @@ static const char *format(cai_protocol_kind kind) {
     return "usb";
   case CAI_PROTOCOL_INPUT_SETTLED:
     return "u";
+  case CAI_PROTOCOL_USER_SHELL:
+    return "uuuuur";
   case CAI_PROTOCOL_HISTORY_APPEND:
     return "t";
   case CAI_PROTOCOL_REQUEST:
@@ -48,6 +50,8 @@ static int invalid(cai_error *error) {
                        "invalid workspace input payload");
 }
 static size_t string_capacity(cai_protocol_kind kind, size_t index) {
+  if (kind == CAI_PROTOCOL_USER_SHELL)
+    return 8193U;
   if (kind == CAI_PROTOCOL_SYNCHRONIZE || kind == CAI_PROTOCOL_QUEUE_BEGIN)
     return 129U;
   if (kind == CAI_PROTOCOL_RESULT)
@@ -112,6 +116,20 @@ static int pack(const cai_cli_input_wire_message *m, field *f,
     break;
   case CAI_PROTOCOL_INPUT_SETTLED:
     f[0].number = m->delivery_after;
+    break;
+  case CAI_PROTOCOL_USER_SHELL:
+    if (m->shell.operation < CAI_APP_SHELL_BEGIN ||
+        m->shell.operation > CAI_APP_SHELL_FINISH ||
+        m->shell.exit_code > 255U || m->shell.length > 8192U ||
+        (m->shell.length != 0U && m->shell.data == NULL))
+      return invalid(error);
+    f[0].number = m->shell.operation;
+    f[1].number = m->shell.recording;
+    f[2].number = m->shell.sequence;
+    f[3].number = m->shell.exit_code;
+    f[4].number = m->shell.duration_ms;
+    f[5].text = m->shell.data;
+    f[5].length = m->shell.length;
     break;
   case CAI_PROTOCOL_REQUEST:
     if (r->operation < CAI_INPUT_OFFER || r->operation > CAI_INPUT_RESOLVE ||
@@ -198,6 +216,17 @@ static int unpack(cai_cli_input_wire_decoder *d, cai_error *error) {
   case CAI_PROTOCOL_INPUT_SETTLED:
     m->delivery_after = f[0].number;
     break;
+  case CAI_PROTOCOL_USER_SHELL:
+    if (f[0].number > CAI_APP_SHELL_FINISH || f[3].number > 255U)
+      return invalid(error);
+    m->shell.operation = (cai_app_shell_operation)f[0].number;
+    m->shell.recording = f[1].number;
+    m->shell.sequence = f[2].number;
+    m->shell.exit_code = (unsigned int)f[3].number;
+    m->shell.duration_ms = f[4].number;
+    m->shell.data = f[5].text;
+    m->shell.length = f[5].length;
+    break;
   case CAI_PROTOCOL_REQUEST:
     if (f[0].number > CAI_INPUT_RESOLVE || f[5].number > CAI_INPUT_STEERING)
       return invalid(error);
@@ -258,13 +287,14 @@ static int unpack(cai_cli_input_wire_decoder *d, cai_error *error) {
     o->change.state = o->state;
     return entry_unpack(f + 12U, &o->change.entry, error);
   case CAI_PROTOCOL_RESULT:
-    if (f[0].number > CAI_CLI_INPUT_HISTORY_RESULT ||
+    if (f[0].number > CAI_CLI_INPUT_SHELL_RESULT ||
         f[3].number > CAI_INPUT_UNKNOWN || f[4].number > CAI_ERR_LIMIT)
       return invalid(error);
     m->category = (cai_cli_input_result_kind)f[0].number;
     o->type = m->category == CAI_CLI_INPUT_RECEIPT ||
                       m->category == CAI_CLI_INPUT_CONTROL_RESULT ||
-                      m->category == CAI_CLI_INPUT_HISTORY_RESULT
+                      m->category == CAI_CLI_INPUT_HISTORY_RESULT ||
+                      m->category == CAI_CLI_INPUT_SHELL_RESULT
                   ? CAI_INPUT_OBSERVATION_RESULT
                   : CAI_INPUT_OBSERVATION_DISCONNECTED;
     o->producer = f[1].number;
@@ -327,6 +357,7 @@ int cai_cli_input_wire_decode(cai_cli_input_wire_decoder *d,
          event->header->sequence != 0U) ||
         ((event->header->kind == CAI_PROTOCOL_REQUEST ||
           event->header->kind == CAI_PROTOCOL_HISTORY_APPEND ||
+          event->header->kind == CAI_PROTOCOL_USER_SHELL ||
           event->header->kind == CAI_PROTOCOL_SYNCHRONIZE) &&
          (event->header->request == 0U || event->header->sequence != 0U)))
       return invalid(error);
@@ -364,7 +395,8 @@ int cai_cli_input_wire_decode(cai_cli_input_wire_decoder *d,
     if (t->type == CAI_CBOR_DATA) {
       if (t->length > d->length - d->offset ||
           (t->length != 0U &&
-           (t->data == NULL || memchr(t->data, '\0', t->length) != NULL)))
+           (t->data == NULL || (d->format[d->index] != 'r' &&
+                                memchr(t->data, '\0', t->length) != NULL))))
         return invalid(error);
       if (t->length != 0U)
         memcpy(d->string + d->offset, t->data, t->length);
@@ -459,7 +491,7 @@ int cai_cli_input_wire_write(const cai_cli_input_wire_output *out,
       ++length;
     else {
       size_t capacity = string_capacity(message->header.kind, i);
-      if (fields[i].text != NULL)
+      if (f[i] != 'r' && fields[i].text != NULL)
         while (fields[i].length < capacity &&
                fields[i].text[fields[i].length] != '\0')
           ++fields[i].length;

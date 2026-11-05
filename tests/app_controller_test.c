@@ -852,6 +852,8 @@ typedef struct typed_view {
       history_results;
   uint64_t history_limit;
   int history_code;
+  size_t shell_results;
+  cai_input_result shell_result;
 } typed_view;
 static int typed_history(void *context, const cai_transcript_event *event,
                          cai_error *error) {
@@ -942,6 +944,9 @@ static int typed_event(void *context, const cai_app_client_event *event,
     assert(view->runtime_ready && view->running && view->provider != NULL &&
            view->session_id != NULL && view->log_path != NULL);
     ++v->statuses;
+  } else if (event->type == CAI_APP_CLIENT_SHELL_RESULT) {
+    ++v->shell_results;
+    v->shell_result = o->result;
   } else if (event->type == CAI_APP_CLIENT_HISTORY_RESULT) {
     ++v->history_results;
     v->history_code = o->result.code;
@@ -1216,6 +1221,111 @@ static void typed_command(typed_view *v, unsigned long long id,
     typed_wait(v, &v->command_failed, failed + 1U);
 }
 
+static void shell_operation(typed_view *v, uint64_t id,
+                            cai_app_shell_operation operation,
+                            uint64_t recording, uint64_t sequence,
+                            const void *bytes, size_t length, int expected) {
+  cai_input_scope scope;
+  cai_app_shell_request request;
+  cai_app_shell_result result;
+  size_t results = v->shell_results;
+  memset(&request, 0, sizeof(request));
+  scope.conversation = v->state.conversation;
+  scope.generation = v->state.transport.generation;
+  request.operation = operation;
+  request.recording = recording;
+  request.sequence = sequence;
+  request.data = bytes;
+  request.length = length;
+  assert(cai_app_client_shell(v->client, id, &scope, &request, NULL) == CAI_OK);
+  typed_wait(v, &v->shell_results, results + 1U);
+  assert(v->shell_result.code == expected);
+  assert(cai_app_client_get_shell_result(v->client, &result, NULL) == CAI_OK &&
+         result.request == id && result.code == expected);
+  if (expected == CAI_OK) {
+    assert(result.first_sequence != 0U);
+    assert(operation == CAI_APP_SHELL_FINISH
+               ? result.last_sequence > result.first_sequence
+               : result.last_sequence == 0U);
+  }
+}
+static void server_capture(int argc, char **argv) {
+  host h;
+  typed_view *a = calloc(1U, sizeof(*a)), *b = calloc(1U, sizeof(*b));
+  unsigned char chunk[4096];
+  cai_input_scope stale;
+  cai_app_shell_request request;
+  uint64_t id = 100U, sequence, roles, recording;
+  unsigned int opens;
+  int code;
+  assert(a != NULL && b != NULL);
+  open_host(&h, "server_capture");
+  assert(cai_app_start_server(h.app, NULL, argc - 1,
+                              (const char *const *)(argv + 1), NULL,
+                              NULL) == CAI_OK);
+  wait_ready(&h);
+  opens = cai_test_storage_open_count();
+  typed_open(a, 0U, NULL);
+  typed_open(b, 0U, NULL);
+  stale.conversation = a->state.conversation;
+  stale.generation = a->state.transport.generation;
+  memset(&request, 0, sizeof(request));
+  request.operation = CAI_APP_SHELL_BEGIN;
+  request.data = "shell";
+  request.length = 5U;
+  assert(cai_app_client_shell(b->client, 1U, &stale, &request, NULL) ==
+         CAI_ERR_INVALID);
+  shell_operation(a, id, CAI_APP_SHELL_BEGIN, 0U, 0U, "shell", 5U, CAI_OK);
+  memset(chunk, 'x', sizeof(chunk));
+  chunk[0] = '\0'; /* Raw NUL survives CBOR, then the runtime sanitizes it. */
+  for (sequence = 1U; sequence <= 64U; ++sequence)
+    shell_operation(a, ++id, CAI_APP_SHELL_WRITE, 100U, sequence, chunk,
+                    sizeof(chunk), CAI_OK);
+  shell_operation(a, ++id, CAI_APP_SHELL_WRITE, 100U, 66U, "MUST_NOT_CAPTURE",
+                  16U, CAI_ERR_INVALID);
+  shell_operation(a, ++id, CAI_APP_SHELL_WRITE, 100U, 65U, "\nCAPTURE_TAIL\n",
+                  14U, CAI_OK);
+  shell_operation(a, ++id, CAI_APP_SHELL_FINISH, 100U, 66U, NULL, 0U, CAI_OK);
+  /* A takeover finalizes the old capture before the new controller begins. */
+  shell_operation(a, ++id, CAI_APP_SHELL_BEGIN, 0U, 0U, "old", 3U, CAI_OK);
+  roles = b->roles;
+  assert(cai_app_client_takeover(b->client, 19U, b->state.transport.generation,
+                                 NULL) == CAI_OK);
+  typed_wait(b, &b->roles, (size_t)roles + 1U);
+  roles = a->roles;
+  typed_wait(a, &a->roles, (size_t)roles + 1U);
+  assert(cai_app_client_shell(a->client, ++id, &stale, &request, NULL) ==
+         CAI_ERR_INVALID);
+  shell_operation(b, 200U, CAI_APP_SHELL_BEGIN, 0U, 0U, "new", 3U, CAI_OK);
+  cai_app_client_close(b->client);
+  server_state(&h, 1U, 0U);
+  roles = a->roles;
+  typed_wait(a, &a->roles, (size_t)roles + 1U);
+  roles = a->roles;
+  assert(cai_app_client_takeover(a->client, 20U, a->state.transport.generation,
+                                 NULL) == CAI_OK);
+  typed_wait(a, &a->roles, (size_t)roles + 1U);
+  recording = ++id;
+  shell_operation(a, recording, CAI_APP_SHELL_BEGIN, 0U, 0U, "after disconnect",
+                  16U, CAI_OK);
+  shell_operation(a, ++id, CAI_APP_SHELL_FINISH, recording, 1U, NULL, 0U,
+                  CAI_OK);
+  assert(cai_app_client_subscribe(a->client, 30U, a->state.conversation,
+                                  a->state.session, NULL, 0U, 0U, -1LL,
+                                  NULL) == CAI_OK);
+  typed_wait(a, &a->replay_ends, 1U);
+  typed_offer(a, 1U, "continue after shared capture");
+  typed_wait(a, &a->assistant_seen, 1U);
+  assert(cai_app_client_detach(a->client, NULL) == CAI_OK);
+  typed_wait(a, &a->disconnected, 1U);
+  assert(cai_app_join(h.app, &code, NULL) == CAI_OK && code == 0 &&
+         cai_test_storage_open_count() == opens);
+  cai_app_client_close(a->client);
+  cai_app_close(h.app);
+  pthread_mutex_destroy(&h.lock);
+  free(a);
+  free(b);
+}
 static void server_commands(int argc, char **argv) {
   host h;
   typed_view *a = calloc(1U, sizeof(*a)), *b = calloc(1U, sizeof(*b));
@@ -1389,6 +1499,12 @@ static void server_commands(int argc, char **argv) {
     assert(strstr(a->command_text, "Queue and approval keys") != NULL &&
            strstr(a->command_text, "Workspace connections") != NULL &&
            a->command_frontend == 2U);
+    typed_command(a, 5U, "/todo layout list", 1);
+    assert(strstr(a->command_text, "Kanban layout:") != NULL &&
+           a->command_frontend == 2U);
+    typed_command(a, 6U, "/todo layout", 1);
+    assert(strstr(a->command_text, "`list`") != NULL &&
+           a->command_frontend == 2U);
   }
   idle_cpu(&h);
   cai_app_client_close(b->client);
@@ -1421,6 +1537,10 @@ static void workspace_server(int argc, char **argv, const char *mode) {
   }
   if (strcmp(mode, "server_commands") == 0) {
     server_commands(argc, argv);
+    return;
+  }
+  if (strcmp(mode, "server_capture") == 0) {
+    server_capture(argc, argv);
     return;
   }
   open_host(&h, mode);

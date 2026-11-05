@@ -1,5 +1,6 @@
 #include "transcript_presenter.h"
 #include "error.h"
+#include "shell_text.h"
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +12,11 @@ typedef enum presentation_kind {
   PRESENT_TEXT,
   PRESENT_REASONING,
   PRESENT_REASONING_START,
-  PRESENT_TEXT_END
+  PRESENT_TEXT_END,
+  PRESENT_SHELL_COMMAND,
+  PRESENT_SHELL_TAIL,
+  PRESENT_SHELL_HEX,
+  PRESENT_SHELL_END
 } presentation_kind;
 
 /** Prefix state never retains the accepted prompt. The delivery's source
@@ -25,6 +30,9 @@ struct cai_cli_transcript_presenter {
   unsigned long long decimal;
   size_t source_left;
   int active, failed, has_data, delivery_stage, digits, body;
+  cai_cli_shell_text shell;
+  int hex_digit, skip_shell_end;
+  uint64_t skip_shell_first, skip_shell_last;
 };
 
 static int failure(cai_cli_transcript_presenter *p, cai_error *error, int code,
@@ -50,6 +58,15 @@ static presentation_kind kind_for(const char *type) {
     return PRESENT_REASONING_START;
   if (strcmp(type, "assistant_text_end") == 0)
     return PRESENT_TEXT_END;
+  if (strcmp(type, "user_shell_started") == 0)
+    return PRESENT_SHELL_COMMAND;
+  if (strcmp(type, "user_shell_output_tail") == 0)
+    return PRESENT_SHELL_TAIL;
+  if (strcmp(type, "user_shell_output_hex") == 0)
+    return PRESENT_SHELL_HEX;
+  if (strcmp(type, "user_shell_completed") == 0 ||
+      strcmp(type, "user_shell_unshared") == 0)
+    return PRESENT_SHELL_END;
   return PRESENT_SKIP;
 }
 
@@ -129,6 +146,46 @@ static int delivery(cai_cli_transcript_presenter *p, const void *data,
   return CAI_OK;
 }
 
+static int shell_output(void *context, const char *bytes, size_t length,
+                        cai_error *error) {
+  return cai_cli_presenter_sink(context, bytes, length) == 0
+             ? CAI_OK
+             : cai_cli_error(error, CAI_ERR_TRANSPORT,
+                             "display stored shell output");
+}
+static int shell_hex(cai_cli_transcript_presenter *p, const void *bytes,
+                     size_t length, cai_error *error) {
+  const unsigned char *data = bytes;
+  char decoded[512];
+  size_t i, used = 0U;
+  for (i = 0U; i < length; ++i) {
+    unsigned int digit;
+    int rc;
+    if (data[i] >= '0' && data[i] <= '9')
+      digit = data[i] - '0';
+    else if (data[i] >= 'a' && data[i] <= 'f')
+      digit = data[i] - 'a' + 10U;
+    else if (data[i] >= 'A' && data[i] <= 'F')
+      digit = data[i] - 'A' + 10U;
+    else
+      return CAI_ERR_PROTOCOL;
+    if (p->hex_digit < 0)
+      p->hex_digit = (int)digit;
+    else {
+      decoded[used++] = (char)((unsigned int)p->hex_digit * 16U + digit);
+      p->hex_digit = -1;
+      if (used == sizeof(decoded)) {
+        rc = cai_cli_shell_plain(&p->shell, decoded, used, 0, shell_output,
+                                 p->presenter, error);
+        if (rc != CAI_OK)
+          return rc;
+        used = 0U;
+      }
+    }
+  }
+  return cai_cli_shell_plain(&p->shell, decoded, used, 0, shell_output,
+                             p->presenter, error);
+}
 static int event_body(cai_cli_transcript_presenter *p,
                       const cai_transcript_event *event, cai_error *error) {
   cai_cli_presenter *ui = p->presenter;
@@ -141,7 +198,10 @@ static int event_body(cai_cli_transcript_presenter *p,
     return CAI_OK; /* The frontend handles this typed subscription notice. */
   }
   if (event->kind == CAI_TRANSCRIPT_REPLAY_BEGIN) {
+    uint64_t first = p->skip_shell_first, last = p->skip_shell_last;
     cai_cli_transcript_presenter_reset(p);
+    p->skip_shell_first = first;
+    p->skip_shell_last = last;
     p->stream = event->stream;
     return CAI_OK;
   }
@@ -151,6 +211,7 @@ static int event_body(cai_cli_transcript_presenter *p,
                      "replay ended inside a transcript event");
     /* Do not finish Markdown: a live delta can continue the document captured
      * at the replay watermark without an artificial block boundary. */
+    p->skip_shell_first = p->skip_shell_last = 0U;
     return CAI_OK;
   }
   if (event->kind == CAI_TRANSCRIPT_EVENT_BEGIN) {
@@ -162,6 +223,13 @@ static int event_body(cai_cli_transcript_presenter *p,
     p->sequence = event->sequence;
     p->timestamp_ns = event->timestamp_ns;
     p->kind = kind_for(event->type);
+    p->skip_shell_end = 0;
+    if (p->kind >= PRESENT_SHELL_COMMAND && p->skip_shell_first != 0U &&
+        event->sequence >= p->skip_shell_first &&
+        (p->skip_shell_last == 0U || event->sequence <= p->skip_shell_last)) {
+      p->skip_shell_end = p->kind == PRESENT_SHELL_END;
+      p->kind = PRESENT_SKIP;
+    }
     p->offset = 0U;
     p->active = 1;
     p->has_data = event->has_data;
@@ -170,6 +238,16 @@ static int event_body(cai_cli_transcript_presenter *p,
     p->decimal = 0U;
     if (p->kind == PRESENT_PROMPT)
       rc = cai_cli_presenter_input_begin(ui, 0);
+    else if (p->kind == PRESENT_SHELL_COMMAND) {
+      rc = cai_cli_presenter_input_begin(ui, 1);
+      if (rc == 0)
+        rc = cai_cli_presenter_input_write(ui, "!", 1U);
+    } else if (p->kind >= PRESENT_SHELL_TAIL) {
+      rc = cai_cli_presenter_finish_response(ui);
+      if (rc == 0)
+        rc = cai_cli_presenter_finish_reasoning(ui);
+      p->hex_digit = -1;
+    }
   } else if (!p->active || event->sequence != p->sequence ||
              event->stream != p->stream) {
     return failure(p, error, CAI_ERR_PROTOCOL,
@@ -192,6 +270,13 @@ static int event_body(cai_cli_transcript_presenter *p,
     else if (p->kind == PRESENT_REASONING)
       rc = cai_cli_reasoning_feed(&p->reasoning, event->data, event->length,
                                   cai_cli_presenter_reasoning_body, ui);
+    else if (p->kind == PRESENT_SHELL_COMMAND)
+      rc = cai_cli_presenter_input_write(ui, event->data, event->length);
+    else if (p->kind == PRESENT_SHELL_TAIL)
+      rc = cai_cli_shell_plain(&p->shell, event->data, event->length, 0,
+                               shell_output, ui, error);
+    else if (p->kind == PRESENT_SHELL_HEX)
+      rc = shell_hex(p, event->data, event->length, error);
     p->offset += event->length;
   } else if (event->kind == CAI_TRANSCRIPT_EVENT_END) {
     if (event->offset != p->offset)
@@ -200,8 +285,13 @@ static int event_body(cai_cli_transcript_presenter *p,
     if (p->kind == PRESENT_DELIVERY && (p->delivery_stage != 8 || !p->body))
       return failure(p, error, CAI_ERR_PROTOCOL,
                      "truncated accepted input delivery");
-    if (p->kind == PRESENT_PROMPT || p->kind == PRESENT_DELIVERY)
+    if (p->kind == PRESENT_PROMPT || p->kind == PRESENT_DELIVERY ||
+        p->kind == PRESENT_SHELL_COMMAND)
       rc = cai_cli_presenter_input_end(ui);
+    else if (p->kind == PRESENT_SHELL_HEX && p->hex_digit >= 0)
+      return failure(p, error, CAI_ERR_PROTOCOL, "odd stored shell hex length");
+    else if (p->kind == PRESENT_SHELL_TAIL || p->kind == PRESENT_SHELL_END)
+      rc = cai_cli_shell_plain(&p->shell, NULL, 0U, 1, shell_output, ui, error);
     else if (p->kind == PRESENT_REASONING_START ||
              p->kind == PRESENT_TEXT_END) {
       rc = cai_cli_presenter_finish_response(ui);
@@ -212,6 +302,8 @@ static int event_body(cai_cli_transcript_presenter *p,
       else
         cai_cli_reasoning_end(&p->reasoning);
     }
+    if (p->skip_shell_end)
+      p->skip_shell_first = p->skip_shell_last = 0U;
     p->active = 0;
   } else
     return failure(p, error, CAI_ERR_PROTOCOL,
@@ -275,6 +367,11 @@ void cai_cli_transcript_presenter_reset(cai_cli_transcript_presenter *p) {
   p->presenter = ui;
 }
 
+void cai_cli_transcript_presenter_skip_shell(cai_cli_transcript_presenter *p,
+                                             uint64_t first, uint64_t last) {
+  p->skip_shell_first = first;
+  p->skip_shell_last = last;
+}
 void cai_cli_transcript_presenter_close(cai_cli_transcript_presenter *p) {
   if (p != NULL) {
     cai_cli_transcript_presenter_reset(p);

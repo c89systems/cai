@@ -264,6 +264,12 @@ int main(int argc, char **argv) {
     config.event_context = &f;
     config.shell_context_max_bytes = 32768U;
     CHECK(cai_agent_runtime_open(client, &config, &runtime, &error) == CAI_OK);
+    {
+      unsigned long long first, last;
+      CHECK(cai_agent_runtime_user_shell_range(runtime, &first, &last,
+                                               &error) == CAI_OK);
+      CHECK(first == 0U && last == 0U);
+    }
     CHECK(cai_agent_runtime_user_shell_write(runtime, "x", 1U, &error) ==
           CAI_ERR_INVALID);
     clear_error(&error);
@@ -279,6 +285,12 @@ int main(int argc, char **argv) {
     clear_error(&error);
     CHECK(cai_agent_runtime_user_shell_begin(runtime, "streamed-user-command",
                                              1, &error) == CAI_OK);
+    {
+      unsigned long long first, last;
+      CHECK(cai_agent_runtime_user_shell_range(runtime, &first, &last,
+                                               &error) == CAI_OK);
+      CHECK(first != 0U && last == 0U);
+    }
     CHECK(cai_agent_runtime_user_shell_begin(runtime, "second", 1, &error) ==
           CAI_ERR_INVALID);
     clear_error(&error);
@@ -308,6 +320,12 @@ int main(int argc, char **argv) {
     clear_error(&error);
     CHECK(cai_agent_runtime_user_shell_finish(runtime, 7, 1234U, &error) ==
           CAI_OK);
+    {
+      unsigned long long first, last;
+      CHECK(cai_agent_runtime_user_shell_range(runtime, &first, &last,
+                                               &error) == CAI_OK);
+      CHECK(first != 0U && last > first);
+    }
     CHECK(f.output_events == 1U);
     wait_export(runtime, &exported, &error);
     CHECK(strstr(exported.data, "\\x1b") == NULL);

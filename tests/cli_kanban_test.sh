@@ -12,7 +12,7 @@ contains "$root/peer/requests.jsonl" 'environment'
 plan '{"plan":[{"tool":"todo_kanban","arguments":{"operation":"add_item","title":"PERSISTENT BOARD CARD"}},"ADDED"]}'
 run --board startup -ni add; ok
 terminal_start
-send '/status\r'; expect 'Kanban board'; expect 'startup'
+send '/status\r'; expect_table 1 'Kanban board'; expect_table 2 'startup'
 send '/todo\r'; expect 'PERSISTENT BOARD CARD'
 send '/todo new project\r'; expect 'Kanban: project'
 send '/todo use missing\r'; expect 'board was not found'

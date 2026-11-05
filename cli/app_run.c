@@ -565,8 +565,8 @@ static int cli_shell_output(void *context, const char *bytes, size_t length,
   if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0)
     return cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "cannot finish output before shell text");
-  return cai_cli_shell_plain(&state->shell, bytes, length, 0, cli_shell_literal,
-                             state, error);
+  return cai_cli_shell_plain(&state->shell.text, bytes, length, 0,
+                             cli_shell_literal, state, error);
 }
 
 static void cli_shell_unwatch(cli_state *state) {
@@ -594,7 +594,7 @@ static int cli_shell_pump(cli_state *state, cai_error *error) {
   if (state->shell.exited && state->shell.eof) {
     rc = state->controller
              ? CAI_OK
-             : cai_cli_shell_plain(&state->shell, NULL, 0U, 1,
+             : cai_cli_shell_plain(&state->shell.text, NULL, 0U, 1,
                                    cli_shell_literal, state, error);
     if (rc == CAI_OK)
       rc = cai_agent_runtime_user_shell_finish(
@@ -2234,7 +2234,7 @@ static int cli_replay_output_body(cli_state *state,
                           "user_shell_output_tail", "user", event->data,
                           strlen(event->data), fields, 2U);
     return !render ? CAI_OK
-                   : cai_cli_shell_plain(&state->shell, event->data,
+                   : cai_cli_shell_plain(&state->shell.text, event->data,
                                          strlen(event->data), 1,
                                          cli_shell_literal, state, error);
   }
@@ -2254,7 +2254,7 @@ static int cli_replay_output_body(cli_state *state,
     }
     if (!render)
       return CAI_OK;
-    if (cai_cli_shell_plain(&state->shell, NULL, 0U, 1, cli_shell_literal,
+    if (cai_cli_shell_plain(&state->shell.text, NULL, 0U, 1, cli_shell_literal,
                             state, error) != CAI_OK)
       return CAI_ERR_TRANSPORT;
     return cli_input(state, command, 1) == 0 ? CAI_OK : CAI_ERR_TRANSPORT;
@@ -2283,13 +2283,13 @@ static int cli_replay_output_body(cli_state *state,
                           "user_shell_output", "user", bytes, n / 2U, fields,
                           2U);
     return !render ? CAI_OK
-                   : cai_cli_shell_plain(&state->shell, bytes, n / 2U, 0,
+                   : cai_cli_shell_plain(&state->shell.text, bytes, n / 2U, 0,
                                          cli_shell_literal, state, error);
   }
   if (render && (strcmp(event->type, "user_shell_completed") == 0 ||
                  strcmp(event->type, "user_shell_unshared") == 0)) {
-    int rc = cai_cli_shell_plain(&state->shell, NULL, 0U, 1, cli_shell_literal,
-                                 state, error);
+    int rc = cai_cli_shell_plain(&state->shell.text, NULL, 0U, 1,
+                                 cli_shell_literal, state, error);
     state->ui.block_spacing_pending = 1;
     return rc != CAI_OK ? rc
            : cli_markdown(state, "**Shell command finished.**") == 0

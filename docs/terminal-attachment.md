@@ -137,11 +137,28 @@ hook keeps owner connections progressing and exits if the active owner fails.
 No terminal callback reenters Softline queue/history/status APIs. After return,
 the original producer synchronizes receipts and resumes from its displayed
 journal position. Takeover or conversation changes during handoff retain their
-normal authority and context rules. Shell bytes never enter model context.
+normal authority and context rules. Unshared shell bytes never enter model context.
+`/shellshare` and `!sh+` explicitly opt into bounded-tail capture through the
+[shell recording channel](workspace-wire-shell.md). They run the same local
+PTY, with at most one 4 KiB chunk awaiting owner acknowledgement. Unshared
+shells send no output over the socket. Local PTY lifetime belongs to the
+frontend; the owner logs its accepted slash/bang commands.
 Returning from a handoff reconciles the current conversation before entering
 its editor again, including when a completed status update arrived before the
 old producer's reset. The old view retains its local draft and queue receipts;
 it cannot receive events belonging to the replacement conversation.
+Completion notices are displayed after native queue synchronization, without
+blocking the editor on that synchronization. Transcript catch-up starts after
+the notice, preserving its seam. Feed restoration follows descriptor-mode
+restoration so a large PTY burst cannot break setup writes on nonblocking
+stdout. Saved shell tails use the same terminal-control sanitizer in live
+presentation and replay; a local capture's acknowledged journal range prevents
+duplicate display without suppressing unrelated assistant/tool entries.
+The common presenter tracks whether its open Markdown document belongs to
+tool/command output or assistant text. A producer change closes the previous
+document before feeding the next, so an assistant reply cannot be consumed as
+part of a tool's table. Fragment boundaries within one producer remain ordinary
+streaming input and do not force document completion.
 
 `/help -p` and `/help less` always use libmdf in Markdown mode, including when
 `less` is installed. The same finite help source drives inline and paged help;
@@ -159,7 +176,7 @@ external-first selection. Preferences belong to each frontend attachment.
 ## Remaining cutover work
 
 This is a working terminal/socket composition, not a claim of complete feature
-parity. Remaining layout/shellshare delegates, review progress parity,
+parity. Remaining review progress parity,
 full startup-control parity and validation of extended configuration outside
 the startup inventory still require
 integration. Automatic executable-path discovery currently

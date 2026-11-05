@@ -1,7 +1,24 @@
 #!/usr/bin/env bash
-# Terminal handoffs are deliberately never journaled or shared with the model.
+# Unshared terminal handoffs stay private; explicit sharing records only a tail.
 source "$(dirname "$0")/cli_test_common.sh"
 peer_start
+controller=$(realpath "$1")
+runtime_root=$(mktemp -d "$support/../build/pty.XXXXXX")
+no_publication() { [[ -z $(find "$runtime_root" -name 'ws-*.info' -print -quit) ]]; }
+pty_cleanup() {
+  local result=$?
+  if ! no_publication; then
+    "$controller" "$runtime_root" "$work" stop >"$root/stop.out" 2>"$root/stop.err" || true
+  fi
+  if [[ $result == 0 ]]; then rm -rf -- "$runtime_root"; fi
+  cleanup "$result"
+}
+trap pty_cleanup EXIT
+base+=(--runtime-dir "$runtime_root")
+pty_close() {
+  terminal_close
+  wait_for no_publication
+}
 export SHELL="$root/local-shell"
 cat >"$SHELL" <<'SHELL'
 #!/bin/sh
@@ -37,14 +54,14 @@ plan '{"plan":["PipeContextDone"]}'
 prompt 'inspect the pipe command result' PipeContextDone
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
 contains "$root/request" SHARED_PIPE_RESULT
-terminal_close
+pty_close
 plan '{"plan":["LocalReplayDone"]}'
 terminal_start
 prompt 'continue after resuming' LocalReplayDone
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
 absent "$root/request" PRIVATE_PTY_RESULT
 absent "$root/request" PRIVATE_GAME_FRAME
-terminal_close
+pty_close
 run --list-all; ok
 id=$(awk 'NR == 1 {print $1}' "$root/stdout")
 run --export "$id"; ok
@@ -55,7 +72,8 @@ contains "$journal" SHARED_PIPE_RESULT
 logs
 absent "$root/logs.jsonl" PRIVATE_PTY_RESULT
 absent "$root/logs.jsonl" PRIVATE_GAME_FRAME
-jq -se 'any(.[]; .event == "terminal_shell_started") and any(.[]; .event == "terminal_shell_completed")' "$root/logs.jsonl" >/dev/null
+# The owner logs accepted commands; local PTY lifetime belongs to the frontend.
+jq -se 'any(.[]; .event == "command_input" and .msg == "/shell")' "$root/logs.jsonl" >/dev/null
 
 # Explicit opt-in aliases share a rolling tail even when ordinary bang sharing
 # is disabled. Both use real PTYs and never persist the discarded raw stream.
@@ -65,11 +83,14 @@ for command in /shellshare '!sh+'; do
   send 'printf "\\033[32mSHARED_PTY_RESULT_€\\033[0m\\n"; exit\r'
   expect 'Shell exited 0.'
 done
+send '/status\r'; expect 'Session ID'
+[[ $(grep -o SHARED_PTY_RESULT_ "$term/text" | wc -l) == 2 ]]
 send '/shellshare\r'; expect LOCAL_PTY_READY
 send 'printf PTY_DISCARDED_HEAD; i=0; while [ "$i" -lt 2000 ]; do printf "\\033[31mSHARED_FRAME_%04d_abcdefghijklmnopqrstuvwxyz_abcdefghijklmnopqrstuvwxyz_abcdefghijklmnopqrstuvwxyz\\033[0m\\n" "$i"; i=$((i+1)); done; printf PTY_NEWEST_SUFFIX; exit\r'
 expect 'Shell exited 0.'
 plan '{"plan":["SharedPtyDone"]}'
 prompt 'inspect the shared terminal tail' SharedPtyDone
+[[ $(grep -o PTY_NEWEST_SUFFIX "$term/text" | wc -l) == 1 ]]
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
 jq -e '(.input // .messages) | tostring | contains("SHARED_PTY_RESULT_€")' "$root/request" >/dev/null
 contains "$root/request" PTY_NEWEST_SUFFIX
@@ -97,7 +118,7 @@ contains "$root/request" PIPE_NEWEST_SUFFIX
 contains "$root/request" PIPE_FRAME_1999
 absent "$root/request" PIPE_DISCARDED_HEAD
 absent "$root/request" PIPE_FRAME_0000
-terminal_close
+pty_close
 run --list-all; ok
 id=$(awk 'NR == 1 {print $1}' "$root/stdout")
 run --export "$id"; ok
@@ -116,4 +137,5 @@ expect PTY_NEWEST_SUFFIX
 expect PIPE_NEWEST_SUFFIX
 absent "$term/text" 'Skipped oversized session event'
 prompt 'continue after shared shell replay' SharedTailReplayDone
-terminal_close
+[[ $(grep -o PTY_NEWEST_SUFFIX "$term/text" | wc -l) == 1 ]]
+pty_close

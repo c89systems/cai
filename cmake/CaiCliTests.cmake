@@ -64,7 +64,7 @@
     # Compile the reusable presenter without application/store objects. This
     # fixture proves its link boundary while observing actual owner-side I/O.
     add_executable(cai_cli_geometry_test tests/cli_geometry_test.c
-      cli/softline_presenter.c cli/transcript_presenter.c cli/literal.c cli/reasoning.c cli/theme.c cli/error.c)
+      cli/softline_presenter.c cli/transcript_presenter.c cli/literal.c cli/reasoning.c cli/theme.c cli/shell_text.c cli/error.c)
     target_link_options(cai_cli_geometry_test PRIVATE -Wl,--wrap=ioctl
       -Wl,--wrap=sl_output_stream_reconcile -Wl,--wrap=sl_output_stream_write)
     target_link_libraries(cai_cli_geometry_test PRIVATE cai_static
@@ -366,8 +366,11 @@
         "$<TARGET_FILE:cai_cli_settings_fixture>")
     add_test(NAME cai_cli_pty_capture
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pty_capture_test.sh"
-        "$<TARGET_FILE:cai_cli_mock_fixture>")
-    set_tests_properties(cai_cli_context_metadata cai_cli_pty_capture PROPERTIES TIMEOUT 45)
+        "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_cli_terminal_owner_control>")
+    add_test(NAME cai_cli_pty_capture_embed
+      COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pty_capture_test.sh"
+        "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_cli_terminal_owner_control>")
+    set_tests_properties(cai_cli_context_metadata cai_cli_pty_capture cai_cli_pty_capture_embed PROPERTIES TIMEOUT 45)
     foreach(_cai_settings_protocol responses chat_completions)
       add_test(NAME cai_cli_settings_${_cai_settings_protocol}
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_settings_test.sh"
@@ -378,7 +381,7 @@
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_shell_context_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_cli_shell_fixture>")
     set_tests_properties(cai_cli_shell_context PROPERTIES TIMEOUT 30)
-    add_executable(cai_cli_shell_runner_test tests/cli_shell_runner_test.c cli/shell.c cli/pouch_stream.c cli/error.c)
+    add_executable(cai_cli_shell_runner_test tests/cli_shell_runner_test.c cli/shell.c cli/shell_text.c cli/pouch_stream.c cli/error.c)
     target_link_libraries(cai_cli_shell_runner_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_shell_runner_test)
     target_compile_options(cai_cli_shell_runner_test PRIVATE -UNDEBUG)
