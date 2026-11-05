@@ -185,7 +185,7 @@ if [[ "$protocol" == responses ]]; then
   last_request; contains "$root/request" REVIEWER_STEER
   contains "$root/request" REVIEWER_SECOND_STEER
   contains "$root/request" ', a code reviewer'
-  ordered_feed '> REVIEWER_STEER' '# Review findings'
+  ordered_feed '> REVIEWER_STEER' '# Review handoff'
   terminal_close
   terminal_start
   expect '> REVIEWER_STEER'; expect 'Fix parser'

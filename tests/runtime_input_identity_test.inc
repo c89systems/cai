@@ -2,8 +2,9 @@
  * The trace holds only bounded lifecycle metadata, never a response body. */
 typedef struct input_identity_trace {
   unsigned long long through;
+  unsigned long long consumed;
   size_t count;
-  int terminals;
+  int terminals, presented;
   size_t settled_count;
   struct {
     char call[256], goal[32];
@@ -22,6 +23,15 @@ static int input_identity_collect(void *context,
   cai_execution_record record;
   int rc;
   trace->through = event->sequence;
+  if (strcmp(event->type, "input_consumed") == 0)
+    trace->consumed = event->sequence;
+  if (strcmp(event->type, "input_presented") == 0) {
+    if (trace->consumed == 0U || event->sequence <= trace->consumed)
+      return cai_set_error(error, CAI_ERR_PROTOCOL,
+                           "input presentation preceded consumption");
+    trace->consumed = 0U;
+    ++trace->presented;
+  }
   if (strcmp(event->type, "execution") != 0)
     return CAI_OK;
   cai_execution_record_init(&record);
@@ -359,6 +369,8 @@ static void input_identity_cases(test_state *state) {
     IDENTITY_REQUIRE(input_identity_wait(runtime, &store, config.session_scope,
                                          config.session_id, trace,
                                          success ? 3 : 1, &error) == CAI_OK);
+    expect_int(state, "consumed_input_has_one_presentation", trace->presented,
+               success ? (variant == 1 ? 4L : 3L) : 1L);
     for (j = 0U; j < (success ? 2U : 1U); ++j) {
       expect_int(state, "queued_input_has_own_start",
                  input_identity_count(trace, "turn.started", calls[j]), 1L);
@@ -523,6 +535,8 @@ static void input_identity_preflight(test_state *state) {
              input_identity_count(&s->trace, "turn.started", call), 0L);
   expect_int(state, "input_preflight_no_request",
              input_identity_count(&s->trace, "response.completed", call), 0L);
+  expect_int(state, "input_preflight_no_false_presentation", s->trace.presented,
+             0L);
   expect_int(state, "input_preflight_settled", (long)s->trace.settled_count,
              1L);
   expect_str(state, "input_preflight_settled_identity",

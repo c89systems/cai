@@ -138,10 +138,16 @@ Partial/replaced streams
 produce no typed chunk. Subscription replacement inside either callback cannot
 overwrite the new stream's cursor, or shorten a borrowed callback lifetime.
 
-The shared terminal presenter now has a span consumer for accepted parent
-inputs, assistant Markdown and reasoning. It strips the bounded
-`input_queue_delivery` provenance header incrementally, displaying the actual
-delivery rather than queue-admission JSON. Native strings and socket fragments
+The shared terminal presenter has a span consumer for consumed parent inputs,
+assistant Markdown and reasoning. `input_presented` is a presentation-only
+journal entry written at actual model consumption, after `input_consumed`.
+Its bounded prompt body is projected directly from the runtime's existing
+input node; no frontend keeps pending prompt text or rereads an admission
+payload. Earlier `input_queue_delivery`, `turn_submitted`, `turn_queued` and
+`steering_queued` records remain recovery/admission data and are not displayed
+as consumed input. Failed preflight work is not falsely shown as delivered.
+Child steering keeps its attributed `subagent_input` projection. Native
+strings and socket fragments
 share one literal rendering path. BEGIN's original timestamp is retained across
 DATA/END, which carry no timestamp themselves. Markdown can continue across the
 replay/live watermark without an artificial finish. Reset abandons pending
@@ -168,7 +174,7 @@ successful and uncertain publication, without notifications on rejected cuts.
 typed replay, observer resume, live output, cancellation and last-client stop.
 `cai_cli_geometry` proves fragmentation-invariant literal output, Unicode/control
 repair, interruption, incremental output before a multi-megabyte producer ends,
-delivery-header validation and replay/live Markdown continuity. Its presenter
+admission suppression and replay/live Markdown continuity. Its presenter
 link has no application/storage objects. `cai_cli_headless` additionally renders
 live and restarted replay from the actual executable's Unix socket, and aborts
 if its frontend attempts to open a storage client.

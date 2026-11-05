@@ -108,6 +108,7 @@ typedef struct frontend {
   int wake[2], timer;
   sl_watch_id_t socket_watch, boot_watch, timer_watch, wake_watch;
   int socket_fd, boot_fd, failed, quit, ready, bound, subscribed, replaying;
+  int replay_finished;
   int action_field, shell, awaiting_bind, welcomed, control, greeting_resumed;
   int child_theme_scope;
   int review_header_shown;
@@ -402,6 +403,7 @@ static int status(frontend *f) {
   unsigned long long elapsed;
   long long goal_seconds;
   char message[1024];
+  const char *title = NULL;
   int busy = 0;
   memset(&goal, 0, sizeof(goal));
   memset(&metrics, 0, sizeof(metrics));
@@ -409,7 +411,7 @@ static int status(frontend *f) {
       cai_app_client_get_view(f->client, &view, NULL) == CAI_OK &&
       view != NULL && view->available) {
     metrics = view->metrics;
-    busy = metrics.turn_active;
+    busy = metrics.turn_active || f->review_open;
     cai_app_view_elapsed(view, clock_ms(), &elapsed, &goal_seconds);
     metrics.turn_elapsed_ms = elapsed;
     goal.has_goal = view->goal.has_goal;
@@ -429,7 +431,16 @@ static int status(frontend *f) {
     if (cai_cli_status_apply(f->ui->sl, &f->status) != 0)
       return -1;
   }
-  if (f->ready && f->history_loaded && f->skills_ready &&
+  if (f->review_open) {
+    if (cai_cli_reasoning_title(&f->current->child_reasoning, &title) != 0)
+      return -1;
+  } else {
+    if (f->transcript != NULL &&
+        cai_cli_transcript_presenter_title(f->transcript, &title) != 0)
+      return -1;
+  }
+  if (f->ready && f->history_loaded && f->skills_ready && f->subscribed &&
+      !f->replaying && f->replay_finished &&
       f->skill_conversation == f->state.conversation && !f->welcomed) {
     snprintf(message, sizeof(message), "%s",
              f->state.transport.controller != f->state.transport.attachment
@@ -448,6 +459,8 @@ static int status(frontend *f) {
   else if (f->bound &&
            (!f->skills_ready || f->skill_conversation != f->state.conversation))
     snprintf(message, sizeof(message), "Loading completions...");
+  else if (!f->welcomed && f->subscribed)
+    snprintf(message, sizeof(message), "Replaying conversation...");
   else if (f->handoff_notice[0] != '\0') {
     snprintf(message, sizeof(message), "Restoring input queue...");
     busy = 1;
@@ -456,7 +469,7 @@ static int status(frontend *f) {
   else if (f->state.transport.controller != f->state.transport.attachment)
     snprintf(message, sizeof(message),
              "Observing workspace. /takeover acquires control.");
-  else if (cai_cli_turn_status_message(message, sizeof(message), NULL,
+  else if (cai_cli_turn_status_message(message, sizeof(message), title,
                                        &metrics) != 0)
     snprintf(message, sizeof(message), "Ready. /help for usage.");
   if (message[0] == '\0')
@@ -616,6 +629,7 @@ static int transcript(void *context, const cai_transcript_event *event,
       f->review_open = 1;
       f->review_header_shown = 0;
       f->child_theme_scope = 2;
+      cai_cli_reasoning_reset(&f->current->child_reasoning);
     }
     if (strcmp(event->type, "review_handoff_committed") == 0 ||
         strcmp(event->type, "subagent_handoff_committed") == 0) {
@@ -624,7 +638,7 @@ static int transcript(void *context, const cai_transcript_event *event,
         return CAI_ERR_TRANSPORT;
     }
     if ((review || strcmp(event->type, "assistant_text_delta") == 0 ||
-         strcmp(event->type, "input_queue_delivery") == 0 ||
+         strcmp(event->type, "input_presented") == 0 ||
          strcmp(event->type, "reasoning_summary_started") == 0) &&
         cai_cli_presenter_set_theme_scope(f->ui, review ? 2 : 0, error) !=
             CAI_OK)
@@ -634,6 +648,7 @@ static int transcript(void *context, const cai_transcript_event *event,
   }
   if (event->kind == CAI_TRANSCRIPT_REPLAY_BEGIN) {
     f->replaying = 1;
+    f->replay_finished = 0;
     f->replay_child[0] = '\0';
     if (event->omitted != 0U && f->options->replay_turns != 0L) {
       char message[160];
@@ -645,6 +660,7 @@ static int transcript(void *context, const cai_transcript_event *event,
     }
   } else if (event->kind == CAI_TRANSCRIPT_REPLAY_END) {
     f->replaying = 0;
+    f->replay_finished = 1;
     f->resume_actions = 0;
     f->resume_collection[0] = '\0';
     f->resume_position = f->resume_sequence = 0U;
@@ -672,7 +688,9 @@ static int transcript(void *context, const cai_transcript_event *event,
       f->resume_position = cursor->position;
       f->resume_sequence = cursor->sequence;
       f->subscribed = 0;
-    }
+    } else
+      f->replay_finished =
+          1; /* The inline warning settles this replay attempt. */
     return notice(f, event->reason != NULL ? event->reason
                                            : "Transcript unavailable") == 0
                ? CAI_OK
@@ -731,8 +749,9 @@ static int execution_body(void *context, const cai_app_execution_event *event,
                ? CAI_OK
                : CAI_ERR_TRANSPORT;
   length = strlen(r->data);
-  if (!event->replay && strcmp(r->kind, "command.completed") == 0 &&
-      r->call_id != NULL && f->history_command[0] != '\0' &&
+  if (!event->replay && strcmp(r->kind, "command.settled") == 0 &&
+      r->code == CAI_OK && r->call_id != NULL &&
+      f->history_command[0] != '\0' &&
       strcmp(r->call_id, f->history_command) == 0) {
     f->history_requested = f->history_loaded = f->current->history_loaded = 0;
     (void)sl_history_set_auto_add(f->ui->sl, 0);
@@ -754,7 +773,8 @@ static int execution_body(void *context, const cai_app_execution_event *event,
     return CAI_ERR_TRANSPORT;
   if (event->subagent && r->subagent != NULL &&
       strcmp(r->subagent, "review") == 0 && r->parent_call_id != NULL &&
-      strcmp(r->parent_call_id, "/review") != 0 && !f->review_header_shown) {
+      !cai_cli_manual_review_call(r->parent_call_id) &&
+      !f->review_header_shown) {
     if (markdown(f, CAI_CLI_REVIEW_START "\n\n",
                  strlen(CAI_CLI_REVIEW_START "\n\n")) != 0 ||
         cai_cli_presenter_finish_response(f->ui) != 0)
@@ -773,8 +793,7 @@ static int execution_body(void *context, const cai_app_execution_event *event,
       return CAI_ERR_TRANSPORT;
   }
   if (f->startup_request != 0U && f->startup_command && r->call_id != NULL &&
-      (strcmp(r->kind, "command.completed") == 0 ||
-       strcmp(r->kind, "command.failed") == 0)) {
+      strcmp(r->kind, "command.settled") == 0) {
     char source[129], tail;
     unsigned long long producer, request, item;
     if (sscanf(r->call_id, "command:%128[^:]:%llu:%llu:%llu%c", source,
@@ -782,7 +801,7 @@ static int execution_body(void *context, const cai_app_execution_event *event,
         producer == f->startup_producer && request == f->startup_request &&
         strcmp(source, f->startup_session) == 0) {
       f->startup_request = 0U;
-      if (strcmp(r->kind, "command.failed") == 0)
+      if (r->code != CAI_OK)
         f->startup.stage = CAI_CLI_STARTUP_DONE;
     }
   }
@@ -878,7 +897,7 @@ static int execution_body(void *context, const cai_app_execution_event *event,
     if (rc == 0)
       rc = cai_cli_presenter_finish_reasoning(f->ui);
     if (rc == 0 && (r->parent_call_id == NULL ||
-                    strcmp(r->parent_call_id, "/review") != 0))
+                    !cai_cli_manual_review_call(r->parent_call_id)))
       rc =
           markdown(f, CAI_CLI_REVIEW_END "\n", strlen(CAI_CLI_REVIEW_END "\n"));
     if (rc == 0)
@@ -909,8 +928,8 @@ static int execution_body(void *context, const cai_app_execution_event *event,
                 (event->subagent &&
                  ((r->subagent != NULL && strcmp(r->subagent, "review") == 0) ||
                   (r->parent_call_id != NULL &&
-                   strcmp(r->parent_call_id, "/review") == 0)))
-            ? "**Review stopped.**\n"
+                   cai_cli_manual_review_call(r->parent_call_id))))
+            ? "**WARN: Review stopped.**\n"
             : "**WARN: Turn stopped.**\n";
     rc = cai_cli_presenter_finish_response(f->ui);
     if (rc == 0)
@@ -1363,6 +1382,7 @@ static int service(frontend *f) {
       if (rc != CAI_OK)
         return -1;
       f->subscribed = 1;
+      f->replay_finished = 0;
     }
     if (f->bound && !f->history_requested) {
       rc = cai_app_client_prompt_history(

@@ -58,19 +58,20 @@ jq -L "$support/fixtures" -cs '
      ($assistant | walk(if type == "object" and has("text") then .text = marker("ANSWER"; $i) + " PARTA PARTB" else . end))] |
      map([.] | tojson | (utf8bytelength|tostring) + "\n" + . + "\n") | add) as $context |
   {record_type:"event", sequence:1, type:"input_journal_v2", data:null},
-  (range(0;25) as $i | ($i*5+2) as $start |
+  (range(0;25) as $i | ($i*6+2) as $start |
     {record_type:"event", sequence:$start, type:"turn_submitted", data:marker("PROMPT"; $i)},
     {record_type:"event", sequence:($start+1), type:"input_consumed", data:($start|tostring)},
-    {record_type:"event", sequence:($start+2), type:"assistant_text_delta", data:(marker("ANSWER"; $i)+" PARTA")},
-    {record_type:"event", sequence:($start+3), type:"assistant_text_delta", data:" PARTB"},
-    {record_type:"event", sequence:($start+4), type:"assistant_text_end", data:null}),
-  ($commit | .applied_event_sequence=126 |
+    {record_type:"event", sequence:($start+2), type:"input_presented", data:marker("PROMPT"; $i)},
+    {record_type:"event", sequence:($start+3), type:"assistant_text_delta", data:(marker("ANSWER"; $i)+" PARTA")},
+    {record_type:"event", sequence:($start+4), type:"assistant_text_delta", data:" PARTB"},
+    {record_type:"event", sequence:($start+5), type:"assistant_text_end", data:null}),
+  ($commit | .applied_event_sequence=151 |
     .state.revision=1 | .state.base_bytes=0 | .state.end_bytes=($context|utf8bytelength) |
     .state.blocks_keep=0 | .state.hidden_keep=0 | .state.owned_keep=0 |
     .state.history_append=$context |
     .state.metadata.history_hidden_events=[] | .state.metadata.history_owned_events=[] |
     .state.metadata.history_blocks=[range(0;25) as $i |
-      {first_item:($i*2), event_start:($i*5+2), input_sequence:($i*5+2), kind:1,
+      {first_item:($i*2), event_start:($i*6+2), input_sequence:($i*6+2), kind:1,
        summary:(marker("ANSWER"; $i) + " PARTA PARTB")}])
 ' "$seed" >"$root/long.jsonl"
 run --import "$root/long.jsonl"; ok

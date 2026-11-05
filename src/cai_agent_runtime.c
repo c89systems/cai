@@ -3100,6 +3100,19 @@ static int cai_runtime_mark_input_consumed_locked(
   return rc;
 }
 
+/** A presentation projection at actual model consumption, independent of the
+ * earlier durable admission used for recovery. Socket clients must not retain
+ * pending prompt bodies or reread their admission records to display this
+ * seam. Child steering has its existing attributed parent projection. */
+static int cai_runtime_present_input_locked(cai_agent_runtime *runtime,
+                                            const char *text,
+                                            cai_error *error) {
+  if (!runtime->record_transcript || runtime->execution_parent_session != NULL)
+    return CAI_OK;
+  return cai_runtime_append_journal_event_locked(runtime, "input_presented",
+                                                 text, NULL, error);
+}
+
 static int cai_runtime_xid_random(unsigned char *output, size_t length,
                                   cai_error *error) {
   int fd;
@@ -4200,6 +4213,31 @@ static int cai_runtime_validate_review_report(const char *report,
   return rc;
 }
 
+/** Review fields are already parsed documents here. Preserve text and line
+ * breaks while neutralizing terminal controls; append ordinary spans at once.
+ * This is the existing bounded report renderer, not a streaming JSON parser. */
+static int cai_runtime_review_safe_append(cai_buffer_builder *out,
+                                          const char *text, cai_error *error) {
+  const unsigned char *p = (const unsigned char *)text;
+  const unsigned char *start = p;
+  int rc = CAI_OK;
+  while (rc == CAI_OK && *p != '\0') {
+    int c1 = p[0] == 0xc2U && p[1] >= 0x80U && p[1] <= 0x9fU;
+    if ((*p < 32U && *p != '\n' && *p != '\t') || *p == 127U || c1) {
+      rc = cai_buffer_append(out, (const char *)start, (size_t)(p - start),
+                             error);
+      if (rc == CAI_OK)
+        rc = cai_buffer_append_cstr(out, "?", error);
+      p += c1 ? 2U : 1U;
+      start = p;
+    } else
+      ++p;
+  }
+  return rc == CAI_OK ? cai_buffer_append(out, (const char *)start,
+                                          (size_t)(p - start), error)
+                      : rc;
+}
+
 static int cai_runtime_render_review_markdown(const char *report, char **out,
                                               cai_error *error) {
   cai_runtime_review_report_doc doc;
@@ -4208,7 +4246,7 @@ static int cai_runtime_render_review_markdown(const char *report, char **out,
   lonejson_error json_error;
   lonejson_status status;
   size_t i;
-  char location[512];
+  char location[96];
   int rc;
 
   if (out == NULL || report == NULL) {
@@ -4231,11 +4269,13 @@ static int cai_runtime_render_review_markdown(const char *report, char **out,
   rc = cai_buffer_append_cstr(&builder, "# Review handoff\n\n**Verdict:** ",
                               error);
   if (rc == CAI_OK)
-    rc = cai_buffer_append_cstr(&builder, doc.overall_correctness, error);
+    rc = cai_runtime_review_safe_append(&builder, doc.overall_correctness,
+                                        error);
   if (rc == CAI_OK)
     rc = cai_buffer_append_cstr(&builder, "\n\n", error);
   if (rc == CAI_OK)
-    rc = cai_buffer_append_cstr(&builder, doc.overall_explanation, error);
+    rc = cai_runtime_review_safe_append(&builder, doc.overall_explanation,
+                                        error);
   if (rc == CAI_OK)
     rc = cai_buffer_append_cstr(&builder, "\n\n", error);
   findings = (cai_runtime_review_finding *)doc.findings.items;
@@ -4243,19 +4283,27 @@ static int cai_runtime_render_review_markdown(const char *report, char **out,
     rc = cai_buffer_append_cstr(&builder, "No actionable findings.\n", error);
   }
   for (i = 0U; rc == CAI_OK && i < doc.findings.count; i++) {
-    (void)snprintf(location, sizeof(location), "%s:%lld-%lld",
-                   findings[i].code_location.absolute_file_path,
+    (void)snprintf(location, sizeof(location), ":%lld-%lld",
                    (long long)findings[i].code_location.line_range.start,
                    (long long)findings[i].code_location.line_range.end);
     rc = cai_buffer_append_cstr(&builder, "## ", error);
     if (rc == CAI_OK)
-      rc = cai_buffer_append_cstr(&builder, findings[i].title, error);
+      rc = cai_runtime_review_safe_append(&builder, findings[i].title, error);
     if (rc == CAI_OK)
       rc = cai_buffer_append_cstr(&builder, "\n\n", error);
+    if (rc == CAI_OK && findings[i].priority_present) {
+      char priority[48];
+      snprintf(priority, sizeof(priority), "Priority: P%lld  \n",
+               (long long)findings[i].priority);
+      rc = cai_buffer_append_cstr(&builder, priority, error);
+    }
     if (rc == CAI_OK)
-      rc = cai_buffer_append_cstr(&builder, findings[i].body, error);
+      rc = cai_runtime_review_safe_append(&builder, findings[i].body, error);
     if (rc == CAI_OK)
       rc = cai_buffer_append_cstr(&builder, "\n\nLocation: `", error);
+    if (rc == CAI_OK)
+      rc = cai_runtime_review_safe_append(
+          &builder, findings[i].code_location.absolute_file_path, error);
     if (rc == CAI_OK)
       rc = cai_buffer_append_cstr(&builder, location, error);
     if (rc == CAI_OK)
@@ -5156,6 +5204,8 @@ static int cai_runtime_deliver_steering(void *context, cai_session *session,
       if (rc == CAI_OK) {
         cai_runtime_mark_commit_event_locked(runtime, consumed_sequence);
       }
+      if (rc == CAI_OK)
+        rc = cai_runtime_present_input_locked(runtime, input->text, error);
       if (rc == CAI_OK) {
         rc = cai_runtime_child_input_projection_locked(runtime, input->text,
                                                        error);
@@ -6258,6 +6308,8 @@ static void *cai_runtime_worker(void *context) {
       pthread_mutex_lock(&runtime->lock);
       rc = cai_runtime_mark_input_consumed_locked(
           runtime, input->journal_sequence, &consumed_sequence, &error);
+      if (rc == CAI_OK)
+        rc = cai_runtime_present_input_locked(runtime, input->text, &error);
       pthread_mutex_unlock(&runtime->lock);
     }
     cai_runtime_input_node_free(input);
@@ -10676,6 +10728,12 @@ int cai_agent_runtime_start_review(cai_agent_runtime *parent,
   if (request == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID, "review request is required");
   }
+  if (request->parent_call_id != NULL &&
+      (request->parent_call_id[0] == '\0' ||
+       strlen(request->parent_call_id) > 255U)) {
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "review parent_call_id must contain 1 to 255 bytes");
+  }
   if (!parent->preset_supports_review) {
     return cai_set_error(error, CAI_ERR_INVALID,
                          "agent preset does not support isolated review");
@@ -10759,8 +10817,10 @@ int cai_agent_runtime_start_review(cai_agent_runtime *parent,
   review = NULL;
   rc = cai_agent_runtime_open(parent->client, &config, &review, error);
   if (rc == CAI_OK)
-    rc = cai_runtime_execution_parent(review, parent, "/review", "review",
-                                      error);
+    rc = cai_runtime_execution_parent(
+        review, parent,
+        request->parent_call_id != NULL ? request->parent_call_id : "/review",
+        "review", error);
   if (rc == CAI_OK) {
     rc = cai_agent_runtime_submit_review(review, request, error);
   }

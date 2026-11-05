@@ -8,9 +8,9 @@ static int progress(cai_cli_documents *d, cai_error *error) {
   d->progress_bytes = 0U;
   return d->progress != NULL ? d->progress(d->progress_context, error) : CAI_OK;
 }
-static int document_record(cai_cli_documents *d, const char *kind,
-                           const char *field, const char *text, int code,
-                           long long http_status, cai_error *error) {
+static int call_record(cai_cli_documents *d, const char *call, const char *kind,
+                       const char *field, const char *text, int code,
+                       long long http_status, cai_error *error) {
   cai_execution_record *record;
   cai_agent_execution *writer = NULL;
   int rc;
@@ -19,7 +19,7 @@ static int document_record(cai_cli_documents *d, const char *kind,
   if (record == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "allocate command metadata");
   record->kind = kind;
-  record->call_id = d->active ? d->call : NULL;
+  record->call_id = call;
   record->field = field;
   record->line_start = 1;
   record->code = code;
@@ -36,6 +36,17 @@ static int document_record(cai_cli_documents *d, const char *kind,
   if (rc != CAI_OK)
     cai_cli_error(&d->error, rc, "persist command record");
   return rc;
+}
+static int document_record(cai_cli_documents *d, const char *kind,
+                           const char *field, const char *text, int code,
+                           long long http_status, cai_error *error) {
+  return call_record(d, d->active ? d->call : NULL, kind, field, text, code,
+                     http_status, error);
+}
+int cai_cli_documents_review_complete(cai_cli_documents *d, const char *call,
+                                      int code, cai_error *error) {
+  return call_record(d, call, "command.review_settled", NULL, NULL, code, 0,
+                     error);
 }
 
 int cai_cli_documents_finish(cai_cli_documents *d) {
@@ -149,6 +160,9 @@ int cai_cli_documents_complete(cai_cli_documents *d, int outcome,
       if (values[i] != NULL && values[i][0] != '\0')
         rc = document_record(d, "command.failed", names[i], values[i], outcome,
                              status, &local);
+    if (rc == CAI_OK)
+      rc = document_record(d, "command.settled", NULL, NULL, outcome, status,
+                           &local);
     if (rc != CAI_OK)
       cai_cli_error(error, rc,
                     local.message != NULL ? local.message

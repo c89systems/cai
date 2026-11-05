@@ -301,7 +301,7 @@ static int transcript_record(cai_cli_transcript_presenter *p, const char *type,
   return cai_cli_transcript_presenter_event(p, &event, NULL) == CAI_OK ? 0 : -1;
 }
 
-/** Verify accepted-input provenance stripping and Markdown continuity across
+/** Verify consumption-only prompt display and Markdown continuity across
  * replay/live spans with real renderers and no store/controller link. */
 static int transcript_cases(void) {
   static const char text[] = "literal **stars** café 🚀\nnext line";
@@ -342,17 +342,19 @@ static int transcript_cases(void) {
   capture[0] = '\0';
   CHECK(cai_cli_presenter_prompt(ui, text) == 0);
   memcpy(reference, capture, captured + 1U);
-  for (i = 1U; i <= strlen(delivery_text); ++i) {
+  for (i = 1U; i <= strlen(text); ++i) {
     captured = 0U;
     capture[0] = '\0';
     ui->feed_breaks = ui->block_spacing_pending = 0;
-    CHECK(transcript_record(p, "input_queue_delivery", delivery_text,
-                            strlen(delivery_text), i, i, 0U) == 0);
+    CHECK(transcript_record(p, "input_presented", text, strlen(text), i, i,
+                            0U) == 0);
     CHECK(strcmp(capture, reference) == 0);
   }
   /* Admission metadata and encoded tool output must not escape through this
    * adapter. The tool presenter consumes the separate typed execution path. */
   before = captured;
+  CHECK(transcript_record(p, "input_queue_delivery", delivery_text,
+                          strlen(delivery_text), 1U, 999U, 0U) == 0);
   CHECK(transcript_record(p, "input_queue", "not a delivered prompt", 22U, 1U,
                           1000U, 0U) == 0);
   CHECK(transcript_record(p, "execution", "{\"data\":\"not raw output\"}", 25U,
@@ -360,10 +362,10 @@ static int transcript_cases(void) {
   CHECK(captured == before);
   for (i = 0U; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
     CHECK(transcript_record(p, "input_queue_delivery", invalid[i],
-                            strlen(invalid[i]), 1U, 2000U + i, 0U) == -1);
+                            strlen(invalid[i]), 1U, 2000U + i, 0U) == 0);
     CHECK(transcript_record(p, "turn_submitted", "held", 4U, 1U, 3000U + i,
-                            0U) == -1);
-    cai_cli_transcript_presenter_reset(p);
+                            0U) == 0);
+    CHECK(captured == before);
   }
   captured = 0U;
   capture[0] = '\0';
@@ -401,7 +403,7 @@ static int transcript_cases(void) {
   event.kind = CAI_TRANSCRIPT_EVENT_BEGIN;
   event.stream = 1U;
   event.sequence = 5000U;
-  event.type = "turn_submitted";
+  event.type = "input_presented";
   event.has_data = 1;
   CHECK(cai_cli_transcript_presenter_event(p, &event, NULL) == CAI_OK);
   event.kind = CAI_TRANSCRIPT_DATA;
@@ -414,7 +416,7 @@ static int transcript_cases(void) {
         CAI_ERR_PROTOCOL);
   cai_cli_transcript_presenter_reset(p);
   CHECK(emitted == before && strstr(capture, "unfinished prompt") == NULL);
-  CHECK(transcript_record(p, "turn_submitted", "Recovered", 9U, 1U, 5001U,
+  CHECK(transcript_record(p, "input_presented", "Recovered", 9U, 1U, 5001U,
                           0U) == 0);
   /* DATA/END lack a wire timestamp; the retained BEGIN must supply the DTG. */
   captured = 0U;

@@ -5399,6 +5399,8 @@ static int cai_lua_agent_runtime_start_review(lua_State *L) {
   luaL_checktype(L, 2, LUA_TTABLE);
   cai_agent_review_request_init(&request);
   request_value_count = 0;
+  request.parent_call_id =
+      cai_lua_opt_string_field(L, 2, "parent_call_id", NULL);
   target = cai_lua_opt_string_field(L, 2, "target", NULL);
   if (target == NULL) {
     request.target = CAI_AGENT_REVIEW_DEFAULT;

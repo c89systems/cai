@@ -131,7 +131,9 @@ Append bursts preserve ordered live delivery by switching a slow ring to native
 catch-up through the existing reader worker. The normal path stays direct;
 neither ring capacity nor the number of reader workers grows with output.
 Reviewer reasoning uses the same incremental Markdown path during live display
-and replay. Manual review headers come from the accepted backend command;
+and replay. Its bounded first-line thinking title drives the active review
+status; root thinking titles come from the transcript presenter. Manual review
+headers come from the accepted backend command;
 model-invoked review tools use the shared formatter's lifecycle presentation.
 
 ## Local terminal handoff
@@ -151,7 +153,10 @@ hook keeps owner connections progressing and exits if the active owner fails.
 No terminal callback reenters Softline queue/history/status APIs. After return,
 the original producer synchronizes receipts and resumes from its displayed
 journal position. Takeover or conversation changes during handoff retain their
-normal authority and context rules. Unshared shell bytes never enter model context.
+normal authority and context rules. A focused real-terminal fixture holds the
+native help pager open until a paused provider finishes, then verifies that
+the unseen response appears exactly once after the pager closes. Unshared
+shell bytes never enter model context.
 `/shellshare` and `!sh+` explicitly opt into bounded-tail capture through the
 [shell recording channel](workspace-wire-shell.md). They run the same local
 PTY, with at most one 4 KiB chunk awaiting owner acknowledgement. Unshared

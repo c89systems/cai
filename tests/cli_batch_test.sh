@@ -53,6 +53,64 @@ run -s batch-fixture -ni 'OBSERVER MUST NOT RUN'; bad
 contains "$root/stderr" 'controller authority'
 kill -TERM "$holder_pid"; wait "$holder_pid" || true; holder_pid=
 
+# Queries and state changes use the same admitted command path as the TUI.
+# Their documents are selected by command identity, without an inference call.
+before=$(requests)
+run -s batch-fixture -ni '/reasoning high' -i '/status'; ok
+contains "$root/stdout" 'Reasoning effort'
+contains "$root/stdout" high
+[[ $(requests) == "$before" ]]
+run -s batch-fixture -ni '/not-a-command' -i 'MUST NOT FOLLOW COMMAND ERROR'; bad
+[[ ! -s "$root/stdout" && $(requests) == "$before" ]]
+run -s batch-fixture -ni '/help -p' -i 'MUST NOT FOLLOW FRONTEND ACTION'; bad
+contains "$root/stderr" 'interactive terminal attachment'
+[[ ! -s "$root/stdout" && $(requests) == "$before" ]]
+
+# Direct reviews attach to this owner. Launch acknowledgement is insufficient:
+# wait for validation and handoff, retaining the exact JSON response or its
+# journaled Markdown projection without opening another runtime in the client.
+report=$(jq -c . "$support/fixtures/review.json")
+printf 'review input\n' >"$work/tracked.txt"
+for mode in markdown json file; do
+  plan "$(jq -n --arg report "$report" '{plan:[{text:"REVIEW PREAMBLE MUST NOT WIN",tool:"read_file",arguments:{path:"tracked.txt"}},$report]}')"
+  flags=()
+  case "$mode" in json) flags+=(-T json) ;; file) flags+=(-o findings.md) ;; esac
+  run -s batch-fixture --review -i 'Inspect the fixture' "${flags[@]}"; ok
+  case "$mode" in
+    json) jq -Se . "$root/stdout" >"$root/actual"; jq -Se . "$support/fixtures/review.json" >"$root/expected"; cmp "$root/actual" "$root/expected" ;;
+    file) [[ ! -s "$root/stdout" ]]; contains "$work/findings.md" '# Review findings' ;;
+    markdown) contains "$root/stdout" '# Review findings'; contains "$root/stdout" 'Priority: P1' ;;
+  esac
+  absent "$root/stdout" 'REVIEW PREAMBLE MUST NOT WIN'
+  [[ $(current_session_id) == "$original" ]]
+  kill -0 "$owner_pid"
+done
+plan "$(jq -n --arg report "$report" '{plan:[$report]}')"
+terminal_launch -s batch-fixture --review -i 'Review from a real terminal'
+wait_for test -s "$term/status"
+wait "$terminal_pid"; terminal_pid=
+[[ $(cat "$term/status") == 0 ]]
+contains "$term/text" '# Review findings'
+absent "$term/text" 'Conversation attached.'
+exec 7>&-
+exec {terminal_event_fd}>&-
+terminal_events=
+unset CAI_TEST_TERMINAL_EVENT_FD
+printf 'PRESERVE THIS FILE\n' >"$work/findings.md"
+plan '{"plan":["not a JSON review report"]}'
+run -s batch-fixture --review -i 'Invalid review fixture' -o findings.md; bad
+[[ ! -s "$root/stdout" && $(cat "$work/findings.md") == 'PRESERVE THIS FILE' ]]
+contains "$root/stderr" 'required JSON report schema'
+
+# Paths are not clipped to a presentation stack buffer; control bytes from
+# a report cannot become terminal control sequences in Markdown output.
+long_path="/$(printf '%0700d' 0)/parser.c"
+safe_report=$(jq -c --arg path "$long_path" '.findings[0].code_location.absolute_file_path=$path | .findings[0].body="before\u001bafter\u009bcontrol"' "$support/fixtures/review.json")
+plan "$(jq -n --arg report "$safe_report" '{plan:[$report]}')"
+run -s batch-fixture --review -i 'Control and long path fixture'; ok
+contains "$root/stdout" "$long_path:4-6"
+contains "$root/stdout" 'before?after?control'
+
 # Goals finish from durable turn/goal boundaries, including a goal created by
 # a tool during an ordinary accepted prompt. Continuations need no new prompt
 # receipt and must never cause a second runtime to open the same collection.

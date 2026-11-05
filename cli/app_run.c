@@ -125,6 +125,7 @@ typedef struct cli_state {
   cai_lua_tools *lua_tools;
 #endif
   cai_agent_runtime *review_runtime;
+  char review_call[256];
   int foreground_subagent;
   sl_watch_id_t review_watch_id;
   int has_review_watch;
@@ -495,7 +496,7 @@ static int cli_event_theme_scope(const cai_agent_runtime_event *event) {
     return (event->subagent_name != NULL &&
             strcmp(event->subagent_name, "review") == 0) ||
                    (event->parent_tool_call_id != NULL &&
-                    strcmp(event->parent_tool_call_id, "/review") == 0)
+                    cai_cli_manual_review_call(event->parent_tool_call_id))
                ? 2
                : 1;
   if ((event->type >= CAI_AGENT_EVENT_TOOL_CALL_STARTED &&
@@ -1323,7 +1324,7 @@ static void cli_log_event(cli_state *state,
   length = event->data != NULL ? event->data_length : strlen(name);
   if (event->type == CAI_AGENT_EVENT_RUN_CANCELLED) {
     text = event->parent_tool_call_id == NULL ? "Turn stopped."
-           : strcmp(event->parent_tool_call_id, "/review") == 0
+           : cai_cli_manual_review_call(event->parent_tool_call_id)
                ? "Review stopped."
                : "Subagent stopped.";
     length = strlen(text);
@@ -1513,7 +1514,7 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
     return cli_event_lifecycle(state, event, error);
   }
   if (event->parent_tool_call_id != NULL &&
-      strcmp(event->parent_tool_call_id, "/review") == 0) {
+      cai_cli_manual_review_call(event->parent_tool_call_id)) {
     if (event->type == CAI_AGENT_EVENT_RUN_CANCELLED)
       state->automation_failed = 1;
     if (event->type == CAI_AGENT_EVENT_TEXT_DELTA)
@@ -1690,8 +1691,10 @@ static int cli_event(void *context, const cai_agent_runtime_event *event,
 
 static int cli_review_event(void *context, const cai_agent_runtime_event *event,
                             cai_error *error) {
+  cli_state *state = context;
   cai_agent_runtime_event forwarded = *event;
-  forwarded.parent_tool_call_id = "/review";
+  forwarded.parent_tool_call_id =
+      state->review_call[0] != '\0' ? state->review_call : "/review";
   forwarded.subagent_name = "review";
   return cli_event(context, &forwarded, error);
 }
@@ -1717,12 +1720,20 @@ static int cli_log_wakeup(sl_t *sl, const sl_watch_event_t *event,
 static int cli_publish_status(cli_state *state, cai_agent_runtime *runtime,
                               cai_error *error) {
   cai_agent_runtime_ids ids;
+  cai_agent_runtime_metrics activity;
   cai_app_view view;
   unsigned long long conversation;
   const cai_app_status *status;
   int rc = cai_app_bridge_publish(state->bridge, runtime, error);
   if (rc != CAI_OK || state->workspace_host == NULL)
     return rc;
+  memset(&activity, 0, sizeof(activity));
+  if (state->review_runtime != NULL) {
+    rc = cai_agent_runtime_get_metrics(state->review_runtime, &activity, error);
+    if (rc != CAI_OK)
+      return rc;
+  } else if (state->has_review_metrics)
+    activity = state->last_review_metrics;
   memset(&ids, 0, sizeof(ids));
   memset(&view, 0, sizeof(view));
   if (runtime != NULL) {
@@ -1758,6 +1769,19 @@ static int cli_publish_status(cli_state *state, cai_agent_runtime *runtime,
   view.effective = status->effective;
   view.pending = status->pending;
   view.metrics = status->metrics;
+  /* Context, usage and identity belong to the conversation. Turn timing
+   * belongs to its foreground work, including an isolated manual reviewer.
+   * Publish final child timing too; frontends must not invent a local clock
+   * or need a parent inference turn merely to show that a review finished. */
+  if (state->review_runtime != NULL ||
+      (state->has_review_metrics && !view.metrics.turn_active)) {
+    view.metrics.turn_active = activity.turn_active;
+    view.metrics.turn_elapsed_ms = activity.turn_elapsed_ms;
+    view.metrics.has_last_turn = activity.has_last_turn;
+    view.metrics.last_turn_duration_ms = activity.last_turn_duration_ms;
+    view.metrics.last_turn_finished_unix_seconds =
+        activity.last_turn_finished_unix_seconds;
+  }
   view.goal.has_goal = status->goal.has_goal;
   view.goal.status = status->goal.status;
   view.goal.has_token_budget = status->goal.has_token_budget;
@@ -3072,6 +3096,7 @@ static int cli_close_runtime(cli_state *state, cai_error *error) {
     cai_agent_runtime_close(state->review_runtime);
     state->review_runtime = NULL;
   }
+  state->review_call[0] = '\0';
   (void)cli_publish_status(state, NULL, NULL);
   if (state->has_message_watch) {
     (void)sl_watch_remove(state->sl, state->message_watch_id);
@@ -4490,6 +4515,13 @@ static int cli_review_wakeup(sl_t *sl, const sl_watch_event_t *event,
     if (rc == CAI_OK)
       rc = cai_agent_runtime_finish_review(state->runtime,
                                            state->review_runtime, &error);
+    if (rc == CAI_OK && state->review_call[0] != '\0')
+      rc = cai_cli_documents_review_complete(
+          &state->documents, state->review_call,
+          run_state == CAI_AGENT_COMPLETED   ? CAI_OK
+          : run_state == CAI_AGENT_CANCELLED ? CAI_ERR_CANCELLED
+                                             : CAI_ERR_PROTOCOL,
+          &error);
     if (rc == CAI_OK) {
       state->last_review_metrics = metrics;
       state->has_review_metrics = 1;
@@ -4498,6 +4530,7 @@ static int cli_review_wakeup(sl_t *sl, const sl_watch_event_t *event,
       state->has_review_watch = 0;
       cai_agent_runtime_close(state->review_runtime);
       state->review_runtime = NULL;
+      state->review_call[0] = '\0';
     }
   }
   if (rc == CAI_OK)
@@ -4593,11 +4626,18 @@ static int cli_review_command(cli_state *state, const char *arguments,
   rc = cli_review_boundary(state, 1, error);
   if (rc != CAI_OK)
     return rc;
+  if (state->controller && state->documents.active) {
+    snprintf(state->review_call, sizeof(state->review_call), "%s",
+             state->documents.call);
+    request.parent_call_id = state->review_call;
+  }
   rc = cai_agent_runtime_start_review(state->runtime, &request,
                                       &state->review_runtime, error);
   started = rc;
   if (state->review_runtime == NULL) {
-    int finished = cli_review_boundary(state, 0, NULL);
+    int finished;
+    state->review_call[0] = '\0';
+    finished = cli_review_boundary(state, 0, NULL);
     if (finished != CAI_OK)
       return finished;
     return rc;

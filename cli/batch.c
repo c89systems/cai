@@ -1,10 +1,12 @@
 #define _POSIX_C_SOURCE 200809L
 #include "batch.h"
+#include "batch_document.h"
 #include "error.h"
 #include "log.h"
 #include "startup.h"
 #include <cai/transcript_selection.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <libmdf/mdf.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -36,18 +38,30 @@ typedef struct batch {
   int goal_command, goal_follow, settled;
   int awaiting_application, application_settled;
   int shared_logger;
+  cai_cli_batch_document command_document, review_candidate, review_json;
+  cai_cli_batch_document review_markdown, output;
+  cai_cli_batch_document_reader document_reader;
+  char review_session[129];
+  int startup_control, review_command, review_done, review_code;
+  int output_document, selected_review, projecting_document;
+  int json_output, header_written, last_byte;
+  size_t header_offset;
+  FILE *destination;
+  int owns_destination;
 } batch;
 
 int cai_cli_batch_mode(const cai_cli_options *o) {
   size_t i;
-  if (o->headless || o->review || cai_cli_options_utility(o) ||
+  if (o->headless || cai_cli_options_utility(o) ||
       (o->goal != NULL && o->instruction_count != 0U) ||
-      (o->instruction_count == 0U && o->goal == NULL && !o->review_and_fix) ||
-      (!o->non_interactive && isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)))
+      (o->instruction_count == 0U && o->goal == NULL && !o->review_and_fix &&
+       !o->review) ||
+      (!o->review && !o->non_interactive && isatty(STDIN_FILENO) &&
+       isatty(STDOUT_FILENO)))
     return 0;
   for (i = 0U; i < o->instruction_count; ++i) {
     const char *text = cai_cli_instruction_at(o, i);
-    if (text == NULL || text[0] == '/' || text[0] == '!')
+    if (text == NULL || (!o->review && text[0] == '!'))
       return 0;
   }
   return 1;
@@ -92,25 +106,72 @@ static int execution(void *context, const cai_app_execution_event *e,
   batch *b = context;
   const cai_execution_record *r = e->record;
   if (b->projecting)
-    return CAI_OK;
+    return b->projecting_document
+               ? cai_cli_batch_document_execution(&b->document_reader, e, error)
+               : CAI_OK;
   if (r == NULL)
     return cai_cli_error(error, e->code != CAI_OK ? e->code : CAI_ERR_PROTOCOL,
                          e->reason != NULL ? e->reason
                                            : "invalid execution history");
-  if (b->pending && b->command && r->call_id != NULL &&
+  if (b->pending && b->command && !e->subagent && r->call_id != NULL &&
       strcmp(r->call_id, b->call) == 0) {
     if (strcmp(r->kind, "command.handoff") == 0) {
       b->handoff = 1;
       b->old_conversation = e->boundary->conversation;
+      cai_cli_batch_document_reset(&b->command_document);
     }
-    if (r->final && (strcmp(r->kind, "command.completed") == 0 ||
-                     strcmp(r->kind, "command.failed") == 0)) {
+    if (r->final && strcmp(r->kind, "command.settled") == 0) {
       b->command_done = 1;
-      b->command_code =
-          strcmp(r->kind, "command.failed") == 0
-              ? (r->code > CAI_OK ? (int)r->code : CAI_ERR_INVALID)
-              : CAI_OK;
+      b->command_code = (int)r->code;
     }
+    if (strcmp(r->kind, "command.frontend") == 0)
+      return cai_cli_error(
+          error, CAI_ERR_INVALID,
+          "this command requires an interactive terminal attachment");
+  }
+  if (b->pending && b->command_document.kind[0] != '\0') {
+    int rc =
+        cai_cli_batch_document_capture(&b->command_document, &b->at, e, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
+  if (b->pending && b->review_command && r->parent_call_id != NULL &&
+      strcmp(r->parent_call_id, b->call) == 0 && r->subagent != NULL &&
+      strcmp(r->subagent, "review") == 0 &&
+      strcmp(r->session_id, b->at.session) != 0) {
+    int rc;
+    if (b->review_session[0] == '\0') {
+      snprintf(b->review_session, sizeof(b->review_session), "%s",
+               r->session_id);
+      rc = cai_cli_batch_document_init(&b->review_candidate,
+                                       "assistant_text_delta",
+                                       b->review_session, NULL, b->call, error);
+      if (rc == CAI_OK)
+        rc = cai_cli_batch_document_init(
+            &b->review_markdown, "review_markdown_delta", b->review_session,
+            NULL, b->call, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
+    if (strcmp(r->session_id, b->review_session) == 0) {
+      rc = cai_cli_batch_document_capture(&b->review_candidate, &b->at, e,
+                                          error);
+      if (rc == CAI_OK)
+        rc = cai_cli_batch_document_capture(&b->review_markdown, &b->at, e,
+                                            error);
+      if (rc != CAI_OK)
+        return rc;
+      if (strcmp(r->kind, "response.completed") == 0 && r->field == NULL) {
+        b->review_json = b->review_candidate;
+        cai_cli_batch_document_reset(&b->review_candidate);
+      }
+    }
+  }
+  if (b->pending && b->review_command && !e->subagent && r->call_id != NULL &&
+      strcmp(r->call_id, b->call) == 0 &&
+      strcmp(r->kind, "command.review_settled") == 0) {
+    b->review_done = 1;
+    b->review_code = (int)r->code;
   }
   if (b->selection != NULL && strcmp(r->kind, "turn.settled") == 0 &&
       strcmp(r->session_id, b->at.session) == 0 &&
@@ -133,19 +194,39 @@ static int execution(void *context, const cai_app_execution_event *e,
       strcmp(r->kind, "application.settled") == 0 &&
       strcmp(r->session_id, b->at.session) == 0 && r->field == NULL && r->final)
     b->application_settled = 1;
-  if (!b->shared_logger && r->data[0] != '\0' &&
+  if (!b->shared_logger &&
+      (r->data[0] != '\0' ||
+       (r->field == NULL && strncmp(r->kind, "tool.", 5U) == 0)) &&
       strcmp(r->kind, "turn.settled") != 0) {
-    pslog_field fields[4];
+    pslog_field fields[7];
+    const char *name = r->kind;
+    const char *role = "runtime";
+    const char *text = r->data;
     char status[48];
     fields[0] = pslog_str("tool_call_id", r->call_id);
     fields[1] = pslog_str("field", r->field);
     fields[2] = pslog_i64("code", r->code);
     snprintf(status, sizeof(status), "HTTP %lld", r->http_status);
     fields[3] = pslog_str("http", r->http_status > 0 ? status : "");
-    cai_cli_log_message(
-        b->log->logger,
-        r->code != CAI_OK ? PSLOG_LEVEL_ERROR : PSLOG_LEVEL_INFO, r->kind,
-        "runtime", r->data, strlen(r->data), fields, 4U);
+    fields[4] = pslog_str("tool", r->tool_name);
+    fields[5] = pslog_str("session_id", r->session_id);
+    fields[6] = pslog_str("parent_tool_call_id", r->parent_call_id);
+    if (strncmp(r->kind, "tool.", 5U) == 0) {
+      role = "tool";
+      if (r->field == NULL) {
+        if (strcmp(r->kind, "tool.started") == 0)
+          name = "tool_call_started";
+        else if (strcmp(r->kind, "tool.completed") == 0)
+          name = "tool_call_completed";
+        else if (strcmp(r->kind, "tool.failed") == 0)
+          name = "tool_call_failed";
+        text = r->tool_name != NULL ? r->tool_name : name;
+      }
+    }
+    cai_cli_log_message(b->log->logger,
+                        r->code != CAI_OK ? PSLOG_LEVEL_ERROR
+                                          : PSLOG_LEVEL_INFO,
+                        name, role, text, strlen(text), fields, 7U);
   }
   return CAI_OK;
 }
@@ -154,7 +235,9 @@ static int transcript(void *context, const cai_transcript_event *e,
   batch *b = context;
   int rc = CAI_OK;
   if (b->projecting)
-    return b->projector != NULL
+    return b->projecting_document
+               ? cai_cli_batch_document_event(&b->document_reader, e, error)
+           : b->projector != NULL
                ? cai_transcript_projector_event(b->projector, e, error)
                : CAI_OK;
   if (e->kind == CAI_TRANSCRIPT_ERROR) {
@@ -205,6 +288,7 @@ static int transcript(void *context, const cai_transcript_event *e,
             error, CAI_ERR_PROTOCOL,
             "batch settlement has no matched terminal outcome");
       b->has_result = 1;
+      b->output_document = b->selected_review = 0;
       b->work_failed = b->result.state != CAI_TRANSCRIPT_WORK_COMPLETED;
       cai_transcript_selection_close(b->selection);
       b->selection = NULL;
@@ -254,40 +338,97 @@ static int rendered(void *context, const char *bytes, size_t count) {
 static int project(void *context, const void *bytes, size_t length,
                    cai_error *error) {
   batch *b = context;
+  if (b->selected_review) {
+    static const char header[] = "# Review handoff";
+    const unsigned char *p = bytes;
+    if (!b->json_output) {
+      while (length && b->header_offset < sizeof(header) - 1U) {
+        if (*p++ != (unsigned char)header[b->header_offset++])
+          return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                               "review Markdown header changed");
+        --length;
+      }
+      if (b->header_offset == sizeof(header) - 1U && !b->header_written) {
+        static const char title[] = "# Review findings";
+        if (fwrite(title, 1U, sizeof(title) - 1U, b->destination) !=
+            sizeof(title) - 1U)
+          return cai_cli_error(error, CAI_ERR_TRANSPORT, "write review title");
+        b->header_written = 1;
+      }
+    }
+    if (length != 0U) {
+      if (fwrite(p, 1U, length, b->destination) != length)
+        return cai_cli_error(error, CAI_ERR_TRANSPORT, "write review output");
+      b->last_byte = p[length - 1U];
+    }
+    return CAI_OK;
+  }
   return b->renderer->feed(b->renderer, bytes, length) == MDF_OK
              ? CAI_OK
              : cai_cli_error(error, CAI_ERR_TRANSPORT, "render batch response");
 }
-static int projection_open(batch *b, cai_error *error) {
+static int projection_open(batch *b, const cai_cli_options *o,
+                           cai_error *error) {
   mdf_options options;
   mdf_sink output;
   cai_sink_callbacks callbacks = {0};
   int rc;
-  mdf_options_init(&options);
-  options.output_fd = STDOUT_FILENO;
-  options.width = 80;
-  options.boring = 1;
-  options.margin_left = 0;
-  options.ansi_mode = MDF_ANSI_OFF;
-  options.table_buffer_mode = MDF_TABLE_BUFFER_FULL;
-  if (mdf_create(MDF_FORMAT_ANSI, &options, &b->renderer) != MDF_OK)
-    return cai_cli_error(error, CAI_ERR_NOMEM, "create batch renderer");
-  output.userdata = b;
-  output.write = rendered;
-  if (b->renderer->set_sink(b->renderer, &output) != MDF_OK)
-    return cai_cli_error(error, CAI_ERR_TRANSPORT, "connect batch renderer");
+  const cai_transcript_selection_result *range =
+      b->output_document ? &b->output.range : &b->result;
+  if (b->selected_review) {
+    b->destination = stdout;
+    if (o->out != NULL) {
+      int directory = open(o->directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+      int fd = directory >= 0
+                   ? openat(directory, o->out,
+                            O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666)
+                   : -1;
+      if (directory >= 0)
+        close(directory);
+      if (fd < 0)
+        return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                             "cannot open review output");
+      b->destination = fdopen(fd, "w");
+      if (b->destination == NULL) {
+        close(fd);
+        return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                             "cannot open review output stream");
+      }
+      b->owns_destination = 1;
+    }
+  } else {
+    mdf_options_init(&options);
+    options.output_fd = STDOUT_FILENO;
+    options.width = 80;
+    options.boring = 1;
+    options.margin_left = 0;
+    options.ansi_mode = MDF_ANSI_OFF;
+    options.table_buffer_mode = MDF_TABLE_BUFFER_FULL;
+    if (mdf_create(MDF_FORMAT_ANSI, &options, &b->renderer) != MDF_OK)
+      return cai_cli_error(error, CAI_ERR_NOMEM, "create batch renderer");
+    output.userdata = b;
+    output.write = rendered;
+    if (b->renderer->set_sink(b->renderer, &output) != MDF_OK)
+      return cai_cli_error(error, CAI_ERR_TRANSPORT, "connect batch renderer");
+  }
   callbacks.context = b;
   callbacks.write = project;
   rc = cai_sink_from_callbacks(&callbacks, &b->sink, error);
-  if (rc == CAI_OK)
-    rc = cai_transcript_projector_open(&b->result, b->sink, &b->projector,
+  if (rc == CAI_OK) {
+    if (b->output_document) {
+      rc = cai_cli_batch_document_read(&b->document_reader, &b->output, b->sink,
                                        error);
+      b->projecting_document = 1;
+    } else
+      rc = cai_transcript_projector_open(&b->result, b->sink, &b->projector,
+                                         error);
+  }
   if (rc == CAI_OK) {
     b->projecting = 1;
     rc = cai_app_client_subscribe(
-        b->client, ++b->subscription, b->result.after.conversation,
-        b->result.after.session, b->result.after.collection,
-        b->result.after.position, b->result.after.sequence, -1LL, error);
+        b->client, ++b->subscription, range->after.conversation,
+        range->after.session, range->after.collection, range->after.position,
+        range->after.sequence, -1LL, error);
   }
   return rc;
 }
@@ -305,6 +446,12 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
     snprintf(b->call, sizeof(b->call), "%s:%s:%llu:%llu:%llu",
              b->command ? "command" : "input", b->state.session,
              b->state.producer, b->request, b->item);
+    if (b->command) {
+      rc = cai_cli_batch_document_init(&b->command_document, "command.markdown",
+                                       NULL, b->call, NULL, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
     if (!b->command || b->goal_command) {
       b->goal_follow = b->goal_command;
       rc = cai_transcript_selection_open(
@@ -329,12 +476,39 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
   if (b->command_done) {
     b->command_done = b->handoff = 0;
     b->command = 0;
-    if (!b->goal_command)
+    if (!b->goal_command && !b->review_command)
       b->pending = 0;
     if (b->command_code != CAI_OK)
       return cai_cli_error(
           error, b->command_code,
           "batch startup command failed; instructions not submitted");
+    if (!b->startup_control && !b->goal_command && !b->review_command) {
+      rc = cai_cli_batch_document_finish(&b->command_document, CAI_OK, error);
+      if (rc != CAI_OK)
+        return rc;
+      b->output = b->command_document;
+      b->output_document = 1;
+      b->selected_review = b->has_result = 0;
+    }
+  }
+  if (b->review_done) {
+    b->pending = b->review_done = 0;
+    if (b->review_code != CAI_OK) {
+      b->work_failed = 1;
+      b->has_result = b->output_document = b->selected_review = 0;
+      b->startup.stage = CAI_CLI_STARTUP_DONE;
+    } else {
+      b->json_output = strcmp(o->output_type, "json") == 0;
+      b->output = b->json_output ? b->review_json : b->review_markdown;
+      rc = cai_cli_batch_document_finish(&b->output, CAI_OK, error);
+      if (rc != CAI_OK)
+        return rc;
+      if (b->output.range.text_bytes == 0U)
+        return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                             "review finished without its validated document");
+      b->output_document = b->selected_review = 1;
+      b->has_result = 0;
+    }
   }
   if (!b->pending && b->startup.stage < CAI_CLI_STARTUP_DONE) {
     cai_input_request request = {0};
@@ -345,9 +519,15 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
     if (rc != CAI_OK || text == NULL)
       return rc;
     b->request = b->state.last_request + 1U;
-    b->command = control;
-    b->goal_command = control && (strncmp(text, "/goal new ", 10U) == 0 ||
-                                  strncmp(text, "/review-and-fix", 15U) == 0);
+    b->startup_control = control;
+    b->command = control || text[0] == '/' || text[0] == '!';
+    b->goal_command =
+        b->command && (strncmp(text, "/goal new ", 10U) == 0 ||
+                       strncmp(text, "/review-and-fix", 15U) == 0);
+    b->review_command = b->command && (strcmp(text, "/review") == 0 ||
+                                       strncmp(text, "/review ", 8U) == 0);
+    b->review_session[0] = '\0';
+    memset(&b->review_json, 0, sizeof(b->review_json));
     b->pending = 1;
     b->receipt = 0;
     request.request_id = b->request;
@@ -465,14 +645,24 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
           rc = advance(b, options, error);
         if (rc == CAI_OK && !b->projecting && !b->pending &&
             b->startup.stage == CAI_CLI_STARTUP_DONE) {
-          if (b->has_result && b->result.text_bytes != 0U)
-            rc = projection_open(b, error);
+          if ((b->output_document && b->output.range.text_bytes != 0U) ||
+              (b->has_result && b->result.text_bytes != 0U))
+            rc = projection_open(b, options, error);
           else
             b->projecting = 1;
         }
         if (rc == CAI_OK && b->projecting &&
-            (b->projector == NULL ||
-             cai_transcript_projector_done(b->projector))) {
+            (b->projecting_document
+                 ? b->document_reader.done
+                 : b->projector == NULL ||
+                       cai_transcript_projector_done(b->projector))) {
+          if (b->selected_review) {
+            if ((!b->json_output && !b->header_written) ||
+                (b->last_byte != '\n' && fputc('\n', b->destination) == EOF) ||
+                fflush(b->destination) != 0)
+              rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
+                                 "finish review output");
+          }
           if (b->renderer != NULL &&
               (b->renderer->finish_document(b->renderer) != MDF_OK ||
                fflush(stdout) != 0))
@@ -532,6 +722,8 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
   cai_sink_close(b->sink);
   if (b->renderer != NULL)
     b->renderer->destroy(b->renderer);
+  if (b->owns_destination && fclose(b->destination) != 0 && rc == CAI_OK)
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "close review output");
   if (cai_cli_log_release(b->log) != 0 && rc == CAI_OK)
     rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "write batch activity log");
   free(b->offered);

@@ -7,7 +7,8 @@
  * terminal presenter. Owns fixed metadata only; no runtime, store, worker,
  * queue, complete message or replay mirror. The presenter is borrowed.
  * Execution/tool records have their separate typed client callback; this
- * adapter never prints their encoded JSON or repeats queued admissions. */
+ * adapter never prints their encoded JSON or repeats queued admissions.
+ * Only input_presented, stamped at consumption, displays root model input. */
 typedef struct cai_cli_transcript_presenter cai_cli_transcript_presenter;
 int cai_cli_transcript_presenter_open(cai_cli_presenter *,
                                       cai_cli_transcript_presenter **,
@@ -30,6 +31,10 @@ int cai_cli_transcript_presenter_command(cai_cli_transcript_presenter *,
  * from a document boundary, not blindly from the raw client's last cursor.
  * Already displayed bytes remain visible. Call before closing the presenter. */
 void cai_cli_transcript_presenter_reset(cai_cli_transcript_presenter *);
+/** Borrow the bounded, Markdown-normalized current thinking title. The
+ * frontend owns status placement; the journal remains the source. */
+int cai_cli_transcript_presenter_title(cai_cli_transcript_presenter *,
+                                       const char **);
 /** Suppress only shell records already shown by this terminal's local PTY.
  * Applied to the next catch-up stream; unrelated messages remain visible.
  * last=0 ends suppression at that recording's completion. Reset outside a

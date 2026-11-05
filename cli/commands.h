@@ -14,6 +14,9 @@ const char *cai_cli_command_at(size_t index);
 const char *cai_cli_command_name(const char *line, size_t *length);
 cli_command_boundary cai_cli_command_delivery(const char *line);
 int cai_cli_command_is_theme(const char *line);
+/** Native manual reviewers and admitted review commands share presentation;
+ * model-invoked reviewers retain their provider tool-call identity. */
+int cai_cli_manual_review_call(const char *);
 /* Presentation-only actions are delivered to the originating frontend. */
 int cai_cli_command_frontend(const char *line);
 /** Select a valid paged command: 1 rendered help, 2 literal log, 0 neither.

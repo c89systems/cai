@@ -13,6 +13,14 @@ storage client. One server-side cached view serves controllers and observers.
 Clients may cache explicitly bounded status metadata. Authority still comes
 from the verified connection's ROLE generation.
 
+Identity, context, usage and goal fields describe the owning conversation.
+The turn fields describe foreground activity: an isolated manual review uses
+its child runtime's measured active/final duration, including when the parent
+has not run an inference turn. The final review timing remains until normal
+parent work starts. Frontends do not estimate a separate review duration from
+their attachment time. Thinking titles are bounded presentation derived from
+the ordered reasoning spans, independent of the status clock.
+
 ## Observation and framing
 
 Use STATUS in the existing envelope: request/stream zero, server-stamped

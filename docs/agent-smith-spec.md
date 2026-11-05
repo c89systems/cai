@@ -787,6 +787,12 @@ and is deliberately still host-pumped: CAI never constrains a TUI, GUI, or
 embedding event loop to one rendering model. The inherited event receiver can
 distinguish the source through `event.runtime_session_id`.
 
+`request.parent_call_id` optionally supplies a nonempty origin of at most 255
+bytes, copied before any child input or inference can run. Native application
+commands use their admitted command identity; omitted origins use `/review`.
+The Lua `start_review` table accepts the same field. This origin attributes
+the complete child journal in the parent; it is not an inference tool call.
+
 Once started, the parent is paused. CAI journals and commits that pause
 before `start_review` returns. Immediate parent turns are rejected, while
 interactive/steering input targets the foreground child at its next safe

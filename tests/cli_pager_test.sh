@@ -53,6 +53,17 @@ for command in '/help -p' '/help less' '/help   less  '; do
   absent "$root/help-view" '# Help'
   send q; expect 'Pager closed.'
 done
+# The owner must finish while libmdf owns the alternate screen. Returning from
+# the pager replays the unseen suffix once, without waiting for another prompt.
+plan '{"plan":[{"pause":true,"pause_text":"PAGER IN FLIGHT ","text":"PAGER BACKGROUND FINISHED"}]}'
+send 'Work while I read help\r'; expect 'PAGER IN FLIGHT'
+pager_offset=$(wc -c <"$term/raw")
+send '/help -p\r'; wait_for native_opened
+release
+wait_for assistant_logged 'PAGER BACKGROUND FINISHED'
+send q; expect 'Pager closed.'
+expect 'PAGER BACKGROUND FINISHED'
+[[ $(grep -Fo 'PAGER BACKGROUND FINISHED' "$term/feed" | wc -l) == 1 ]]
 external_log
 send '/help invalid\r'; expect 'Use /help'
 send '/status\r'; expect 'Session ID'
@@ -82,4 +93,4 @@ terminal_start -N
 native_log
 pager_close
 cmp "$root/pager.ini" "$root/pager-original.ini"
-[[ $(requests) == 0 ]]
+[[ $(requests) == 1 ]]

@@ -1,10 +1,9 @@
 #ifndef CAI_CLI_BATCH_H
 #define CAI_CLI_BATCH_H
 #include "frontend.h"
-/** Instruction/goal adapter. No runtime, storage client, terminal editor or
- * response spool. Direct reviews, combined goal/instruction startup and
- * explicit slash/shell instructions retain their existing composition until
- * their completion contracts move here too. */
+/** Instruction/goal/review adapter. No runtime, storage client, terminal editor
+ * or response spool. Combined goal/instruction startup and explicit shell
+ * instructions still await their dependent-admission/completion cutover. */
 int cai_cli_batch_mode(const cai_cli_options *);
 /** Borrow options and boot through return. One producer owns this invocation's
  * sequential instructions; exact accepted execution records determine results.

@@ -356,6 +356,10 @@ typedef struct cai_agent_review_request {
   const char *commit;
   const char *commit_title;
   const char *instructions;
+  /** Optional originating operation when start_review creates a child. Copied
+   * before the child can run, and present on its durable parent attribution.
+   * NULL uses the ordinary manual-review identity. Ignored by submit_review. */
+  const char *parent_call_id;
 } cai_agent_review_request;
 
 /** Initialize a zero-defaultable review request. */

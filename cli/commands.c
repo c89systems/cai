@@ -1,5 +1,9 @@
 #include "commands.h"
 #include <string.h>
+int cai_cli_manual_review_call(const char *call) {
+  return call != NULL &&
+         (strcmp(call, "/review") == 0 || strncmp(call, "command:", 8U) == 0);
+}
 /* One policy inventory for the complete slash-command surface. Bare queries
  * can differ from mutations; neither Enter nor Alt-Enter changes the boundary
  * required by a command. Ordinary conversation input keeps its native intent.

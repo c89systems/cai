@@ -1,14 +1,12 @@
 #include "transcript_presenter.h"
 #include "error.h"
 #include "shell_text.h"
-#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
 typedef enum presentation_kind {
   PRESENT_SKIP = 0,
   PRESENT_PROMPT,
-  PRESENT_DELIVERY,
   PRESENT_TEXT,
   PRESENT_REASONING,
   PRESENT_REASONING_START,
@@ -19,17 +17,15 @@ typedef enum presentation_kind {
   PRESENT_SHELL_END
 } presentation_kind;
 
-/** Prefix state never retains the accepted prompt. The delivery's source
- * identity is bounded and discarded here; authority/deduplication belong to
- * the backend. The final suffix goes directly to the literal presenter. */
+/** Consumption projections go directly to the literal presenter. Admission
+ * and recovery metadata never become displayed input; no pending prompt body
+ * or provenance lookup is retained by the frontend. */
 struct cai_cli_transcript_presenter {
   cai_cli_presenter *presenter;
   cai_cli_reasoning reasoning;
   presentation_kind kind;
   uint64_t stream, sequence, offset, timestamp_ns;
-  unsigned long long decimal;
-  size_t source_left;
-  int active, failed, has_data, delivery_stage, digits, body;
+  int active, failed, has_data;
   cai_cli_shell_text shell;
   int hex_digit, skip_shell_end;
   uint64_t skip_shell_first, skip_shell_last;
@@ -44,11 +40,7 @@ static int failure(cai_cli_transcript_presenter *p, cai_error *error, int code,
 }
 
 static presentation_kind kind_for(const char *type) {
-  if (strcmp(type, "input_queue_delivery") == 0)
-    return PRESENT_DELIVERY;
-  if (strcmp(type, "turn_submitted") == 0 || strcmp(type, "turn_queued") == 0 ||
-      strcmp(type, "steering_queued") == 0 ||
-      strcmp(type, "goal_continuation") == 0 ||
+  if (strcmp(type, "input_presented") == 0 ||
       strcmp(type, "policy_diagnostic") == 0 ||
       strcmp(type, "subagent_input") == 0)
     return PRESENT_PROMPT;
@@ -70,82 +62,6 @@ static presentation_kind kind_for(const char *type) {
       strcmp(type, "user_shell_unshared") == 0)
     return PRESENT_SHELL_END;
   return PRESENT_SKIP;
-}
-
-/** Match the runtime's input_queue_delivery grammar a byte at a time:
- * scope LF source-length LF source LF sequence LF kind LF actual-text.
- * Decimal overflow, empty source/identity/body and truncated headers fail
- * before an input can be completed. No transport boundary is semantic. */
-static int delivery(cai_cli_transcript_presenter *p, const void *data,
-                    size_t length) {
-  const unsigned char *bytes = data;
-  size_t i;
-  for (i = 0U; i < length; ++i) {
-    unsigned char ch = bytes[i];
-    if (p->delivery_stage == 8) {
-      p->body = 1;
-      return cai_cli_presenter_input_write(p->presenter, bytes + i,
-                                           length - i) == 0
-                 ? CAI_OK
-                 : CAI_ERR_TRANSPORT;
-    }
-    switch (p->delivery_stage) {
-    case 0:
-      if (ch != 'L' && ch != 'C')
-        return CAI_ERR_PROTOCOL;
-      p->delivery_stage = 1;
-      break;
-    case 1:
-      if (ch != '\n')
-        return CAI_ERR_PROTOCOL;
-      p->delivery_stage = 2;
-      break;
-    case 2:
-    case 5:
-      if (ch >= '0' && ch <= '9') {
-        if (p->digits == 20 || p->decimal > (ULLONG_MAX - (ch - '0')) / 10ULL)
-          return CAI_ERR_PROTOCOL;
-        p->decimal = p->decimal * 10ULL + (ch - '0');
-        ++p->digits;
-      } else if (ch == '\n' && p->digits != 0 && p->decimal != 0U) {
-        if (p->delivery_stage == 2) {
-          if (p->decimal > 128U)
-            return CAI_ERR_PROTOCOL;
-          p->source_left = (size_t)p->decimal;
-          p->delivery_stage = 3;
-        } else
-          p->delivery_stage = 6;
-        p->digits = 0;
-        p->decimal = 0U;
-      } else
-        return CAI_ERR_PROTOCOL;
-      break;
-    case 3:
-      if (ch == 0U)
-        return CAI_ERR_PROTOCOL;
-      if (--p->source_left == 0U)
-        p->delivery_stage = 4;
-      break;
-    case 4:
-      if (ch != '\n')
-        return CAI_ERR_PROTOCOL;
-      p->delivery_stage = 5;
-      break;
-    case 6:
-      if (ch < '0' || ch > '2')
-        return CAI_ERR_PROTOCOL;
-      p->delivery_stage = 7;
-      break;
-    case 7:
-      if (ch != '\n' || cai_cli_presenter_input_begin(p->presenter, 0) != 0)
-        return CAI_ERR_PROTOCOL;
-      p->delivery_stage = 8;
-      break;
-    default:
-      return CAI_ERR_PROTOCOL;
-    }
-  }
-  return CAI_OK;
 }
 
 static int shell_output(void *context, const char *bytes, size_t length,
@@ -249,6 +165,8 @@ static int event_body(cai_cli_transcript_presenter *p,
     p->sequence = event->sequence;
     p->timestamp_ns = event->timestamp_ns;
     p->kind = kind_for(event->type);
+    if (strcmp(event->type, "input_presented") == 0)
+      cai_cli_reasoning_reset(&p->reasoning);
     if (p->kind == PRESENT_SHELL_COMMAND) {
       p->shell_anchor = event->sequence;
       p->live_offset = 0U;
@@ -282,9 +200,6 @@ static int event_body(cai_cli_transcript_presenter *p,
     p->offset = 0U;
     p->active = 1;
     p->has_data = event->has_data;
-    p->delivery_stage = p->digits = p->body = 0;
-    p->source_left = 0U;
-    p->decimal = 0U;
     if (p->kind == PRESENT_PROMPT)
       rc = cai_cli_presenter_input_begin(ui, 0);
     else if (p->kind == PRESENT_SHELL_COMMAND) {
@@ -307,12 +222,7 @@ static int event_body(cai_cli_transcript_presenter *p,
         event->length > UINT64_MAX - p->offset)
       return failure(p, error, CAI_ERR_PROTOCOL,
                      "invalid transcript presentation offset");
-    if (p->kind == PRESENT_DELIVERY) {
-      int code = delivery(p, event->data, event->length);
-      if (code != CAI_OK)
-        return failure(p, error, code,
-                       "cannot present accepted input delivery");
-    } else if (p->kind == PRESENT_PROMPT)
+    if (p->kind == PRESENT_PROMPT)
       rc = cai_cli_presenter_input_write(ui, event->data, event->length);
     else if (p->kind == PRESENT_TEXT)
       rc = cai_cli_presenter_text(ui, event->data, event->length);
@@ -331,11 +241,7 @@ static int event_body(cai_cli_transcript_presenter *p,
     if (event->offset != p->offset)
       return failure(p, error, CAI_ERR_PROTOCOL,
                      "transcript presentation length changed");
-    if (p->kind == PRESENT_DELIVERY && (p->delivery_stage != 8 || !p->body))
-      return failure(p, error, CAI_ERR_PROTOCOL,
-                     "truncated accepted input delivery");
-    if (p->kind == PRESENT_PROMPT || p->kind == PRESENT_DELIVERY ||
-        p->kind == PRESENT_SHELL_COMMAND)
+    if (p->kind == PRESENT_PROMPT || p->kind == PRESENT_SHELL_COMMAND)
       rc = cai_cli_presenter_input_end(ui);
     else if (p->kind == PRESENT_SHELL_HEX && p->hex_digit >= 0)
       return failure(p, error, CAI_ERR_PROTOCOL, "odd stored shell hex length");
@@ -401,6 +307,11 @@ int cai_cli_transcript_presenter_open(cai_cli_presenter *presenter,
     return cai_cli_error(error, CAI_ERR_NOMEM, "open transcript presenter");
   (*out)->presenter = presenter;
   return CAI_OK;
+}
+
+int cai_cli_transcript_presenter_title(cai_cli_transcript_presenter *p,
+                                       const char **out) {
+  return cai_cli_reasoning_title(&p->reasoning, out);
 }
 
 void cai_cli_transcript_presenter_reset(cai_cli_transcript_presenter *p) {

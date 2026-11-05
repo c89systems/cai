@@ -22,5 +22,9 @@ int cai_cli_documents_write(cai_cli_documents *, const void *, size_t);
 int cai_cli_documents_finish(cai_cli_documents *);
 int cai_cli_documents_delegate(cai_cli_documents *, const char *, cai_error *);
 int cai_cli_documents_complete(cai_cli_documents *, int, cai_error *);
+/** Asynchronous review completion belongs to the original command even when
+ * another command is being rendered. Does not replace the active document. */
+int cai_cli_documents_review_complete(cai_cli_documents *, const char *call,
+                                      int code, cai_error *);
 void cai_cli_documents_close(cai_cli_documents *);
 #endif

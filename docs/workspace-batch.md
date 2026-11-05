@@ -71,10 +71,30 @@ owner startup deferral and the prompt/goal batch adapter are implemented.
 Standalone batch discovers or quietly launches the owner; `-s SELECTOR`
 attaches to an existing one. Native `run()` uses the same calling-thread owner
 and a default-stack batch adapter. Temporary runs share this composition;
-noninteractive cleanup never asks a terminal question. Direct `--review`,
-combined `-g` plus `-i` startup, and slash/shell `-i` instructions still use the
-old receiver, so its removal and terminal-independent packaging remain cutover
-work.
+noninteractive cleanup never asks a terminal question. Direct `--review` and
+slash `-i` commands use the same adapter. Combined `-g` plus `-i` startup and
+shell `-i` instructions still use the old receiver, so its removal and
+terminal-independent packaging remain cutover work.
+
+Slash commands finish at `command.settled`, after all command error fields.
+An unsuccessful startup control prevents dependent prompts from being offered.
+Frontend-only actions fail explicitly in batch mode. Ordinary command output
+is selected by the exact admitted command identity; another producer's reply
+cannot replace it. Deliberate `/new` and `/resume` transitions carry that
+identity into their destination conversation.
+
+Manual reviews pass that identity as `parent_call_id` before starting the
+child. Launch acknowledgement does not finish the invocation. The owner
+publishes `command.review_settled` only after validation, terminal observation
+drain and durable parent handoff. Batch retains fixed cursors for the child's
+last completed JSON response and its validated Markdown projection. Both
+formats are read directly from the native range through the existing typed
+execution decoder into their destination. No report accumulator or spool is
+added to the attachment. Review validation itself still owns its existing
+bounded 256 KiB report; it is not a streaming JSON validator. Invalid reports
+produce no findings output and do not truncate an output file. Once output
+begins, source or sink failure may leave a partial file, as with other streaming
+APIs. Markdown output sanitizes terminal controls and retains complete paths.
 
 `turn.settled` follows the complete terminal record, including every failure
 field, and carries its exact call identity, code and goal status at that
@@ -102,7 +122,10 @@ STOP outcome.
 
 Focused `cai_cli_batch` coverage exercises existing-owner controls, `/new` and
 `/resume` handoff, rejected startup controls, observer rejection, explicit and
-model-created goals, pausing, and connection loss after admission. The native
+model-created goals, pausing, slash-query output without inference, command
+failure ordering, existing-owner reviews, exact JSON response selection,
+relative output files, invalid reports, terminal-control filtering, long paths,
+and connection loss after admission. The native
 batch fixture checks default-stack callback affinity, one SDK client, untouched
 host process state, restoration, temporary cleanup and startup failure. Existing
 final-output tests cover both provider protocols and the last-response rules;

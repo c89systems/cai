@@ -37,7 +37,9 @@ for mode in malformed truncated provider_error cyber_policy cyber_notice cancel 
   absent "$term/text" '[reasoning]'
   if [[ "$mode" == provider_error ]]; then expect 'fixture stream error'; fi
   if [[ "$mode" == cyber_policy || "$mode" == cyber_notice ]]; then
-    expect 'Provider rejected the response'
+    # Socket frontends render the durable failure fields; runtime logger
+    # summaries are not a second source of conversation presentation.
+    expect 'Request failed'
     expect 'Provider cybersecurity notice'
     expect "req_$mode"
     expect 'Diagnostic explanation for this incident'
@@ -103,6 +105,8 @@ for code in cyber_policy cyber_notice; do
   bad
   [[ $(stdout_text) == 'Diagnostic explanation' ]] || fail 'Missing diagnostic final output'
   [[ $(requests) == $((before+2)) ]] || fail 'Unexpected provider request count'
-  jq -se --arg code "$code" 'any(.[]; .lvl == "error" and .msg == "cai.response.provider_error" and .provider_code == $code and .request_id == ("req_" + $code) and .detail == "Provider cybersecurity notice")' "$root/stderr" >/dev/null
+  jq -se --arg code "$code" 'any(.[]; .event == "request.failed" and .field == "provider_code" and .msg == $code) and any(.[]; .event == "request.failed" and .field == "request_id" and .msg == ("req_" + $code))' "$root/stderr" >/dev/null
+  logs
+  jq -se --arg code "$code" 'any(.[]; .lvl == "error" and .msg == "cai.response.provider_error" and .provider_code == $code and .request_id == ("req_" + $code) and .detail == "Provider cybersecurity notice")' "$root/logs.jsonl" >/dev/null
   absent "$root/stderr" cai.http.transport_error
 done

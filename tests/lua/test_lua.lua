@@ -985,7 +985,11 @@ do
     review_reasoning_effort = cai.REASONING_EFFORT_MEDIUM,
     disable_default_session_store = true,
   }))
-  local review = assert_ok(parent:start_review({ target = "uncommitted" }))
+  assert_not_ok(parent:start_review({ target = "uncommitted", parent_call_id = "" }),
+    "empty review origin must fail before starting a child")
+  assert_not_ok(parent:start_review({ target = "uncommitted", parent_call_id = string.rep("x", 256) }),
+    "oversized review origin must fail before starting a child")
+  local review = assert_ok(parent:start_review({ target = "uncommitted", parent_call_id = "command:lua:2:3:4" }))
   assert_not_ok(parent:submit("must wait for review"),
     "parent direct input must be paused during review")
   local review_state = "sampling"

@@ -35,8 +35,10 @@ inherits that environment. Workspace owners and prompt/goal batch adapters
 instead resolve captured `LOG_` values through public libpslog configuration
 and output APIs; they do not enter this wrapper. The upstream lookup-constructor
 request in `stash/cr-libpslog-captured-environment.md` would allow consolidating
-that overlay in the dependency. Direct review/command batches, utility process
-helpers and removal of the remaining combined receiver are separate cutover work.
+that overlay in the dependency. Review and slash-command batch attachments now
+share the captured-view composition. Dependent goal/prompt and shell batches,
+utility process helpers and removal of the remaining combined receiver are
+separate cutover work.
 
 `cai_cli_utility_boundary` seeds a conversation using a real local-provider
 runtime, then runs maintenance through an embedding host that permits only

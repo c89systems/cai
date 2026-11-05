@@ -104,6 +104,7 @@ typedef struct execution_review_state {
   pthread_cond_t ready;
   char parent_id[CAI_AGENT_SESSION_ID_MAX];
   int done, parent_records, child_records, child_text, child_markdown;
+  int wrong_origin;
 } execution_review_state;
 static int execution_review_append(void *context, const char *scope,
                                    const char *id,
@@ -118,6 +119,11 @@ static int execution_review_append(void *context, const char *scope,
     return CAI_OK;
   cai_execution_record_init(&record);
   rc = cai_execution_record_parse(event->data, &record, error);
+  pthread_mutex_lock(&s->lock);
+  if (rc == CAI_OK && record.parent_call_id != NULL &&
+      strcmp(record.parent_call_id, "command:parent:2:3:4") != 0)
+    s->wrong_origin++;
+  pthread_mutex_unlock(&s->lock);
   if (rc == CAI_OK && strcmp(event->type, "subagent") == 0) {
     pthread_mutex_lock(&s->lock);
     if (strcmp(id, s->parent_id) == 0 && record.subagent != NULL &&
@@ -171,6 +177,7 @@ static void test_execution_poll_review(test_state *state) {
   cai_error error;
   struct timespec deadline;
   struct pollfd event_fd;
+  char oversized_origin[257];
   int i;
   if (http_mock_client_open_script(state, "execution_poll_review", script, 1U,
                                    &mock) != 0)
@@ -201,6 +208,21 @@ static void test_execution_poll_review(test_state *state) {
     cai_agent_review_request_init(&request);
     request.target = CAI_AGENT_REVIEW_CUSTOM;
     request.instructions = "Review the fixture";
+    request.parent_call_id = "";
+    expect_int(
+        state, "execution_review_empty_origin",
+        cai_agent_runtime_start_review(parent, &request, &review, &error),
+        CAI_ERR_INVALID);
+    memset(oversized_origin, 'a', sizeof(oversized_origin) - 1U);
+    oversized_origin[sizeof(oversized_origin) - 1U] = '\0';
+    request.parent_call_id = oversized_origin;
+    expect_int(
+        state, "execution_review_oversized_origin",
+        cai_agent_runtime_start_review(parent, &request, &review, &error),
+        CAI_ERR_INVALID);
+    request.parent_call_id = "command:parent:2:3:4";
+    cai_error_cleanup(&error);
+    cai_error_init(&error);
     expect_int(
         state, "execution_poll_review",
         cai_agent_runtime_start_review(parent, &request, &review, &error),
@@ -235,6 +257,8 @@ static void test_execution_poll_review(test_state *state) {
       expect_int(state, "execution_poll_child_text", s.child_text > 0, 1L);
       expect_int(state, "execution_poll_child_markdown", s.child_markdown > 0,
                  1L);
+      expect_int(state, "execution_poll_origin_from_first_event",
+                 s.wrong_origin, 0L);
       pthread_mutex_unlock(&s.lock);
       expect_int(state, "execution_poll_handoff",
                  cai_agent_runtime_finish_review(parent, review, &error),
