@@ -34,9 +34,18 @@ cai_cli_input_adapter *cai_cli_input_socket_adapter(cai_cli_input_socket *);
 int cai_cli_input_socket_observe(cai_cli_input_socket *,
                                  const cai_app_client_event *, cai_error *);
 /* Abandon frontend routing to the current transport, mark outcomes unknown,
- * and release its borrowed reference. The caller stops routing its events and
- * closes/detaches that client; this method never closes it. */
+ * and release its borrowed reference. Stop routing its events and close/detach
+ * that client; this method itself never closes it. Also abandons a pause. */
 int cai_cli_input_socket_disconnect(cai_cli_input_socket *, cai_error *);
+/** Pause editor observations while continuing to pump the borrowed client.
+ * Pending outcomes become unknown; no observations are buffered or reapplied.
+ * Keep the original client alive. Resume accepts only that same connection,
+ * bound to the original conversation epoch/session/producer. Follow resume
+ * with SYNCHRONIZE and native receipt RESOLVE; never repeat uncertain offers.
+ * A changed scope must instead disconnect and bind the appropriate view. */
+int cai_cli_input_socket_pause(cai_cli_input_socket *, cai_error *);
+int cai_cli_input_socket_resume(cai_cli_input_socket *, cai_app_client *,
+                                cai_error *);
 /* Explicit transport replacement after disconnect() released the old client.
  * Retains editor, mirror, request mapping and unresolved outcomes. This does
  * not open/connect/bind/resubmit anything; verify the new instance and resume

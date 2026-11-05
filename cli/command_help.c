@@ -175,7 +175,7 @@ int cai_cli_command_help(const char *invocation, int attached,
       "| Ctrl-R | Search history; Enter selects for editing, Enter again "
       "sends. |\n"
       "| Ctrl-G | Cancel history search and restore the original draft. |\n",
-      "| Alt-S | Open a local shell between turns; retain your draft, "
+      "| Alt-S | Open a local shell; retain your draft, "
       "cursor and undo state when it exits. |\n"
       "| Ctrl-L | Refresh terminal layout while retaining the draft. |\n"
       "| Alt-Q | Save the draft to prompt history and quit without sending "
@@ -216,8 +216,16 @@ int cai_cli_command_help(const char *invocation, int attached,
         "| `/shutdown` | Stop this owner; requires control. |\n\n"
         "Observers can switch workspaces or detach. Quit detaches all visited "
         "owners; nonpersistent owners stop after their last attachment "
-        "leaves.\n";
-    if (write(context, connections, strlen(connections)) != 0)
+        "leaves.\n\n";
+    const char *handoff =
+        "Alt-S opens a local shell while retaining the editor draft and undo "
+        "state, including while the owner generates a response. `/shell` "
+        "and `!sh` use the ordinary turn queue. To escape a local program, "
+        "press Enter then `~.`. `/log -p` (or `/log less`) opens `less`, "
+        "with libmdf's buffered log viewer as the fallback. Owner work "
+        "continues during either viewer; return displays the missed suffix.\n";
+    if (write(context, connections, strlen(connections)) != 0 ||
+        write(context, handoff, strlen(handoff)) != 0)
       return CAI_ERR_TRANSPORT;
   }
   return CAI_OK;

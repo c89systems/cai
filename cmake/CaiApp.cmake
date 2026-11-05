@@ -1,4 +1,4 @@
-add_library(cai_app_objects OBJECT cli/app.c cli/app_client.c cli/input_socket.c cli/frontend.c cli/app_run.c cli/kanban.c)
+add_library(cai_app_objects OBJECT cli/app.c cli/app_client.c cli/input_socket.c cli/frontend.c cli/terminal_program.c cli/app_run.c cli/kanban.c)
 target_link_libraries(cai_app_objects PRIVATE cai_cli_support)
 cai_configure_c_target(cai_app_objects)
 add_library(cai_app_static STATIC $<TARGET_OBJECTS:cai_app_objects>

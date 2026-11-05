@@ -1,12 +1,12 @@
 # Workspace process handoff
 
 This is executable scaffolding for the workspace frontend cutover. Native
-embedding continues to use `cai_app_start_server`; libraries do not fork or
-install process signal handlers. The executable's
+embedding continues to use `cai_app_start_server`; libraries never fork a
+workspace owner. The executable's
 [terminal attachment](terminal-attachment.md) now uses this handoff for automatic
 startup after workspace discovery.
 
-The standalone terminal receiver creates no worker threads. After nonblocking
+Workspace discovery and startup create no frontend worker threads. After nonblocking
 discovery, it may launch its own absolute program path on that single frontend
 thread through a private `--_workspace-owner FD -- ...` entry point. The editor
 can already be open; this launcher must remain outside threaded library hosts.
@@ -26,6 +26,16 @@ explicit headless true default, and explicit overrides. Starting an owner
 does not itself create an attachment or a producer. Frontend prompts must
 eventually be submitted once through the bound producer, not forwarded as
 both backend startup instructions and frontend input.
+
+An explicit local shell/pager action is a separate terminal operation, available
+to native embedding too. Softline relays its PTY while native owner connections
+continue progressing quietly. The adapter prepares argv and captured environment
+before fork; the child uses only async-signal-safe operations before exec. One
+default-stack waiter observes that exact child with `WNOWAIT`, keeping its PID
+owned until terminal restoration, join and reap. It neither installs a SIGCHLD
+handler nor changes the host cwd/environment. The host must leave these children
+waitable and must not reap them. When `less` is unavailable, libmdf's buffered
+log pager temporarily owns and restores terminal/signal state instead.
 
 The bootstrap channel uses the existing incremental CBOR/framing/protocol
 implementation, not a second serializer or a JSON value. STATUS records have

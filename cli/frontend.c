@@ -9,6 +9,7 @@
 #include "replay_tools.h"
 #include "startup.h"
 #include "status.h"
+#include "terminal_program.h"
 #include "tool_result.h"
 #include "transcript_presenter.h"
 #include "workspace_claims.h"
@@ -20,7 +21,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
+#include <sys/stat.h>
 #include <sys/timerfd.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -60,6 +64,8 @@ typedef struct frontend {
   unsigned char instance[16];
   sl_watch_id_t parked_watch;
   int parked_fd, parked_failed, expected_close;
+  int handoff_fd, handoff_failed;
+  unsigned int handoff_events;
   char resume_collection[21];
   uint64_t resume_position, resume_sequence;
   int resume_actions;
@@ -85,6 +91,7 @@ typedef struct frontend {
   int full_output;
   int review_open;
   int history_requested, history_loaded;
+  int resolve_receipts;
   unsigned int history_limit;
   uint64_t history_request, exit_save;
   char *history_entry, *exit_draft;
@@ -99,6 +106,7 @@ typedef struct frontend {
   sl_watch_id_t socket_watch, boot_watch, timer_watch, wake_watch;
   int socket_fd, boot_fd, failed, quit, ready, bound, subscribed, replaying;
   int action_field, shell, awaiting_bind, welcomed, control;
+  int transcript_entry, presentation_parked;
   uint64_t bind_request, subscribe_request, control_request;
   unsigned long long startup_request, startup_producer;
   char startup_session[129];
@@ -111,6 +119,7 @@ typedef struct frontend {
   } hidden_recall[CAI_CLI_STARTUP_INSTRUCTIONS];
   size_t action_length;
   char *action;
+  char action_call[256], handoff_call[256];
   size_t command_length;
   char *command;
   cai_cli_tool_text tool_text;
@@ -124,6 +133,7 @@ struct frontend_group {
   cai_workspace_discovery *discovery;
   sl_watch_id_t discovery_watch;
   int discovery_fd, listing, listed, switching, requested;
+  int terminal_active;
   char *selector;
 };
 
@@ -211,7 +221,8 @@ static int catalog(void *context, const cai_app_catalog_event *e,
     f->skill_candidate_count = 0U;
     f->skills_ready = 1;
   }
-  if ((e->phase == CAI_APP_CATALOG_END || e->phase == CAI_APP_CATALOG_ERROR) &&
+  if (!f->group->terminal_active &&
+      (e->phase == CAI_APP_CATALOG_END || e->phase == CAI_APP_CATALOG_ERROR) &&
       cai_cli_completions_open(&f->current->completions, f->ui->sl,
                                f->target.workspace, completion_catalog,
                                f) != SL_OK)
@@ -221,6 +232,7 @@ static int catalog(void *context, const cai_app_catalog_event *e,
 static int quit_key(sl_t *, sl_key_t, void *, sl_key_action_t *);
 static int enter_key(sl_t *, sl_key_t, void *, sl_key_action_t *);
 static int cancel_key(sl_t *, sl_key_t, void *, sl_key_action_t *);
+static int shell_key(sl_t *, sl_key_t, void *, sl_key_action_t *);
 static int event_ready(sl_t *, const sl_watch_event_t *, void *);
 static int markdown(frontend *f, const char *bytes, size_t length) {
   int saved = f->ui->tool_result_body;
@@ -234,6 +246,10 @@ static int tool_markdown(void *context, const char *bytes, size_t length) {
   return markdown(context, bytes, length);
 }
 static int notice(frontend *f, const char *message) {
+  if (f->group->terminal_active) {
+    snprintf(f->history_warning, sizeof(f->history_warning), "%s", message);
+    return 0;
+  }
   if (f->group->active != f)
     return 0;
   return cai_cli_presenter_notice(f->ui, message);
@@ -288,6 +304,10 @@ static void save_submission(void *context, const cai_input_request *request) {
 static int prompt_history(void *context, const cai_transcript_event *e,
                           cai_error *error) {
   frontend *f = context;
+  if (f->group->terminal_active) {
+    f->history_requested = f->history_loaded = 0;
+    return CAI_OK;
+  }
   if (e->kind == CAI_TRANSCRIPT_REPLAY_BEGIN) {
     f->history_limit = (unsigned int)e->visibility;
     f->history_length = 0U;
@@ -415,7 +435,7 @@ static int observed(void *context, const cai_app_client_event *event,
                     cai_error *error) {
   frontend *f = context;
   f->state = *event->state;
-  if (f->queue != NULL) {
+  if (f->queue != NULL && !f->group->terminal_active) {
     int suppress = 0;
     size_t i;
     int rc;
@@ -488,20 +508,22 @@ static int observed(void *context, const cai_app_client_event *event,
   }
   if (event->type == CAI_APP_CLIENT_INPUT && event->input != NULL &&
       event->input->type == CAI_INPUT_OBSERVATION_SNAPSHOT_END) {
+    f->resolve_receipts = 1;
     f->bound = 1;
     f->ready = 1;
     snprintf(f->current->session, sizeof(f->current->session), "%s",
              f->state.session);
     f->current->producer = f->state.producer;
     f->current->epoch = f->state.conversation;
-    if (cai_cli_completions_open(&f->current->completions, f->ui->sl,
+    if (!f->group->terminal_active &&
+        cai_cli_completions_open(&f->current->completions, f->ui->sl,
                                  f->target.workspace, completion_catalog,
                                  f) != SL_OK)
       return cai_cli_error(error, CAI_ERR_TRANSPORT, "bind completion catalog");
   } else if (event->type == CAI_APP_CLIENT_INPUT && event->input != NULL &&
              event->input->type == CAI_INPUT_OBSERVATION_DISCONNECTED &&
              !f->state.bound) {
-    if (f->queue != NULL) {
+    if (f->queue != NULL && !f->group->terminal_active) {
       (void)cai_cli_input_socket_disconnect(f->queue, NULL);
       f->queue = NULL;
     }
@@ -510,11 +532,35 @@ static int observed(void *context, const cai_app_client_event *event,
   }
   return CAI_OK;
 }
+/** Park only after a validated entry. Later spans from the same transport pump
+ * may advance its cursor, but must not advance the displayed resume position.
+ */
+static int park_presentation(frontend *f, const cai_transcript_event *end) {
+  if (f->presentation_parked)
+    return CAI_OK;
+  if (cai_app_client_get_state(f->client, &f->state, &f->error) != CAI_OK)
+    return f->error.code;
+  snprintf(f->resume_collection, sizeof(f->resume_collection), "%s",
+           f->state.transcript.collection);
+  f->resume_position =
+      end != NULL ? end->position : f->state.transcript.position;
+  f->resume_sequence =
+      end != NULL ? end->sequence : f->state.transcript.sequence;
+  f->presentation_parked = 1;
+  return CAI_OK;
+}
 static int transcript(void *context, const cai_transcript_event *event,
                       cai_error *error) {
   frontend *f = context;
-  if (f->group->active != f)
+  int rc;
+  if (f->group->active != f || f->group->terminal_active ||
+      f->presentation_parked)
     return CAI_OK;
+  if (event->kind == CAI_TRANSCRIPT_EVENT_BEGIN)
+    f->transcript_entry = 1;
+  else if (event->kind == CAI_TRANSCRIPT_EVENT_END ||
+           event->kind == CAI_TRANSCRIPT_ERROR)
+    f->transcript_entry = 0;
   if (event->kind == CAI_TRANSCRIPT_EVENT_BEGIN && event->type != NULL) {
     int review = strcmp(event->type, "review_pending") == 0;
     if ((review || strcmp(event->type, "assistant_text_delta") == 0 ||
@@ -541,6 +587,7 @@ static int transcript(void *context, const cai_transcript_event *event,
     f->resume_actions = 0;
     f->resume_collection[0] = '\0';
     f->resume_position = f->resume_sequence = 0U;
+    f->handoff_call[0] = '\0';
   }
   if (event->kind == CAI_TRANSCRIPT_ERROR) {
     /* A malformed cursor or unavailable index must not trigger an unbounded
@@ -570,7 +617,11 @@ static int transcript(void *context, const cai_transcript_event *event,
                ? CAI_OK
                : CAI_ERR_TRANSPORT;
   }
-  return cai_cli_transcript_presenter_event(f->transcript, event, error);
+  rc = cai_cli_transcript_presenter_event(f->transcript, event, error);
+  if (rc == CAI_OK && (f->shell || f->group->switching) &&
+      event->kind == CAI_TRANSCRIPT_EVENT_END)
+    rc = park_presentation(f, event);
+  return rc;
 }
 
 /** Actions are bounded accepted input commands, not output documents.
@@ -581,6 +632,8 @@ static int action_chunk(frontend *f, const cai_execution_record *record,
   unsigned long long producer, request, item;
   size_t length = strlen(record->data);
   if ((replay && !f->resume_actions) || record->call_id == NULL ||
+      (replay && f->resume_actions &&
+       strcmp(record->call_id, f->handoff_call) == 0) ||
       sscanf(record->call_id, "command:%128[^:]:%llu:%llu:%llu%c", source,
              &producer, &request, &item, &tail) != 4 ||
       producer != f->state.producer || strcmp(source, f->state.session) != 0)
@@ -599,6 +652,7 @@ static int action_chunk(frontend *f, const cai_execution_record *record,
   f->action_length += length;
   f->action[f->action_length] = '\0';
   if (record->final) {
+    snprintf(f->action_call, sizeof(f->action_call), "%s", record->call_id);
     f->action_field = 1;
     return actions(f) == 0 ? CAI_OK : CAI_ERR_TRANSPORT;
   }
@@ -768,7 +822,8 @@ static int execution(void *context, const cai_app_execution_event *event,
   int old_event = f->ui->presentation_event;
   unsigned long long old_stamp = f->ui->presentation_timestamp_ns;
   int rc;
-  if (f->group->active != f)
+  if (f->group->active != f || f->group->terminal_active ||
+      f->presentation_parked)
     return CAI_OK;
   rc = execution_body(context, event, error);
   f->ui->presentation_event = old_event;
@@ -871,6 +926,8 @@ static int actions(frontend *f) {
       rc = markdown(f, message, strlen(message));
   } else if (strcmp(line, "/shell") == 0 || strcmp(line, "!sh") == 0)
     f->shell = 1;
+  else if (strcmp(line, "/log -p") == 0 || strcmp(line, "/log less") == 0)
+    f->shell = 2;
   else
     rc = notice(f, "This frontend action is not connected yet.");
   f->action_length = 0U;
@@ -895,7 +952,13 @@ static int event_ready(sl_t *sl, const sl_watch_event_t *event, void *context) {
     f->failed = 1;
     f->quit = 1;
   }
-  if (f->quit || f->shell || f->switching || f->group->switching)
+  if ((f->shell || f->group->switching) && !f->transcript_entry &&
+      park_presentation(f, NULL) != CAI_OK) {
+    f->failed = f->quit = 1;
+  }
+  if (f->quit ||
+      ((f->shell || f->group->switching) && f->presentation_parked) ||
+      f->switching)
     return sl_suspend(f->ui->sl);
   return SL_OK;
 }
@@ -1004,6 +1067,32 @@ static int startup_input(frontend *f) {
   }
   return 0;
 }
+/** A verified baseline permits read-only reconciliation of uncertain native
+ * receipts. Ask for their original outcomes; never repeat an offer/edit. */
+static int resolve_receipts(frontend *f) {
+  sl_queue_backend_info_t info;
+  size_t i, count;
+  if (!f->resolve_receipts ||
+      sl_queue_backend_info(f->ui->sl, &info) != SL_OK || !info.synchronized)
+    return 0;
+  f->resolve_receipts = 0;
+  count = info.pending_count;
+  for (i = 0U; i < count; ++i) {
+    sl_queue_pending_info_t pending;
+    if (sl_queue_backend_pending(f->ui->sl, i, &pending) == SL_OK &&
+        !pending.pending && pending.status == SL_QUEUE_UNKNOWN) {
+      sl_queue_request_t request;
+      sl_queue_request_id_t id;
+      memset(&request, 0, sizeof(request));
+      request.operation = SL_QUEUE_RESOLVE;
+      request.target_request_id = pending.request.request_id;
+      if (sl_queue_backend_request(f->ui->sl, &request, &id) != SL_OK)
+        return notice(f, "Could not resolve an uncertain queue receipt; "
+                         "its original request remains retained.");
+    }
+  }
+  return 0;
+}
 static int service(frontend *f) {
   int rc, ready = 0;
   if (workspace_progress(f) != 0)
@@ -1101,7 +1190,7 @@ static int service(frontend *f) {
         return -1;
       f->history_warning[0] = '\0';
     }
-    if (actions(f) != 0)
+    if (resolve_receipts(f) != 0 || actions(f) != 0)
       return -1;
     if (startup_input(f) != 0)
       return -1;
@@ -1213,6 +1302,30 @@ static int enter_key(sl_t *sl, sl_key_t key, void *context,
   return SL_OK;
 }
 
+/** Request local handoff at a complete transcript entry, without submitting
+ * the draft or waiting for the owner's current generation to finish. */
+static int shell_key(sl_t *sl, sl_key_t key, void *context,
+                     sl_key_action_t *action) {
+  frontend *f = context;
+  const cai_app_view *view = NULL;
+  (void)key;
+  *action = SL_KEY_ACTION_HANDLED;
+  if (!f->ready || !f->history_loaded || f->exit_save != 0U ||
+      f->group->discovery != NULL || f->group->candidate != NULL ||
+      cai_app_client_get_view(f->client, &view, NULL) != CAI_OK ||
+      view == NULL || !view->available || f->replaying || !f->subscribed ||
+      f->state.transcript.subscribing)
+    return sl_set_status_message(
+        sl, "Wait for workspace attachment before opening a local shell.");
+  f->shell = 1;
+  f->action_call[0] = '\0';
+  if (!f->transcript_entry) {
+    if (park_presentation(f, NULL) != CAI_OK)
+      return SL_ERROR_IO;
+    *action = SL_KEY_ACTION_SUSPEND;
+  }
+  return SL_OK;
+}
 /** Park the complete native editor, including its draft, undo state and queue
  * receipts. Only the active view participates in the owner's poll loop. */
 static void park_view(frontend *f) {
@@ -1305,6 +1418,7 @@ static int select_view(frontend *f, const char *session) {
         sl_watch_add(f->ui->sl, f->timer, SL_WATCH_READ, event_ready, f,
                      &f->timer_watch) != SL_OK ||
         sl_bind_key(f->ui->sl, SL_KEY_ALT_BASE + 'q', quit_key, f) != SL_OK ||
+        sl_bind_key(f->ui->sl, SL_KEY_ALT_BASE + 's', shell_key, f) != SL_OK ||
         sl_bind_key(f->ui->sl, SL_KEY_ESCAPE, cancel_key, f) != SL_OK ||
         sl_bind_key(f->ui->sl, SL_KEY_ENTER, enter_key, f) != SL_OK ||
         sl_bind_key(f->ui->sl, SL_KEY_ALT_ENTER, enter_key, f) != SL_OK ||
@@ -1332,6 +1446,7 @@ static int select_view(frontend *f, const char *session) {
   f->resume_collection[0] = '\0';
   f->resume_position = f->resume_sequence = 0U;
   f->resume_actions = 0;
+  f->presentation_parked = f->transcript_entry = f->shell = 0;
   f->history_requested = f->history_loaded = v->history_loaded;
   f->history_limit = v->history_loaded
                          ? v->history_limit
@@ -1409,6 +1524,14 @@ static frontend *frontend_open(frontend_group *group,
       cai_cli_presenter_sink(f->ui, application->banner,
                              strlen(application->banner)) != 0) {
     cai_cli_error(error, CAI_ERR_TRANSPORT, "write frontend banner");
+    return NULL;
+  }
+  if (group->active == NULL &&
+      cai_cli_presenter_introduction(f->ui, application->introduction_markdown,
+                                     application->introduction_margin_left,
+                                     application->introduction_margin_right) !=
+          0) {
+    cai_cli_error(error, CAI_ERR_TRANSPORT, "write frontend introduction");
     return NULL;
   }
   f->failed = boot == NULL && connect_target(f) != CAI_OK;
@@ -1634,10 +1757,8 @@ static int workspace_activate(frontend **current) {
   if (cai_app_client_get_state(f->client, &f->state, NULL) != CAI_OK)
     return -1;
   if (f->state.transcript.collection[0] != '\0') {
-    snprintf(f->resume_collection, sizeof(f->resume_collection), "%s",
-             f->state.transcript.collection);
-    f->resume_position = f->state.transcript.position;
-    f->resume_sequence = f->state.transcript.sequence;
+    if (!f->presentation_parked && park_presentation(f, NULL) != CAI_OK)
+      return -1;
     f->resume_actions = 1;
     if (cai_app_client_unsubscribe(f->client, &f->error) != CAI_OK)
       return -1;
@@ -1652,6 +1773,7 @@ static int workspace_activate(frontend **current) {
       sl_output_stream_end(f->ui->sl) != SL_OK)
     return -1;
   cai_cli_transcript_presenter_reset(f->transcript);
+  f->presentation_parked = f->transcript_entry = 0;
   f->command_length = f->action_length = 0U;
   f->action_field = 0;
   /* Keep bounded call metadata: a yielded command can finish while parked,
@@ -1672,6 +1794,290 @@ static int workspace_activate(frontend **current) {
   return 0;
 }
 
+/** Maintain native clients while Softline owns its terminal relay. Queue
+ * routing is paused, not copied: the original producer is synchronized after
+ * return. Catalog metadata is bounded; transcript bodies are unsubscribed.
+ * This callback must never enter an editor or presenter. */
+static int terminal_service(void *context, int epoll_fd, int *timeout,
+                            cai_error *error) {
+  frontend *active = context, *p;
+  uint64_t now = clock_ms();
+  for (p = active->group->first; p != NULL; p = p->next) {
+    struct pollfd fd;
+    struct epoll_event event;
+    uint64_t deadline = 0U;
+    unsigned int flags;
+    if (p->client == NULL || p->handoff_failed)
+      continue;
+    if (cai_app_client_pump(p->client, now, &p->error) != CAI_OK ||
+        cai_app_client_get_state(p->client, &p->state, &p->error) != CAI_OK ||
+        p->state.transport.phase == CAI_WORKSPACE_DISCONNECTED ||
+        p->state.transport.phase == CAI_WORKSPACE_FAILED ||
+        cai_app_client_prepare(p->client, &fd, &deadline, &p->error) !=
+            CAI_OK) {
+      p->handoff_failed = 1;
+      if (p->handoff_fd >= 0)
+        (void)epoll_ctl(epoll_fd, EPOLL_CTL_DEL, p->handoff_fd, NULL);
+      p->handoff_fd = -1;
+      continue;
+    }
+    flags = EPOLLET | (fd.events & POLLIN ? EPOLLIN : 0U) |
+            (fd.events & POLLOUT ? EPOLLOUT : 0U);
+    if (p->handoff_fd >= 0 && p->handoff_fd != fd.fd) {
+      (void)epoll_ctl(epoll_fd, EPOLL_CTL_DEL, p->handoff_fd, NULL);
+      p->handoff_fd = -1;
+    }
+    if (fd.fd >= 0 && (p->handoff_fd != fd.fd || p->handoff_events != flags)) {
+      memset(&event, 0, sizeof(event));
+      event.events = flags;
+      event.data.fd = fd.fd;
+      if (epoll_ctl(epoll_fd, p->handoff_fd < 0 ? EPOLL_CTL_ADD : EPOLL_CTL_MOD,
+                    fd.fd, &event) != 0)
+        return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                             "watch owner during terminal handoff");
+      p->handoff_fd = fd.fd;
+      p->handoff_events = flags;
+    }
+    if (deadline != 0U) {
+      uint64_t remaining = deadline > now ? deadline - now : 0U;
+      int wait = remaining > INT_MAX ? INT_MAX : (int)remaining;
+      if (*timeout < 0 || wait < *timeout)
+        *timeout = wait;
+    }
+  }
+  return CAI_OK;
+}
+/** Resolve a fixed local executable using the frontend's captured PATH and
+ * selected workspace, including relative/empty PATH components. No shell. */
+static char *pager_path(frontend *f) {
+  const char *path = cai_environment_get(f->options->environment, "PATH");
+  char *result = malloc(PATH_MAX);
+  if (result == NULL)
+    return NULL;
+  if (path == NULL)
+    path = "/usr/bin:/bin";
+  do {
+    struct stat st;
+    size_t length = strcspn(path, ":");
+    int n = -1;
+    if (length < PATH_MAX) {
+      if (path[0] == '/')
+        n = snprintf(result, PATH_MAX, "%.*s/less", (int)length, path);
+      else
+        n = snprintf(result, PATH_MAX, "%s/%.*s%sless", f->workspace,
+                     (int)length, path, length == 0U ? "" : "/");
+    }
+    if (n >= 0 && n < PATH_MAX && access(result, X_OK) == 0 &&
+        stat(result, &st) == 0 && S_ISREG(st.st_mode))
+      return result;
+    path += length;
+    if (*path == '\0')
+      break;
+    ++path;
+  } while (1);
+  free(result);
+  return NULL;
+}
+/** The finite-file fallback is libmdf's buffered viewer. Its cooperative hook
+ * services owner connections without invoking Softline or another renderer. */
+typedef struct pager_service {
+  frontend *frontend;
+  int epoll;
+  uint64_t next;
+} pager_service;
+static int pager_cancel(void *context) {
+  pager_service *p = context;
+  uint64_t now = clock_ms();
+  int timeout = -1;
+  if (now < p->next)
+    return 0;
+  p->next = now + 50U;
+  return terminal_service(p->frontend, p->epoll, &timeout,
+                          &p->frontend->error) != CAI_OK ||
+         p->frontend->handoff_failed;
+}
+static int log_pager(frontend *f, const char *log) {
+  pager_service service;
+  mdf_pager_control control;
+  mdf_options options;
+  mdf_status status;
+  int rc = CAI_OK;
+  memset(&service, 0, sizeof(service));
+  service.frontend = f;
+  service.epoll = epoll_create1(EPOLL_CLOEXEC);
+  if (service.epoll < 0)
+    return cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
+                         "watch owner during log pager");
+  if (sl_output_stream_end(f->ui->sl) != SL_OK) {
+    close(service.epoll);
+    return cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
+                         "release editor for log pager");
+  }
+  memset(&control, 0, sizeof(control));
+  control.userdata = &service;
+  control.should_cancel = pager_cancel;
+  mdf_options_init(&options);
+  cai_cli_theme_markdown(&f->ui->render_theme, &options);
+  if (cai_environment_get(f->options->environment, "NO_COLOR") != NULL)
+    options.ansi_mode = MDF_ANSI_OFF;
+  status = mdf_pager_file(log, &options, MDF_PAGER_FORMAT_TEXT, &control);
+  close(service.epoll);
+  if (sl_output_stream_begin(f->ui->sl) != SL_OK)
+    rc = cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
+                       "restore editor after log pager");
+  else if (status != MDF_OK && status != MDF_CANCELLED)
+    rc = cai_cli_error(&f->error, CAI_ERR_TRANSPORT, mdf_status_string(status));
+  else if (f->handoff_failed)
+    rc = cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
+                       "owner disconnected during log pager");
+  return rc;
+}
+static int terminal_action(frontend *f, int kind) {
+  frontend *p;
+  const cai_app_view *view = NULL;
+  const char *arguments[4], *shell;
+  char *pager = NULL, *log = NULL, message[128];
+  int raw_status = 0, escaped = 0, rc, result = 0;
+  if (f->group->discovery != NULL || f->group->candidate != NULL ||
+      f->exit_save != 0U || !f->ready) {
+    result =
+        notice(f, "Finish the current workspace transition before handoff.");
+    goto done;
+  }
+  if (kind == 2) {
+    (void)cai_app_client_get_view(f->client, &view, NULL);
+    if (view == NULL || view->log_path == NULL) {
+      result = notice(f, "No log file is configured for this conversation.");
+      goto done;
+    }
+    pager = pager_path(f);
+    log = strdup(view->log_path);
+    if (log == NULL) {
+      free(pager);
+      return cai_cli_error(&f->error, CAI_ERR_NOMEM, "copy log pager path");
+    }
+    arguments[0] = pager;
+    arguments[1] = "--";
+    arguments[2] = log;
+    arguments[3] = NULL;
+  } else {
+    shell = cai_environment_get(f->options->environment, "SHELL");
+    arguments[0] = shell != NULL && shell[0] != '\0' ? shell : "/bin/sh";
+    arguments[1] = "-i";
+    arguments[2] = NULL;
+  }
+  if (cai_cli_presenter_finish_response(f->ui) != 0 ||
+      cai_cli_presenter_finish_reasoning(f->ui) != 0 ||
+      cai_app_client_get_state(f->client, &f->state, &f->error) != CAI_OK) {
+    result = -1;
+    goto done;
+  }
+  if (f->state.transcript.collection[0] != '\0') {
+    if (!f->presentation_parked && park_presentation(f, NULL) != CAI_OK) {
+      result = -1;
+      goto done;
+    }
+    f->resume_actions = 1;
+    snprintf(f->handoff_call, sizeof(f->handoff_call), "%s", f->action_call);
+    if (cai_app_client_unsubscribe(f->client, &f->error) != CAI_OK) {
+      result = -1;
+      goto done;
+    }
+  }
+  for (p = f->group->first; p != NULL; p = p->next) {
+    p->handoff_fd = -1;
+    p->handoff_events = 0U;
+    p->handoff_failed = p->parked_failed || p->failed;
+    if (p->queue != NULL && !p->handoff_failed && p->state.bound &&
+        cai_cli_input_socket_pause(p->queue, &p->error) != CAI_OK) {
+      result = -1;
+      goto done;
+    }
+  }
+  cai_cli_transcript_presenter_reset(f->transcript);
+  f->subscribed = 0;
+  f->group->terminal_active = 1;
+  rc = kind == 2 && pager == NULL
+           ? log_pager(f, log)
+           : cai_cli_terminal_program(f->ui->sl, arguments, f->workspace,
+                                      f->options->environment, terminal_service,
+                                      f, &raw_status, &escaped, &f->error);
+  f->group->terminal_active = 0;
+  f->presentation_parked = f->transcript_entry = 0;
+  f->ui->feed_breaks = f->ui->feed_ansi = 0;
+  if (cai_cli_presenter_geometry(f->ui) != 0) {
+    result = -1;
+    goto done;
+  }
+  for (p = f->group->first; p != NULL; p = p->next) {
+    if (p->queue != NULL && !p->handoff_failed && p->state.bound &&
+        strcmp(p->state.session, p->current->session) == 0) {
+      sl_queue_request_t request;
+      sl_queue_request_id_t id;
+      if (cai_cli_input_socket_resume(p->queue, p->client, &p->error) !=
+          CAI_OK) {
+        result = -1;
+        goto done;
+      }
+      memset(&request, 0, sizeof(request));
+      request.operation = SL_QUEUE_SYNCHRONIZE;
+      if (sl_queue_backend_request(p->ui->sl, &request, &id) != SL_OK) {
+        result = -1;
+        goto done;
+      }
+    } else if (p->queue != NULL)
+      (void)cai_cli_input_socket_disconnect(p->queue, NULL);
+    if (p->handoff_failed)
+      p->parked_failed = 1;
+  }
+  if (f->switching) {
+    if (select_view(f, f->next_session) != 0) {
+      result = -1;
+      goto done;
+    }
+  } else if (cai_cli_completions_open(&f->current->completions, f->ui->sl,
+                                      f->workspace, completion_catalog,
+                                      f) != SL_OK) {
+    result = -1;
+    goto done;
+  }
+  cai_cli_status_maybe_refresh_branch(&f->status, f->workspace);
+  if (rc != CAI_OK) {
+    result =
+        notice(f, f->error.message != NULL ? f->error.message
+                                           : "Local terminal handoff failed.");
+    cai_error_cleanup(&f->error);
+  } else {
+    const char *name = kind == 2 ? "Pager" : "Shell";
+    if (kind == 2 && pager == NULL)
+      snprintf(message, sizeof(message), "**Pager closed.**\n");
+    else if (escaped)
+      snprintf(message, sizeof(message), "**%s escaped.**\n", name);
+    else if (WIFSIGNALED(raw_status))
+      snprintf(message, sizeof(message), "**%s terminated by signal %d.**\n",
+               name, WTERMSIG(raw_status));
+    else
+      snprintf(message, sizeof(message), "**%s exited %d.**\n", name,
+               WEXITSTATUS(raw_status));
+    result = markdown(f, message, strlen(message));
+    if (result == 0)
+      result = cai_cli_presenter_finish_response(f->ui);
+  }
+done:
+  if (result == 0 && f->presentation_parked) {
+    /* A rejected local action must also resume any spans skipped after its
+     * entry seam. Do not replay the action itself on that suffix. */
+    f->resume_actions = 1;
+    snprintf(f->handoff_call, sizeof(f->handoff_call), "%s", f->action_call);
+    if (cai_app_client_unsubscribe(f->client, &f->error) != CAI_OK)
+      result = -1;
+    cai_cli_transcript_presenter_reset(f->transcript);
+    f->subscribed = f->presentation_parked = f->transcript_entry = 0;
+  }
+  free(pager);
+  free(log);
+  return result;
+}
 int cai_cli_frontend_run(const cai_app_config *application,
                          const cai_cli_options *options,
                          const cai_app_client_config *target,
@@ -1734,9 +2140,9 @@ int cai_cli_frontend_run(const cai_app_config *application,
         }
       }
     } else if (!f->quit && f->shell) {
-      int code;
+      int kind = f->shell;
       f->shell = 0;
-      if (sl_terminal_local(f->ui->sl, NULL, &code) < 0)
+      if (terminal_action(f, kind) != 0)
         f->failed = 1;
     } else if (!f->quit) {
       int input_status = sl_last_readline_status(f->ui->sl);
@@ -1842,6 +2248,7 @@ int cai_app_terminal_run(const cai_app_config *application,
   cai_cli_workspace_claims requirements;
   cai_config_context context;
   cai_config *configuration = NULL;
+  cai_environment *environment = NULL;
   char **arguments;
   int rc = CAI_OK, i;
   if (exit_code != NULL)
@@ -1899,13 +2306,17 @@ int cai_app_terminal_run(const cai_app_config *application,
       if (rc == CAI_OK) {
         checked.requirements = requirements.values;
         checked.requirement_count = requirements.count;
-        rc = cai_cli_frontend_run(application, &options, &checked, NULL,
-                                  exit_code, error);
+        rc = cai_config_environment(configuration, &environment, error);
+        options.environment = environment;
+        if (rc == CAI_OK)
+          rc = cai_cli_frontend_run(application, &options, &checked, NULL,
+                                    exit_code, error);
       }
     }
     if (configured == 0)
       *exit_code = 0;
   }
+  cai_environment_close(environment);
   cai_config_close(configuration);
   for (i = 0; i <= argc; ++i)
     free(arguments[i]);

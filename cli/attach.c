@@ -6,6 +6,7 @@
 #include "identity.h"
 #include "spawn.h"
 #include "workspace_claims.h"
+#include <cai/environment.h>
 #include <cai/workspace_discovery.h>
 #include <errno.h>
 #include <limits.h>
@@ -198,6 +199,7 @@ cai_cli_attach_boot_adapter(cai_cli_attach_boot *s) {
 int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
                        int *exit_code, cai_error *error) {
   cai_config *configuration = NULL;
+  cai_environment *environment = NULL;
   cai_cli_options options;
   cai_cli_workspace_claims requirements = {0};
   cai_app_client_config target;
@@ -211,7 +213,10 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
     cai_config_close(configuration);
     return rc == 0 ? CAI_OK : CAI_ERR_INVALID;
   }
-  rc = cai_cli_private_directory(options.runtime_dir, error);
+  rc = cai_config_environment(configuration, &environment, error);
+  options.environment = environment;
+  if (rc == CAI_OK)
+    rc = cai_cli_private_directory(options.runtime_dir, error);
   if (rc == CAI_OK)
     rc = cai_cli_workspace_claims_build(&options, configuration, 1,
                                         &requirements, error);
@@ -231,6 +236,7 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
                             error);
 done:
   cai_cli_attach_boot_close(startup);
+  cai_environment_close(environment);
   cai_config_close(configuration);
   return rc;
 }

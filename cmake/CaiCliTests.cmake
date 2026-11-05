@@ -119,7 +119,25 @@
     target_link_libraries(cai_cli_progress_owner PRIVATE cai_app_static)
     target_link_options(cai_cli_progress_owner PRIVATE -Wl,--wrap=cai_client_open)
     cai_configure_cli_target(cai_cli_progress_owner)
+    add_executable(cai_cli_terminal_owner_control tests/terminal_owner_control.c)
+    target_link_libraries(cai_cli_terminal_owner_control PRIVATE cai_app_static)
+    target_link_options(cai_cli_terminal_owner_control PRIVATE -Wl,--wrap=lc_client_open)
+    target_compile_options(cai_cli_terminal_owner_control PRIVATE -UNDEBUG)
+    cai_configure_cli_target(cai_cli_terminal_owner_control)
+    add_executable(cai_cli_handoff_host tests/app_terminal_host.c tests/terminal_handoff_guard.c)
+    target_link_libraries(cai_cli_handoff_host PRIVATE cai_app_static)
+    target_link_options(cai_cli_handoff_host PRIVATE -Wl,--wrap=lc_client_open
+      -Wl,--wrap=sl_terminal_handoff -Wl,--wrap=mdf_pager_file -Wl,--wrap=sl_queue_backend_update
+      -Wl,--wrap=sl_history_add -Wl,--wrap=sl_set_status_message)
+    target_compile_options(cai_cli_handoff_host PRIVATE -UNDEBUG)
+    cai_configure_cli_target(cai_cli_handoff_host)
     foreach(_cai_compat_mode native embed)
+      add_test(NAME cai_cli_attached_handoff_${_cai_compat_mode} COMMAND bash
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_attached_handoff_test.sh"
+        "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_cli_handoff_host>"
+        "$<TARGET_FILE:cai_cli_terminal_owner_control>" "${_cai_compat_mode}")
+      set_tests_properties(cai_cli_attached_handoff_${_cai_compat_mode}
+        PROPERTIES TIMEOUT 45 LABELS "cli;local;offline")
       add_test(NAME cai_cli_command_progress_${_cai_compat_mode} COMMAND bash
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_command_progress_test.sh"
         "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_app_terminal_host>"

@@ -16,7 +16,8 @@ const cai_cli_frontend_boot *cai_cli_attach_boot_adapter(cai_cli_attach_boot *);
  * a ready surviving child's local watch is abandoned without signalling it. */
 void cai_cli_attach_boot_close(cai_cli_attach_boot *);
 /** Executable discovery/quiet-exec composition. The reusable terminal
- * frontend itself never forks or opens storage. */
+ * frontend never starts an owner or opens storage. Explicit local shell/pager
+ * actions may start a foreground program through Softline's PTY adapter. */
 int cai_cli_attach_run(const cai_app_config *, int, char **, int *,
                        cai_error *);
 #endif

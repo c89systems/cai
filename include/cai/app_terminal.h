@@ -11,7 +11,12 @@ extern "C" {
 /** Run the terminal adapter on the calling thread. Requires a terminal on
  * standard input/output and exclusive ownership of that terminal until return.
  * Opens no runtime, SDK client, authentication store or conversation writer;
- * never forks or starts a server. The transport target supplies runtime
+ * never starts a server. Explicit user shell/pager actions start a local
+ * foreground program through Softline's PTY adapter, without changing host
+ * cwd/environment. The libmdf fallback pager temporarily owns and restores
+ * terminal/signal state. The host must leave foreground program
+ * children waitable and must not reap the adapter's owned child.
+ * The transport target supplies runtime
  * directory, canonical workspace and optional verified instance identity.
  * Its event/transcript callbacks are replaced by this adapter's consumers.
  *

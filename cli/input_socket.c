@@ -8,6 +8,9 @@
 struct cai_cli_input_socket {
   cai_cli_input_adapter *adapter;
   cai_app_client *client;
+  cai_app_client *paused_client;
+  unsigned long long paused_conversation;
+  int synchronizing, resumed_snapshot;
   char session[129];
   unsigned long long producer, base, highest, source_high, item_namespace;
   int fixed, detached;
@@ -147,6 +150,8 @@ int cai_cli_input_socket_disconnect(cai_cli_input_socket *s, cai_error *error) {
   int rc;
   if (s == NULL || s->detached)
     return unavailable(error, "Live socket queue binding required");
+  s->paused_client = NULL;
+  s->synchronizing = s->resumed_snapshot = 0;
   if (s->client == NULL)
     return CAI_OK;
   memset(&observation, 0, sizeof(observation));
@@ -155,6 +160,47 @@ int cai_cli_input_socket_disconnect(cai_cli_input_socket *s, cai_error *error) {
   if (rc == CAI_OK)
     s->client = NULL;
   return rc;
+}
+int cai_cli_input_socket_pause(cai_cli_input_socket *s, cai_error *error) {
+  cai_app_client_state state;
+  cai_app_client *client;
+  int rc;
+  if (s == NULL || s->detached || !s->fixed || s->client == NULL ||
+      s->paused_client != NULL)
+    return unavailable(error, "Live bound editor routing required");
+  client = s->client;
+  rc = cai_app_client_get_state(client, &state, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (!state.bound || state.producer != s->producer ||
+      strcmp(state.session, s->session) != 0)
+    return unavailable(error, "The editor producer is not bound");
+  rc = cai_cli_input_socket_disconnect(s, error);
+  if (rc == CAI_OK) {
+    s->paused_client = client;
+    s->paused_conversation = state.conversation;
+  }
+  return rc;
+}
+int cai_cli_input_socket_resume(cai_cli_input_socket *s, cai_app_client *client,
+                                cai_error *error) {
+  cai_app_client_state state;
+  int rc;
+  if (s == NULL || s->detached || client == NULL ||
+      client != s->paused_client || s->client != NULL)
+    return unavailable(error, "The original paused transport is required");
+  rc = cai_app_client_get_state(client, &state, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (state.transport.phase != CAI_WORKSPACE_CONNECTED || !state.bound ||
+      state.conversation != s->paused_conversation ||
+      state.producer != s->producer || strcmp(state.session, s->session) != 0)
+    return unavailable(error, "Paused editor scope changed; rebind its view");
+  s->client = client;
+  s->paused_client = NULL;
+  s->synchronizing = 1;
+  s->resumed_snapshot = 0;
+  return CAI_OK;
 }
 static unsigned long long local_request(cai_cli_input_socket *s,
                                         unsigned long long id) {
@@ -198,6 +244,15 @@ int cai_cli_input_socket_observe(cai_cli_input_socket *s,
   if (event->type != CAI_APP_CLIENT_INPUT || event->input == NULL)
     return unavailable(error, "Typed input observation required");
   observation = *event->input;
+  if (s->synchronizing) {
+    if (observation.type == CAI_INPUT_OBSERVATION_SNAPSHOT_BEGIN)
+      s->resumed_snapshot = 1;
+    else if (observation.type != CAI_INPUT_OBSERVATION_RESULT &&
+             ((observation.type != CAI_INPUT_OBSERVATION_SNAPSHOT_ITEM &&
+               observation.type != CAI_INPUT_OBSERVATION_SNAPSHOT_END) ||
+              !s->resumed_snapshot))
+      return CAI_OK;
+  }
   end = observation.type == CAI_INPUT_OBSERVATION_SNAPSHOT_END;
   if (end &&
       (!state->ready || state->session[0] == '\0' || state->producer == 0U ||
@@ -217,6 +272,8 @@ int cai_cli_input_socket_observe(cai_cli_input_socket *s,
     observation.change.request_id =
         local_request(s, observation.change.request_id);
   rc = cai_cli_input_adapter_observe(s->adapter, &observation, error);
+  if (rc == CAI_OK && end)
+    s->synchronizing = s->resumed_snapshot = 0;
   if (rc == CAI_OK && end && !s->fixed) {
     strcpy(s->session, state->session);
     s->producer = state->producer;
@@ -231,7 +288,8 @@ int cai_cli_input_socket_reconnect(cai_cli_input_socket *s,
                                    cai_app_client *client, cai_error *error) {
   cai_app_client_state replacement;
   int rc;
-  if (s == NULL || s->detached || client == NULL || client == s->client)
+  if (s == NULL || s->detached || client == NULL || client == s->client ||
+      s->paused_client != NULL)
     return unavailable(error, "New application client required");
   rc = cai_app_client_get_state(client, &replacement, error);
   if (rc != CAI_OK)

@@ -273,8 +273,11 @@ begin/item/end observations; the producer never builds a complete queue value.
 The Softline adapter constructs its explicit bounded editor mirror and publishes
 it only at the validated end. Disconnect/takeover releases edits durably,
 without advancing request IDs or replacing accepted text. Recovery releases
-orphaned edits before selecting the queue. Application command presentation
-remains pending. This API does not fork or install signals.
+orphaned edits before selecting the queue. Application command replies use the
+[semantic execution channel](workspace-commands.md); the terminal receiver
+renders those replies through the shared presenter. Owner startup does not
+fork or install signals. Explicit frontend shell/pager actions follow the
+[terminal handoff contract](terminal-attachment.md#local-terminal-handoff).
 
 `cai -x` / `cai --headless` is the standalone process composition of this API,
 with a default of `persist = true`, JSON logging to stderr and automatic color.

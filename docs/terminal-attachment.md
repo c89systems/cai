@@ -31,9 +31,13 @@ policy then applies. A persistent owner remains running.
 Native hosts can use `cai_app_terminal_run` from `cai/app_terminal.h` with an
 explicit transport target. It uses the same terminal implementation, resolves
 frontend preferences and opens no runtime, authentication store or SDK client.
-It never starts a process. The CLI's discovery/fork/exec scaffolding is separate
+It never starts a server process. Explicit local shell/pager actions use the
+same PTY adapter as the executable. The CLI's discovery/fork/exec scaffolding is separate
 from this library receiver. Existing `cai_app.run` composition has not yet been
 cut over; asynchronous server lifecycle APIs remain the backend entry points.
+The initial terminal displays the host's banner and configured Markdown
+introduction through the shared renderer before replay, including introduction
+margins and NO_COLOR. Switching workspaces does not repeat that introduction.
 
 The adapter drives public client interests from Softline descriptor watches.
 Wake bytes schedule socket progress after editor requests; they do not contain
@@ -116,10 +120,29 @@ Reviewer reasoning uses the same incremental Markdown path during live display
 and replay. Manual review headers come from the accepted backend command;
 model-invoked review tools use the shared formatter's lifecycle presentation.
 
+## Local terminal handoff
+
+Alt-S opens a local shell while retaining Softline's draft, undo state and native
+queue receipts. It is available during generation: presentation stops at the
+next complete journal entry, while the workspace owner continues working.
+`/shell` and `!sh` still pass through the ordinary turn queue. Enter followed by
+`~.` escapes a local foreground program. Resize and interrupt bytes reach its
+PTY. The program runs in the selected workspace with the resolved configuration
+environment, without changing its embedding host's cwd or environment.
+
+`/log -p` and `/log less` invoke an available `less` directly with the authenticated
+session log path. Without `less`, libmdf's finite-file buffered text pager is used;
+this local viewer is not a streaming transport. Its cooperative cancellation
+hook keeps owner connections progressing and exits if the active owner fails.
+No terminal callback reenters Softline queue/history/status APIs. After return,
+the original producer synchronizes receipts and resumes from its displayed
+journal position. Takeover or conversation changes during handoff retain their
+normal authority and context rules. Shell bytes never enter model context.
+
 ## Remaining cutover work
 
 This is a working terminal/socket composition, not a claim of complete feature
-parity. Remaining key bindings, pager/layout delegates, review progress parity,
+parity. Remaining layout/shellshare delegates, review progress parity,
 full startup-control parity and validation of extended configuration outside
 the startup inventory still require
 integration. Automatic executable-path discovery currently
@@ -142,3 +165,9 @@ parked, suffix-only catch-up and nonpersistent/persistent detach lifetimes.
 without a runtime/storage client, then exercises a stalled probe and two actual
 terminal launches, distinct startup inputs and last-detach shutdown. Named
 completion tests attach from another directory and resolve files at the owner.
+`cai_cli_attached_handoff_native` and `cai_cli_attached_handoff_embed` exercise
+draft retention, active generation, resize, interrupts, local-program errors,
+takeover, context changes and suffix-only replay across shell/pager handoff.
+The embedding guard rejects editor API reentry during the Softline relay and
+checks that the host environment and cwd remain unchanged. The queue unit test
+resolves a receipt lost during paused routing without offering the input twice.

@@ -30,6 +30,7 @@ typedef struct frontend {
   size_t results;
   size_t control_results;
   int control_code;
+  int paused;
   cai_input_result result;
 } frontend;
 typedef struct fixture {
@@ -52,8 +53,9 @@ static int observed(void *context, const cai_app_client_event *event,
     ++f->results;
     f->result = event->input->result;
   }
-  return f->queue != NULL ? cai_cli_input_socket_observe(f->queue, event, error)
-                          : CAI_OK;
+  return f->queue != NULL && !f->paused
+             ? cai_cli_input_socket_observe(f->queue, event, error)
+             : CAI_OK;
 }
 static void server(fixture *f) {
   int stopping;
@@ -484,6 +486,50 @@ static void cases(fixture *f) {
   free(a);
   free(b);
 }
+static void pause_cases(fixture *f) {
+  frontend *a = calloc(1U, sizeof(*a)), *b = calloc(1U, sizeof(*b));
+  sl_queue_backend_info_t info;
+  sl_queue_pending_info_t pending;
+  size_t before = count(f);
+  assert(a != NULL && b != NULL);
+  open_frontend(f, a, 1, 0U, 0U);
+  takeover(f, a);
+  open_frontend(f, b, 0, 0U, 0U);
+  assert(sl_set_buffer(a->editor, "paused local draft") == SL_OK);
+  assert(request(a, SL_QUEUE_OFFER, "accepted while observations pause", 0U,
+                 0U) == 1U);
+  assert(cai_cli_input_socket_pause(a->queue, NULL) == CAI_OK);
+  assert(cai_cli_input_socket_pause(a->queue, NULL) == CAI_ERR_INVALID);
+  a->paused = 1;
+  assert(drive(f, a, b) == CAI_OK && count(f) == before + 1U);
+  assert(sl_queue_backend_pending(a->editor, 0U, &pending) == SL_OK &&
+         !pending.pending && pending.status == SL_QUEUE_UNKNOWN);
+  assert(cai_cli_input_socket_resume(a->queue, b->client, NULL) ==
+         CAI_ERR_INVALID);
+  assert(cai_cli_input_socket_reconnect(a->queue, a->client, NULL) ==
+         CAI_ERR_INVALID);
+  takeover(f, b); /* Authority changes; the original producer remains bound. */
+  assert(cai_cli_input_socket_resume(a->queue, a->client, NULL) == CAI_OK);
+  assert(cai_cli_input_socket_resume(a->queue, a->client, NULL) ==
+         CAI_ERR_INVALID);
+  a->paused = 0;
+  assert(request(a, SL_QUEUE_SYNCHRONIZE, NULL, 0U, 0U) == 2U);
+  assert(drive(f, a, b) == CAI_OK);
+  assert(sl_queue_backend_info(a->editor, &info) == SL_OK &&
+         info.synchronized && info.visible_count == before + 1U);
+  assert(request(a, SL_QUEUE_RESOLVE, NULL, 0U, 1U) == 3U);
+  assert(drive(f, a, b) == CAI_OK && count(f) == before + 1U);
+  assert(sl_queue_backend_info(a->editor, &info) == SL_OK &&
+         !info.pending_count);
+  assert(strcmp(sl_buffer(a->editor), "paused local draft") == 0);
+  assert(request(a, SL_QUEUE_OFFER, "must remain an observer", 0U, 0U) == 4U);
+  assert(drive(f, a, b) == CAI_OK && a->result.outcome == CAI_INPUT_REJECTED &&
+         count(f) == before + 1U);
+  close_frontend(a);
+  close_frontend(b);
+  free(a);
+  free(b);
+}
 static void *run(void *unused) {
   fixture *f = calloc(1U, sizeof(*f));
   cai_attachment_config lifetime;
@@ -514,6 +560,7 @@ static void *run(void *unused) {
   reject_instance(f);
   cancellation_cases(f);
   cases(f);
+  pause_cases(f);
   assert(cai_cli_workspace_host_input(f->host, NULL, NULL, NULL) == CAI_OK);
   cai_cli_workspace_host_close(f->host);
   cai_input_controller_close(f->controller);
