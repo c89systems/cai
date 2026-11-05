@@ -253,6 +253,9 @@ apply locally. Explicit inference settings are ordinary acknowledged backend
 controls. Incompatible explicit server/store/config identity reports which
 server is already running and which setting conflicts. Do not silently start
 a second owner or mutate config.ini.
+The implemented [startup requirement inventory](workspace-wire-claims.md)
+validates these identities before admission, without publishing configuration
+values in discovery. Full runtime startup-control parity remains unfinished.
 
 ## CLI contract
 

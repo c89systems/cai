@@ -752,13 +752,12 @@ void cai_cli_workspace_host_prompt_limit(cai_cli_workspace_host *host,
     cai_cli_transcript_feed_prompt_limit(host->history, limit);
   }
 }
-int cai_cli_workspace_host_open(const char *runtime_directory,
-                                const char *workspace, const char *name,
-                                const cai_attachment_config *lifetime,
-                                const cai_input_controller_config *admission,
-                                cai_app_bridge *bridge, pslog_logger *logger,
-                                cai_cli_workspace_host **out,
-                                cai_error *error) {
+int cai_cli_workspace_host_open(
+    const char *runtime_directory, const char *workspace, const char *name,
+    const cai_workspace_claim *claims, size_t claim_count,
+    const cai_attachment_config *lifetime,
+    const cai_input_controller_config *admission, cai_app_bridge *bridge,
+    pslog_logger *logger, cai_cli_workspace_host **out, cai_error *error) {
   cai_workspace_server_config config;
   cai_cli_workspace_host *host;
   int rc;
@@ -774,6 +773,8 @@ int cai_cli_workspace_host_open(const char *runtime_directory,
   config.runtime_directory = runtime_directory;
   config.workspace = workspace;
   config.name = name;
+  config.claims = claims;
+  config.claim_count = claim_count;
   config.lifetime = *lifetime;
   config.event = message;
   config.context = host;

@@ -4,6 +4,7 @@
 #include "app_internal.h"
 #include "identity.h"
 #include "status.h"
+#include "stores.h"
 #include "theme.h"
 #include <cai/models.h>
 #include <cai/version.h>
@@ -1082,6 +1083,20 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
       return -1;
   }
   defaults.config_file = early.config_file;
+  if (early.config_file != NULL)
+    defaults.owner_explicit |= CAI_CLI_OWNER_BIT(config_file);
+  /* Capture explicit INI/environment/host settings before derived automatic
+   * paths are stored. Defaults alone never constrain an existing owner. */
+#define CAI_CLI_OWNER_CONFIG(section, key, member, type)                       \
+  if (cfg->get(cfg, section, key) != NULL)                                     \
+    defaults.owner_explicit |= CAI_CLI_OWNER_BIT(member);
+  CAI_CLI_OWNER_FIELDS(CAI_CLI_OWNER_CONFIG)
+#undef CAI_CLI_OWNER_CONFIG
+  for (i = 0U; i < cfg->section_count(cfg); ++i)
+    if (strncmp(cfg->section_at(cfg, i), "store.", 6U) == 0)
+      defaults.owner_explicit |= CAI_CLI_OWNER_BIT(sessions_store) |
+                                 CAI_CLI_OWNER_BIT(auth_store) |
+                                 CAI_CLI_OWNER_BIT(messaging_store);
   {
     long long replay = cai_config_get_integer(cfg, "ui", "replay_turns", 10LL);
     if (replay < -1LL || replay > LONG_MAX)
@@ -1280,6 +1295,11 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
     return -1;
   options->directory = cfg->get(cfg, "paths", "directory");
   if (application_defaults(cfg, options, application, 0, error) != CAI_OK)
+    return -1;
+  /* Every receiver sees the same source-relative store paths, including
+   * frontend admission fingerprints. This stays in memory and precedes any
+   * temporary workspace transition or SDK client construction. */
+  if (cai_cli_stores_resolve(cfg, error) != CAI_OK)
     return -1;
   if (cai_cli_validate_options(options) < 0)
     return -1;

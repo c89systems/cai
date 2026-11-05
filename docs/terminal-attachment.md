@@ -66,6 +66,11 @@ then follow the existing-owner queue path. Failure to verify preserves the
 original launch error. No second launch, PID takeover or unbounded retry is
 implied. Named discovery also replaces the editor's provisional directory for
 status and file completions before accepting inputs.
+Explicit startup identity now uses the shared
+[pre-admission requirement inventory](workspace-wire-claims.md), including
+private roots, stores, namespaces, config identity and integration/tool policy.
+Conflicts identify the owner directory and setting before binding a producer;
+native embedding can supply additional requirements through the same client.
 
 Skill completion names arrive through the owner's
 [catalog channel](workspace-wire-catalog.md). Only the bounded native completion
@@ -105,8 +110,8 @@ model-invoked review tools use the shared formatter's lifecycle presentation.
 
 This is a working terminal/socket composition, not a claim of complete feature
 parity. Remaining key bindings, pager/layout delegates, review progress parity,
-immediate live command-progress events and explicit
-startup-configuration compatibility still require
+immediate live command-progress events, full startup-control parity and
+validation of extended configuration outside the startup inventory still require
 integration. Automatic executable-path discovery currently
 uses Linux `/proc/self/exe`. Batch/temp and the original synchronous app receiver
 still use their existing composition. These remain part of the active goal.

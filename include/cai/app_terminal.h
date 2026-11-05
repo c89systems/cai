@@ -17,8 +17,10 @@ extern "C" {
  *
  * argv excludes the program name. Frontend preferences use normal app config,
  * settings and argv precedence. Explicit startup inputs/settings are submitted
- * through the native backend queue once control is available. Workspace
- * redirection at startup and utility/batch/server modes are rejected. Runtime
+ * through the native backend queue once control is available. Startup
+ * identity requirements are merged with the target's requirements and
+ * validated before authority/producer acquisition; conflicts fail explicitly.
+ * Workspace redirection and utility/batch/server modes are rejected. Runtime
  * /workspace discovery selects existing owners under this runtime directory;
  * visited attachments and their editors remain until quit. NULL application
  * selects defaults.

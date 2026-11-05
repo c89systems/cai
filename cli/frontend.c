@@ -10,6 +10,7 @@
 #include "status.h"
 #include "tool_result.h"
 #include "transcript_presenter.h"
+#include "workspace_claims.h"
 #include <cai/app_terminal.h>
 #include <cai/workspace_discovery.h>
 #include <errno.h>
@@ -1605,6 +1606,11 @@ static int workspace_progress(frontend *f) {
             cai_app_client_config target = f->target;
             target.workspace = found->record.workspace;
             target.expected_instance = found->record.instance;
+            /* Invocation requirements identify only the initial owner. An
+             * explicit /workspace selects another already configured owner;
+             * never impose the first workspace's store/tool identity on it. */
+            target.requirements = NULL;
+            target.requirement_count = 0U;
             if (target.handshake_timeout_ms == 0U)
               target.handshake_timeout_ms = 10000U;
             p = frontend_open(g, f->application, f->options, &target, NULL,
@@ -1878,6 +1884,7 @@ int cai_app_terminal_run(const cai_app_config *application,
                          cai_error *error) {
   cai_app_config defaults;
   cai_cli_options options;
+  cai_cli_workspace_claims requirements;
   cai_config_context context;
   cai_config *configuration = NULL;
   char **arguments;
@@ -1927,9 +1934,20 @@ int cai_app_terminal_run(const cai_app_config *application,
       rc = cai_cli_error(error, CAI_ERR_INVALID,
                          "terminal receiver accepts frontend options for its "
                          "explicit workspace only");
-    else
-      rc = cai_cli_frontend_run(application, &options, target, NULL, exit_code,
-                                error);
+    else {
+      cai_app_client_config checked = *target;
+      rc = cai_cli_workspace_claims_build(&options, configuration, 1,
+                                          &requirements, error);
+      if (rc == CAI_OK)
+        rc = cai_cli_workspace_claims_merge(&requirements, target->requirements,
+                                            target->requirement_count, error);
+      if (rc == CAI_OK) {
+        checked.requirements = requirements.values;
+        checked.requirement_count = requirements.count;
+        rc = cai_cli_frontend_run(application, &options, &checked, NULL,
+                                  exit_code, error);
+      }
+    }
     if (configured == 0)
       *exit_code = 0;
   }

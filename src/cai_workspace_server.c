@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cai_internal.h"
+#include "cai_workspace_claims.h"
 #include <cai/workspace.h>
 #include <cai/workspace_server.h>
 #include <openssl/rand.h>
@@ -20,9 +21,10 @@ typedef struct server_peer {
   cai_protocol_decoder *protocol;
   uint64_t attachment, deadline;
   size_t part, offset;
+  cai_workspace_claim_reader claims;
   role_notice notices[ROLE_NOTICES];
   size_t notice_head, notice_count;
-  int greeted, detach, failed, writing, probe;
+  int greeted, detach, failed, writing, probe, rejected;
 } server_peer;
 /** Owner-thread workspace listener and attachment authority.
  * Owns endpoint/peer lifetimes; callbacks borrow messages and must not reenter
@@ -31,6 +33,7 @@ struct cai_workspace_server {
   cai_workspace_server_config config;
   cai_workspace_endpoint *endpoint;
   cai_attachment_controller *attachments;
+  cai_workspace_claim *claims;
   pthread_t owner;
   server_peer peers[CAI_ATTACHMENT_LIMIT];
   unsigned char instance[CAI_WORKSPACE_INSTANCE_BYTES];
@@ -265,12 +268,27 @@ static int greeting(server_peer *peer, const cai_protocol_event *event,
       goto invalid;
     peer->part = peer->offset = 0U;
     peer->probe = h->kind == CAI_PROTOCOL_PROBE;
+    memset(&peer->claims, 0, sizeof(peer->claims));
+    peer->claims.claims = peer->server->claims;
+    peer->claims.count = peer->server->config.claim_count;
     return CAI_OK;
   }
   if (event->type == CAI_PROTOCOL_COMPLETE) {
-    if (peer->part != (peer->probe ? 6U : 8U))
+    if (peer->part != (peer->probe ? 7U : 9U))
       goto invalid;
     peer->greeted = 1;
+    if (peer->claims.mismatch[0]) {
+      cai_protocol_header header;
+      size_t n = strlen(peer->claims.mismatch);
+      int rc;
+      memset(&header, 0, sizeof(header));
+      header.kind = CAI_PROTOCOL_REJECT;
+      peer->rejected = 1;
+      rc = cai_protocol_peer_begin(peer->wire, &header, string_size(n), error);
+      if (rc == CAI_OK)
+        rc = write_bytes(peer, peer->claims.mismatch, n, error);
+      return rc == CAI_OK ? cai_protocol_peer_end(peer->wire, error) : rc;
+    }
     if (peer->probe)
       return identity(peer, error);
     peer->deadline = 0U;
@@ -278,10 +296,18 @@ static int greeting(server_peer *peer, const cai_protocol_event *event,
   }
   if (token->indefinite)
     goto invalid;
+  if (peer->part == (peer->probe ? 5U : 7U)) {
+    int rc = cai_workspace_claim_read(&peer->claims, token);
+    if (rc < 0)
+      goto invalid;
+    if (rc == 1)
+      ++peer->part;
+    return CAI_OK;
+  }
   switch (peer->part) {
   case 0:
     if (token->type != CAI_CBOR_ARRAY ||
-        token->argument != (peer->probe ? 2U : 3U))
+        token->argument != (peer->probe ? 3U : 4U))
       goto invalid;
     peer->part = 1U;
     break;
@@ -325,11 +351,14 @@ static int greeting(server_peer *peer, const cai_protocol_event *event,
         goto invalid;
       break;
     }
-    if (token->type != CAI_CBOR_END || token->argument != CAI_CBOR_ARRAY)
-      goto invalid;
-    peer->part = 6U;
-    break;
+    goto invalid; /* PROBE claims are consumed above. */
   case 6:
+    if (peer->probe) {
+      if (token->type != CAI_CBOR_END || token->argument != CAI_CBOR_ARRAY)
+        goto invalid;
+      peer->part = 7U;
+      break;
+    }
     if (token->type == CAI_CBOR_DATA) {
       if (token->length > CAI_WORKSPACE_INSTANCE_BYTES - peer->offset ||
           memcmp(token->data, peer->server->instance + peer->offset,
@@ -343,10 +372,10 @@ static int greeting(server_peer *peer, const cai_protocol_event *event,
     else
       goto invalid;
     break;
-  case 7:
+  case 8:
     if (token->type != CAI_CBOR_END || token->argument != CAI_CBOR_ARRAY)
       goto invalid;
-    peer->part = 8U;
+    peer->part = 9U;
     break;
   default:
     goto invalid;
@@ -362,7 +391,7 @@ static int receive(void *context, const cai_protocol_event *event,
   cai_workspace_server *server = peer->server;
   const cai_protocol_header *header = event->header;
   int control;
-  if (peer->detach)
+  if (peer->detach || peer->rejected)
     return cai_set_error(error, CAI_ERR_PROTOCOL, "request after detach");
   if (peer->attachment == 0U)
     return greeting(peer, event, error);
@@ -453,13 +482,17 @@ int cai_workspace_server_open(const cai_workspace_server_config *config,
   server->config = *config;
   server->config.runtime_directory = server->config.workspace = NULL;
   server->config.name = NULL;
+  server->config.claims = NULL;
   server->owner = pthread_self();
   if (server->config.handshake_timeout_ms == 0U)
     server->config.handshake_timeout_ms = 10000U;
-  rc = RAND_bytes(server->instance, sizeof(server->instance)) == 1
-           ? CAI_OK
-           : cai_set_error(error, CAI_ERR_TRANSPORT,
-                           "generate workspace server instance identity");
+  rc = cai_workspace_claim_copy(config->claims, config->claim_count,
+                                &server->claims, error);
+  if (rc == CAI_OK)
+    rc = RAND_bytes(server->instance, sizeof(server->instance)) == 1
+             ? CAI_OK
+             : cai_set_error(error, CAI_ERR_TRANSPORT,
+                             "generate workspace server instance identity");
   if (rc == CAI_OK)
     rc = cai_workspace_endpoint_open(
         config->runtime_directory, config->workspace, &server->endpoint, error);
@@ -576,7 +609,7 @@ int cai_workspace_server_pump(cai_workspace_server *server, uint64_t now,
     (void)cai_attachment_controller_get_state(server->attachments, &state,
                                               NULL);
     if (rc == CAI_OK && !eof && !peer->detach && peer->greeted &&
-        !peer->probe && peer->attachment == 0U &&
+        !peer->probe && !peer->rejected && peer->attachment == 0U &&
         state.phase == CAI_ATTACHMENT_READY) {
       rc = cai_attachment_controller_attach(server->attachments, now,
                                             &peer->attachment, &local);
@@ -589,7 +622,7 @@ int cai_workspace_server_pump(cai_workspace_server *server, uint64_t now,
     }
     if (rc == CAI_OK && !eof && !peer->detach)
       rc = cai_wire_peer_flush(peer->wire, 0U, &local);
-    if (rc == CAI_OK && peer->probe && peer->greeted &&
+    if (rc == CAI_OK && (peer->probe || peer->rejected) && peer->greeted &&
         cai_wire_peer_pending(peer->wire) == 0U)
       peer->detach = 1;
     if (rc != CAI_OK && local.code == CAI_OK)
@@ -771,5 +804,6 @@ void cai_workspace_server_close(cai_workspace_server *server) {
       drop(&server->peers[i], 0);
   cai_attachment_controller_close(server->attachments);
   cai_workspace_endpoint_close(server->endpoint);
+  cai_workspace_claim_free(server->claims, server->config.claim_count);
   cai_free_mem(NULL, server);
 }

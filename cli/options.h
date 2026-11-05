@@ -1,6 +1,8 @@
 #ifndef CAI_CLI_OPTIONS_H
 #define CAI_CLI_OPTIONS_H
 
+#include "workspace_fields.h"
+#include <cai/workspace_claims.h>
 #include <stddef.h>
 #include <stdio.h>
 
@@ -37,6 +39,11 @@ typedef struct cai_cli_options {
   const char *provider;
   const char *config_file;
   int config_explicit;
+  unsigned long long owner_explicit;
+  /** Executable composition borrows one bounded startup requirement inventory.
+   */
+  const cai_workspace_claim *workspace_requirements;
+  size_t workspace_requirement_count;
   int no_config;
   int model_configured;
   const char *chrome_socket;
@@ -137,6 +144,8 @@ typedef struct cai_cli_options {
 } cai_cli_options;
 
 void cai_cli_options_init(cai_cli_options *options);
+/** Record an explicitly supplied member through the shared owner inventory. */
+void cai_cli_options_mark_owner(cai_cli_options *, size_t member_offset);
 /* Returns 1 to start, 0 for help/version, -1 for an invalid command line. */
 int cai_cli_parse_options(int argc, char *const *argv,
                           cai_cli_options *options);

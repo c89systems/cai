@@ -1,9 +1,11 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cai_internal.h"
+#include "cai_workspace_claims.h"
 #include <cai/workspace.h>
 #include <cai/workspace_client.h>
 #include <errno.h>
 #include <pthread.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -15,6 +17,10 @@ struct cai_workspace_client {
   cai_protocol_decoder *protocol;
   cai_workspace_client_config config;
   cai_workspace_client_state state;
+  cai_workspace_claim *requirements;
+  char rejection[CAI_WORKSPACE_CLAIM_NAME + 1U];
+  size_t rejection_length;
+  int rejecting;
   pthread_t owner;
   uint64_t now, role, role_generation;
   unsigned char instance[CAI_WORKSPACE_INSTANCE_BYTES];
@@ -239,6 +245,57 @@ static int receive(void *context, const cai_protocol_event *event,
   const cai_protocol_header *h = event->header;
   if (client->state.phase == CAI_WORKSPACE_FAILED)
     return client->state.error_code;
+  if (!client->state.has_welcome && !client->state.has_identity &&
+      (client->rejecting || h->kind == CAI_PROTOCOL_REJECT)) {
+    const cai_cbor_token *t = event->token;
+    if (event->type == CAI_PROTOCOL_HEADER) {
+      if (client->rejecting || h->request || h->conversation || h->generation ||
+          h->sequence || h->stream || h->attachment)
+        return invalid(error);
+      client->rejecting = 1;
+      client->part = client->offset = 0U;
+    } else if (event->type == CAI_PROTOCOL_COMPLETE) {
+      const char *directory = cai_workspace_client_directory(client);
+      size_t capacity;
+      char *message;
+      int rc;
+      if (client->part != 2U)
+        return invalid(error);
+      capacity = strlen(directory) + strlen(client->rejection) + 160U;
+      message = cai_alloc(NULL, capacity);
+      if (message == NULL)
+        return cai_set_error(error, CAI_ERR_NOMEM,
+                             "allocate workspace rejection diagnostic");
+      snprintf(message, capacity,
+               "workspace server '%s' conflicts with startup setting '%s'; "
+               "use matching settings or stop that server first",
+               directory, client->rejection);
+      rc = cai_set_error(error, CAI_ERR_INVALID, message);
+      cai_free_mem(NULL, message);
+      return rc;
+    } else if (t->indefinite)
+      return invalid(error);
+    else if (client->part == 0U) {
+      if (t->type != CAI_CBOR_BYTES || t->argument == 0U ||
+          t->argument > CAI_WORKSPACE_CLAIM_NAME)
+        return invalid(error);
+      client->part = 1U;
+      client->rejection_length = (size_t)t->argument;
+    } else if (client->part == 1U && t->type == CAI_CBOR_DATA) {
+      if (t->length > client->rejection_length - client->offset ||
+          (t->length && !cai_workspace_claim_name(t->data, t->length)))
+        return invalid(error);
+      memcpy(client->rejection + client->offset, t->data, t->length);
+      client->offset += t->length;
+    } else if (client->part == 1U && t->type == CAI_CBOR_END &&
+               t->argument == CAI_CBOR_BYTES &&
+               client->offset == client->rejection_length) {
+      client->rejection[client->offset] = '\0';
+      client->part = 2U;
+    } else
+      return invalid(error);
+    return CAI_OK;
+  }
   if (client->config.probe)
     return identity(client, event, error);
   if (!client->state.has_welcome)
@@ -251,7 +308,7 @@ static int receive(void *context, const cai_protocol_event *event,
       h->kind == CAI_PROTOCOL_SHUTDOWN || h->kind == CAI_PROTOCOL_SUBSCRIBE ||
       h->kind == CAI_PROTOCOL_UNSUBSCRIBE || h->kind == CAI_PROTOCOL_PROBE ||
       h->kind == CAI_PROTOCOL_IDENTITY || h->kind == CAI_PROTOCOL_CANCEL ||
-      h->kind == CAI_PROTOCOL_HISTORY_GET ||
+      h->kind == CAI_PROTOCOL_REJECT || h->kind == CAI_PROTOCOL_HISTORY_GET ||
       h->kind == CAI_PROTOCOL_HISTORY_APPEND)
     return invalid(error);
   if (h->kind == CAI_PROTOCOL_ROLE) {
@@ -320,16 +377,18 @@ static int connected(cai_workspace_client *client, cai_error *error) {
   client->state.phase = CAI_WORKSPACE_GREETING;
   memset(&header, 0, sizeof(header));
   header.kind = client->config.probe ? CAI_PROTOCOL_PROBE : CAI_PROTOCOL_HELLO;
-  rc =
-      cai_protocol_peer_begin(client->wire, &header,
-                              1U + size_of_string(strlen(directory)) +
-                                  size_of_string(strlen(CAI_WORKSPACE_SCHEMA)) +
-                                  (client->config.probe ? 0U
-                                   : client->expecting  ? 17U
-                                                        : 1U),
-                              error);
+  rc = cai_protocol_peer_begin(
+      client->wire, &header,
+      1U + size_of_string(strlen(directory)) +
+          size_of_string(strlen(CAI_WORKSPACE_SCHEMA)) +
+          (client->config.probe ? 0U
+           : client->expecting  ? 17U
+                                : 1U) +
+          cai_workspace_claim_size(client->requirements,
+                                   client->config.requirement_count),
+      error);
   if (rc == CAI_OK)
-    rc = token(client, CAI_CBOR_ARRAY, client->config.probe ? 2U : 3U, NULL, 0U,
+    rc = token(client, CAI_CBOR_ARRAY, client->config.probe ? 3U : 4U, NULL, 0U,
                error);
   if (rc == CAI_OK)
     rc = string(client, CAI_CBOR_BYTES, directory, error);
@@ -348,6 +407,9 @@ static int connected(cai_workspace_client *client, cai_error *error) {
         rc = token(client, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U, error);
     }
   }
+  if (rc == CAI_OK)
+    rc = cai_workspace_claim_write(client->wire, client->requirements,
+                                   client->config.requirement_count, error);
   if (rc == CAI_OK)
     rc = token(client, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, error);
   if (rc == CAI_OK)
@@ -377,6 +439,7 @@ int cai_workspace_client_open(const cai_workspace_client_config *config,
   client->config = *config;
   client->config.runtime_directory = client->config.workspace = NULL;
   client->config.expected_instance = NULL;
+  client->config.requirements = NULL;
   client->expecting = config->expected_instance != NULL;
   if (client->expecting)
     memcpy(client->expected, config->expected_instance,
@@ -387,8 +450,11 @@ int cai_workspace_client_open(const cai_workspace_client_config *config,
     client->state.deadline_ms = config->handshake_timeout_ms > UINT64_MAX - now
                                     ? UINT64_MAX
                                     : now + config->handshake_timeout_ms;
-  rc = cai_workspace_endpoint_open(config->runtime_directory, config->workspace,
-                                   &client->endpoint, error);
+  rc = cai_workspace_claim_copy(config->requirements, config->requirement_count,
+                                &client->requirements, error);
+  if (rc == CAI_OK)
+    rc = cai_workspace_endpoint_open(
+        config->runtime_directory, config->workspace, &client->endpoint, error);
   if (rc == CAI_OK)
     rc = cai_workspace_endpoint_connect(client->endpoint, &client->fd,
                                         &connecting, error);
@@ -630,5 +696,7 @@ void cai_workspace_client_close(cai_workspace_client *client) {
     return;
   release_transport(client);
   cai_workspace_endpoint_close(client->endpoint);
+  cai_workspace_claim_free(client->requirements,
+                           client->config.requirement_count);
   cai_free_mem(NULL, client);
 }

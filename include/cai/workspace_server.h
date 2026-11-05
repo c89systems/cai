@@ -5,6 +5,7 @@
 #define CAI_WORKSPACE_SERVER_H
 #include <cai/attachment.h>
 #include <cai/protocol.h>
+#include <cai/workspace_claims.h>
 #include <poll.h>
 #ifdef __cplusplus
 extern "C" {
@@ -39,6 +40,12 @@ typedef struct cai_workspace_server_config {
    * NULL/empty leaves the owner discoverable by canonical path and stable ID.
    */
   const char *name;
+  /** Immutable sorted application fingerprints, copied at open. Requested
+   * missing/mismatched claims reject HELLO before authority or lifetime
+   * changes. Discovery never publishes these values. No application policy
+   * lives in the generic transport; hosts define each claim's semantics. */
+  const cai_workspace_claim *claims;
+  size_t claim_count;
   cai_attachment_config lifetime;
   /** Zero selects 10 seconds for an incomplete greeting. Completed greetings
    * can wait through STARTING; READY begins the first-attachment grace period.

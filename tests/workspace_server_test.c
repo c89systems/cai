@@ -120,7 +120,7 @@ static void greeting_kind(test_client *client, const char *workspace,
                           const char *schema, cai_protocol_kind kind) {
   cai_protocol_header header;
   size_t n = strlen(workspace), s = strlen(schema);
-  uint32_t length = 1U + (uint32_t)n +
+  uint32_t length = 2U + (uint32_t)n +
                     (n < 24U    ? 1U
                      : n < 256U ? 2U
                                 : 3U) +
@@ -131,7 +131,7 @@ static void greeting_kind(test_client *client, const char *workspace,
   header.kind = kind;
   assert(cai_protocol_peer_begin(client->wire, &header, length, NULL) ==
          CAI_OK);
-  token(client, CAI_CBOR_ARRAY, kind == CAI_PROTOCOL_HELLO ? 3U : 2U, NULL, 0U);
+  token(client, CAI_CBOR_ARRAY, kind == CAI_PROTOCOL_HELLO ? 4U : 3U, NULL, 0U);
   token(client, CAI_CBOR_BYTES, n, NULL, 0U);
   token(client, CAI_CBOR_DATA, 0U, workspace, n);
   token(client, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U);
@@ -140,6 +140,8 @@ static void greeting_kind(test_client *client, const char *workspace,
   token(client, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U);
   if (kind == CAI_PROTOCOL_HELLO)
     token(client, CAI_CBOR_NULL, 0U, NULL, 0U);
+  token(client, CAI_CBOR_ARRAY, 0U, NULL, 0U);
+  token(client, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U);
   token(client, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U);
   assert(cai_protocol_peer_end(client->wire, NULL) == CAI_OK);
 }

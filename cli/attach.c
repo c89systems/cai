@@ -5,6 +5,7 @@
 #include "frontend.h"
 #include "identity.h"
 #include "spawn.h"
+#include "workspace_claims.h"
 #include <cai/workspace_discovery.h>
 #include <errno.h>
 #include <limits.h>
@@ -177,6 +178,8 @@ int cai_cli_attach_boot_open(const cai_cli_options *options,
   s->target.runtime_directory = options->runtime_dir;
   s->target.workspace = s->workspace;
   s->target.expected_instance = s->instance;
+  s->target.requirements = options->workspace_requirements;
+  s->target.requirement_count = options->workspace_requirement_count;
   s->adapter.context = s;
   s->adapter.prepare = prepare;
   s->adapter.pump = pump;
@@ -196,6 +199,7 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
                        int *exit_code, cai_error *error) {
   cai_config *configuration = NULL;
   cai_cli_options options;
+  cai_cli_workspace_claims requirements = {0};
   cai_app_client_config target;
   cai_cli_attach_boot *startup = NULL;
   int rc;
@@ -208,6 +212,11 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
     return rc == 0 ? CAI_OK : CAI_ERR_INVALID;
   }
   rc = cai_cli_private_directory(options.runtime_dir, error);
+  if (rc == CAI_OK)
+    rc = cai_cli_workspace_claims_build(&options, configuration, 1,
+                                        &requirements, error);
+  options.workspace_requirements = requirements.values;
+  options.workspace_requirement_count = requirements.count;
   if (rc == CAI_OK)
     rc = cai_cli_attach_boot_open(&options, NULL, argc - 1,
                                   (const char *const *)(argv + 1), &startup,

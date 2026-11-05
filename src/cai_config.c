@@ -1003,6 +1003,9 @@ int cai_config_open_schema(const cai_config_field *fields, size_t count,
 const char *cai_config_directory(const cai_config *self) {
   return self != NULL ? IMPL(self)->directory : NULL;
 }
+const char *cai_config_origin(const cai_config *self) {
+  return self != NULL ? IMPL(self)->origin : NULL;
+}
 const char *cai_config_getenv(const cai_config *self, const char *name) {
   const char *captured;
   if (self == NULL || name == NULL)

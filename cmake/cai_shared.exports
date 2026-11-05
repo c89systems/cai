@@ -216,6 +216,7 @@ cai_config_load
 cai_config_load_file
 cai_config_open
 cai_config_open_schema
+cai_config_origin
 cai_config_resolve_path
 cai_config_section_at
 cai_config_section_count

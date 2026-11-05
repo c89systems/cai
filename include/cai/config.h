@@ -111,6 +111,11 @@ int cai_config_open_schema(const cai_config_field *fields, size_t count,
                            cai_error *error);
 /** Borrow the captured absolute base directory until close. */
 const char *cai_config_directory(const cai_config *self);
+/** Last successfully loaded source origin, borrowed until the next successful
+ * load or close. NULL before loading; scalar/default/path changes and failed
+ * loads preserve it. load_file records the actual selected absolute filename,
+ * independently of configured directory paths. NULL self is accepted. */
+const char *cai_config_origin(const cai_config *self);
 /** Borrow the effective [env]/captured value. Captured values (including empty
  * values) win unless config_env_has_precedence=true. No global getenv call. */
 const char *cai_config_getenv(const cai_config *self, const char *name);

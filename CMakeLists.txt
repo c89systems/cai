@@ -727,6 +727,7 @@ set(CAI_SOURCES
   src/cai_workspace.c
   src/cai_workspace_server.c
   src/cai_workspace_client.c
+  src/cai_workspace_claims.c
   src/cai_workspace_registry.c
   src/cai_workspace_discovery.c
   src/cai_conversation.c
@@ -925,7 +926,7 @@ if(CAI_BUILD_APP)
   # The product and fixture entrypoints share these exact sources/options.
   # Compile them once per configuration; keep fixture substitutions in main.
   add_library(cai_cli_support OBJECT cli/identity.c cli/app_control.c cli/workspace_host.c cli/input_wire.c cli/commands.c cli/completion.c cli/input_adapter.c cli/input_local.c cli/options.c cli/help.c cli/config.c cli/runtime_options.c cli/mcp.c cli/skills.c cli/status.c cli/reasoning.c cli/literal.c cli/shell.c cli/login.c
-    cli/command_help.c cli/catalog_wire.c cli/review_report.c cli/pouch.c cli/pouch_stream.c cli/error.c cli/pouch_transcript.c cli/transcript.c cli/transcript_feed.c cli/transcript_wire.c cli/status_wire.c cli/quota_refresh.c cli/session_commands.c
+    cli/command_help.c cli/catalog_wire.c cli/review_report.c cli/pouch.c cli/pouch_stream.c cli/error.c cli/pouch_transcript.c cli/transcript.c cli/transcript_feed.c cli/transcript_wire.c cli/status_wire.c cli/quota_refresh.c cli/session_commands.c cli/workspace_claims.c
     cli/log.c cli/response.c cli/softline_presenter.c cli/transcript_presenter.c cli/documents.c cli/messages.c cli/message_names.c cli/todo.c cli/theme.c cli/stores.c cli/temp.c cli/replay.c cli/replay_tools.c cli/tool_result.c)
   target_link_libraries(cai_cli_support PUBLIC cai_static
     softline::softline_static libmdf::mdf_static lockdc::static)
@@ -1045,6 +1046,12 @@ if(CAI_BUILD_TESTS)
   add_executable(cai_attachment_test tests/attachment_test.c)
   add_executable(cai_workspace_server_test tests/workspace_server_test.c)
   add_executable(cai_workspace_client_test tests/workspace_client_test.c)
+  add_executable(cai_workspace_claims_test tests/workspace_claims_test.c)
+  target_link_libraries(cai_workspace_claims_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_workspace_claims_test)
+  target_compile_options(cai_workspace_claims_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_workspace_claims COMMAND cai_workspace_claims_test)
+  set_tests_properties(cai_workspace_claims PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   add_executable(cai_workspace_registry_test tests/workspace_registry_test.c)
   add_executable(cai_workspace_discovery_test tests/workspace_discovery_test.c)
   target_link_libraries(cai_workspace_discovery_test PRIVATE ${_cai_internal_link_target})

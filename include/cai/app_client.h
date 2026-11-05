@@ -73,6 +73,10 @@ typedef struct cai_app_client_config {
   /** Optional 16-byte owner identity copied at open, checked by the server
    * before admitting an attachment. Set from verified selector discovery. */
   const unsigned char *expected_instance;
+  /** Optional application startup requirements, copied by the transport.
+   * A mismatch fails before acquiring controller authority. */
+  const cai_workspace_claim *requirements;
+  size_t requirement_count;
   uint64_t handshake_timeout_ms;
   size_t backlog_limit;
   /** Borrowed through close, invoked on the opening thread. May query state

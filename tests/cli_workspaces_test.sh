@@ -28,10 +28,11 @@ wait_for has "$root/a.log" 'Workspace server ready'
 wait_for has "$root/b.log" 'Workspace server ready'
 "$client" "$runtime_root" "$root/other" hold >"$root/holder" 2>"$root/holder.err" & holder_pid=$!
 wait_for test -s "$root/holder"
-attach_args=(-s workspace-a)
+# Initial owner A enables managed commands; request that same startup policy.
+attach_args=(-s workspace-a --terminal)
 if [[ ${3:-native} == embed ]]; then
   base=("$terminal_host" "$runtime_root" "$work" "${base[@]:1}")
-  attach_args=()
+  attach_args=(--terminal)
 fi
 terminal_start "${attach_args[@]}"
 prompt 'hello in the first workspace' 'FIRST workspace answer'

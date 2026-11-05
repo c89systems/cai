@@ -83,8 +83,9 @@ static void *run(void *context) {
   assert(runtime != NULL && workspace != NULL);
   cai_attachment_config_init(&lifetime);
   lifetime.persist = 1;
-  assert(cai_cli_workspace_host_open(runtime, workspace, NULL, &lifetime, NULL,
-                                     NULL, NULL, &host, NULL) == CAI_OK);
+  assert(cai_cli_workspace_host_open(runtime, workspace, NULL, NULL, 0U,
+                                     &lifetime, NULL, NULL, NULL, &host,
+                                     NULL) == CAI_OK);
   memset(&source, 0, sizeof(source));
   source.available = 1;
   source.provider = "custom";

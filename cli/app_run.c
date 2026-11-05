@@ -41,6 +41,7 @@
 #endif
 #include <locale.h>
 
+#include "workspace_claims.h"
 #include <cai/agent_runtime.h>
 #include <cai/auth.h>
 #include <cai/display.h>
@@ -5640,9 +5641,6 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     parsed = -1;
   if (parsed > 0)
     state->options.environment = state->environment;
-  if (parsed > 0 &&
-      cai_cli_stores_resolve(state->configuration, &error) != CAI_OK)
-    parsed = -1;
   if (parsed > 0) {
     state->normal_options = state->options;
     if (state->options.temporary &&
@@ -5693,13 +5691,19 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   }
   if (server != NULL) {
     cai_attachment_config selected = *server;
+    cai_cli_options identity = state->options;
+    cai_cli_workspace_claims claims;
     if (!lifetime_explicit)
       selected.persist = state->options.server_persist;
-    rc = cai_cli_workspace_host_open(
-        state->options.runtime_dir, state->workspace,
-        state->options.workspace_name, &selected,
-        application != NULL ? &application->input : NULL, state->bridge,
-        cli_logger(state), &state->workspace_host, &error);
+    identity.server_persist = selected.persist;
+    rc = cai_cli_workspace_claims_build(&identity, state->configuration, 0,
+                                        &claims, &error);
+    if (rc == CAI_OK)
+      rc = cai_cli_workspace_host_open(
+          state->options.runtime_dir, state->workspace,
+          state->options.workspace_name, claims.values, claims.count, &selected,
+          application != NULL ? &application->input : NULL, state->bridge,
+          cli_logger(state), &state->workspace_host, &error);
     if (rc != CAI_OK) {
       cli_print_error(state, "open workspace server", &error);
       goto cleanup;

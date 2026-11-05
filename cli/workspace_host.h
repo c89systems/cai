@@ -13,6 +13,7 @@ struct cai_cli_pouch;
  * until close, after runtime/store shutdown. */
 int cai_cli_workspace_host_open(const char *runtime_directory,
                                 const char *workspace, const char *name,
+                                const cai_workspace_claim *, size_t claim_count,
                                 const cai_attachment_config *lifetime,
                                 const cai_input_controller_config *admission,
                                 cai_app_bridge *bridge,

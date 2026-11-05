@@ -5,6 +5,7 @@
 #define CAI_WORKSPACE_CLIENT_H
 #include <cai/attachment.h>
 #include <cai/protocol.h>
+#include <cai/workspace_claims.h>
 #include <poll.h>
 #ifdef __cplusplus
 extern "C" {
@@ -40,6 +41,11 @@ typedef struct cai_workspace_client_config {
    * current owner of this canonical workspace, without pinning an instance.
    */
   const unsigned char *expected_instance;
+  /** Optional sorted application requirements. Copied at open; compared by
+   * the server before admitting this connection. Rejection identifies the
+   * first conflicting name without revealing configured values. */
+  const cai_workspace_claim *requirements;
+  size_t requirement_count;
   /** Zero means no deadline: restoration may take time while this event loop
    * remains responsive. Otherwise bounds connect/WELCOME/initial ROLE. */
   uint64_t handshake_timeout_ms;

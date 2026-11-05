@@ -31,8 +31,9 @@ static size_t read_bytes(void *context, void *out, size_t count,
   r->pos += n;
   return n;
 }
-static int load_n(cai_config *config, const char *text, size_t size,
-                  size_t chunk, int fail, cai_error *error) {
+static int load_at(cai_config *config, const char *text, size_t size,
+                   size_t chunk, int fail, const char *origin,
+                   cai_error *error) {
   cai_source_callbacks callbacks;
   cai_source *source;
   reader r;
@@ -46,9 +47,14 @@ static int load_n(cai_config *config, const char *text, size_t size,
   callbacks.read = read_bytes;
   callbacks.context = &r;
   assert(cai_source_from_callbacks(&callbacks, &source, error) == CAI_OK);
-  rc = config->load(config, source, "/configuration/sample.ini", error);
+  rc = config->load(config, source, origin, error);
   cai_source_close(source);
   return rc;
+}
+static int load_n(cai_config *config, const char *text, size_t size,
+                  size_t chunk, int fail, cai_error *error) {
+  return load_at(config, text, size, chunk, fail, "/configuration/sample.ini",
+                 error);
 }
 static int load(cai_config *config, const char *text, size_t chunk, int fail,
                 cai_error *error) {
@@ -119,6 +125,32 @@ static void numeric_locale_test(void) {
   config->close(config);
   cai_error_cleanup(&error);
 }
+static void origin_test(void) {
+  cai_config *config;
+  cai_error error;
+  const char *origin, *resolved;
+  cai_error_init(&error);
+  assert(cai_config_origin(NULL) == NULL);
+  assert(cai_config_open(NULL, 0U, NULL, &config, &error) == CAI_OK);
+  assert(cai_config_origin(config) == NULL);
+  assert(load(config, "", 1U, 0, &error) == CAI_OK);
+  origin = cai_config_origin(config);
+  assert(strcmp(origin, "/configuration/sample.ini") == 0);
+  assert(config->set(config, "client", "ca_path", ".", &error) == CAI_OK);
+  assert(config->resolve_path(config, "client", "ca_path", &resolved, &error) ==
+         CAI_OK);
+  assert(config->set_default(config, "agent", "model", "other", &error) ==
+         CAI_OK);
+  assert(cai_config_origin(config) == origin);
+  assert(load_at(config, "=", 1U, 1U, 0, "/different/bad.ini", &error) !=
+         CAI_OK);
+  assert(cai_config_origin(config) == origin);
+  reset(&error);
+  assert(load_at(config, "", 0U, 1U, 0, NULL, &error) == CAI_OK);
+  assert(strcmp(cai_config_origin(config), "configuration") == 0);
+  config->close(config);
+  cai_error_cleanup(&error);
+}
 int main(int argc, char **argv) {
   cai_config *config, *again;
   cai_error error;
@@ -184,6 +216,7 @@ int main(int argc, char **argv) {
     numeric_locale_test();
     return 0;
   }
+  origin_test();
   cai_error_init(&error);
   assert(cai_config_open(NULL, 0U, NULL, &config, &error) == CAI_OK);
   for (i = 1U; i <= 16U; i *= 2U) {

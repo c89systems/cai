@@ -114,6 +114,15 @@
     set_tests_properties(cai_cli_attach_boot PROPERTIES TIMEOUT 30
       LABELS "cli;local;offline"
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+    foreach(_cai_compat_mode native embed)
+      add_test(NAME cai_startup_compat_${_cai_compat_mode} COMMAND bash
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_startup_compat_test.sh"
+        "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_app_terminal_host>"
+        "${_cai_compat_mode}")
+      set_tests_properties(cai_startup_compat_${_cai_compat_mode} PROPERTIES
+        TIMEOUT 30 LABELS "cli;local;offline"
+        ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+    endforeach()
     add_test(NAME cai_cli_workspaces COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_workspaces_test.sh" "$<TARGET_FILE:cai_cli>"
       "$<TARGET_FILE:cai_cli_headless_client_test>" "$<TARGET_FILE:cai_app_terminal_host>")

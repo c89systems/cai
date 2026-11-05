@@ -63,6 +63,7 @@ files=(
   docs/workspace-wire-queue.md
   docs/workspace-wire-history.md
   docs/workspace-wire-catalog.md
+  docs/workspace-wire-claims.md
   docs/agent-messaging.md
   docs/kanban.md
   docs/journal.md
