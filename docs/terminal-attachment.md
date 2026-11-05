@@ -5,8 +5,9 @@ and attaches through the native Unix socket client. `-s` / `--server SELECTOR`
 selects an existing owner by its verified name, path or stable workspace ID;
 it never invents a directory or starts a missing named workspace. Without a
 selector, an absent owner is started quietly by the existing executable handoff.
-The editor remains available while that child restores context and announces
-READY. Explicit `-x` owners persist; ordinary automatic owners stop after their
+The editor opens before the first identity probe and remains available during
+discovery, restoration and the child's READY announcement. Explicit `-x` owners
+persist; ordinary automatic owners stop after their
 last attachment leaves unless persistence was explicitly configured.
 
 `/workspace` lists verified live owners and identifies the current directory.
@@ -58,6 +59,13 @@ neither draft text nor stored recall enters model context. Explicit
 startup inputs for an existing owner pass through the same editor/backend queue;
 commands wait for application before subsequent inputs. A newly launched owner
 receives the startup arguments itself, avoiding duplicate submission.
+If simultaneous launches both observed absence, a losing child is reaped and
+its claim-limit failure triggers one fresh identity-only lookup. A verified
+winner is selected with its instance pinned; that terminal's own startup inputs
+then follow the existing-owner queue path. Failure to verify preserves the
+original launch error. No second launch, PID takeover or unbounded retry is
+implied. Named discovery also replaces the editor's provisional directory for
+status and file completions before accepting inputs.
 
 Skill completion names arrive through the owner's
 [catalog channel](workspace-wire-catalog.md). Only the bounded native completion
@@ -97,11 +105,9 @@ model-invoked review tools use the shared formatter's lifecycle presentation.
 
 This is a working terminal/socket composition, not a claim of complete feature
 parity. Remaining key bindings, pager/layout delegates, review progress parity,
-concurrent first-launch
-reconciliation, immediate live command-progress events and explicit
+immediate live command-progress events and explicit
 startup-configuration compatibility still require
-integration. Discovery currently runs before editor construction; a slow identity
-probe can delay that construction. Automatic executable-path discovery currently
+integration. Automatic executable-path discovery currently
 uses Linux `/proc/self/exe`. Batch/temp and the original synchronous app receiver
 still use their existing composition. These remain part of the active goal.
 
@@ -117,3 +123,7 @@ status, sink failure and metadata-cache pressure on default-stack workers.
 and public terminal receiver across two actual owners, with isolated drafts,
 observer takeover, invalid/relative selections, queued work continuing while
 parked, suffix-only catch-up and nonpersistent/persistent detach lifetimes.
+`cai_cli_attach_boot` verifies claim reconciliation and failure preservation
+without a runtime/storage client, then exercises a stalled probe and two actual
+terminal launches, distinct startup inputs and last-detach shutdown. Named
+completion tests attach from another directory and resolve files at the owner.

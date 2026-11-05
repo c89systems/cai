@@ -6,8 +6,10 @@ install process signal handlers. The executable's
 [terminal attachment](terminal-attachment.md) now uses this handoff for automatic
 startup after workspace discovery.
 
-Before starting UI/runtime threads, the executable may launch its own absolute
-program path through a private `--_workspace-owner FD -- ...` entry point.
+The standalone terminal receiver creates no worker threads. After nonblocking
+discovery, it may launch its own absolute program path on that single frontend
+thread through a private `--_workspace-owner FD -- ...` entry point. The editor
+can already be open; this launcher must remain outside threaded library hosts.
 The child becomes a session leader, restores normal child signal dispositions
 and masks, redirects standard input/output/error to `/dev/null`, and execs.
 Only the explicit Unix socket is deliberately retained across that exec; the
@@ -65,6 +67,14 @@ for immediate executable exit, when surviving persistent children are adopted
 normally. Close must not silently kill a ready server or discard an unreaped
 child in a running frontend. Workspace locks and conditional discovery, not
 bootstrap PIDs, decide whether an owner already exists.
+
+Initial discovery and the child watch use the same frontend prepare/pump
+adapter. Lookup never acquires controller authority. A losing pre-READY child
+with a claim-limit error is reaped before one fresh verified lookup; only a
+successful identity response selects the winner and changes the frontend to
+the existing-owner startup-input path. Other launch failures are preserved,
+and a failed reconciliation does not start another child. Resolved lookups
+without an owned child have no descriptor or timer, so they add no idle polls.
 
 Verification covers fragmented and malformed bootstrap records, publication
 only after COMPLETE, abrupt exit and startup failure, duplicate ownership,

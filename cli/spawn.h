@@ -16,8 +16,9 @@ typedef struct cai_cli_spawn_state {
   int was_ready, exit_code, signal;
   cai_cli_bootstrap_message observation;
 } cai_cli_spawn_state;
-/* Standalone executable only, before creating threads or installing SIGCHLD
- * handlers. program is an absolute path; argv contains backend startup options
+/* Standalone executable only, on its single frontend thread before creating
+ * workers or installing SIGCHLD handlers. A threadless editor may already be
+ * open. program is an absolute path; argv contains backend startup options
  * only, without argv[0]. The child execs the same program's private owner
  * entry. Zero startup timeout selects 60 seconds. No attachment/store is opened
  * here. The supplied clock is monotonic milliseconds; ordinary child failures

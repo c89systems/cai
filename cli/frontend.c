@@ -1055,12 +1055,43 @@ static int service(frontend *f) {
   if (workspace_progress(f) != 0)
     return -1;
   if (f->boot != NULL) {
-    rc = f->boot->pump(f->boot->context, clock_ms(), &f->target, &ready,
-                       &f->error);
+    cai_app_client_config target = f->target;
+    rc =
+        f->boot->pump(f->boot->context, clock_ms(), &target, &ready, &f->error);
     if (rc != CAI_OK)
       return -1;
-    if (ready && f->client == NULL && connect_target(f) != CAI_OK)
-      return -1;
+    if (ready && f->client == NULL) {
+      char *workspace;
+      if ((ready != CAI_CLI_FRONTEND_EXISTING &&
+           ready != CAI_CLI_FRONTEND_STARTED) ||
+          target.workspace == NULL || target.expected_instance == NULL)
+        return cai_cli_error(&f->error, CAI_ERR_PROTOCOL,
+                             "startup target was not verified");
+      workspace = strdup(target.workspace);
+      if (workspace == NULL)
+        return cai_cli_error(&f->error, CAI_ERR_NOMEM,
+                             "copy verified startup workspace");
+      /* A named selector can resolve outside the provisional cwd. Keep every
+       * editor consumer on that verified directory before accepting input. */
+      free(f->workspace);
+      f->workspace = workspace;
+      f->target = target;
+      f->target.workspace = f->workspace;
+      f->target.runtime_directory = f->runtime_directory;
+      memcpy(f->instance, target.expected_instance, sizeof(f->instance));
+      f->target.expected_instance = f->instance;
+      cai_cli_status_init(&f->status, f->workspace, getenv("HOME"));
+      (void)cai_cli_status_fields_parse(f->options->status_fields,
+                                        &f->status.fields);
+      if (cai_cli_completions_open(&f->current->completions, f->ui->sl,
+                                   f->workspace, completion_catalog,
+                                   f) != SL_OK)
+        return cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
+                             "select verified completion directory");
+      f->startup_stage = ready == CAI_CLI_FRONTEND_STARTED ? 5 : 0;
+      if (connect_target(f) != CAI_OK)
+        return -1;
+    }
   }
   if (f->client != NULL) {
     rc = cai_app_client_pump(f->client, clock_ms(), &f->error);
@@ -1384,10 +1415,10 @@ static frontend *frontend_open(frontend_group *group,
     f->target.expected_instance = f->instance;
   }
   f->boot = boot;
-  /* A newly spawned owner receives the original argv and applies it itself.
-   * Existing owners receive explicit intents exactly once through admissions.
-   */
-  f->startup_stage = boot != NULL ? 5 : 0;
+  /* Discovery decides whether a new owner already received the original argv.
+   * An existing owner (including the winner of a launch race) gets explicit
+   * intents exactly once through admissions after its replay completes. */
+  f->startup_stage = 0;
   f->theme_offsets[0] = options->theme_offset;
   f->theme_offsets[1] = options->subagent_theme_offset;
   f->theme_offsets[2] = options->review_theme_offset;

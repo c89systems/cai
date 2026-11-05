@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/cli_test_common.sh"
 peer_start
+attach_options=()
 mkdir -p "$root/skills/completion-skill" "$work/folder space" "$work/.git"
 printf '%s\n' '---' 'name: completion-skill' 'description: Completion fixture.' '---' 'Skill instructions.' >"$root/skills/completion-skill/SKILL.md"
 printf 'file\n' >"$work/report-unique.txt"
@@ -27,13 +28,17 @@ if [[ ${1:-local} != local ]]; then
     cleanup "$result"
   }
   trap completion_cleanup EXIT
-  "${base[@]}" -x -N --skills --skills-dir "$root/skills" >"$root/owner.out" 2>"$root/owner.log" & completion_owner=$!
+  "${base[@]}" -x -N --workspace-name completion-owner --skills --skills-dir "$root/skills" >"$root/owner.out" 2>"$root/owner.log" & completion_owner=$!
   wait_for has "$root/owner.log" 'Workspace server ready'
   if [[ $1 == embed ]]; then
     base=("$(realpath "$2")" "$completion_runtime" "$work" "${base[@]:1}")
+  else
+    # Initial named discovery resolves outside the client's provisional cwd.
+    # File completions must use the verified owner's directory throughout.
+    attach_options=(-C "$root" -s completion-owner)
   fi
 fi
-terminal_start -N --skills --skills-dir "$root/skills"
+terminal_start -N --skills --skills-dir "$root/skills" "${attach_options[@]}"
 if [[ ${1:-local} != local ]]; then
   # Only the owner has the loaded catalog. A frontend scan now sees a decoy.
   mv "$root/skills" "$root/server-only-skills"

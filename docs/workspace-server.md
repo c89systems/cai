@@ -209,7 +209,8 @@ tests cover live-name conflicts, process-death recovery, changed-inode safety,
 malformed/unsafe records and default-stack worker use. The headless CLI tests
 verify flag/config/environment precedence and compare registry instance IDs
 with a real socket probe. Terminal selector commands and workspace switching
-remain pending.
+use the same verified discovery through the
+[terminal adapter](terminal-attachment.md).
 
 Selector attachment must bind its selected server instance before the host
 admits an attachment. Merely comparing the later WELCOME is insufficient: an

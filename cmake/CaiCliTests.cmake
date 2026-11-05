@@ -102,6 +102,18 @@
       "$<TARGET_FILE:cai_cli_headless_client_test>" "$<TARGET_FILE:cai_app_terminal_host>")
     set_tests_properties(cai_cli_attach PROPERTIES TIMEOUT 45
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+    add_executable(cai_cli_attach_boot_test tests/cli_attach_boot_test.c
+      cli/attach.c cli/spawn.c cli/bootstrap.c)
+    target_link_libraries(cai_cli_attach_boot_test PRIVATE cai_app_static)
+    target_link_options(cai_cli_attach_boot_test PRIVATE -Wl,--wrap=lc_client_open)
+    cai_configure_cli_target(cai_cli_attach_boot_test)
+    target_compile_options(cai_cli_attach_boot_test PRIVATE -UNDEBUG)
+    add_test(NAME cai_cli_attach_boot COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_attach_boot_test.sh"
+      "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_cli_attach_boot_test>")
+    set_tests_properties(cai_cli_attach_boot PROPERTIES TIMEOUT 30
+      LABELS "cli;local;offline"
+      ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
     add_test(NAME cai_cli_workspaces COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_workspaces_test.sh" "$<TARGET_FILE:cai_cli>"
       "$<TARGET_FILE:cai_cli_headless_client_test>" "$<TARGET_FILE:cai_app_terminal_host>")
