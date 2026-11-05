@@ -73,6 +73,8 @@ int cai_cli_command_help(const char *invocation, int attached,
       "| `/reasoning [EFFORT]`, `/r` | Show model-specific reasoning choices "
       "or "
       "change effort at the next safe model/tool boundary. |\n",
+      "| `/reasoning-summary [none\\|auto\\|concise\\|detailed]` | Show or "
+      "change reasoning summaries at the next safe model/tool boundary. |\n",
       "| `/reasoning-tool [on\\|off\\|normal LEVEL\\|high LEVEL]` | "
       "Configure "
       "the optional model-controlled effort tool between turns. |\n",

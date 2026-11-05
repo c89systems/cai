@@ -115,6 +115,13 @@
       LABELS "cli;local;offline"
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
     foreach(_cai_compat_mode native embed)
+      add_test(NAME cai_startup_controls_${_cai_compat_mode} COMMAND bash
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_startup_controls_test.sh"
+        "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_app_terminal_host>"
+        "${_cai_compat_mode}")
+      set_tests_properties(cai_startup_controls_${_cai_compat_mode} PROPERTIES
+        TIMEOUT 45 LABELS "cli;local;offline"
+        ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
       add_test(NAME cai_startup_compat_${_cai_compat_mode} COMMAND bash
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_startup_compat_test.sh"
         "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_app_terminal_host>"
@@ -421,6 +428,13 @@
       "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_app_controls_host>")
     set_tests_properties(cai_cli_temp PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_runtime_options_test tests/cli_runtime_options_test.c)
+    add_executable(cai_cli_startup_test tests/cli_startup_test.c)
+    target_link_libraries(cai_cli_startup_test PRIVATE cai_cli_support)
+    cai_configure_cli_target(cai_cli_startup_test)
+    target_compile_options(cai_cli_startup_test PRIVATE -UNDEBUG)
+    add_test(NAME cai_cli_startup_intents COMMAND cai_cli_startup_test)
+    set_tests_properties(cai_cli_startup_intents PROPERTIES TIMEOUT 5
+      LABELS "unit;local;offline")
     target_link_libraries(cai_cli_runtime_options_test PRIVATE cai_cli_support)
     cai_configure_cli_target(cai_cli_runtime_options_test)
     add_test(NAME cai_cli_runtime_options COMMAND cai_cli_runtime_options_test

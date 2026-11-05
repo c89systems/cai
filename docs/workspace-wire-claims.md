@@ -64,8 +64,11 @@ private endpoints and controller generations still supply authority. Never use
 this inventory to publish credentials or grant access based on a hash.
 
 Only explicitly selected identity requirements constrain a running owner.
-Frontend theme/layout preferences remain local; the existing model/effort
-startup controls retain their acknowledged queue path. Incompatible settings
+Frontend theme/layout preferences remain local. Mutable invocation settings
+use the [acknowledged startup command path](terminal-attachment.md), including
+model, effort, summary, tier, terminal yield and runtime policies. The optional
+reasoning tool and its effort mappings are mutable, not owner fingerprints.
+Incompatible identity settings
 fail before prompt history, replay, startup instructions or producer binding.
 Both the executable and `cai_app_terminal_run` use the same projection, merging
 explicit requirements supplied by an embedding host. No configuration file or

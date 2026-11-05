@@ -59,6 +59,16 @@ neither draft text nor stored recall enters model context. Explicit
 startup inputs for an existing owner pass through the same editor/backend queue;
 commands wait for application before subsequent inputs. A newly launched owner
 receives the startup arguments itself, avoiding duplicate submission.
+The existing-owner invocation compiler translates explicit model, effort,
+summary, service-tier, execution-yield, YOLO, reasoning-tool, shell-context,
+effort-tool mappings, prompt-history, retention and automatic-queue controls
+into the same public commands used interactively, before submitting `-i`
+inputs. Explicit false,
+zero and provider-default selections are retained. Inherited defaults leave
+live settings unchanged. A rejected control stops the remaining invocation
+inputs; generated controls do not enter prompt recall. `/reasoning-summary`
+queries or updates the runtime at the same request boundary as model/effort.
+The compiler does not choose a second execution policy or bypass admission.
 If simultaneous launches both observed absence, a losing child is reaped and
 its claim-limit failure triggers one fresh identity-only lookup. A verified
 winner is selected with its instance pinned; that terminal's own startup inputs

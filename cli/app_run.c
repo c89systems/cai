@@ -3177,6 +3177,14 @@ static int cli_settings_changed(cli_state *state,
         cli_text(state, ".\n", 2U) != 0 || cli_finish_response(state) != 0)
       return CAI_ERR_TRANSPORT;
   }
+  if ((fields & CAI_AGENT_RUNTIME_SETTING_REASONING_SUMMARY) != 0U &&
+      settings->reasoning_summary != NULL) {
+    static const char prefix[] = "Reasoning summary changed to ";
+    if (cli_text(state, prefix, sizeof(prefix) - 1U) != 0 ||
+        cli_code_span(state, settings->reasoning_summary) != 0 ||
+        cli_text(state, ".\n", 2U) != 0 || cli_finish_response(state) != 0)
+      return CAI_ERR_TRANSPORT;
+  }
   return CAI_OK;
 }
 
@@ -4153,6 +4161,59 @@ static int cli_settings_command(cli_state *state, const char *arguments,
   return cli_settings_changed(state, &result.effective, requested.present);
 }
 
+/** Summary selection uses the same request-boundary update as model/effort.
+ * Acknowledgement describes pending intent; only effective values announce a
+ * completed change, including when a worker applies it later. */
+static int cli_summary_command(cli_state *state, const char *argument,
+                               cai_error *error) {
+  cai_agent_runtime_settings effective, pending, requested;
+  cai_agent_runtime_control_result result;
+  char message[256], value[16];
+  size_t length;
+  int rc;
+  argument += strspn(argument, " \t");
+  length = strlen(argument);
+  while (length != 0U && strchr(" \t", argument[length - 1U]) != NULL)
+    --length;
+  if (length == 0U) {
+    rc = cai_agent_runtime_get_settings(state->runtime, &effective, &pending,
+                                        error);
+    if (rc != CAI_OK)
+      return rc;
+    snprintf(message, sizeof(message),
+             "Reasoning summary: `%s`. Pending: `%s`. "
+             "Use `/reasoning-summary none|auto|concise|detailed`.",
+             effective.reasoning_summary != NULL ? effective.reasoning_summary
+                                                 : "unset",
+             pending.reasoning_summary != NULL ? pending.reasoning_summary
+                                               : "none");
+    return cli_markdown(state, message) == 0 ? CAI_OK : CAI_ERR_TRANSPORT;
+  }
+  if (length >= sizeof(value))
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "use /reasoning-summary none|auto|concise|detailed");
+  memcpy(value, argument, length);
+  value[length] = '\0';
+  if (strcmp(value, "none") != 0 && strcmp(value, "auto") != 0 &&
+      strcmp(value, "concise") != 0 && strcmp(value, "detailed") != 0)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "use /reasoning-summary none|auto|concise|detailed");
+  memset(&requested, 0, sizeof(requested));
+  requested.present = CAI_AGENT_RUNTIME_SETTING_REASONING_SUMMARY;
+  requested.reasoning_summary = value;
+  rc = cai_agent_runtime_update_settings(state->runtime, &requested, &result,
+                                         error);
+  if (rc != CAI_OK)
+    return rc;
+  if (!result.applied) {
+    state->settings_notice_fields |= requested.present;
+    return CAI_OK;
+  }
+  requested.present |= state->settings_notice_fields;
+  state->settings_notice_fields = 0U;
+  return cli_settings_changed(state, &result.effective, requested.present);
+}
+
 static int cli_tools_write(void *context, const char *bytes, size_t count) {
   return cli_text(context, bytes, count);
 }
@@ -4754,8 +4815,8 @@ static int cli_handle_command(cli_state *state, const char *line,
   if (strcmp(line, "/autoqueue") == 0 ||
       strncmp(line, "/autoqueue ", 11U) == 0) {
     int enabled;
-    if (state->messages == NULL)
-      return cai_cli_error(error, CAI_ERR_INVALID, "Messaging is disabled.");
+    /* Admission policy belongs to the input queue, including while a mailbox
+     * is disabled; enabling it later uses the same explicit selection. */
     {
       cai_input_state pending;
       rc = cai_input_queue_get_state(state->input, &pending, error);
@@ -4863,6 +4924,10 @@ static int cli_handle_command(cli_state *state, const char *line,
       strncmp(line, "/reasoning ", 11U) == 0 ||
       strncmp(line, "/reasoning\t", 11U) == 0)
     return cli_settings_command(state, line + 10U, 1, error);
+  if (strcmp(line, "/reasoning-summary") == 0 ||
+      strncmp(line, "/reasoning-summary ", 19U) == 0 ||
+      strncmp(line, "/reasoning-summary\t", 19U) == 0)
+    return cli_summary_command(state, line + 18U, error);
   if (strcmp(line, "/output") == 0 || strncmp(line, "/output ", 8U) == 0) {
     arg = strcmp(line, "/output") == 0 ? "" : line + 8;
     if (*arg == '\0')

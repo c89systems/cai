@@ -7,6 +7,7 @@
 #include "input_socket.h"
 #include "input_wire.h"
 #include "replay_tools.h"
+#include "startup.h"
 #include "status.h"
 #include "tool_result.h"
 #include "transcript_presenter.h"
@@ -101,13 +102,14 @@ typedef struct frontend {
   uint64_t bind_request, subscribe_request, control_request;
   unsigned long long startup_request, startup_producer;
   char startup_session[129];
-  int startup_stage, startup_command;
+  cai_cli_startup startup;
+  int startup_command;
   int startup_control, startup_feeding;
   struct {
     uint64_t request, producer;
     char session[129];
-  } hidden_recall[4];
-  size_t instruction, action_length;
+  } hidden_recall[CAI_CLI_STARTUP_INSTRUCTIONS];
+  size_t action_length;
   char *action;
   size_t command_length;
   char *command;
@@ -419,7 +421,7 @@ static int observed(void *context, const cai_app_client_event *event,
     int rc;
     if (event->type == CAI_APP_CLIENT_INPUT && event->input != NULL &&
         event->input->type == CAI_INPUT_OBSERVATION_RESULT)
-      for (i = 0U; i < 4U; ++i)
+      for (i = 0U; i < CAI_CLI_STARTUP_INSTRUCTIONS; ++i)
         if (f->hidden_recall[i].request != 0U &&
             f->hidden_recall[i].request == event->request &&
             f->hidden_recall[i].producer == f->state.producer &&
@@ -477,7 +479,7 @@ static int observed(void *context, const cai_app_client_event *event,
       f->startup_request != 0U && f->state.producer == f->startup_producer &&
       strcmp(f->state.session, f->startup_session) == 0) {
     if (event->input->result.outcome != CAI_INPUT_ACCEPTED) {
-      f->startup_stage = 5;
+      f->startup.stage = CAI_CLI_STARTUP_DONE;
       f->startup_request = 0U;
       (void)notice(f, "Startup input was not accepted; inspect or recover its "
                       "native queue receipt.");
@@ -649,7 +651,7 @@ static int execution_body(void *context, const cai_app_execution_event *event,
         strcmp(source, f->startup_session) == 0) {
       f->startup_request = 0U;
       if (strcmp(r->kind, "command.failed") == 0)
-        f->startup_stage = 5;
+        f->startup.stage = CAI_CLI_STARTUP_DONE;
     }
   }
   if (strncmp(r->kind, "tool.", 5U) == 0 ||
@@ -953,82 +955,33 @@ static int interests(frontend *f) {
  * durable offer receipt precedes the next input; state-changing commands also
  * require their application record, including across a conversation switch. */
 static int startup_input(frontend *f) {
-  const char *prefix = NULL, *value = NULL;
   char *text = NULL;
+  int rc, control;
   sl_queue_request_t request;
   sl_queue_request_id_t id;
   if (!f->ready || !f->subscribed || f->replaying || f->startup_request != 0U ||
       !f->state.transcript.active || f->state.transcript.subscribing ||
       f->state.transcript.replaying ||
       f->state.transport.controller != f->state.transport.attachment ||
-      f->startup_stage >= 5)
+      f->startup.stage >= CAI_CLI_STARTUP_DONE)
     return 0;
-  while (value == NULL && f->startup_stage < 5) {
-    switch (f->startup_stage++) {
-    case 0:
-      if (f->options->new_session) {
-        prefix = "/new";
-        value = "";
-      } else if (f->options->resume_id != NULL &&
-                 strcmp(f->options->resume_id, f->state.session) != 0) {
-        prefix = "/resume ";
-        value = f->options->resume_id;
-      }
-      break;
-    case 1:
-      if (f->options->model_explicit) {
-        prefix = "/model ";
-        value = f->options->model;
-      }
-      break;
-    case 2:
-      if (f->options->reasoning_effort_explicit) {
-        prefix = "/reasoning ";
-        value = f->options->reasoning_effort;
-      }
-      break;
-    case 3:
-      if (f->options->goal != NULL) {
-        prefix = "/goal new ";
-        value = f->options->goal;
-      }
-      break;
-    case 4:
-      value = cai_cli_instruction_at(f->options, f->instruction);
-      if (value != NULL) {
-        ++f->instruction;
-        f->startup_stage = 4;
-      }
-      break;
-    }
-  }
-  if (value == NULL)
-    return 0;
-  if (prefix != NULL) {
-    size_t a = strlen(prefix), b = strlen(value);
-    if (a > CAI_CLI_INPUT_TEXT_MAX || b > CAI_CLI_INPUT_TEXT_MAX - a)
-      return cai_cli_error(&f->error, CAI_ERR_LIMIT,
-                           "startup command exceeds input limit");
-    text = malloc(a + b + 1U);
-    if (text == NULL)
-      return cai_cli_error(&f->error, CAI_ERR_NOMEM, "allocate startup input");
-    memcpy(text, prefix, a);
-    memcpy(text + a, value, b + 1U);
-    value = text;
-  }
+  rc = cai_cli_startup_next(&f->startup, f->options, f->state.session, &text,
+                            &control, &f->error);
+  if (rc != CAI_OK || text == NULL)
+    return rc;
   memset(&request, 0, sizeof(request));
   request.operation = SL_QUEUE_OFFER;
   request.mode = SL_PROMPT_QUEUE_MODE_QUEUED;
-  request.text = value;
-  f->startup_command = value[0] == '/' || value[0] == '!';
-  f->startup_control = prefix != NULL;
+  request.text = text;
+  f->startup_command = text[0] == '/' || text[0] == '!';
+  f->startup_control = control;
   f->startup_feeding = 1;
   {
     int submitted = sl_queue_backend_request(f->ui->sl, &request, &id);
     f->startup_feeding = 0;
     if (submitted != SL_OK) {
       free(text);
-      f->startup_stage = 5;
+      f->startup.stage = CAI_CLI_STARTUP_DONE;
       return notice(
           f, "Startup input handoff failed; its native receipt was retained.");
     }
@@ -1040,7 +993,7 @@ static int startup_input(frontend *f) {
            f->state.session);
   if (f->startup_control) {
     size_t i;
-    for (i = 0U; i < 4U; ++i)
+    for (i = 0U; i < CAI_CLI_STARTUP_INSTRUCTIONS; ++i)
       if (f->hidden_recall[i].request == 0U) {
         f->hidden_recall[i].request = f->startup_request;
         f->hidden_recall[i].producer = f->startup_producer;
@@ -1089,7 +1042,9 @@ static int service(frontend *f) {
                                    f) != SL_OK)
         return cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
                              "select verified completion directory");
-      f->startup_stage = ready == CAI_CLI_FRONTEND_STARTED ? 5 : 0;
+      f->startup.stage = ready == CAI_CLI_FRONTEND_STARTED
+                             ? CAI_CLI_STARTUP_DONE
+                             : CAI_CLI_STARTUP_SELECT;
       if (connect_target(f) != CAI_OK)
         return -1;
     }
@@ -1419,7 +1374,7 @@ static frontend *frontend_open(frontend_group *group,
   /* Discovery decides whether a new owner already received the original argv.
    * An existing owner (including the winner of a launch race) gets explicit
    * intents exactly once through admissions after its replay completes. */
-  f->startup_stage = 0;
+  f->startup.stage = CAI_CLI_STARTUP_SELECT;
   f->theme_offsets[0] = options->theme_offset;
   f->theme_offsets[1] = options->subagent_theme_offset;
   f->theme_offsets[2] = options->review_theme_offset;
@@ -1616,7 +1571,7 @@ static int workspace_progress(frontend *f) {
             p = frontend_open(g, f->application, f->options, &target, NULL,
                               &local);
             if (p != NULL)
-              p->startup_stage = 5;
+              p->startup.stage = CAI_CLI_STARTUP_DONE;
             else
               rc = local.code != CAI_OK ? local.code : CAI_ERR_TRANSPORT;
           }

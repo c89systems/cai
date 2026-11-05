@@ -22,6 +22,7 @@ static const struct cli_command_definition {
     {"/review-and-fix", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
     {"/model", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
     {"/reasoning", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
+    {"/reasoning-summary", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
     {"/tier", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
     {"/fast", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
     {"/foreground", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},

@@ -11,6 +11,21 @@ struct cai_environment;
 #define CAI_CLI_STATUS_DEFAULT_FIELDS                                          \
   "model:ctx:dir:branch:weekly:crd:yolo:goal"
 
+/** Explicit invocation controls that may change an already-running owner.
+ * Inherited defaults must not overwrite that owner's live settings. */
+typedef enum cai_cli_control_option {
+  CAI_CLI_CONTROL_TIER = 1U << 0,
+  CAI_CLI_CONTROL_YOLO = 1U << 1,
+  CAI_CLI_CONTROL_YIELD = 1U << 2,
+  CAI_CLI_CONTROL_REASONING_TOOL = 1U << 3,
+  CAI_CLI_CONTROL_SHELL_CONTEXT = 1U << 4,
+  CAI_CLI_CONTROL_HISTORY = 1U << 5,
+  CAI_CLI_CONTROL_RETENTION = 1U << 6,
+  CAI_CLI_CONTROL_AUTOQUEUE = 1U << 7,
+  CAI_CLI_CONTROL_NORMAL_EFFORT = 1U << 8,
+  CAI_CLI_CONTROL_HIGH_EFFORT = 1U << 9
+} cai_cli_control_option;
+
 typedef struct cai_cli_options {
   /* Borrow the application-owned effective configuration environment. */
   struct cai_environment *environment;
@@ -40,6 +55,7 @@ typedef struct cai_cli_options {
   const char *config_file;
   int config_explicit;
   unsigned long long owner_explicit;
+  unsigned int control_explicit;
   /** Executable composition borrows one bounded startup requirement inventory.
    */
   const cai_workspace_claim *workspace_requirements;

@@ -67,8 +67,7 @@
   X("agent", "todo", todo, 'b') \
   X("agent", "searxng", searxng, 'b') \
   X("agent", "revgeo", revgeo, 'b') \
-  X("messaging", "enabled", messaging, 'b') \
-  X("agent", "reasoning_tool", reasoning_tool, 'b')
+  X("messaging", "enabled", messaging, 'b')
 /* clang-format on */
 /* The inventory uses one bit per field and leaves the configured names visible
  * in diagnostics. Keep transport limits and this mask in step if it grows. */

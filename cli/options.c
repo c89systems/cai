@@ -257,6 +257,12 @@ static int cli_read_options(int argc, char *const *argv,
       for (k = 0U; k < sizeof(names) / sizeof(names[0]); k++)
         if (strncmp(flag, "--", 2U) == 0 && strcmp(name, names[k]) == 0) {
           *values[k] = enabled;
+          if (values[k] == &options->yolo)
+            options->control_explicit |= CAI_CLI_CONTROL_YOLO;
+          if (values[k] == &options->foreground)
+            options->control_explicit |= CAI_CLI_CONTROL_YIELD;
+          if (values[k] == &options->reasoning_tool)
+            options->control_explicit |= CAI_CLI_CONTROL_REASONING_TOOL;
           cai_cli_options_mark_owner(
               options,
               (size_t)((unsigned char *)values[k] - (unsigned char *)options));
@@ -284,6 +290,7 @@ static int cli_read_options(int argc, char *const *argv,
     if (strcmp(flag, "--autoqueue") == 0 ||
         strcmp(flag, "--no-autoqueue") == 0) {
       options->enable_auto_enqueue = strcmp(flag, "--autoqueue") == 0;
+      options->control_explicit |= CAI_CLI_CONTROL_AUTOQUEUE;
       continue;
     }
     if (strcmp(flag, "--conversation-retention-days") == 0) {
@@ -303,6 +310,7 @@ static int cli_read_options(int argc, char *const *argv,
         return -1;
       }
       options->conversation_retention_days = number;
+      options->control_explicit |= CAI_CLI_CONTROL_RETENTION;
       continue;
     }
     if (strcmp(flag, "--prompt-history-limit") == 0) {
@@ -321,6 +329,7 @@ static int cli_read_options(int argc, char *const *argv,
         return -1;
       }
       options->prompt_history_limit = (int)number;
+      options->control_explicit |= CAI_CLI_CONTROL_HISTORY;
       continue;
     }
     if (strcmp(flag, "--replay-turns") == 0) {
@@ -460,6 +469,7 @@ static int cli_read_options(int argc, char *const *argv,
     }
     if (strcmp(flag, "--no-shell-context") == 0) {
       options->shell_context = 0;
+      options->control_explicit |= CAI_CLI_CONTROL_SHELL_CONTEXT;
       continue;
     }
     if (strcmp(flag, "--theme-offset") == 0 ||
@@ -489,6 +499,7 @@ static int cli_read_options(int argc, char *const *argv,
       if (options->foreground)
         options->yield_time_ms = CAI_TERMINAL_DEFAULT_YIELD_TIME_MS;
       options->foreground = 0;
+      options->control_explicit |= CAI_CLI_CONTROL_YIELD;
       continue;
     }
     if (strcmp(flag, "--yield-time-ms") == 0) {
@@ -506,12 +517,14 @@ static int cli_read_options(int argc, char *const *argv,
         return -1;
       }
       options->foreground = interval == 0L;
+      options->control_explicit |= CAI_CLI_CONTROL_YIELD;
       options->yield_time_ms =
           interval != 0L ? interval : CAI_TERMINAL_DEFAULT_YIELD_TIME_MS;
       continue;
     }
     if (strcmp(flag, "--shell-context") == 0) {
       options->shell_context = 1;
+      options->control_explicit |= CAI_CLI_CONTROL_SHELL_CONTEXT;
       continue;
     }
     if (strcmp(flag, "--shell-context-max-lines") == 0 ||
@@ -731,6 +744,12 @@ static int cli_read_options(int argc, char *const *argv,
       options->reasoning_effort_explicit = 1;
     if (field == &options->reasoning_summary)
       options->reasoning_summary_explicit = 1;
+    if (field == &options->service_tier)
+      options->control_explicit |= CAI_CLI_CONTROL_TIER;
+    if (field == &options->normal_reasoning_effort)
+      options->control_explicit |= CAI_CLI_CONTROL_NORMAL_EFFORT;
+    if (field == &options->high_reasoning_effort)
+      options->control_explicit |= CAI_CLI_CONTROL_HIGH_EFFORT;
     if ((field == &options->reasoning_effort ||
          field == &options->normal_reasoning_effort ||
          field == &options->high_reasoning_effort ||

@@ -14,11 +14,12 @@ for colors in yes no; do
     send '\025'
     send '/t\r'; expect 'Current: default:default'; expect 'pairings'
   fi
-  for command in '/m gpt-6-luna low' '/r medium' '/output full'; do
+  for command in '/m gpt-6-luna low' '/r medium' '/reasoning-summary concise' '/output full'; do
     offset=$(wc -c <"$term/raw")
     send "$command\r"; expect "\$ $command"
     case "$command" in
       /m*) expect 'Model changed' ;;
+      /reasoning-summary*) expect 'Reasoning summary changed' ;;
       /r*) expect 'Reasoning effort changed' ;;
       /output*) expect 'setting applies' ;;
     esac
@@ -51,7 +52,7 @@ for colors in yes no; do
   send '/shell-context invalid\r'; expect 'Usage: /shell-context [on|off]'
   tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/info"
   absent "$root/info" '`/shell-context'
-  for command in '/r invalid' '/output invalid' '/resume 999' '/resume invalid' '/unknown' '/mm'; do
+  for command in '/r invalid' '/reasoning-summary invalid' '/output invalid' '/resume 999' '/resume invalid' '/unknown' '/mm'; do
     offset=$(wc -c <"$term/raw")
     send "$command\r"; expect "\$ $command"; expect '* ERROR:'
     tail -c +$((offset+1)) "$term/raw" >"$root/command"
