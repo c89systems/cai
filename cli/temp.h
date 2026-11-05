@@ -8,13 +8,19 @@
 #endif
 typedef struct cai_cli_temp {
   int parent_fd, root_fd;
+  int runtime_parent_fd, runtime_fd;
   char root[PATH_MAX], workspace[PATH_MAX], private_dir[PATH_MAX];
   char state[PATH_MAX], cache[PATH_MAX], data[PATH_MAX];
   char clipboard[PATH_MAX], logs[PATH_MAX], key[PATH_MAX], exports[PATH_MAX];
+  char runtime[PATH_MAX];
 } cai_cli_temp;
 void cai_cli_temp_init(cai_cli_temp *temp);
 int cai_cli_temp_open(cai_cli_temp *temp, cai_cli_options *options,
                       cai_error *error);
+/** Give an interactive temporary owner its own short-lived discovery directory
+ * under the configured runtime root. Socket paths must still fit Unix limits;
+ * the cache workspace path is often too deep to host a socket directly. */
+int cai_cli_temp_runtime_open(cai_cli_temp *, cai_cli_options *, cai_error *);
 /* Call only after workers, stores and softline have closed. Never follows
  * workspace symlinks. EOF, interruption and host STOP mean No. */
 int cai_cli_temp_close(cai_cli_temp *temp, int force, int ask, int stop_fd,

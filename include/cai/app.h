@@ -216,14 +216,16 @@ typedef struct cai_app_config {
 } cai_app_config;
 
 typedef struct cai_app cai_app;
-/** Application receiver. Interactive run (excluding --temp) keeps the common
+/** Application receiver. Interactive run keeps the common
  * controller and host callbacks on its calling thread, with a default-stack
  * terminal worker attached through the public Unix socket client. It captures
  * directory/environment views without installing process environment or
  * locale. Its controller installs no signal state. Hosts give the adapter
  * exclusive use of stdin/stdout; its
  * temporary terminal/signal modes are restored before return, including
- * failures. Batch, utility and temporary modes still use the legacy
+ * failures. Temporary runs use an ephemeral owner, joined before a plain
+ * default-no workspace cleanup question; host STOP interrupts that question.
+ * Batch and utility modes still use the legacy
  * resource-saving composition and must be serialized with other
  * process-resource users. Repeated runs are supported; one run per instance may
  * be active. start selects an independent terminal-free owner. Borrowed loggers

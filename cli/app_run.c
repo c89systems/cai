@@ -2,6 +2,7 @@
 #define _XOPEN_SOURCE 700
 
 #include "app_internal.h"
+#include "app_startup.h"
 #include "command_help.h"
 #include "commands.h"
 #include "completion.h"
@@ -101,6 +102,7 @@ typedef struct cli_state {
   cai_cli_options options;
   cai_cli_options normal_options;
   cai_cli_temp temporary;
+  int borrowed_configuration, borrowed_temporary;
   int review_block;
   char *normal_reasoning_override, *high_reasoning_override;
   cai_config *configuration;
@@ -5620,19 +5622,8 @@ static int cli_output_final(cli_state *state, cai_error *error) {
 
 static int cli_temp_stop(void *context) {
   cli_state *state = context;
-  cai_app_command *command;
-  while ((command = cai_app_bridge_take(state->bridge)) != NULL) {
-    cai_error error;
-    int rc = CAI_OK;
-    cai_error_init(&error);
-    if (command->type == CAI_APP_STOP) {
-      state->host_stopped = 1;
-      cai_app_bridge_outcome(state->bridge, CAI_APP_STOPPED);
-    } else
-      rc = cai_cli_error(&error, CAI_ERR_INVALID, "application is stopping");
-    cai_app_bridge_ack(state->bridge, command, rc, &error);
-    cai_error_cleanup(&error);
-  }
+  if (cai_app_bridge_cleanup_stop(state->bridge))
+    state->host_stopped = 1;
   return state->host_stopped;
 }
 
@@ -5641,7 +5632,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
                              cai_app_bridge *bridge,
                              const cai_config_context *startup,
                              const cai_attachment_config *server,
-                             int lifetime_explicit) {
+                             int lifetime_explicit,
+                             const cai_cli_prepared *prepared) {
   cai_client_config client_config;
   cai_chatgpt_auth_config auth_config;
   cai_cli_pouch *auth_store = NULL;
@@ -5731,9 +5723,20 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     result = rc == CAI_OK ? 0 : 1;
     goto cleanup;
   }
-  parsed =
-      cai_cli_configure_at(argc, argv, &state->options, &state->configuration,
-                           application, startup, &error);
+  if (prepared != NULL) {
+    state->configuration = prepared->configuration;
+    state->options = prepared->options;
+    state->normal_options = prepared->normal_options;
+    state->borrowed_configuration = 1;
+    if (prepared->temporary != NULL) {
+      state->temporary = *prepared->temporary;
+      state->borrowed_temporary = 1;
+    }
+    parsed = 1;
+  } else
+    parsed =
+        cai_cli_configure_at(argc, argv, &state->options, &state->configuration,
+                             application, startup, &error);
   if (parsed > 0 && state->options.headless && server == NULL) {
     cai_cli_error(&error, CAI_ERR_INVALID,
                   "--headless is an executable process mode; native hosts "
@@ -5762,7 +5765,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     parsed = -1;
   if (parsed > 0)
     state->options.environment = state->environment;
-  if (parsed > 0) {
+  if (parsed > 0 && prepared == NULL) {
     state->normal_options = state->options;
     if (state->options.temporary &&
         cai_cli_temp_open(&state->temporary, &state->options, &error) != CAI_OK)
@@ -6612,7 +6615,8 @@ cleanup:
   cai_cli_input_adapter_close(state->input_adapter);
   cai_app_bridge_bind_input(state->bridge, NULL);
   cai_input_controller_close(state->input_controller);
-  if (state->temporary.root[0] != '\0' || state->temporary.parent_fd >= 0) {
+  if (!state->borrowed_temporary &&
+      (state->temporary.root[0] != '\0' || state->temporary.parent_fd >= 0)) {
     cai_error cleanup_error;
     int kept = 0;
     cai_error_init(&cleanup_error);
@@ -6653,7 +6657,8 @@ cleanup:
   cai_cli_replay_order_close(state->replay_order);
   cai_cli_replay_tools_close(state->replay_tools);
   free(metadata_json);
-  cai_config_close(state->configuration);
+  if (!state->borrowed_configuration)
+    cai_config_close(state->configuration);
   cai_environment_close(state->environment);
   cai_cli_workspace_host_close(state->workspace_host);
   cai_error_cleanup(&error);
@@ -6669,7 +6674,8 @@ cleanup:
 static int
 cli_app_receive(int argc, char **argv, const cai_app_config *application,
                 cai_app_bridge *bridge, const cai_config_context *startup,
-                const cai_attachment_config *server, int lifetime_explicit) {
+                const cai_attachment_config *server, int lifetime_explicit,
+                const cai_cli_prepared *prepared) {
   cli_state *state = calloc(1U, sizeof(*state));
   int code;
   if (state == NULL) {
@@ -6681,22 +6687,23 @@ cli_app_receive(int argc, char **argv, const cai_app_config *application,
     return 1;
   }
   code = cli_app_run_state(state, argc, argv, application, bridge, startup,
-                           server, lifetime_explicit);
+                           server, lifetime_explicit, prepared);
   free(state);
   return code;
 }
 int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
                     cai_app_bridge *bridge) {
-  return cli_app_receive(argc, argv, application, bridge, NULL, NULL, 0);
+  return cli_app_receive(argc, argv, application, bridge, NULL, NULL, 0, NULL);
 }
 int cai_cli_app_controller_run(int argc, char **argv,
                                const cai_app_config *application,
                                cai_app_bridge *bridge,
                                const cai_config_context *startup,
                                const cai_attachment_config *server,
-                               int lifetime_explicit) {
+                               int lifetime_explicit,
+                               const cai_cli_prepared *prepared) {
   return cli_app_receive(argc, argv, application, bridge, startup, server,
-                         lifetime_explicit);
+                         lifetime_explicit, prepared);
 }
 
 int cai_cli_app_main(int argc, char **argv, const cai_app_config *application) {

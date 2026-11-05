@@ -3,6 +3,7 @@
 #include "config.h"
 #include "error.h"
 #include "frontend.h"
+#include "log.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,8 @@ typedef struct terminal_run {
   cai_config_context startup;
   cai_config *configuration;
   cai_cli_options options;
+  cai_cli_prepared prepared;
+  cai_cli_temp temporary;
   cai_app_client_config target;
   cai_cli_frontend_boot boot;
   cai_app_frontend_status status;
@@ -26,12 +29,11 @@ typedef struct terminal_run {
 } terminal_run;
 
 static int agent_mode(const cai_cli_options *o) {
-  return !o->headless && o->server == NULL && !o->temporary &&
-         !o->non_interactive && !o->review && !o->list && !o->list_all &&
-         !o->resume_list && !o->delete_list && o->delete_id == NULL &&
-         o->export_id == NULL && o->import_file == NULL && !o->login &&
-         !o->chrome_setup && !o->chrome_remove && o->install_skill == NULL &&
-         o->message == NULL;
+  return !o->headless && o->server == NULL && !o->non_interactive &&
+         !o->review && !o->list && !o->list_all && !o->resume_list &&
+         !o->delete_list && o->delete_id == NULL && o->export_id == NULL &&
+         o->import_file == NULL && !o->login && !o->chrome_setup &&
+         !o->chrome_remove && o->install_skill == NULL && o->message == NULL;
 }
 static int prepare(void *context, struct pollfd *fd, uint64_t *deadline,
                    cai_error *error) {
@@ -80,34 +82,53 @@ static void *terminal(void *context) {
 }
 int cai_cli_run_terminal(const cai_app_config *application,
                          cai_app_bridge *bridge, int argc, char **argv,
-                         int *handled, int *exit_code, cai_error *error) {
+                         const cai_cli_prepared *resolved, int *handled,
+                         int *exit_code, cai_error *error) {
   terminal_run *r;
   cai_cli_options early;
   cai_attachment_config lifetime;
   pthread_t thread;
   int parsed, rc = CAI_OK, code = 1, started = 0;
   *handled = 0;
-  if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO) ||
-      cai_cli_read_options(argc, argv, NULL, &early) != 1 ||
-      !agent_mode(&early))
+  if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
+    return CAI_OK;
+  if (resolved != NULL)
+    early = resolved->options;
+  else if (cai_cli_read_options(argc, argv, NULL, &early) != 1)
+    return CAI_OK;
+  if (!agent_mode(&early))
     return CAI_OK;
   r = calloc(1U, sizeof(*r));
   if (r == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "allocate terminal composition");
   r->application = application;
   r->bridge = bridge;
+  cai_cli_temp_init(&r->temporary);
   cai_error_init(&r->error);
-  r->directory = getcwd(NULL, 0U);
+  r->directory =
+      resolved != NULL ? strdup(resolved->options.directory) : getcwd(NULL, 0U);
   if (r->directory == NULL)
     rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
                        "capture application directory");
-  if (rc == CAI_OK)
-    rc = cai_environment_open(NULL, &r->startup.environment, error);
+  if (rc == CAI_OK) {
+    if (resolved != NULL && resolved->options.environment != NULL) {
+      rc = cai_environment_retain(resolved->options.environment, error);
+      if (rc == CAI_OK)
+        r->startup.environment = resolved->options.environment;
+    } else
+      rc = cai_environment_open(NULL, &r->startup.environment, error);
+  }
   r->startup.directory = r->directory;
   if (rc != CAI_OK)
     goto done;
-  parsed = cai_cli_configure_at(argc, argv, &r->options, &r->configuration,
-                                application, &r->startup, &r->error);
+  if (resolved != NULL) {
+    r->options = resolved->options;
+    r->options.environment = NULL;
+    r->configuration = resolved->configuration;
+    parsed = 1;
+  } else
+    parsed = cai_cli_configure_at(argc, argv, &r->options, &r->configuration,
+                                  application, &r->startup, &r->error);
   if (parsed <= 0 || !agent_mode(&r->options)) {
     /* Configuration errors still use the common diagnostic path. A completed
      * help/dump utility has already written its explicit result exactly once.
@@ -122,6 +143,17 @@ int cai_cli_run_terminal(const cai_app_config *application,
   rc = cai_config_environment(r->configuration, &r->options.environment, error);
   if (rc != CAI_OK)
     goto done;
+  r->prepared.configuration = r->configuration;
+  r->prepared.normal_options = r->options;
+  if (r->options.temporary) {
+    rc = cai_cli_temp_open(&r->temporary, &r->options, error);
+    if (rc == CAI_OK)
+      rc = cai_cli_temp_runtime_open(&r->temporary, &r->options, error);
+    if (rc != CAI_OK)
+      goto done;
+    r->prepared.temporary = &r->temporary;
+  }
+  r->prepared.options = r->options;
   cai_app_client_config_init(&r->target);
   r->target.runtime_directory = r->options.runtime_dir;
   r->target.workspace = r->options.directory;
@@ -139,30 +171,57 @@ int cai_cli_run_terminal(const cai_app_config *application,
   started = 1;
   cai_attachment_config_init(&lifetime);
   code = cai_cli_app_controller_run(argc, argv, application, bridge,
-                                    &r->startup, &lifetime, 0);
+                                    &r->startup, &lifetime, 0, &r->prepared);
   /* Wake a terminal whose owner failed or stopped before it could attach.
    * The outer run finalizes the same status after joining this receiver. */
-  cai_app_bridge_end(bridge, code, NULL);
+  cai_app_bridge_frontend_owner_end(bridge, code);
   (void)pthread_join(thread, NULL); /* Exact owned, joinable frontend. */
   if (r->rc != CAI_OK && code == 0)
     rc = cai_cli_error(error, r->rc,
                        r->error.message != NULL ? r->error.message
                                                 : "terminal attachment failed");
   *exit_code = code != 0 ? code : r->code;
-  if (rc == CAI_OK && *exit_code == 0) {
-    int host_stop;
-    pthread_mutex_lock(&bridge->lock);
-    host_stop = bridge->stop_requested;
-    pthread_mutex_unlock(&bridge->lock);
-    if (!host_stop)
-      cai_app_bridge_outcome(bridge, CAI_APP_COMPLETED);
-  }
 done:
+  if (r->temporary.parent_fd >= 0) {
+    cai_error cleanup;
+    int kept = 0, cleanup_rc, stopped;
+    cai_error_init(&cleanup);
+    /* Both the terminal and the owner (including store clients, readers and
+     * endpoint ownership) have returned before this plain-input question.
+     * Host STOP remains accepted until run() itself returns. */
+    stopped = cai_app_bridge_cleanup_stop(bridge);
+    cleanup_rc = cai_cli_temp_close(
+        &r->temporary, r->options.force,
+        started && rc == CAI_OK && *exit_code == 0 && !stopped, bridge->fd,
+        cai_app_bridge_cleanup_stop, bridge, &kept, &cleanup);
+    if (kept) {
+      pslog_field field = pslog_str("workspace", r->temporary.workspace);
+      cai_cli_log_message(application->logger, PSLOG_LEVEL_INFO,
+                          "temp_workspace_kept", "diagnostic",
+                          "Temporary workspace kept", 24U, &field, 1U);
+      fprintf(stdout, "\nKept temporary workspace: %s\n",
+              r->temporary.workspace);
+    }
+    if (cleanup_rc != CAI_OK) {
+      cai_app_bridge_error(bridge, &cleanup);
+      if (rc == CAI_OK)
+        rc = cai_cli_error(error, cleanup_rc,
+                           cleanup.message != NULL
+                               ? cleanup.message
+                               : "clean temporary workspace");
+      *exit_code = 1;
+    }
+    cai_error_cleanup(&cleanup);
+  }
+  if (*handled && rc == CAI_OK && *exit_code == 0 &&
+      !cai_app_bridge_cleanup_stop(bridge))
+    cai_app_bridge_outcome(bridge, CAI_APP_COMPLETED);
   if (*handled || started)
     cai_app_bridge_frontend_close(bridge);
   cai_environment_close(r->options.environment);
   cai_environment_close(r->startup.environment);
-  cai_config_close(r->configuration);
+  if (resolved == NULL)
+    cai_config_close(r->configuration);
   cai_error_cleanup(&r->error);
   free(r->directory);
   free(r);

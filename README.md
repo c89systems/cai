@@ -750,7 +750,11 @@ to this invocation without rewriting history or configuration.
 `cai --temp -k` starts a new conversation in a unique
 `cache_dir/temp/chat-XXXXXX/workspace` directory. Its sibling `private/`
 contains the encrypted conversation pouch and key, prompt history, clipboard,
-exports, and app-owned logs. The normal global or explicit `--config` file is
+exports, and app-owned logs. Interactive runs use the common owner/socket
+frontend, with a separate private `t-XXXXXX` discovery directory under
+`runtime_dir`; that short-lived directory and its socket/locks are also removed.
+Temporary owners never persist after their frontend quits, including with
+`--persist`. The normal global or explicit `--config` file is
 loaded unchanged; path isolation is applied only in memory. Relative CLI input
 paths (instructions, skills, model metadata, authentication, client PEM, and
 Chrome socket) resolve against the original workspace selected by `-C` before

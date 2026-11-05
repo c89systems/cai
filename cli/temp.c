@@ -16,6 +16,7 @@
 void cai_cli_temp_init(cai_cli_temp *temp) {
   memset(temp, 0, sizeof(*temp));
   temp->parent_fd = temp->root_fd = -1;
+  temp->runtime_parent_fd = temp->runtime_fd = -1;
 }
 static int path(char *out, const char *base, const char *suffix,
                 cai_error *error) {
@@ -77,8 +78,40 @@ int cai_cli_temp_open(cai_cli_temp *temp, cai_cli_options *options,
   options->log_dir = temp->logs;
   options->pouch_key_file = temp->key;
   options->export_dir = temp->exports;
+  /* Temporary ownership cannot outlive the frontend cleanup decision. Shared
+   * authentication/messaging still resolve through the original options. */
+  options->server_persist = 0;
   options->lockd = options->lockd_client_pem = NULL;
   options->new_session = 1;
+  return CAI_OK;
+}
+
+int cai_cli_temp_runtime_open(cai_cli_temp *temp, cai_cli_options *options,
+                              cai_error *error) {
+  char parent[PATH_MAX];
+  int rc = cai_cli_private_directory(options->runtime_dir, error);
+  if (rc != CAI_OK)
+    return rc;
+  temp->runtime_parent_fd = open(
+      options->runtime_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  if (temp->runtime_parent_fd < 0 ||
+      realpath(options->runtime_dir, parent) == NULL)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "open temporary runtime parent");
+  rc = path(temp->runtime, parent, "t-XXXXXX", error);
+  if (rc != CAI_OK)
+    return rc;
+  if (mkdtemp(temp->runtime) == NULL) {
+    temp->runtime[0] = '\0';
+    return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "create temporary runtime directory");
+  }
+  temp->runtime_fd =
+      open(temp->runtime, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  if (temp->runtime_fd < 0)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "open temporary runtime directory");
+  options->runtime_dir = temp->runtime;
   return CAI_OK;
 }
 
@@ -126,6 +159,19 @@ int cai_cli_temp_close(cai_cli_temp *temp, int force, int ask, int stop_fd,
   const char *name;
   int remove_workspace = force, rc = CAI_OK;
   *kept = 0;
+  if (temp->runtime_fd >= 0) {
+    name = strrchr(temp->runtime, '/') + 1U;
+    if (fstat(temp->runtime_fd, &opened) != 0 ||
+        fstatat(temp->runtime_parent_fd, name, &named, AT_SYMLINK_NOFOLLOW) !=
+            0 ||
+        opened.st_dev != named.st_dev || opened.st_ino != named.st_ino)
+      rc = cai_cli_error(
+          error, CAI_ERR_INVALID,
+          "temporary runtime changed; automatic deletion refused");
+    else if (cai_cli_remove_at(temp->runtime_parent_fd, name) != 0)
+      rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "remove temporary runtime directory");
+  }
   if (temp->root_fd >= 0) {
     name = strrchr(temp->root, '/') + 1U;
     if (fstat(temp->root_fd, &opened) != 0 ||
@@ -133,11 +179,14 @@ int cai_cli_temp_close(cai_cli_temp *temp, int force, int ask, int stop_fd,
         opened.st_dev != named.st_dev || opened.st_ino != named.st_ino)
       rc = cai_cli_error(error, CAI_ERR_INVALID,
                          "temporary root changed; automatic deletion refused");
-    if (!force && ask && rc == CAI_OK && !(stop != NULL && stop(context)))
-      remove_workspace = confirm(temp->workspace, stop_fd, stop, context);
     if (cai_cli_remove_at(temp->root_fd, "private") != 0)
       rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "remove temporary private history and state");
+    /* Privacy cleanup is unconditional once stores close. Do it before the
+     * potentially interrupted user question; only workspace files depend on
+     * the answer. No process-wide signal handler belongs in this helper. */
+    if (!force && ask && rc == CAI_OK && !(stop != NULL && stop(context)))
+      remove_workspace = confirm(temp->workspace, stop_fd, stop, context);
     if (rc == CAI_OK && remove_workspace) {
       if (cai_cli_remove_at(temp->root_fd, "workspace") != 0 ||
           unlinkat(temp->parent_fd, name, AT_REMOVEDIR) != 0)
@@ -150,6 +199,11 @@ int cai_cli_temp_close(cai_cli_temp *temp, int force, int ask, int stop_fd,
     close(temp->root_fd);
   if (temp->parent_fd >= 0)
     close(temp->parent_fd);
+  if (temp->runtime_fd >= 0)
+    close(temp->runtime_fd);
+  if (temp->runtime_parent_fd >= 0)
+    close(temp->runtime_parent_fd);
   temp->root_fd = temp->parent_fd = -1;
+  temp->runtime_fd = temp->runtime_parent_fd = -1;
   return rc;
 }

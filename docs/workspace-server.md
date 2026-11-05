@@ -19,8 +19,9 @@ admits mutations; observers can inspect and explicitly take over. Terminal
 workspaces, drafts and queues remain separate. Native contexts use captured
 environment/directory views; configuration does not install `[env]` into the
 process. Interactive synchronous run now composes this owner and socket
-frontend while retaining callbacks on the calling thread. Batch/temp and
-utility composition still own legacy process scaffolding. Native library
+frontend while retaining callbacks on the calling thread. Temporary interactive
+runs use that same composition, with an ephemeral owner and cleanup after join.
+Batch and utility composition still own legacy process scaffolding. Native library
 controller startup never forks or installs signal handlers.
 
 Independent typed channels carry [queue observations](workspace-wire-queue.md),
@@ -39,7 +40,7 @@ remaining cutover work, [workspace process handoff](workspace-process.md) for
 executable ownership, and [command execution](workspace-commands.md) for backend
 admission/delegation. The confirmed decisions and specification below remain
 the target contract; an implemented boundary is not a claim of complete feature
-parity. In particular, batch/temp composition, extended startup parity
+parity. In particular, batch composition, extended startup parity
 and optional frontend packaging remain unfinished.
 
 The optional [Lua workspace client](lua-workspace-client.md) exposes the typed
@@ -298,6 +299,18 @@ their last client first stops and joins that server, then performs the
 existing default-no cleanup prompt after Softline returns. Observers cannot
 delete a live workspace; `--yes`/`--force` retain their explicit cleanup meaning.
 Do not leave an invisible temp server in a directory just deleted by a client.
+
+Interactive `cai_app.run` resolves configuration once for both owner and
+frontend. Temporary state/cache/data remain under the unique cache tree;
+socket discovery uses a separate private `t-XXXXXX` directory under the
+configured runtime root, avoiding the additional deep workspace path in Unix
+socket names. Both directories belong to the run. Persistence is disabled
+even if inherited or explicitly requested for that temporary invocation.
+Owner/store/reader shutdown and frontend join precede the plain cleanup
+question. Temporary socket metadata, locks and the private conversation tree
+are removed before asking; only workspace files may be kept. The host run stays
+stoppable throughout confirmation. A startup failure
+never waits for an answer; `--force` still deletes its owned workspace.
 
 ## Control ownership and request outcomes
 

@@ -2,6 +2,7 @@
 #define CAI_APP_INTERNAL_H
 #include <cai/app.h>
 #include <pthread.h>
+struct cai_cli_prepared;
 typedef struct cai_app_command {
   struct cai_app_command *next;
   cai_app_control_type type;
@@ -24,6 +25,7 @@ typedef struct cai_app_bridge {
   int stop_requested;
   int frontend_done;
   int frontend_running, frontend_ready, frontend_phase;
+  int frontend_owner_ended, frontend_owner_code;
   size_t count; /* Ordinary commands; the reserved STOP does not consume it. */
   unsigned long long next_id;
   /** Reserved shutdown command: no capacity or allocation dependency. */
@@ -59,6 +61,12 @@ void cai_app_bridge_frontend_close(cai_app_bridge *);
  */
 void cai_app_bridge_frontend_done(cai_app_bridge *);
 int cai_app_bridge_frontend_ended(cai_app_bridge *);
+/** End the owned runtime before joining its frontend, retaining the host run
+ * lifetime for post-terminal temporary-workspace confirmation. */
+void cai_app_bridge_frontend_owner_end(cai_app_bridge *, int code);
+/** Drain shutdown controls on the calling owner. STOP remains available while
+ * awaiting cleanup input; other commands receive an explicit rejection. */
+int cai_app_bridge_cleanup_stop(void *);
 void cai_app_bridge_bind_input(cai_app_bridge *bridge,
                                cai_input_controller *input);
 void cai_app_bridge_server(
@@ -89,7 +97,8 @@ int cai_cli_app_controller_run(int argc, char **argv,
                                cai_app_bridge *bridge,
                                const cai_config_context *context,
                                const cai_attachment_config *server,
-                               int lifetime_explicit);
+                               int lifetime_explicit,
+                               const struct cai_cli_prepared *prepared);
 int cai_cli_app_main(int argc, char **argv, const cai_app_config *application);
 size_t cai_cli_help_count(void);
 const cai_app_option *cai_cli_help_at(size_t index);

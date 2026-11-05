@@ -157,6 +157,8 @@ void cai_app_bridge_begin(cai_app_bridge *b) {
   b->failed = 0;
   b->stop_requested = 0;
   b->frontend_done = 0;
+  b->frontend_owner_ended = 0;
+  b->frontend_owner_code = 0;
   memset(&b->stop, 0, sizeof(b->stop));
   b->next_id = 0U;
   status_wake(b);
@@ -185,8 +187,7 @@ int cai_app_bridge_control(cai_app_bridge *b, cai_app_control_type type,
     c->type = type;
   }
   pthread_mutex_lock(&b->lock);
-  if (!b->accepting ||
-      (b->frontend_done && !(type == CAI_APP_STOP && b->stop_requested)) ||
+  if (!b->accepting || (b->frontend_done && type != CAI_APP_STOP) ||
       (!b->status.runtime_ready && type != CAI_APP_STOP) ||
       (type != CAI_APP_STOP && b->count >= 64U)) {
     pthread_mutex_unlock(&b->lock);
@@ -349,10 +350,11 @@ int cai_app_bridge_frontend_observe(cai_app_bridge *b,
                            : cai_cli_error(error, CAI_ERR_INVALID,
                                            "terminal observer is closed");
   if (rc == CAI_OK) {
-    out->running = b->status.running;
+    out->running = b->status.running && !b->frontend_owner_ended;
     out->ready = b->status.runtime_ready;
     out->has_server = b->status.has_server;
-    out->exit_code = b->status.exit_code;
+    out->exit_code =
+        b->frontend_owner_ended ? b->frontend_owner_code : b->status.exit_code;
     out->code = b->status.error.code;
     out->phase = b->status.server.phase;
     memcpy(out->instance, b->status.server_instance, sizeof(out->instance));
@@ -378,6 +380,39 @@ void cai_app_bridge_frontend_done(cai_app_bridge *b) {
   while (write(b->fd, &value, sizeof(value)) < 0 && errno == EINTR) {
   }
   pthread_mutex_unlock(&b->lock);
+}
+void cai_app_bridge_frontend_owner_end(cai_app_bridge *b, int code) {
+  uint64_t value = 1U;
+  pthread_mutex_lock(&b->lock);
+  b->frontend_owner_ended = 1;
+  b->frontend_owner_code = code;
+  if (b->frontend_fd >= 0)
+    while (write(b->frontend_fd, &value, sizeof(value)) < 0 && errno == EINTR) {
+    }
+  pthread_mutex_unlock(&b->lock);
+}
+int cai_app_bridge_cleanup_stop(void *context) {
+  cai_app_bridge *b = context;
+  cai_app_command *command;
+  int stopped = 0;
+  while ((command = cai_app_bridge_take(b)) != NULL) {
+    cai_error error;
+    int rc = CAI_OK;
+    cai_error_init(&error);
+    if (command->type == CAI_APP_STOP) {
+      stopped = 1;
+      cai_app_bridge_outcome(b, CAI_APP_STOPPED);
+    } else
+      rc = cai_cli_error(&error, CAI_ERR_INVALID, "application is stopping");
+    cai_app_bridge_ack(b, command, rc, &error);
+    cai_error_cleanup(&error);
+  }
+  if (b != NULL) {
+    pthread_mutex_lock(&b->lock);
+    stopped = stopped || b->stop_requested;
+    pthread_mutex_unlock(&b->lock);
+  }
+  return stopped;
 }
 int cai_app_bridge_frontend_ended(cai_app_bridge *b) {
   int ended = 0;

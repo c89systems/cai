@@ -177,6 +177,11 @@ int main(int argc, char **argv) {
   if (child < 0)
     return 2;
   if (child == 0) {
+    /* Bash launches this peer as a background job and may inherit SIGINT
+     * ignored. Tests of normal foreground disposition request it explicitly;
+     * ordinary fixture hosts retain their inherited signal contract. */
+    if (getenv("CAI_TEST_TERMINAL_DEFAULT_SIGINT") != NULL)
+      (void)signal(SIGINT, SIG_DFL);
     if (events >= 0)
       close(events);
     close(master);

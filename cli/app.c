@@ -152,7 +152,7 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
     cai_cli_error(error, rc, "copy application arguments");
   } else {
     rc = cai_cli_run_terminal(&app->config, app->bridge, argc + 1, arguments,
-                              &handled, exit_code, error);
+                              NULL, &handled, exit_code, error);
     if (rc == CAI_OK && !handled) {
       if (pthread_mutex_trylock(&application_lock) != 0)
         rc = cai_cli_error(error, CAI_ERR_INVALID,
@@ -195,7 +195,7 @@ static void *controller_run(void *context) {
   app->controller_code = cai_cli_app_controller_run(
       app->argument_count + 1, app->arguments, &app->config, app->bridge,
       &app->startup, app->server ? &app->lifetime : NULL,
-      app->lifetime_explicit);
+      app->lifetime_explicit, NULL);
   cai_app_bridge_end(app->bridge, app->controller_code, NULL);
   return NULL;
 }

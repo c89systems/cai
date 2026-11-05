@@ -33,7 +33,7 @@ explicit transport target. It uses the same terminal implementation, resolves
 frontend preferences and opens no runtime, authentication store or SDK client.
 It never starts a server process. Explicit local shell/pager actions use the
 same PTY adapter as the executable. The CLI's discovery/fork/exec scaffolding is separate
-from this library receiver. Interactive `cai_app.run` (excluding `--temp`) now
+from this library receiver. Interactive `cai_app.run` now
 composes the same controller and socket frontend in-process: the calling
 thread owns runtime callbacks and a default-stack worker owns the terminal.
 It never forks an embedding host. Its frontend uses no second SDK client or
@@ -41,6 +41,10 @@ runtime. A separate lifecycle wake channel cannot consume the host observer's
 status notification. Closing this owned frontend stops/joins its controller;
 closing a terminal attached to an independently started owner obeys that
 owner's persistence policy.
+Temporary runs always use nonpersistent ownership and join both sides before
+asking their default-no cleanup question. They resolve configuration once,
+preserve selected shared auth/messaging stores, and remove their private
+runtime discovery directory as well as their temporary history/cache.
 The initial terminal displays the host's banner and configured Markdown
 introduction through the shared renderer before replay, including introduction
 margins and NO_COLOR. Switching workspaces does not repeat that introduction.
@@ -185,7 +189,7 @@ This is a working terminal/socket composition, not a claim of complete feature
 parity. Full startup-control parity and validation of extended configuration outside
 the startup inventory still require
 integration. Automatic executable-path discovery currently
-uses Linux `/proc/self/exe`. Batch/temp and utility invocations still use their
+uses Linux `/proc/self/exe`. Batch and utility invocations still use their
 existing composition. These remain part of the active goal.
 
 Softline 0.16's unconditional trigger stripping also needs a pre-activation
@@ -227,6 +231,13 @@ takeover, context changes and suffix-only replay across shell/pager handoff.
 Both help and log pagers are tested with work completed while the alternate
 screen is open: no transcript output enters that screen, and the missed output
 appears exactly once after closing it.
+`cai_cli_temp_owner` exercises the shipped executable with argv and config-only
+temporary mode, retained policy files, pipe shell output, default-no/yes
+cleanup, inherited persistence and failed socket startup. `cai_app_run_terminal`
+also checks EOF/force cleanup, callback affinity and one SDK client in temporary
+runs. The broader temp fixture checks shared authentication/messaging stores
+and host STOP during the final question. Runtime-name replacement tests refuse
+cleanup through a symlink to an unrelated tree.
 The embedding guard rejects editor API reentry during the Softline relay and
 checks that the host environment and cwd remain unchanged. The queue unit test
 resolves a receipt lost during paused routing without offering the input twice.

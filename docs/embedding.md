@@ -175,8 +175,9 @@ The explicit `apply_environment` utility still changes process-global state;
 use the immutable view for independently running controllers. The current
 application configuration resolver does not install `[env]`: it uses the
 effective view for option aliases, path expansion and XDG derivation. The legacy
-synchronous terminal receiver explicitly installs it within its temporary
-process ownership; that wider lifecycle extraction remains pending. MCP
+synchronous batch/utility receiver explicitly installs it within its temporary
+process ownership; that lifecycle extraction remains pending. Interactive run,
+including temporary workspaces, uses the captured controller/adapter views. MCP
 discovery and later refreshes retain a separate effective environment snapshot,
 so worker credential lookup does not depend on later global changes. Reopening
 the MCP context adopts updated configuration; `/mcp refresh` retains the current
@@ -1163,6 +1164,11 @@ private history, prompt history and managed cache data. The workspace deletion
 question defaults to No. Non-interactive runs, EOF, errors, and host STOP
 preserve the workspace unless `--yes` / `--force` is passed. STOP also interrupts
 the final question. See the [temporary workspace and store configuration](../README.md).
+Interactive temporary runs use the common owner and socket frontend, resolving
+configuration once without changing host cwd/environment. Their separate
+private runtime directory is removed after owner shutdown, before asking the
+cleanup question; persistence is disabled for the ephemeral owner. The host
+run remains active during that question and accepts STOP until return.
 
 See [messaging](agent-messaging.md) for delivery,
 editing, ACK deadlines, and core C/Lua next-turn integration APIs.

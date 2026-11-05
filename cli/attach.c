@@ -4,6 +4,7 @@
 #include "error.h"
 #include "frontend.h"
 #include "identity.h"
+#include "run_terminal.h"
 #include "spawn.h"
 #include "workspace_claims.h"
 #include <cai/environment.h>
@@ -215,6 +216,27 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
   }
   rc = cai_config_environment(configuration, &environment, error);
   options.environment = environment;
+  if (rc == CAI_OK && options.temporary) {
+    cai_app_bridge *bridge = NULL;
+    cai_cli_prepared resolved;
+    int handled = 0;
+    memset(&resolved, 0, sizeof(resolved));
+    resolved.configuration = configuration;
+    resolved.options = options;
+    rc = cai_app_bridge_open(&bridge, application, error);
+    if (rc == CAI_OK) {
+      cai_app_bridge_begin(bridge);
+      rc = cai_cli_run_terminal(application, bridge, argc, argv, &resolved,
+                                &handled, exit_code, error);
+      cai_app_bridge_end(bridge, rc == CAI_OK ? *exit_code : 1,
+                         rc != CAI_OK ? error : NULL);
+      cai_app_bridge_close(bridge);
+      if (rc == CAI_OK && !handled)
+        rc = cai_cli_error(error, CAI_ERR_INVALID,
+                           "temporary startup requires an interactive agent");
+    }
+    goto done;
+  }
   if (rc == CAI_OK)
     rc = cai_cli_private_directory(options.runtime_dir, error);
   if (rc == CAI_OK)

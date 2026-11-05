@@ -3,6 +3,14 @@ source "$(dirname "$0")/cli_test_common.sh"
 controls=$(realpath "$1")
 scope=${2:-mock}
 base=("$cli")
+runtime_root=$(mktemp -d "$support/../build/temp-run.XXXXXX")
+temp_cleanup() {
+  local result=$?
+  if [[ $result == 0 ]]; then rm -rf -- "$runtime_root"; fi
+  cleanup "$result"
+}
+trap temp_cleanup EXIT
+export CAI_RUNTIME_DIR="$runtime_root"
 for args in '--temp --list' '--temp --resume old' '--force' '--replace'; do
   read -r -a flags <<<"$args"
   run "${flags[@]}"; bad

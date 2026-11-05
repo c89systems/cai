@@ -32,13 +32,19 @@ int main(int argc, char **argv) {
   for (i = 0U; i < sizeof(answers) / sizeof(answers[0]); i++) {
     cai_cli_options_init(&options);
     options.cache_dir = argv[1];
+    options.runtime_dir = argv[1];
+    options.server_persist = 1;
     cai_cli_temp_init(&temp);
     assert(cai_cli_temp_open(&temp, &options, &error) == CAI_OK);
+    assert(cai_cli_temp_runtime_open(&temp, &options, &error) == CAI_OK);
+    assert(strcmp(options.runtime_dir, temp.runtime) == 0 &&
+           !options.server_persist && exists(temp.runtime));
     assert(stat(temp.root, &st) == 0 && (st.st_mode & 0777U) == 0700U);
     assert(options.lockd == NULL);
     assert(getcwd(current, sizeof(current)) != NULL &&
-           strcmp(current, temp.workspace) == 0);
-    assert(symlink(outside, "outside-link") == 0);
+           strcmp(current, original) == 0);
+    snprintf(link, sizeof(link), "%s/outside-link", temp.workspace);
+    assert(symlink(outside, link) == 0);
     snprintf(link, sizeof(link), "%s/outside-link", temp.private_dir);
     assert(symlink(outside, link) == 0);
     assert(pipe(pipefd) == 0);
@@ -53,7 +59,8 @@ int main(int argc, char **argv) {
     assert(dup2(saved_input, STDIN_FILENO) >= 0);
     close(saved_input);
     assert(kept == (i >= 2U));
-    assert(!exists(temp.private_dir) && exists(outside));
+    assert(!exists(temp.private_dir) && !exists(temp.runtime) &&
+           exists(outside));
     assert(exists(temp.workspace) == kept && exists(temp.root) == kept);
     assert(getcwd(current, sizeof(current)) != NULL &&
            strcmp(current, original) == 0);
@@ -69,12 +76,27 @@ int main(int argc, char **argv) {
              CAI_OK &&
          !kept);
   assert(getcwd(current, sizeof(current)) != NULL &&
-         strcmp(current, temp.workspace) == 0);
+         strcmp(current, original) == 0);
   assert(cai_cli_temp_close(&temp, 1, 0, -1, NULL, NULL, &kept, &error) ==
              CAI_OK &&
          !kept);
   assert(getcwd(current, sizeof(current)) != NULL &&
          strcmp(current, original) == 0);
+  /* A replaced runtime name must never redirect cleanup into another tree.
+   * The opened directory is retained for an explicit caller decision. */
+  cai_cli_options_init(&options);
+  options.cache_dir = options.runtime_dir = argv[1];
+  cai_cli_temp_init(&temp);
+  assert(cai_cli_temp_open(&temp, &options, &error) == CAI_OK);
+  assert(cai_cli_temp_runtime_open(&temp, &options, &error) == CAI_OK);
+  snprintf(link, sizeof(link), "%s/moved-runtime", argv[1]);
+  assert(rename(temp.runtime, link) == 0);
+  assert(symlink(argv[1], temp.runtime) == 0);
+  assert(cai_cli_temp_close(&temp, 1, 0, -1, NULL, NULL, &kept, &error) ==
+         CAI_ERR_INVALID);
+  assert(kept && exists(outside) && exists(link) && exists(temp.workspace));
+  assert(unlink(temp.runtime) == 0 && rmdir(link) == 0);
+  cai_error_cleanup(&error);
   options.cache_dir = outside;
   cai_cli_temp_init(&temp);
   assert(cai_cli_temp_open(&temp, &options, &error) != CAI_OK);
