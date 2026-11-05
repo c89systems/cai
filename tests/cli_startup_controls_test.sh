@@ -18,7 +18,7 @@ controls_cleanup() {
 trap controls_cleanup EXIT
 export LOG_LEVEL=info
 plan '{"plan":["FIRST SETTINGS APPLIED"]}'
-"${base[@]}" -x -N >"$root/owner.out" 2>"$root/owner.log" & owner_pid=$!
+"${base[@]}" -x -N --todo >"$root/owner.out" 2>"$root/owner.log" & owner_pid=$!
 wait_for has "$root/owner.log" 'Workspace server ready'
 if [[ $mode == embed ]]; then
   base=("$terminal_host" "$runtime_root" "$work" "${base[@]:1}")
@@ -28,7 +28,7 @@ fi
 terminal_start --service-tier flex --reasoning-summary concise -r low \
   --yield-time-ms 17 --yolo --no-reasoning-tool --shell-context \
   --normal-reasoning-effort low --high-reasoning-effort xhigh \
-  --autoqueue \
+  --autoqueue --board 'startup board' --todo-layout list \
   --prompt-history-limit 3 --conversation-retention-days 0 \
   -i 'FIRST INVOCATION'
 expect 'FIRST SETTINGS APPLIED'
@@ -43,6 +43,8 @@ send '/history\r'; expect '3 entries'
 send '/retention\r'; expect 'forever'
 send '/shell-context\r'; expect 'will be shared'
 send '/reasoning-tool\r'; expect 'low'; expect 'xhigh'
+send '/todo\r'; expect 'startup board'
+send '/todo layout\r'; expect 'list'
 # A new public summary command is discoverable and validates rather than
 # killing the frontend. Queries never cause inference or reset selection.
 send '/reasoning-summary invalid\r'; expect 'use /reasoning-summary'
@@ -54,7 +56,7 @@ kill -0 "$owner_pid"
 plan '{"plan":["SECOND SETTINGS APPLIED"]}'
 terminal_start --service-tier default --reasoning-summary detailed \
   --foreground --no-yolo --no-shell-context --prompt-history-limit 0 \
-  --no-autoqueue \
+  --no-autoqueue --board 'second board' --todo-layout board \
   --conversation-retention-days 30 -i 'SECOND INVOCATION'
 expect 'SECOND SETTINGS APPLIED'
 jq -se 'length == 2 and .[1].service_tier == "default" and
@@ -64,12 +66,23 @@ send '/yolo\r'; expect 'off (restricted)'
 send '/history\r'; expect '0 entries'
 send '/retention\r'; expect '30 days'
 send '/shell-context\r'; expect 'stay out of model'
+send '/todo\r'; expect 'second board'
+send '/todo layout\r'; expect 'board'
 terminal_close
 
 # No explicit control flags: the running owner's settings survive reattachment.
 # Catch-up must display prior controls without reapplying them or resubmitting
 # either startup instruction.
+export CAI_BOARD=environment-board CAI_UI_TODO_LAYOUT=list
 terminal_start
+send '/todo\r'; expect 'second board'
+send '/todo layout\r'; expect 'list'
+[[ $(requests) == 2 ]]
+terminal_close
+unset CAI_BOARD CAI_UI_TODO_LAYOUT
+terminal_start
+send '/todo\r'; expect 'second board'
+send '/todo layout\r'; expect 'list'
 send '/yield_time_ms\r'; expect 'Foreground commands'
 send '/reasoning-summary\r'; expect 'Reasoning summary: detailed.'
 [[ $(requests) == 2 ]]

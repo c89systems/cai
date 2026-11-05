@@ -106,6 +106,19 @@ int cai_cli_startup_next(cai_cli_startup *cursor, const cai_cli_options *o,
         value = o->enable_auto_enqueue ? "on" : "off";
       }
       break;
+    case CAI_CLI_STARTUP_TODO_LAYOUT:
+      if (o->control_explicit & CAI_CLI_CONTROL_TODO_LAYOUT) {
+        prefix = "/todo layout ";
+        value = o->todo_layout;
+      }
+      break;
+    case CAI_CLI_STARTUP_BOARD:
+      if (o->board_explicit &&
+          (o->todo || !o->owner_explicit[CAI_CLI_OWNER_todo])) {
+        prefix = "/todo new ";
+        value = o->board;
+      }
+      break;
     case CAI_CLI_STARTUP_REVIEW_AND_FIX:
       if (o->review_and_fix) {
         prefix = o->review_uncommitted ? "/review-and-fix uncommitted"

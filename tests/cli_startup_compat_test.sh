@@ -51,11 +51,20 @@ reject paths.state_dir --state-dir "$root/other-state"
 reject storage.sessions_store --sessions-store alternate
 reject storage.namespace_prefix --namespace-prefix another
 reject plugins.enabled --plugins
+reject paths.clipboard_dir --clipboard-dir "$root/other-clipboard"
+reject paths.export_dir --export-dir "$root/other-exports"
+reject agent.shell_context_max_lines --shell-context-max-lines 19
+reject agent.shell_context_max_bytes --shell-context-max-bytes 4096
+reject messaging.ack_timeout_ms --message-ack-timeout-ms 17
+[[ ! -e "$root/other-clipboard" && ! -e "$root/other-exports" ]]
 printf '[ui]\ntheme=gruvbox\n' >"$root/other.ini"
 reject paths.config_file --config "$root/other.ini"
 # Same canonical config, matching explicit values, and frontend-only theme
 # changes must remain valid. No failed attempt may have submitted startup text.
-terminal_start --config "$root/config/cai/config.ini" --state-dir "$root/state/cai" --no-plugins --theme gruvbox
+terminal_start --config "$root/config/cai/config.ini" --state-dir "$root/state/cai" --no-plugins --theme gruvbox \
+  --shell-context-max-lines 5000 --shell-context-max-bytes 4194304 \
+  --message-ack-timeout-ms 300000 --clipboard-dir "$root/cache/cai/clipboard" \
+  --export-dir "$root/data/cai/exports"
 send '/status\r'; expect 'Session ID'
 terminal_close
 plan '{"plan":["STARTUP VALUE PRESERVED"]}'

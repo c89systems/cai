@@ -10,6 +10,8 @@
   X("paths", "state_dir", state_dir, 's') \
   X("paths", "cache_dir", cache_dir, 's') \
   X("paths", "data_dir", data_dir, 's') \
+  X("paths", "clipboard_dir", clipboard_dir, 's') \
+  X("paths", "export_dir", export_dir, 's') \
   X("paths", "log_dir", log_dir, 's') \
   X("paths", "config_dir", config_dir, 's') \
   X("store.default", "key_file", pouch_key_file, 's') \
@@ -26,6 +28,9 @@
   X("storage", "messaging_store", messaging_store, 's') \
   X("messaging", "queue_prefix", queue_prefix, 's') \
   X("messaging", "queue_name", message_queue, 's') \
+  X("messaging", "ack_timeout_ms", message_ack_timeout_ms, 'l') \
+  X("agent", "shell_context_max_lines", shell_context_max_lines, 'z') \
+  X("agent", "shell_context_max_bytes", shell_context_max_bytes, 'z') \
   X("client", "provider", provider, 's') \
   X("client", "base_url", endpoint, 's') \
   X("client", "api_key_env", api_key_env, 's') \
@@ -69,13 +74,12 @@
   X("agent", "revgeo", revgeo, 'b') \
   X("messaging", "enabled", messaging, 'b')
 /* clang-format on */
-/* The inventory uses one bit per field and leaves the configured names visible
- * in diagnostics. Keep transport limits and this mask in step if it grows. */
+/* Explicitness is recorded per field, independently of the wire's bounded
+ * inventory. No machine-word mask limits which settings can be compared. */
 enum {
 #define CAI_CLI_OWNER_ID(section, key, member, type) CAI_CLI_OWNER_##member,
   CAI_CLI_OWNER_FIELDS(CAI_CLI_OWNER_ID)
 #undef CAI_CLI_OWNER_ID
       CAI_CLI_OWNER_COUNT
 };
-#define CAI_CLI_OWNER_BIT(member) (1ULL << CAI_CLI_OWNER_##member)
 #endif

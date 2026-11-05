@@ -1087,20 +1087,22 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
       return -1;
   }
   defaults.config_file = early.config_file;
+  if (cfg->get(cfg, "ui", "todo_layout") != NULL)
+    defaults.control_explicit |= CAI_CLI_CONTROL_TODO_LAYOUT;
   if (early.config_file != NULL)
-    defaults.owner_explicit |= CAI_CLI_OWNER_BIT(config_file);
+    defaults.owner_explicit[CAI_CLI_OWNER_config_file] = 1U;
   /* Capture explicit INI/environment/host settings before derived automatic
    * paths are stored. Defaults alone never constrain an existing owner. */
 #define CAI_CLI_OWNER_CONFIG(section, key, member, type)                       \
   if (cfg->get(cfg, section, key) != NULL)                                     \
-    defaults.owner_explicit |= CAI_CLI_OWNER_BIT(member);
+    defaults.owner_explicit[CAI_CLI_OWNER_##member] = 1U;
   CAI_CLI_OWNER_FIELDS(CAI_CLI_OWNER_CONFIG)
 #undef CAI_CLI_OWNER_CONFIG
   for (i = 0U; i < cfg->section_count(cfg); ++i)
     if (strncmp(cfg->section_at(cfg, i), "store.", 6U) == 0)
-      defaults.owner_explicit |= CAI_CLI_OWNER_BIT(sessions_store) |
-                                 CAI_CLI_OWNER_BIT(auth_store) |
-                                 CAI_CLI_OWNER_BIT(messaging_store);
+      defaults.owner_explicit[CAI_CLI_OWNER_sessions_store] =
+          defaults.owner_explicit[CAI_CLI_OWNER_auth_store] =
+              defaults.owner_explicit[CAI_CLI_OWNER_messaging_store] = 1U;
   {
     long long replay = cai_config_get_integer(cfg, "ui", "replay_turns", 10LL);
     if (replay < -1LL || replay > LONG_MAX)

@@ -10,7 +10,7 @@ HELLO is a definite `[workspace, schema, expected_instance, requirements]`.
 PROBE is a definite `[workspace, schema, requirements]`. Requirements are a
 definite array of definite `[name, digest]` pairs, strictly increasing by name.
 Names are ASCII letters/digits, dots, hyphens and underscores, 1–80 bytes;
-digests are exactly 32 bytes. At most 64 pairs are accepted. Empty requirements
+digests are exactly 32 bytes. At most 128 pairs are accepted. Empty requirements
 are the default. This is one current schema, with no legacy greeting parser or
 protocol-version negotiation.
 
@@ -41,7 +41,8 @@ instance pinning remains independent and is checked before attachment.
 `cli/workspace_fields.h` is the shared startup inventory used by the primary
 parser, INI/environment/host configuration and fingerprint producer. It covers
 the configured server name/persistence, config-file identity, private roots,
-namespaces, selected stores and keys, provider/endpoint/auth sources,
+namespaces, selected stores and keys, clipboard/export roots, shell-context
+limits, messaging acknowledgement timeout, provider/endpoint/auth sources,
 instructions, integrations, plugins and tool policy. Explicit values equal to
 defaults are still requirements. Another option's value cannot become one:
 the primary parser records the actual consumed member instead of rescanning
@@ -68,6 +69,9 @@ Frontend theme/layout preferences remain local. Mutable invocation settings
 use the [acknowledged startup command path](terminal-attachment.md), including
 model, effort, summary, tier, terminal yield and runtime policies. The optional
 reasoning tool and its effort mappings are mutable, not owner fingerprints.
+Explicit board selection and Kanban layout also use acknowledged commands.
+The explicit-field inventory uses one byte per field, without a machine-word
+limit; numeric fingerprints preserve the complete long/size_t value.
 Incompatible identity settings
 fail before prompt history, replay, startup instructions or producer binding.
 Both the executable and `cai_app_terminal_run` use the same projection, merging

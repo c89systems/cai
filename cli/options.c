@@ -29,7 +29,7 @@ static void cai_cli_option_error(cai_cli_options *options, const char *format,
 void cai_cli_options_mark_owner(cai_cli_options *options, size_t offset) {
 #define CAI_CLI_OWNER_MARK(section, key, member, type)                         \
   if (offset == offsetof(cai_cli_options, member))                             \
-    options->owner_explicit |= CAI_CLI_OWNER_BIT(member);
+    options->owner_explicit[CAI_CLI_OWNER_##member] = 1U;
   CAI_CLI_OWNER_FIELDS(CAI_CLI_OWNER_MARK)
 #undef CAI_CLI_OWNER_MARK
 }
@@ -155,7 +155,7 @@ static int cli_read_options(int argc, char *const *argv,
     }
     if (strcmp(flag, "--no-config") == 0) {
       options->no_config = 1;
-      options->owner_explicit |= CAI_CLI_OWNER_BIT(config_file);
+      options->owner_explicit[CAI_CLI_OWNER_config_file] = 1U;
       continue;
     }
     if (strcmp(flag, "--headless") == 0 || strcmp(flag, "-x") == 0) {
@@ -164,7 +164,7 @@ static int cli_read_options(int argc, char *const *argv,
     }
     if (strcmp(flag, "--persist") == 0 || strcmp(flag, "--no-persist") == 0) {
       options->server_persist = strcmp(flag, "--persist") == 0;
-      options->owner_explicit |= CAI_CLI_OWNER_BIT(server_persist);
+      options->owner_explicit[CAI_CLI_OWNER_server_persist] = 1U;
       continue;
     }
     if (strcmp(flag, "--yes") == 0 || strcmp(flag, "--force") == 0 ||
@@ -175,7 +175,7 @@ static int cli_read_options(int argc, char *const *argv,
     if (strcmp(flag, "--insecure") == 0 || strcmp(flag, "-k") == 0 ||
         strcmp(flag, "--no-insecure") == 0) {
       options->insecure = strcmp(flag, "--no-insecure") != 0;
-      options->owner_explicit |= CAI_CLI_OWNER_BIT(insecure);
+      options->owner_explicit[CAI_CLI_OWNER_insecure] = 1U;
       continue;
     }
     if (strcmp(flag, "--temp") == 0) {
@@ -197,18 +197,18 @@ static int cli_read_options(int argc, char *const *argv,
     }
     if (strcmp(flag, "--plugins") == 0 || strcmp(flag, "--no-plugins") == 0) {
       options->plugins = strcmp(flag, "--plugins") == 0;
-      options->owner_explicit |= CAI_CLI_OWNER_BIT(plugins);
+      options->owner_explicit[CAI_CLI_OWNER_plugins] = 1U;
       continue;
     }
     if (strcmp(flag, "--chrome") == 0) {
       options->chrome = 1;
-      options->owner_explicit |= CAI_CLI_OWNER_BIT(chrome);
+      options->owner_explicit[CAI_CLI_OWNER_chrome] = 1U;
       options->chrome_explicit = 1;
       continue;
     }
     if (strcmp(flag, "--no-chrome") == 0) {
       options->chrome = 0;
-      options->owner_explicit |= CAI_CLI_OWNER_BIT(chrome);
+      options->owner_explicit[CAI_CLI_OWNER_chrome] = 1U;
       options->chrome_explicit = 1;
       continue;
     }
@@ -283,13 +283,13 @@ static int cli_read_options(int argc, char *const *argv,
     if (strcmp(flag, "--disable-compression") == 0 ||
         strcmp(flag, "--no-disable-compression") == 0) {
       options->disable_compression = strcmp(flag, "--disable-compression") == 0;
-      options->owner_explicit |= CAI_CLI_OWNER_BIT(disable_compression);
+      options->owner_explicit[CAI_CLI_OWNER_disable_compression] = 1U;
       continue;
     }
     if (strcmp(flag, "--messaging") == 0 ||
         strcmp(flag, "--no-messaging") == 0) {
       options->messaging = strcmp(flag, "--messaging") == 0;
-      options->owner_explicit |= CAI_CLI_OWNER_BIT(messaging);
+      options->owner_explicit[CAI_CLI_OWNER_messaging] = 1U;
       continue;
     }
     if (strcmp(flag, "--autoqueue") == 0 ||
@@ -371,6 +371,8 @@ static int cli_read_options(int argc, char *const *argv,
         return -1;
       }
       options->message_ack_timeout_ms = timeout;
+      cai_cli_options_mark_owner(
+          options, offsetof(cai_cli_options, message_ack_timeout_ms));
       continue;
     }
     if (strcmp(flag, "--chrome-remove") == 0) {
@@ -393,7 +395,7 @@ static int cli_read_options(int argc, char *const *argv,
           options->list_all = 1;
         else if (flag[j] == 'k') {
           options->insecure = 1;
-          options->owner_explicit |= CAI_CLI_OWNER_BIT(insecure);
+          options->owner_explicit[CAI_CLI_OWNER_insecure] = 1U;
         } else if (flag[j] == 'y')
           options->force = 1;
         else if (flag[j] == 'x')
@@ -552,6 +554,9 @@ static int cli_read_options(int argc, char *const *argv,
         options->shell_context_max_lines = (size_t)number;
       else
         options->shell_context_max_bytes = (size_t)number;
+      cai_cli_options_mark_owner(
+          options, lines ? offsetof(cai_cli_options, shell_context_max_lines)
+                         : offsetof(cai_cli_options, shell_context_max_bytes));
       continue;
     }
     if (strcmp(flag, "-v") == 0 || strcmp(flag, "--verbose") == 0) {
@@ -652,7 +657,7 @@ static int cli_read_options(int argc, char *const *argv,
       field = &options->chrome_socket;
       options->chrome = 1;
       options->chrome_explicit = 1;
-      options->owner_explicit |= CAI_CLI_OWNER_BIT(chrome);
+      options->owner_explicit[CAI_CLI_OWNER_chrome] = 1U;
     } else if (strcmp(flag, "--searxng-url") == 0)
       field = &options->searxng_url;
     else if (strcmp(flag, "--revgeo-url") == 0)
@@ -736,6 +741,8 @@ static int cli_read_options(int argc, char *const *argv,
       cai_cli_option_error(options, "--todo-layout must be board or list");
       return -1;
     }
+    if (field == &options->todo_layout)
+      options->control_explicit |= CAI_CLI_CONTROL_TODO_LAYOUT;
     if (field == &options->tool_output && strcmp(value, "compact") != 0 &&
         strcmp(value, "full") != 0) {
       cai_cli_option_error(options, "--tool-output must be compact or full\n");

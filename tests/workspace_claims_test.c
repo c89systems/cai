@@ -93,7 +93,8 @@ static void codec(void) {
   assert(feed(&r, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U) == 1);
   assert(feed(&r, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U) < 0);
   memset(&r, 0, sizeof(r));
-  assert(feed(&r, CAI_CBOR_ARRAY, 65U, NULL, 0U) < 0);
+  assert(feed(&r, CAI_CBOR_ARRAY, CAI_WORKSPACE_CLAIM_LIMIT + 1U, NULL, 0U) <
+         0);
   assert(feed(&r, CAI_CBOR_ARRAY, 2U, NULL, 0U) == 0);
   entry(&r, &c);
   assert(strcmp(r.mismatch, c.name) == 0);
@@ -116,8 +117,9 @@ static void codec(void) {
 int main(void) {
   char temporary[] = "cai-claims-XXXXXX", workspace[4096];
   char *root;
-  cai_workspace_claim claims[64], requested[64];
-  char names[64][32];
+  cai_workspace_claim claims[CAI_WORKSPACE_CLAIM_LIMIT],
+      requested[CAI_WORKSPACE_CLAIM_LIMIT];
+  char names[CAI_WORKSPACE_CLAIM_LIMIT][32];
   cai_workspace_server_config config;
   cai_workspace_server *server;
   cai_workspace_client *c, *controller;
@@ -130,8 +132,8 @@ int main(void) {
   root = realpath(temporary, NULL);
   assert(root);
   snprintf(workspace, sizeof(workspace), "%s/..", root);
-  for (i = 0U; i < 64U; ++i) {
-    snprintf(names[i], sizeof(names[i]), "setting.%02u", (unsigned int)i);
+  for (i = 0U; i < CAI_WORKSPACE_CLAIM_LIMIT; ++i) {
+    snprintf(names[i], sizeof(names[i]), "setting.%03u", (unsigned int)i);
     claims[i].name = names[i];
     memset(claims[i].digest, (int)i, 32U);
   }
@@ -139,18 +141,18 @@ int main(void) {
   config.runtime_directory = root;
   config.workspace = workspace;
   config.claims = claims;
-  config.claim_count = 64U;
+  config.claim_count = CAI_WORKSPACE_CLAIM_LIMIT;
   assert(cai_workspace_server_open(&config, &server, NULL) == CAI_OK);
   memcpy(requested, claims, sizeof(claims));
   claims[0].digest[0] ^= 1U; /* Owner must retain its original copy. */
   assert(cai_workspace_server_get_state(server, &before, NULL) == CAI_OK);
   for (i = 0U; i < 2U; ++i) {
-    requested[63].digest[31] ^= 1U;
-    c = client(root, workspace, requested, 64U, (int)i);
-    connect(server, c, 1, "setting.63");
+    requested[CAI_WORKSPACE_CLAIM_LIMIT - 1U].digest[31] ^= 1U;
+    c = client(root, workspace, requested, CAI_WORKSPACE_CLAIM_LIMIT, (int)i);
+    connect(server, c, 1, "setting.127");
     unchanged(server, &before);
     cai_workspace_client_close(c);
-    requested[63].digest[31] ^= 1U;
+    requested[CAI_WORKSPACE_CLAIM_LIMIT - 1U].digest[31] ^= 1U;
   }
   requested[0].name = "missing";
   c = client(root, workspace, requested, 1U, 0);
@@ -166,7 +168,7 @@ int main(void) {
   unchanged(server, &before); /* Nonpersistent first-attach grace unchanged. */
   cai_workspace_client_close(c);
   requested[0].digest[0] ^= 1U;
-  controller = client(root, workspace, requested, 64U, 0);
+  controller = client(root, workspace, requested, CAI_WORKSPACE_CLAIM_LIMIT, 0);
   requested[0].digest[0] ^= 1U; /* Client must retain its original copy too. */
   connect(server, controller, 0, NULL);
   assert(cai_workspace_server_get_state(server, &before, NULL) == CAI_OK);

@@ -23,7 +23,8 @@ typedef enum cai_cli_control_option {
   CAI_CLI_CONTROL_RETENTION = 1U << 6,
   CAI_CLI_CONTROL_AUTOQUEUE = 1U << 7,
   CAI_CLI_CONTROL_NORMAL_EFFORT = 1U << 8,
-  CAI_CLI_CONTROL_HIGH_EFFORT = 1U << 9
+  CAI_CLI_CONTROL_HIGH_EFFORT = 1U << 9,
+  CAI_CLI_CONTROL_TODO_LAYOUT = 1U << 10
 } cai_cli_control_option;
 
 typedef struct cai_cli_options {
@@ -55,7 +56,7 @@ typedef struct cai_cli_options {
   const char *provider;
   const char *config_file;
   int config_explicit;
-  unsigned long long owner_explicit;
+  unsigned char owner_explicit[CAI_CLI_OWNER_COUNT];
   unsigned int control_explicit;
   /** Executable composition borrows one bounded startup requirement inventory.
    */

@@ -22,10 +22,8 @@ static const claim_field fields[] = {
 #undef CAI_CLI_OWNER_FIELD
 };
 typedef char
-    inventory_fits_wire[CAI_CLI_OWNER_COUNT <= CAI_WORKSPACE_CLAIM_LIMIT &&
-                                CAI_CLI_OWNER_COUNT <= 64
-                            ? 1
-                            : -1];
+    inventory_fits_wire[CAI_CLI_OWNER_COUNT <= CAI_WORKSPACE_CLAIM_LIMIT ? 1
+                                                                         : -1];
 static int add(EVP_MD_CTX *hash, const char *text) {
   unsigned char present = text != NULL;
   return EVP_DigestUpdate(hash, &present, 1U) == 1 &&
@@ -84,14 +82,24 @@ int cai_cli_workspace_claims_build(const cai_cli_options *options,
     const char *value;
     cai_workspace_claim *claim;
     unsigned int length;
-    char canonical[PATH_MAX];
-    if (requested && !(options->owner_explicit & (1ULL << i)))
+    char canonical[PATH_MAX], number[32];
+    if (requested && !options->owner_explicit[i])
       continue;
     claim = &out->values[out->count];
     claim->name = f->name;
     if (f->type == 's')
       memcpy(&value, p, sizeof(value));
-    else {
+    else if (f->type == 'l') {
+      long integer;
+      memcpy(&integer, p, sizeof(integer));
+      snprintf(number, sizeof(number), "%ld", integer);
+      value = number;
+    } else if (f->type == 'z') {
+      size_t integer;
+      memcpy(&integer, p, sizeof(integer));
+      snprintf(number, sizeof(number), "%llu", (unsigned long long)integer);
+      value = number;
+    } else {
       int flag;
       memcpy(&flag, p, sizeof(flag));
       value = flag ? "true" : "false";

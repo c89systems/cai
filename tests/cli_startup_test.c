@@ -1,6 +1,7 @@
 #include "../cli/goal_input.h"
 #include "../cli/input_wire.h"
 #include "../cli/startup.h"
+#include "../cli/workspace_claims.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,6 +33,71 @@ static void expect(cai_cli_startup *cursor, const cai_cli_options *options,
   assert(control == generated);
   free(text);
   cai_error_cleanup(&error);
+}
+
+/** Every fixed owner setting must constrain attachment independently, including
+ * fields beyond a machine-word boundary and both numeric storage types. */
+static void owner_inventory(void) {
+  static const struct {
+    size_t offset;
+    char type;
+  } fields[] = {
+#define FIELD(s, k, m, t) {offsetof(cai_cli_options, m), t},
+      CAI_CLI_OWNER_FIELDS(FIELD)
+#undef FIELD
+  };
+  cai_cli_workspace_claims owner, requested;
+  cai_cli_options defaults, selected;
+  cai_config *cfg;
+  size_t i, j;
+  cai_cli_options_init(&defaults);
+  defaults.no_config = 1;
+  assert(cai_config_open(NULL, 0U, NULL, &cfg, NULL) == CAI_OK);
+  assert(cai_cli_workspace_claims_build(&defaults, cfg, 0, &owner, NULL) ==
+         CAI_OK);
+  assert(owner.count == CAI_CLI_OWNER_COUNT && owner.count > 64U);
+  assert(cai_cli_workspace_claims_build(&defaults, cfg, 1, &requested, NULL) ==
+         CAI_OK);
+  assert(requested.count == 0U);
+  for (i = 0U; i < CAI_CLI_OWNER_COUNT; ++i) {
+    unsigned char *member;
+    selected = defaults;
+    cai_cli_options_mark_owner(&selected, fields[i].offset);
+    assert(selected.owner_explicit[i]);
+    assert(cai_cli_workspace_claims_build(&selected, cfg, 1, &requested,
+                                          NULL) == CAI_OK);
+    assert(requested.count == 1U);
+    for (j = 0U; j < owner.count; ++j)
+      if (!strcmp(owner.values[j].name, requested.values[0].name))
+        break;
+    assert(j < owner.count);
+    assert(!memcmp(owner.values[j].digest, requested.values[0].digest,
+                   CAI_WORKSPACE_CLAIM_DIGEST));
+    /* Config origin is independently covered by the file/native-host probes. */
+    if (i == CAI_CLI_OWNER_config_file)
+      continue;
+    member = (unsigned char *)&selected + fields[i].offset;
+    if (fields[i].type == 's') {
+      const char *value = "changed";
+      memcpy(member, &value, sizeof(value));
+    } else if (fields[i].type == 'z') {
+      size_t value = (size_t)-1;
+      memcpy(member, &value, sizeof(value));
+    } else if (fields[i].type == 'l') {
+      long value = 1L;
+      memcpy(member, &value, sizeof(value));
+    } else {
+      int value;
+      memcpy(&value, member, sizeof(value));
+      value = !value;
+      memcpy(member, &value, sizeof(value));
+    }
+    assert(cai_cli_workspace_claims_build(&selected, cfg, 1, &requested,
+                                          NULL) == CAI_OK);
+    assert(memcmp(owner.values[j].digest, requested.values[0].digest,
+                  CAI_WORKSPACE_CLAIM_DIGEST));
+  }
+  cfg->close(cfg);
 }
 
 int main(void) {
@@ -87,6 +153,7 @@ int main(void) {
   char *disabled[sizeof(disabled_input) / sizeof(disabled_input[0])];
   char *background[3], *no_foreground[2];
   char *mappings[5];
+  owner_inventory();
   copy_args(args, input, sizeof(args) / sizeof(args[0]));
   copy_args(disabled, disabled_input, sizeof(disabled) / sizeof(disabled[0]));
   copy_args(background, background_input, 3U);
@@ -145,6 +212,30 @@ int main(void) {
   expect(&cursor, &options, "current", "/reasoning-tool normal low", 1);
   expect(&cursor, &options, "current", "/reasoning-tool high xhigh", 1);
   expect(&cursor, &options, "current", NULL, 0);
+  {
+    const char *board_input[] = {"cai",     "--todo",        "--board",
+                                 "a board", "--todo-layout", "list"};
+    char *board_args[6];
+    copy_args(board_args, board_input, 6U);
+    assert(cai_cli_parse_options(6, board_args, &options) == 1);
+    memset(&cursor, 0, sizeof(cursor));
+    expect(&cursor, &options, "current", "/todo layout list", 1);
+    expect(&cursor, &options, "current", "/todo new a board", 1);
+    expect(&cursor, &options, "current", NULL, 0);
+    /* Defaults do not describe an existing owner's tool policy. An explicit
+     * disabled policy, however, retains --board's existing ignored behavior. */
+    options.todo = 0;
+    options.owner_explicit[CAI_CLI_OWNER_todo] = 0U;
+    memset(&cursor, 0, sizeof(cursor));
+    expect(&cursor, &options, "current", "/todo layout list", 1);
+    expect(&cursor, &options, "current", "/todo new a board", 1);
+    expect(&cursor, &options, "current", NULL, 0);
+    options.owner_explicit[CAI_CLI_OWNER_todo] = 1U;
+    memset(&cursor, 0, sizeof(cursor));
+    expect(&cursor, &options, "current", "/todo layout list", 1);
+    expect(&cursor, &options, "current", NULL, 0);
+    free_args(board_args, 6U);
+  }
   assert(cai_cli_read_options(2, no_foreground, &defaults, &options) == 1);
   memset(&cursor, 0, sizeof(cursor));
   expect(&cursor, &options, "current", "/yield_time_ms 10000", 1);
