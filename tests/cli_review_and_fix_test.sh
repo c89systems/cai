@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/cli_test_common.sh"
 peer_start
-export CAI_TEST_VOLATILE_SESSION=1
 git -C "$work" init -q -b main
 git -C "$work" config core.hooksPath /dev/null
 printf 'base\n' >"$work/tracked.txt"

@@ -19,7 +19,7 @@
       target_link_options(${target} PRIVATE "-Wl,--wrap=lc_client_open")
     endfunction()
     add_executable(cai_cli_mock_fixture tests/cli_mock_fixture.c tests/cli_mcp_config_fixture.c)
-    target_link_libraries(cai_cli_mock_fixture PRIVATE cai_cli_support)
+    target_link_libraries(cai_cli_mock_fixture PRIVATE cai_cli_support cai_app_static)
     cai_configure_cli_target(cai_cli_mock_fixture)
     cai_cli_use_storage_fixture(cai_cli_mock_fixture)
     target_link_options(cai_cli_mock_fixture PRIVATE "-Wl,--wrap=cai_mcp_streamable_http_client_open")
@@ -37,7 +37,7 @@
     cai_configure_cli_target(cai_cli_softline_resize_repro)
     add_executable(cai_cli_resize_fixture tests/cli_resize_fixture.c)
     target_link_options(cai_cli_resize_fixture PRIVATE -Wl,--wrap=sl_output_stream_write)
-    target_link_libraries(cai_cli_resize_fixture PRIVATE cai_cli_support)
+    target_link_libraries(cai_cli_resize_fixture PRIVATE cai_cli_support cai_app_static)
     cai_configure_cli_target(cai_cli_resize_fixture)
     cai_cli_use_storage_fixture(cai_cli_resize_fixture)
     add_test(NAME cai_cli_resize_settled
@@ -337,7 +337,7 @@
     set_tests_properties(cai_cli_chrome_stop PROPERTIES LABELS "cli;local;offline" TIMEOUT 15)
 
     add_executable(cai_cli_shell_fixture tests/cli_shell_fixture.c)
-    target_link_libraries(cai_cli_shell_fixture PRIVATE cai_cli_support)
+    target_link_libraries(cai_cli_shell_fixture PRIVATE cai_cli_support cai_app_static)
     cai_configure_cli_target(cai_cli_shell_fixture)
     cai_cli_use_storage_fixture(cai_cli_shell_fixture)
     add_test(NAME cai_cli_trim
@@ -346,7 +346,7 @@
         "$<TARGET_FILE:cai_cli_pouch_startup_test>")
     set_tests_properties(cai_cli_trim PROPERTIES TIMEOUT 45)
     add_executable(cai_cli_settings_fixture tests/cli_settings_fixture.c)
-    target_link_libraries(cai_cli_settings_fixture PRIVATE cai_cli_support)
+    target_link_libraries(cai_cli_settings_fixture PRIVATE cai_cli_support cai_app_static)
     cai_configure_cli_target(cai_cli_settings_fixture)
     cai_cli_use_storage_fixture(cai_cli_settings_fixture)
     add_test(NAME cai_cli_tier
@@ -354,7 +354,7 @@
         "$<TARGET_FILE:cai_cli_settings_fixture>")
     set_tests_properties(cai_cli_tier PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_spinner_test tests/cli_spinner_test.c)
-    target_link_libraries(cai_cli_spinner_test PRIVATE cai_cli_support)
+    target_link_libraries(cai_cli_spinner_test PRIVATE cai_cli_support cai_app_static)
     cai_configure_cli_target(cai_cli_spinner_test)
     add_test(NAME cai_cli_spinner COMMAND cai_cli_spinner_test)
     add_test(NAME cai_cli_model_catalog
@@ -493,7 +493,7 @@
     set_tests_properties(cai_cli_storage_stream PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_reasoning_test tests/cli_reasoning_test.c)
     target_link_options(cai_cli_reasoning_test PRIVATE -Wl,--wrap=cai_tool_display_tick)
-    target_link_libraries(cai_cli_reasoning_test PRIVATE cai_cli_support)
+    target_link_libraries(cai_cli_reasoning_test PRIVATE cai_cli_support cai_app_static)
     cai_configure_cli_target(cai_cli_reasoning_test)
     add_test(NAME cai_cli_reasoning COMMAND cai_cli_reasoning_test)
     add_test(NAME cai_cli_auto_compact_status COMMAND bash
@@ -539,8 +539,9 @@
     cai_configure_cli_target(cai_cli_log_test)
     add_test(NAME cai_cli_log COMMAND cai_cli_log_test "${CMAKE_CURRENT_BINARY_DIR}")
     add_executable(cai_cli_startup_fixture tests/cli_startup_fixture.c)
-    target_link_libraries(cai_cli_startup_fixture PRIVATE cai_cli_support)
+    target_link_libraries(cai_cli_startup_fixture PRIVATE cai_cli_support cai_app_static)
     cai_configure_cli_target(cai_cli_startup_fixture)
+    target_compile_options(cai_cli_startup_fixture PRIVATE -UNDEBUG)
     cai_cli_use_storage_fixture(cai_cli_startup_fixture)
     add_test(NAME cai_cli_startup
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_startup_test.sh"
@@ -850,6 +851,17 @@
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_shell_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>")
     set_tests_properties(cai_cli_shell PROPERTIES TIMEOUT 45)
+    foreach(_live_shell_mode native embed)
+      if(_live_shell_mode STREQUAL "native")
+        set(_live_shell_target cai_cli)
+      else()
+        set(_live_shell_target cai_cli_mock_fixture)
+      endif()
+      add_test(NAME cai_cli_live_shell_${_live_shell_mode}
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_live_shell_test.sh"
+          "$<TARGET_FILE:${_live_shell_target}>" "$<TARGET_FILE:cai_cli_terminal_owner_control>")
+      set_tests_properties(cai_cli_live_shell_${_live_shell_mode} PROPERTIES TIMEOUT 30)
+    endforeach()
     add_test(NAME cai_cli_tool_display
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_tool_display_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>")
@@ -881,7 +893,7 @@
     get_property(_cai_cli_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
     list(FILTER _cai_cli_targets INCLUDE REGEX "^cai_cli($|_)|^cai_terminal_peer$")
     add_custom_target(cai_cli_tests DEPENDS ${_cai_cli_targets})
-    add_dependencies(cai_cli_tests cai_app_test cai_status_wire_test cai_status_host_test cai_transcript_test cai_transcript_wire_test cai_transcript_store_test cai_app_client_test cai_input_socket_test cai_app_controller_test cai_input_wire_test cai_app_home_test cai_app_mcp_environment_test cai_app_status_test cai_app_host cai_app_worker_stack_host cai_app_controls_host cai_app_startup_goal_test cai_app_utility_stop_test cai_kanban_test cai_chrome_client_fixture)
+    add_dependencies(cai_cli_tests cai_app_test cai_status_wire_test cai_status_host_test cai_transcript_test cai_transcript_wire_test cai_transcript_store_test cai_app_client_test cai_input_socket_test cai_app_controller_test cai_input_wire_test cai_app_home_test cai_app_mcp_environment_test cai_app_status_test cai_app_host cai_app_worker_stack_host cai_app_run_terminal_host cai_app_controls_host cai_app_startup_goal_test cai_app_utility_stop_test cai_kanban_test cai_chrome_client_fixture)
     add_test(NAME cai_cli_kanban COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_kanban_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")
@@ -890,13 +902,6 @@
     set_tests_properties(${_cai_cli_tests} PROPERTIES LABELS "cli;local;offline"
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>;CAI_TEST_PYTHON=${CAI_TEST_PYTHON};CAI_TEST_JQ=${CAI_TEST_JQ};CAI_TEST_TMUX=${CAI_TEST_TMUX}")
     set_property(TEST cai_cli_bootstrap cai_cli_help_source APPEND PROPERTY LABELS unit)
-    # These cases assert CLI presentation/tool wiring, not stored history.
-    # Stateful cases retain real encrypted commit/replay/export coverage.
-    set_property(TEST cai_cli_mcp_inventory_responses
-      cai_cli_mcp_inventory_chat_completions cai_cli_tool_policy_responses
-      cai_cli_tool_policy_chat_completions cai_cli_skills cai_cli_skills_inventory cai_cli_commands
-      cai_cli_tool_display cai_cli_reasoning_presentation cai_cli_terminal_handoff
-      APPEND PROPERTY ENVIRONMENT "CAI_TEST_VOLATILE_SESSION=1")
     foreach(_cai_cli_test IN LISTS _cai_cli_tests)
       get_test_property(${_cai_cli_test} TIMEOUT _cai_cli_timeout)
       if(NOT _cai_cli_timeout)

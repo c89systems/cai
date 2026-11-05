@@ -8,6 +8,7 @@
 #include "input_socket.h"
 #include "input_wire.h"
 #include "replay_tools.h"
+#include "review_report.h"
 #include "startup.h"
 #include "status.h"
 #include "terminal_program.h"
@@ -103,10 +104,14 @@ typedef struct frontend {
   char next_session[129];
   int pending_context, switching;
   cai_error error;
+  cai_sink *execution_sink;
   int wake[2], timer;
   sl_watch_id_t socket_watch, boot_watch, timer_watch, wake_watch;
   int socket_fd, boot_fd, failed, quit, ready, bound, subscribed, replaying;
   int action_field, shell, awaiting_bind, welcomed, control, greeting_resumed;
+  int child_theme_scope;
+  int review_header_shown;
+  char replay_child[129];
   int transcript_entry, presentation_parked;
   uint64_t bind_request, subscribe_request, control_request;
   unsigned long long startup_request, startup_producer;
@@ -253,6 +258,16 @@ static int markdown(frontend *f, const char *bytes, size_t length) {
 static int tool_markdown(void *context, const char *bytes, size_t length) {
   return markdown(context, bytes, length);
 }
+/** Reuse the core's structured execution renderer for harness failures and
+ * progress records. One borrowed chunk flows directly into this UI's MDF
+ * document; no JSON, complete diagnostic or replay copy is accumulated. */
+static int execution_markdown(void *context, const void *bytes, size_t length,
+                              cai_error *error) {
+  return markdown(context, bytes, length) == 0
+             ? CAI_OK
+             : cai_cli_error(error, CAI_ERR_TRANSPORT,
+                             "render execution diagnostic");
+}
 static int notice(frontend *f, const char *message) {
   if (f->group->terminal_active) {
     snprintf(f->history_warning, sizeof(f->history_warning), "%s", message);
@@ -261,6 +276,15 @@ static int notice(frontend *f, const char *message) {
   if (f->group->active != f)
     return 0;
   return cai_cli_presenter_notice(f->ui, message);
+}
+/** Finish only this terminal's presentation. Update the native sticky row
+ * while its editor is active; no farewell is appended to the transcript. */
+static int goodbye(frontend *f) {
+  return sl_set_status_spinner(f->ui->sl, 0) == SL_OK &&
+                 sl_set_status_busy(f->ui->sl, 0) == SL_OK &&
+                 sl_set_status_message(f->ui->sl, "Goodbye.") == SL_OK
+             ? 0
+             : -1;
 }
 static void save_submission(void *context, const cai_input_request *request) {
   frontend *f = context;
@@ -506,9 +530,12 @@ static int observed(void *context, const cai_app_client_event *event,
       (void)notice(f, event->input->result.reason);
     if (f->exit_save != 0U && event->request == f->exit_save) {
       if (event->input->result.code == CAI_OK && f->current == f->exit_view &&
-          strcmp(sl_buffer(f->ui->sl), f->exit_draft) == 0)
+          strcmp(sl_buffer(f->ui->sl), f->exit_draft) == 0) {
+        if (goodbye(f) != 0)
+          return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                               "close terminal draft");
         f->quit = 1;
-      else if (event->input->result.code == CAI_OK)
+      } else if (event->input->result.code == CAI_OK)
         (void)notice(f, "Draft changed while saving; exit cancelled.");
       f->exit_save = 0U;
       free(f->exit_draft);
@@ -585,6 +612,17 @@ static int transcript(void *context, const cai_transcript_event *event,
     f->transcript_entry = 0;
   if (event->kind == CAI_TRANSCRIPT_EVENT_BEGIN && event->type != NULL) {
     int review = strcmp(event->type, "review_pending") == 0;
+    if (review) {
+      f->review_open = 1;
+      f->review_header_shown = 0;
+      f->child_theme_scope = 2;
+    }
+    if (strcmp(event->type, "review_handoff_committed") == 0 ||
+        strcmp(event->type, "subagent_handoff_committed") == 0) {
+      f->child_theme_scope = f->review_open = 0;
+      if (cai_cli_presenter_set_theme_scope(f->ui, 0, error) != CAI_OK)
+        return CAI_ERR_TRANSPORT;
+    }
     if ((review || strcmp(event->type, "assistant_text_delta") == 0 ||
          strcmp(event->type, "input_queue_delivery") == 0 ||
          strcmp(event->type, "reasoning_summary_started") == 0) &&
@@ -596,6 +634,7 @@ static int transcript(void *context, const cai_transcript_event *event,
   }
   if (event->kind == CAI_TRANSCRIPT_REPLAY_BEGIN) {
     f->replaying = 1;
+    f->replay_child[0] = '\0';
     if (event->omitted != 0U && f->options->replay_turns != 0L) {
       char message[160];
       snprintf(message, sizeof(message),
@@ -701,18 +740,35 @@ static int execution_body(void *context, const cai_app_execution_event *event,
   }
   f->ui->presentation_event = 1;
   f->ui->presentation_timestamp_ns = r->timestamp_ns;
-  if (cai_cli_presenter_set_theme_scope(f->ui,
-                                        r->subagent == NULL ? 0
-                                        : strcmp(r->subagent, "review") == 0
-                                            ? 2
-                                            : 1,
-                                        error) != CAI_OK)
+  /* Local command documents belong to the currently displayed region. They
+   * must not reset an active review/worker's palette just to answer a query.
+   * Ordinary parent execution resumes the parent's region. */
+  if (r->subagent != NULL)
+    f->child_theme_scope = strcmp(r->subagent, "review") == 0 ? 2 : 1;
+  else if (strncmp(r->kind, "command.", 8U) != 0 &&
+           strcmp(r->kind, "application.markdown") != 0 &&
+           !(f->review_open && strcmp(r->kind, "turn.cancelled") == 0))
+    f->child_theme_scope = 0;
+  if (cai_cli_presenter_set_theme_scope(f->ui, f->child_theme_scope, error) !=
+      CAI_OK)
     return CAI_ERR_TRANSPORT;
-  if (strcmp(r->kind, "tool.started") == 0 && r->tool_name != NULL &&
-      strcmp(r->tool_name, "run_review") == 0 && !f->review_open) {
-    f->review_open = 1;
-    if (markdown(f, "**Review started.**\n\n",
-                 strlen("**Review started.**\n\n")) != 0 ||
+  if (event->subagent && r->subagent != NULL &&
+      strcmp(r->subagent, "review") == 0 && r->parent_call_id != NULL &&
+      strcmp(r->parent_call_id, "/review") != 0 && !f->review_header_shown) {
+    if (markdown(f, CAI_CLI_REVIEW_START "\n\n",
+                 strlen(CAI_CLI_REVIEW_START "\n\n")) != 0 ||
+        cai_cli_presenter_finish_response(f->ui) != 0)
+      return CAI_ERR_TRANSPORT;
+    f->review_header_shown = f->review_open = 1;
+  }
+  if (event->replay && event->subagent && r->session_id != NULL &&
+      strcmp(f->replay_child, r->session_id) != 0) {
+    const char *heading =
+        r->subagent != NULL && strcmp(r->subagent, "review") == 0
+            ? "### Review subagent\n"
+            : "### Subagent\n";
+    snprintf(f->replay_child, sizeof(f->replay_child), "%s", r->session_id);
+    if (markdown(f, heading, strlen(heading)) != 0 ||
         cai_cli_presenter_finish_response(f->ui) != 0)
       return CAI_ERR_TRANSPORT;
   }
@@ -740,6 +796,19 @@ static int execution_body(void *context, const cai_app_execution_event *event,
     rc = cai_cli_replay_tools_follow(&f->tools, r, f->ui->tool_display,
                                      f->full_output, 72U, tool_markdown, f,
                                      &handled, error);
+    if (rc == CAI_OK && r->tool_name != NULL &&
+        strcmp(r->tool_name, "run_review") == 0) {
+      const char *header = NULL;
+      if (strcmp(r->kind, "tool.failed") == 0 && r->field != NULL &&
+          strcmp(r->field, "message") == 0 && r->final && f->review_open) {
+        f->review_open = 0;
+        f->review_header_shown = 0;
+        header = CAI_CLI_REVIEW_END "\n";
+      }
+      if (header != NULL && (markdown(f, header, strlen(header)) != 0 ||
+                             cai_cli_presenter_finish_response(f->ui) != 0))
+        return CAI_ERR_TRANSPORT;
+    }
     if (rc == CAI_ERR_PROTOCOL || rc == CAI_ERR_LIMIT) {
       (void)notice(
           f, "Saved tool output is incomplete; inspect the JSONL export.");
@@ -770,7 +839,7 @@ static int execution_body(void *context, const cai_app_execution_event *event,
           r->call_id != NULL && strlen(r->call_id) < sizeof(f->history_command))
         snprintf(f->history_command, sizeof(f->history_command), "%s",
                  r->call_id);
-      rc = cai_cli_presenter_input(f->ui, f->command, 1);
+      rc = cai_cli_transcript_presenter_command(f->transcript, f->command);
       f->command_length = 0U;
     }
   } else if (strcmp(r->kind, "command.markdown") == 0 ||
@@ -782,7 +851,7 @@ static int execution_body(void *context, const cai_app_execution_event *event,
     return action_chunk(f, r, event->replay, error);
   else if (strcmp(r->kind, "command.failed") == 0) {
     if (r->field == NULL)
-      rc = markdown(f, "**Command failed.**\n\n", 21U);
+      rc = notice(f, "ERROR: command failed");
     else {
       if (r->offset == 0U)
         cai_cli_tool_text_init(&f->tool_text, 0, 72U);
@@ -810,11 +879,13 @@ static int execution_body(void *context, const cai_app_execution_event *event,
       rc = cai_cli_presenter_finish_reasoning(f->ui);
     if (rc == 0 && (r->parent_call_id == NULL ||
                     strcmp(r->parent_call_id, "/review") != 0))
-      rc = markdown(f, "**Review finished.**\n",
-                    strlen("**Review finished.**\n"));
+      rc =
+          markdown(f, CAI_CLI_REVIEW_END "\n", strlen(CAI_CLI_REVIEW_END "\n"));
     if (rc == 0)
       rc = cai_cli_presenter_finish_response(f->ui);
     f->review_open = 0;
+    f->review_header_shown = 0;
+    f->child_theme_scope = 0;
   } else if (event->subagent && strcmp(r->kind, "assistant_text_delta") == 0 &&
              (r->subagent == NULL || strcmp(r->subagent, "review") != 0))
     rc = cai_cli_presenter_text(f->ui, r->data, length);
@@ -823,13 +894,29 @@ static int execution_body(void *context, const cai_app_execution_event *event,
     if (rc == 0)
       rc = cai_cli_presenter_finish_reasoning(f->ui);
     cai_cli_reasoning_end(&f->current->child_reasoning);
+  } else if (strcmp(r->kind, "request.failed") == 0 ||
+             strcmp(r->kind, "turn.failed") == 0 ||
+             strcmp(r->kind, "compaction.failed") == 0 ||
+             strcmp(r->kind, "request.retry") == 0 ||
+             strcmp(r->kind, "compaction.started") == 0 ||
+             strcmp(r->kind, "compaction.completed") == 0) {
+    rc = cai_execution_record_write_markdown(r, 0, f->execution_sink, error);
+    if (rc == CAI_OK && r->final)
+      rc = cai_cli_presenter_finish_response(f->ui);
   } else if (strcmp(r->kind, "turn.cancelled") == 0) {
+    const char *message =
+        f->review_open ||
+                (event->subagent &&
+                 ((r->subagent != NULL && strcmp(r->subagent, "review") == 0) ||
+                  (r->parent_call_id != NULL &&
+                   strcmp(r->parent_call_id, "/review") == 0)))
+            ? "**Review stopped.**\n"
+            : "**WARN: Turn stopped.**\n";
     rc = cai_cli_presenter_finish_response(f->ui);
     if (rc == 0)
       rc = cai_cli_presenter_finish_reasoning(f->ui);
     if (rc == 0)
-      rc = markdown(f, "**WARN: Turn stopped.**\n",
-                    strlen("**WARN: Turn stopped.**\n"));
+      rc = markdown(f, message, strlen(message));
     if (rc == 0)
       rc = cai_cli_presenter_finish_response(f->ui);
   }
@@ -882,9 +969,11 @@ static int actions(frontend *f) {
   if (!f->action_field)
     return 0;
   f->action_field = 0;
-  if (strcmp(line, "/quit") == 0 || strcmp(line, "/exit") == 0)
+  if (strcmp(line, "/quit") == 0 || strcmp(line, "/exit") == 0) {
+    rc = goodbye(f);
     f->quit = 1;
-  else if (strncmp(line, "/theme ", 7U) == 0 || strncmp(line, "/t ", 3U) == 0) {
+  } else if (strncmp(line, "/theme ", 7U) == 0 ||
+             strncmp(line, "/t ", 3U) == 0) {
     cai_cli_theme selected;
     const char *why = cai_cli_theme_parse(strchr(line, ' ') + 1U, &selected);
     if (why != NULL)
@@ -908,6 +997,7 @@ static int actions(frontend *f) {
   } else if (cai_cli_command_is_theme(line)) {
     const char *argument = line + strcspn(line, " \t");
     char *end;
+    int valid = 1;
     int scope = strncmp(line, "/subagent-", 10U) == 0 ? 1
                 : strncmp(line, "/review-", 8U) == 0  ? 2
                                                       : 0;
@@ -918,15 +1008,16 @@ static int actions(frontend *f) {
       errno = 0;
       selected = strtoll(argument, &end, 10);
       end += strspn(end, " \t");
-      if (errno != 0 || end == argument || *end != '\0')
-        rc = notice(f, "Theme offset must be a signed integer.");
-      else {
+      if (errno != 0 || end == argument || *end != '\0') {
+        valid = 0;
+        rc = notice(f, "ERROR: Theme offset requires a signed 64-bit integer.");
+      } else {
         f->theme_offsets[scope] = selected;
         f->ui->theme_offsets[scope] = selected;
         rc = cai_cli_presenter_set_theme(f->ui, &f->theme, &f->error);
       }
     }
-    if (rc == 0) {
+    if (rc == 0 && valid) {
       snprintf(message, sizeof(message), "%s theme offset: **%lld**.\n",
                scope == 1   ? "Subagent"
                : scope == 2 ? "Review"
@@ -1333,6 +1424,8 @@ static int quit_key(sl_t *sl, sl_key_t key, void *context,
     *action = SL_KEY_ACTION_HANDLED;
     return SL_OK;
   }
+  if (goodbye(f) != 0)
+    return SL_ERROR_IO;
   f->quit = 1;
   *action = SL_KEY_ACTION_SUSPEND;
   return SL_OK;
@@ -1378,9 +1471,14 @@ static int enter_key(sl_t *sl, sl_key_t key, void *context,
     if (sl_prompt_queue_draft_info(sl, &draft) != SL_OK)
       return SL_ERROR_IO;
     if (!draft.id) {
-      f->control = 3;
+      if (cai_cli_transcript_presenter_command(f->transcript, sl_buffer(sl)) !=
+          0)
+        return SL_ERROR_IO;
       if (sl_set_buffer(sl, "") != SL_OK)
         return SL_ERROR_IO;
+      if (goodbye(f) != 0)
+        return SL_ERROR_IO;
+      f->quit = 1;
       *action = SL_KEY_ACTION_SUSPEND;
       return SL_OK;
     }
@@ -1444,6 +1542,7 @@ static int select_view(frontend *f, const char *session) {
   frontend_view *v;
   sl_config_t config;
   int fresh = 0;
+  f->child_theme_scope = 0;
   if (f->current != NULL || session != NULL)
     f->greeting_resumed = session != NULL;
   if (f->current != NULL) {
@@ -1495,6 +1594,8 @@ static int select_view(frontend *f, const char *session) {
     cai_cli_input_socket_set_wakeup(f->queue, f->wake[1]);
     cai_cli_input_socket_prompt(f->queue, save_submission, f);
     sl_config_init(&config);
+    config.prompt_theme =
+        getenv("NO_COLOR") != NULL ? SL_PROMPT_THEME_PLAIN : f->theme.prompt;
     config.line_max_len = CAI_CLI_INPUT_TEXT_MAX;
     cai_cli_input_adapter_configure(cai_cli_input_socket_adapter(f->queue),
                                     &config);
@@ -1508,7 +1609,7 @@ static int select_view(frontend *f, const char *session) {
         sl_history_set_auto_add(f->ui->sl, 0) != SL_OK ||
         sl_set_prompt_queue_profile(
             f->ui->sl, SL_PROMPT_QUEUE_PROFILE_QUEUED_TURNS) != SL_OK ||
-        sl_set_prompt_theme(f->ui->sl, f->theme.prompt) != SL_OK ||
+        sl_set_prompt_theme(f->ui->sl, config.prompt_theme) != SL_OK ||
         sl_set_idle_callback(f->ui->sl, editor_idle, f) != SL_OK ||
         cai_cli_completions_open(&v->completions, f->ui->sl,
                                  f->target.workspace, completion_catalog,
@@ -1564,6 +1665,7 @@ static frontend *frontend_open(frontend_group *group,
                                const cai_cli_frontend_boot *boot,
                                cai_error *error) {
   frontend *f = calloc(1U, sizeof(*f));
+  cai_sink_callbacks diagnostic;
   if (f == NULL) {
     cai_cli_error(error, CAI_ERR_NOMEM, "allocate terminal frontend");
     return NULL;
@@ -1599,6 +1701,11 @@ static frontend *frontend_open(frontend_group *group,
   f->wake[0] = f->wake[1] = f->timer = f->socket_fd = f->boot_fd = -1;
   f->parked_fd = -1;
   cai_error_init(&f->error);
+  memset(&diagnostic, 0, sizeof(diagnostic));
+  diagnostic.context = f;
+  diagnostic.write = execution_markdown;
+  if (cai_sink_from_callbacks(&diagnostic, &f->execution_sink, error) != CAI_OK)
+    return NULL;
   if (f->workspace == NULL ||
       (target->runtime_directory != NULL && f->runtime_directory == NULL)) {
     cai_cli_error(error, CAI_ERR_NOMEM, "copy frontend workspace identity");
@@ -2421,14 +2528,10 @@ int cai_cli_frontend_run(const cai_app_config *application,
         f->failed = 1;
     } else if (!f->quit && f->control) {
       int control = f->control;
-      const char *command = control == 1   ? "/takeover"
-                            : control == 2 ? "/shutdown"
-                                           : "/quit";
+      const char *command = control == 1 ? "/takeover" : "/shutdown";
       f->control = 0;
       if (cai_cli_presenter_input(f->ui, command, 1) != 0)
         f->failed = 1;
-      else if (control == 3)
-        f->quit = 1;
       else {
         int submitted =
             control == 1
@@ -2541,6 +2644,7 @@ done:
     free(f->workspace);
     free(f->runtime_directory);
     clear_skills(f);
+    cai_sink_close(f->execution_sink);
     free(f);
     f = next;
   }

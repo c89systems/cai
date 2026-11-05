@@ -15,6 +15,8 @@ typedef struct cai_cli_completions {
 
 /* Keep the workspace and callback context alive until the editor is closed.
  * Files are resolved one directory at a time, never by recursively scanning.
+ * Queries catalog('$') once for availability before registering providers;
+ * no skill names are retained here. An empty catalog leaves '$' literal.
  */
 int cai_cli_completions_open(cai_cli_completions *completions, sl_t *editor,
                              const char *workspace,

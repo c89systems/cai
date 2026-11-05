@@ -18,8 +18,10 @@ verified `-s` selectors and a Softline terminal attachment. One controller
 admits mutations; observers can inspect and explicitly take over. Terminal
 workspaces, drafts and queues remain separate. Native contexts use captured
 environment/directory views; configuration does not install `[env]` into the
-process. The original synchronous receiver still owns legacy process
-scaffolding. Native library startup never forks or installs signal handlers.
+process. Interactive synchronous run now composes this owner and socket
+frontend while retaining callbacks on the calling thread. Batch/temp and
+utility composition still own legacy process scaffolding. Native library
+controller startup never forks or installs signal handlers.
 
 Independent typed channels carry [queue observations](workspace-wire-queue.md),
 [status](workspace-wire-status.md),
@@ -37,8 +39,8 @@ remaining cutover work, [workspace process handoff](workspace-process.md) for
 executable ownership, and [command execution](workspace-commands.md) for backend
 admission/delegation. The confirmed decisions and specification below remain
 the target contract; an implemented boundary is not a claim of complete feature
-parity. In particular, the synchronous receiver, batch/temp composition,
-some terminal delegates and optional frontend packaging remain unfinished.
+parity. In particular, batch/temp composition, extended startup parity
+and optional frontend packaging remain unfinished.
 
 The optional [Lua workspace client](lua-workspace-client.md) exposes the typed
 C client channels and explicit scopes. Lua drives prepare/pump (or an explicit

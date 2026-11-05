@@ -26,6 +26,8 @@ typedef struct subscriber {
    */
   int catchup, catchup_started;
   uint64_t live_position, live_sequence, catchup_target;
+  uint64_t output_sequence, output_offset;
+  int output_failed;
   unsigned int limit;
   cai_transcript_failure failure;
   int code;
@@ -705,6 +707,8 @@ int cai_cli_transcript_feed_request(cai_cli_transcript_publisher *f,
   s->prepared = s->error = 0;
   s->catchup = s->catchup_started = 0;
   s->live_position = s->live_sequence = s->catchup_target = 0U;
+  s->output_sequence = s->output_offset = 0U;
+  s->output_failed = 0;
   s->history->count = s->history->start = s->live->count = s->live->start = 0U;
   snprintf(s->expected, sizeof(s->expected), "%s",
            collection != NULL ? collection : "");
@@ -765,6 +769,54 @@ void cai_cli_transcript_feed_drain(cai_cli_transcript_publisher *f) {
   pthread_mutex_lock(&f->lock);
   drain(f);
   pthread_mutex_unlock(&f->lock);
+}
+int cai_cli_transcript_feed_shell(cai_cli_transcript_publisher *f,
+                                  uint64_t sequence, uint64_t offset,
+                                  const void *bytes, size_t length, int final,
+                                  cai_error *error) {
+  size_t i;
+  if (sequence == 0U || length > CAI_CLI_TRANSCRIPT_CHUNK ||
+      length > UINT64_MAX - offset || (final ? length != 0U : length == 0U) ||
+      (length != 0U && bytes == NULL))
+    return cai_cli_error(error, CAI_ERR_INVALID, "invalid live shell span");
+  if (f == NULL)
+    return CAI_OK;
+  pthread_mutex_lock(&f->lock);
+  for (i = 0U; i < PEERS; ++i) {
+    subscriber *s = &f->peers[i];
+    cai_transcript_event e;
+    if (!s->active)
+      continue;
+    if (!final && offset == 0U && s->output_sequence != sequence) {
+      s->output_sequence = sequence;
+      s->output_offset = 0U;
+      s->output_failed = 0;
+    }
+    if (s->output_sequence != sequence || s->output_failed)
+      continue;
+    if (!s->prepared || s->catchup || s->live == NULL ||
+        s->live_sequence < sequence || s->live->count == FRAMES ||
+        offset != s->output_offset) {
+      s->output_failed = 1;
+      continue;
+    }
+    memset(&e, 0, sizeof(e));
+    e.kind =
+        final ? CAI_TRANSCRIPT_SHELL_OUTPUT_END : CAI_TRANSCRIPT_SHELL_OUTPUT;
+    e.stream = s->stream;
+    e.conversation = f->conversation;
+    e.sequence = sequence;
+    e.offset = offset;
+    e.data = bytes;
+    e.length = length;
+    push(s->live, &e);
+    s->output_offset += length;
+    if (final)
+      s->output_failed = 1; /* Exactly one terminal marker. */
+    wake(f);
+  }
+  pthread_mutex_unlock(&f->lock);
+  return CAI_OK;
 }
 static int lane_ready(cai_cli_transcript_publisher *f, uint64_t attachment,
                       int prompts, int *failed) {

@@ -36,6 +36,8 @@ struct cai_app_client {
       stream_high, event_sequence, event_offset;
   char transcript_session[129], transcript_collection[21];
   int event_open, event_has_data;
+  int event_shell, output_ended;
+  uint64_t output_sequence, output_offset;
   cai_app_transcript_state history;
   uint64_t history_stream, history_epoch, history_offset, history_sequence;
   char history_session[129];
@@ -196,6 +198,8 @@ static int receive(void *context, const cai_protocol_event *event,
       event->header->kind == CAI_PROTOCOL_STREAM_BEGIN ||
       event->header->kind == CAI_PROTOCOL_STREAM_CHUNK ||
       event->header->kind == CAI_PROTOCOL_STREAM_END ||
+      event->header->kind == CAI_PROTOCOL_SHELL_OUTPUT ||
+      event->header->kind == CAI_PROTOCOL_SHELL_OUTPUT_END ||
       event->header->kind == CAI_PROTOCOL_SUBSCRIPTION_ERROR)
     return event->header->request == client->history_stream &&
                    client->history_stream != 0U
@@ -513,6 +517,8 @@ static int receive_transcript(cai_app_client *c,
     s->position = c->wanted_position;
     s->active = s->replaying = 1;
     s->subscribing = c->event_open = 0;
+    c->output_sequence = c->output_offset = 0U;
+    c->output_ended = 0;
     break;
   case CAI_TRANSCRIPT_EVENT_BEGIN:
     if (!s->active || c->event_open || e->conversation != s->conversation ||
@@ -522,6 +528,11 @@ static int receive_transcript(cai_app_client *c,
     c->event_sequence = e->sequence;
     c->event_offset = 0U;
     c->event_has_data = e->has_data;
+    c->event_shell = strcmp(e->type, "user_shell_started") == 0 ? 1
+                     : strcmp(e->type, "user_shell_completed") == 0 ||
+                             strcmp(e->type, "user_shell_unshared") == 0
+                         ? 2
+                         : 0;
     discard_execution(c);
     if (c->config.execution != NULL && (strcmp(e->type, "execution") == 0 ||
                                         strcmp(e->type, "subagent") == 0)) {
@@ -588,6 +599,14 @@ static int receive_transcript(cai_app_client *c,
         return rc;
     }
     break;
+  case CAI_TRANSCRIPT_SHELL_OUTPUT:
+  case CAI_TRANSCRIPT_SHELL_OUTPUT_END:
+    if (!s->active || s->replaying || c->event_open || c->output_ended ||
+        e->conversation != s->conversation ||
+        e->sequence != c->output_sequence || e->offset != c->output_offset ||
+        e->length > UINT64_MAX - c->output_offset)
+      return cai_cli_error(error, CAI_ERR_PROTOCOL, reason);
+    break;
   case CAI_TRANSCRIPT_REPLAY_END:
     if (!s->active || !s->replaying || c->event_open ||
         e->conversation != s->conversation || e->watermark != s->watermark)
@@ -608,7 +627,16 @@ static int receive_transcript(cai_app_client *c,
     s->sequence = e->sequence;
     s->position = e->position;
     c->event_open = 0;
-  } else if (rc == CAI_OK && e->kind == CAI_TRANSCRIPT_REPLAY_END)
+    if (c->event_shell != 0) {
+      c->output_sequence = c->event_shell == 1 ? e->sequence : 0U;
+      c->output_offset = 0U;
+      c->output_ended = 0;
+    }
+  } else if (rc == CAI_OK && e->kind == CAI_TRANSCRIPT_SHELL_OUTPUT)
+    c->output_offset += e->length;
+  else if (rc == CAI_OK && e->kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END)
+    c->output_ended = 1;
+  else if (rc == CAI_OK && e->kind == CAI_TRANSCRIPT_REPLAY_END)
     s->position = e->watermark;
   return rc;
 }
@@ -684,6 +712,9 @@ static int receive_history(cai_app_client *c, const cai_protocol_event *event,
   case CAI_TRANSCRIPT_ERROR:
     s->active = s->replaying = s->subscribing = c->history_open = 0;
     break;
+  case CAI_TRANSCRIPT_SHELL_OUTPUT:
+  case CAI_TRANSCRIPT_SHELL_OUTPUT_END:
+    return invalid(error); /* Ephemeral output is never prompt recall. */
   }
   rc =
       c->config.prompt_history != NULL

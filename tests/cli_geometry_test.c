@@ -496,6 +496,52 @@ static int transcript_cases(void) {
     CHECK(strstr(capture, "TABLEVALUE") != NULL &&
           strstr(capture, "AFTERTABLE") != NULL);
   }
+  {
+    static const unsigned char binary[] = {'L', 'I', 'V', 'E', 0xc2};
+    captured = 0U;
+    capture[0] = '\0';
+    CHECK(cai_cli_transcript_presenter_command(p, "!printf receipt") == 0);
+    CHECK(transcript_record(p, "user_shell_started", "printf receipt", 14U, 1U,
+                            10000U, 0U) == 0);
+    memset(&event, 0, sizeof(event));
+    event.kind = CAI_TRANSCRIPT_SHELL_OUTPUT;
+    event.stream = 1U;
+    event.sequence = 10000U;
+    event.data = binary;
+    event.length = sizeof(binary);
+    CHECK(cai_cli_transcript_presenter_event(p, &event, NULL) == CAI_OK);
+    event.offset = sizeof(binary);
+    event.data = "\x9b";
+    event.length = 1U;
+    CHECK(cai_cli_transcript_presenter_event(p, &event, NULL) == CAI_OK);
+    event.kind = CAI_TRANSCRIPT_SHELL_OUTPUT_END;
+    event.offset++;
+    event.data = NULL;
+    event.length = 0U;
+    CHECK(cai_cli_transcript_presenter_event(p, &event, NULL) == CAI_OK);
+    CHECK(transcript_record(p, "user_shell_output_tail", "DUPLICATE_TAIL", 14U,
+                            1U, 10001U, 0U) == 0);
+    CHECK(transcript_record(p, "user_shell_completed", NULL, 0U, 1U, 10002U,
+                            0U) == 0);
+    CHECK(strstr(capture, "LIVE\\xc2\\x9b") != NULL &&
+          strstr(capture, "DUPLICATE_TAIL") == NULL);
+    CHECK(strstr(capture, "printf receipt") != NULL);
+    CHECK(strstr(strstr(capture, "printf receipt") + 1, "printf receipt") ==
+          NULL);
+    /* Missing live END keeps the retained tail visible, with an explanation. */
+    CHECK(transcript_record(p, "user_shell_started", "partial", 7U, 1U, 10003U,
+                            0U) == 0);
+    event.kind = CAI_TRANSCRIPT_SHELL_OUTPUT;
+    event.sequence = 10003U;
+    event.offset = 0U;
+    event.data = "PREFIX";
+    event.length = 6U;
+    CHECK(cai_cli_transcript_presenter_event(p, &event, NULL) == CAI_OK);
+    CHECK(transcript_record(p, "user_shell_output_tail", "RESTORED_TAIL", 13U,
+                            1U, 10004U, 0U) == 0);
+    CHECK(strstr(capture, "interrupted") != NULL &&
+          strstr(capture, "RESTORED_TAIL") != NULL);
+  }
   cai_cli_transcript_presenter_close(p);
   cai_cli_presenter_close(ui);
   sl_destroy(editor);

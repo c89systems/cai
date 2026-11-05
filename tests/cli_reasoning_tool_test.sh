@@ -60,7 +60,6 @@ acknowledged
 receipt 'requested high (high): unchanged at xhigh (already at or above requested effort)'
 fi
 if [[ "$scenario" == unsupported ]]; then
-export CAI_TEST_VOLATILE_SESSION=1
 for supported in '["low"]' '[]' null; do
   if [[ "$supported" == null ]]; then
     printf '%s\n' '{"models":[{"provider":"custom","id":"gpt-5.6-luna"}]}' >"$root/models.json"
@@ -81,7 +80,6 @@ for supported in '["low"]' '[]' null; do
 done
 fi
 if [[ "$scenario" == interactive ]]; then
-export CAI_TEST_VOLATILE_SESSION=1
 metadata '["low","medium","high","xhigh"]'
 printf '[agent]\nreasoning_tool = true\nnormal_reasoning_effort = low\nhigh_reasoning_effort = xhigh\n' >>"$root/protocol.ini"
 export CAI_NORMAL_REASONING_EFFORT=medium CAI_HIGH_REASONING_EFFORT=high

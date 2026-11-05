@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../cli/app_internal.h"
 #include <assert.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -106,6 +107,40 @@ int main(void) {
   forbid_allocation = 0;
   cai_app_bridge_end(bridge, 0, NULL);
   assert(acknowledgements == 131);
+  {
+    cai_app_status status;
+    cai_app_frontend_status frontend_status;
+    struct pollfd descriptor;
+    cai_app_status_init(&status);
+    cai_app_bridge_begin(bridge);
+    assert(cai_app_bridge_frontend_open(bridge, &error) == CAI_OK);
+    assert(cai_app_bridge_observe(bridge, &status, &error) == CAI_OK);
+    descriptor.fd = bridge->frontend_fd;
+    descriptor.events = POLLIN;
+    descriptor.revents = 0;
+    assert(poll(&descriptor, 1U, 0) == 1);
+    assert(cai_app_bridge_frontend_observe(bridge, &frontend_status, &error) ==
+           CAI_OK);
+    assert(poll(&descriptor, 1U, 0) == 0);
+    cai_app_bridge_outcome(bridge, CAI_APP_RUNNING);
+    /* Ordinary status updates do not wake the terminal's lifecycle watch. */
+    assert(poll(&descriptor, 1U, 0) == 0);
+    assert(cai_app_bridge_frontend_observe(bridge, &frontend_status, &error) ==
+           CAI_OK);
+    descriptor.fd = bridge->status_fd;
+    assert(poll(&descriptor, 1U, 0) == 1);
+    /* Local receiver lifetime cancellation has no allocation, request ID or
+     * host acknowledgement, and still interrupts bounded startup work. */
+    forbid_allocation = 1;
+    cai_app_bridge_frontend_done(bridge);
+    assert(cai_app_bridge_frontend_ended(bridge) &&
+           cai_app_bridge_stopping(bridge));
+    assert(cai_app_bridge_take(bridge) == NULL && acknowledgements == 131);
+    forbid_allocation = 0;
+    cai_app_bridge_end(bridge, 0, NULL);
+    cai_app_bridge_frontend_close(bridge);
+    cai_app_status_cleanup(&status);
+  }
   cai_app_bridge_close(bridge);
   cai_error_cleanup(&error);
   return 0;

@@ -102,8 +102,8 @@ int cai_cli_command_frontend(const char *line) {
          cli_word_is(name, length, "/quit") ||
          cli_word_is(name, length, "/exit") ||
          cli_word_is(name, length, "/shell") ||
-         cli_word_is(name, length, "/shellshare") ||
-         cli_word_is(name, length, "!sh") || cli_word_is(name, length, "!sh+");
+         cli_word_is(name, length, "/shellshare") || strcmp(line, "!sh") == 0 ||
+         strcmp(line, "!sh+") == 0;
 }
 
 cli_command_boundary cai_cli_command_delivery(const char *line) {

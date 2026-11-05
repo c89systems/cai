@@ -12,7 +12,8 @@ typedef struct resolver_fixture {
   sl_completion_provider_t providers[3];
   char root[4096], path[4096], names[16][512];
   size_t count;
-  int fail, calls;
+  int fail, calls, empty;
+  size_t provider_count;
 } resolver_fixture;
 static resolver_fixture *fixture;
 int __real_sl_set_completion_providers(sl_t *, const sl_completion_provider_t *,
@@ -22,8 +23,10 @@ int __wrap_sl_set_completion_providers(sl_t *, const sl_completion_provider_t *,
 int __wrap_sl_set_completion_providers(sl_t *editor,
                                        const sl_completion_provider_t *items,
                                        size_t count) {
-  assert(count == 3U);
-  memcpy(fixture->providers, items, sizeof(fixture->providers));
+  assert(count == 2U || count == 3U);
+  fixture->provider_count = count;
+  memset(fixture->providers, 0, sizeof(fixture->providers));
+  memcpy(fixture->providers, items, count * sizeof(*items));
   return __real_sl_set_completion_providers(editor, items, count);
 }
 static int collect(const char *name, void *context) {
@@ -38,6 +41,8 @@ static int catalog(void *context, char trigger, sl_completion_emit_t emit,
                    void *emit_context) {
   resolver_fixture *out = context;
   out->calls++;
+  if (out->empty && trigger == '$')
+    return SL_OK;
   return emit(trigger == '/' ? "/status" : "$fixture-skill", emit_context);
 }
 static int contains(resolver_fixture *out, const char *name) {
@@ -99,7 +104,7 @@ int main(int argc, char **argv) {
          fixture->providers[2].strip_trigger);
   assert(resolve(editor, 0U, NULL) == SL_OK && contains(fixture, "/status"));
   assert(resolve(editor, 2U, NULL) == SL_OK &&
-         contains(fixture, "$fixture-skill") && fixture->calls == 2);
+         contains(fixture, "$fixture-skill") && fixture->calls == 3);
   assert(resolve(editor, 1U, NULL) == SL_OK && fixture->count == 4U &&
          contains(fixture, "@file name") && contains(fixture, "@.hidden") &&
          contains(fixture, "@directory/") && contains(fixture, "@link"));
@@ -116,6 +121,16 @@ int main(int argc, char **argv) {
   assert(resolve(editor, 1U, NULL) == SL_OK && fixture->count == 4U);
   assert(cai_cli_completions_open(&fixture->completions, editor, "", catalog,
                                   fixture) == SL_ERROR_INVALID);
+  fixture->empty = 1;
+  assert(sl_set_buffer(editor, "!kill -TERM $$") == SL_OK);
+  assert(cai_cli_completions_open(&fixture->completions, editor, fixture->root,
+                                  catalog, fixture) == SL_OK &&
+         fixture->provider_count == 2U &&
+         strcmp(sl_buffer(editor), "!kill -TERM $$") == 0);
+  fixture->empty = 0;
+  assert(cai_cli_completions_open(&fixture->completions, editor, fixture->root,
+                                  catalog, fixture) == SL_OK &&
+         fixture->provider_count == 3U);
   sl_destroy(editor);
   path(fixture, "link");
   assert(unlink(fixture->path) == 0);

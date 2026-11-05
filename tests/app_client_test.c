@@ -332,7 +332,8 @@ static void transcript_message(cai_cli_transcript_message *m,
   m->header.conversation = 11U;
   m->header.request = m->header.stream = 1U;
   if (kind == CAI_PROTOCOL_STREAM_BEGIN || kind == CAI_PROTOCOL_STREAM_CHUNK ||
-      kind == CAI_PROTOCOL_STREAM_END)
+      kind == CAI_PROTOCOL_STREAM_END || kind == CAI_PROTOCOL_SHELL_OUTPUT ||
+      kind == CAI_PROTOCOL_SHELL_OUTPUT_END)
     m->header.sequence = 8U;
   m->event.session = "session";
   m->event.collection = "collection";
@@ -1065,6 +1066,70 @@ static void catalog_tests(const char *runtime, const char *workspace) {
   }
   free(f);
 }
+static void shell_output_tests(const char *runtime, const char *workspace) {
+  unsigned int scenario;
+  static const unsigned char binary[] = {0, 0xc2, 0x9b};
+  for (scenario = 0U; scenario < 8U; ++scenario) {
+    fixture *f = calloc(1U, sizeof(*f));
+    cai_cli_transcript_message m;
+    int expected = CAI_ERR_PROTOCOL;
+    assert(f != NULL);
+    open_fixture(f, runtime, workspace);
+    subscribe(f);
+    transcript_message(&m, CAI_PROTOCOL_REPLAY_BEGIN);
+    transcript_send(f, &m);
+    if (scenario != 1U) {
+      transcript_message(&m, CAI_PROTOCOL_STREAM_BEGIN);
+      m.event.type = "user_shell_started";
+      m.event.has_data = 0;
+      transcript_send(f, &m);
+      transcript_message(&m, CAI_PROTOCOL_STREAM_END);
+      transcript_send(f, &m);
+    }
+    if (scenario != 2U) {
+      transcript_message(&m, CAI_PROTOCOL_REPLAY_END);
+      transcript_send(f, &m);
+    }
+    assert(exchange(f) == CAI_OK);
+    if (scenario == 7U) {
+      transcript_message(&m, CAI_PROTOCOL_STREAM_BEGIN);
+      m.header.sequence = 9U;
+      transcript_send(f, &m);
+      assert(exchange(f) == CAI_OK);
+    }
+    f->reject_transcript = scenario == 6U;
+    f->reject_kind = CAI_TRANSCRIPT_SHELL_OUTPUT;
+    transcript_message(&m, CAI_PROTOCOL_SHELL_OUTPUT);
+    m.event.data = binary;
+    m.event.length = sizeof(binary);
+    if (scenario == 3U)
+      m.event.offset = 1U;
+    if (scenario == 4U)
+      m.header.sequence = 9U;
+    transcript_send(f, &m);
+    if (scenario == 0U || scenario == 5U) {
+      assert(exchange(f) == CAI_OK && state(f).transcript.position == 10U &&
+             state(f).transcript.sequence == 8U && f->record_ends == 1U);
+      transcript_message(&m, CAI_PROTOCOL_SHELL_OUTPUT_END);
+      m.event.offset = sizeof(binary);
+      transcript_send(f, &m);
+      assert(exchange(f) == CAI_OK && state(f).transcript.position == 10U);
+      if (scenario == 0U) {
+        close_fixture(f);
+        free(f);
+        continue;
+      }
+      transcript_send(f, &m); /* A second END cannot acknowledge another run. */
+    }
+    if (scenario == 6U)
+      expected = CAI_ERR_CANCELLED;
+    assert(exchange(f) == expected &&
+           state(f).transport.phase == CAI_WORKSPACE_FAILED);
+    assert(state(f).transcript.position == (scenario == 2U ? 9U : 10U));
+    close_fixture(f);
+    free(f);
+  }
+}
 static void *run(void *context) {
   char path[] = "./ac.XXXXXX";
   char *runtime, *workspace;
@@ -1079,6 +1144,7 @@ static void *run(void *context) {
   malformed(runtime, workspace);
   rejection_and_eof(runtime, workspace);
   transcript_tests(runtime, workspace);
+  shell_output_tests(runtime, workspace);
   status_tests(runtime, workspace);
   execution_tests(runtime, workspace);
   catalog_tests(runtime, workspace);

@@ -140,6 +140,8 @@ expect 'failed to resolve the review merge base'
 palette manual_preparation_failed
 cmp "$root/parent.palette" "$root/manual_preparation_failed.palette"
 [[ $(requests) == "$before" ]]
+expected_boundaries=$(grep -c '^  Review started$' "$term/feed")
+[[ $expected_boundaries == 5 && $(grep -c '^  Review finished$' "$term/feed") == "$expected_boundaries" ]]
 terminal_close
 before=$(requests)
 terminal_start --resume "$id" -t dracula --replay-turns -1
@@ -147,8 +149,14 @@ expect 'Conversation resumed.'
 contains "$term/text" 'Review subagent'
 grep -Eq $'\033\\[(0;)?38;5;108mRead' "$term/raw"
 grep -Eq $'\033\\[(0;)?1;38;5;143mreview.txt' "$term/raw"
-[[ $(grep -c '^  Review started$' "$term/text") == 4 ]]
-[[ $(grep -c '^  Review finished$' "$term/text") == 4 ]]
+# Socket replay is asynchronous and includes the operator documents from the
+# failed manual preparation too. Match actual live boundaries, after they
+# have arrived, rather than racing the welcome row or dropping that attempt.
+replayed_boundaries() {
+  [[ $(grep -c '^  Review started$' "$term/feed") == "$expected_boundaries" &&
+     $(grep -c '^  Review finished$' "$term/feed") == "$expected_boundaries" ]]
+}
+wait_for replayed_boundaries
 LC_ALL=C grep -oE '38;5;[0-9]+' "$term/raw" | LC_ALL=C sort -u >"$root/replay.palette"
 while IFS= read -r color; do contains "$root/replay.palette" "$color"; done <"$root/reviewer.palette"
 palette replay_restored

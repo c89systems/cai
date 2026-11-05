@@ -79,6 +79,12 @@ successful commands, observer rejection, frontend delegation, shell and review
 completion, and a `/new` reply replayed from the new conversation. Store-client
 open counts must remain constant through these operations.
 
+Backend bang commands publish [live-only output](workspace-live-output.md)
+through the existing presentation subscription. Only their retained tail is
+saved; observers and reconnecting clients never require a second output store.
+`!sh` and `!sh+` select a frontend PTY only as exact commands. An invocation
+such as `!sh script.sh` remains an ordinary backend pipe command.
+
 `cai_cli_command_progress_native` and `cai_cli_command_progress_embed` gate a real
 catalog response twice, verify the command receipt and editable draft before
 release, and then verify the results and subsequent status queries. Only the

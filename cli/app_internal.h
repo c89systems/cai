@@ -8,12 +8,22 @@ typedef struct cai_app_command {
   char *text;
   unsigned long long id;
 } cai_app_command;
+/** Bounded local startup/lifetime projection, without model context/settings.
+ */
+typedef struct cai_app_frontend_status {
+  int running, ready, has_server, exit_code, code;
+  cai_attachment_phase phase;
+  unsigned char instance[CAI_WORKSPACE_INSTANCE_BYTES];
+  char reason[192];
+} cai_app_frontend_status;
 typedef struct cai_app_bridge {
   pthread_mutex_t lock;
-  int fd, status_fd;
+  int fd, status_fd, frontend_fd;
   int accepting;
   int failed;
   int stop_requested;
+  int frontend_done;
+  int frontend_running, frontend_ready, frontend_phase;
   size_t count; /* Ordinary commands; the reserved STOP does not consume it. */
   unsigned long long next_id;
   /** Reserved shutdown command: no capacity or allocation dependency. */
@@ -36,6 +46,19 @@ int cai_app_bridge_status(cai_app_bridge *bridge, cai_app_status *out,
                           cai_error *error);
 int cai_app_bridge_observe(cai_app_bridge *bridge, cai_app_status *out,
                            cai_error *error);
+/** Independent wake channel for run()'s terminal adapter. It shares the owned
+ * status snapshot, never consumes a host observer's notification. Open before
+ * starting the adapter; close only after its thread and controller have ended.
+ */
+int cai_app_bridge_frontend_open(cai_app_bridge *, cai_error *);
+int cai_app_bridge_frontend_observe(cai_app_bridge *, cai_app_frontend_status *,
+                                    cai_error *);
+void cai_app_bridge_frontend_close(cai_app_bridge *);
+/** End run()'s owned frontend lifetime without inventing a host control ID or
+ * acknowledgement. Wakes the controller and its bounded startup cancellation.
+ */
+void cai_app_bridge_frontend_done(cai_app_bridge *);
+int cai_app_bridge_frontend_ended(cai_app_bridge *);
 void cai_app_bridge_bind_input(cai_app_bridge *bridge,
                                cai_input_controller *input);
 void cai_app_bridge_server(

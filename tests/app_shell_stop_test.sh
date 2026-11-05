@@ -24,9 +24,10 @@ for command in /shell '!sh' /shellshare '!sh+' alt-s; do
   if [[ "$command" == alt-s ]]; then send 'retained draft\033s'; else send "$command\r"; fi
   expect HOST_SHELL_READY
   wait_for test -f "$CAI_TEST_APP_SHELL_QUEUED"
-  # Non-STOP controls stay queued during handoff. The shell remains usable.
+  # The independent owner accepts controls while the frontend lends its
+  # terminal. Host prompts remain approval-held; the shell stays usable.
   send "printf 'SHELL_%s\\n' STILL_USABLE\r"; expect SHELL_STILL_USABLE
-  [[ ! -e "$CAI_TEST_APP_RELEASE" ]]
+  wait_for test -e "$CAI_TEST_APP_RELEASE"
   # STOP must terminate the shell without sending exit or EOF to its PTY.
   case "$command" in
     '!sh'|'!sh+') send "sh -c 'printf S >&8; exec sleep 60'\r" ;;

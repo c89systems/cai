@@ -1,6 +1,5 @@
-/* The real CLI against local provider fixtures. Stateless presentation tests
- * explicitly omit session storage; replay/export tests retain the real store.
- */
+/* The real CLI against local providers and private durable fixture stores.
+ * Socket presentation requires the same journal as production owners. */
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #include "../cli/messages.h"
@@ -84,7 +83,6 @@ static int fixture_runtime_open(cai_client *client,
   cai_agent_runtime_config selected = *config;
   cai_agent_preset worker;
   cai_agent_subagent_profile profile;
-  const char *volatile_session = getenv("CAI_TEST_VOLATILE_SESSION");
   if (getenv("CAI_TEST_APPEND_GATE") != NULL &&
       selected.session_store != NULL) {
     fixture_gated_store = *selected.session_store;
@@ -113,12 +111,6 @@ static int fixture_runtime_open(cai_client *client,
     profile.instruction_template = "Perform {{instructions}}.";
     selected.subagents = &profile;
     selected.subagent_count = 1U;
-  }
-  if (volatile_session != NULL && strcmp(volatile_session, "1") == 0) {
-    selected.session_store = NULL;
-    selected.disable_default_session_store = 1;
-    selected.resume_latest = 0;
-    selected.resume_session_id = NULL;
   }
   return cai_agent_runtime_open(client, &selected, out, error);
 }

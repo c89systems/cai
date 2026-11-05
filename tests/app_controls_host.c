@@ -255,8 +255,8 @@ static void ack(void *context, unsigned long long id, int status,
   unchanged_directory(h);
   assert(pthread_equal(h->owner, pthread_self()) && id > 0U);
   if (strcmp(h->mode, "shell_stop") == 0) {
-    /* Acknowledgements must follow PTY teardown and editor restoration. */
-    assert(tcgetpgrp(STDIN_FILENO) == getpgrp());
+    /* Owner acknowledgements do not depend on the frontend's terminal state.
+     * Teardown/restoration is verified after synchronous run returns. */
     assert(release != NULL);
   }
   h->acks++;
@@ -366,8 +366,7 @@ int main(int argc, char **argv) {
     assert(file != NULL && fgets(shell_tty, sizeof(shell_tty), file) != NULL);
     assert(fclose(file) == 0);
     shell_tty[strcspn(shell_tty, "\r\n")] = '\0';
-    assert((strcmp(shell_tty, original_tty) == 0) ==
-           (strcmp(getenv("CAI_TEST_APP_SHELL_SHARED"), "0") == 0));
+    assert(strcmp(shell_tty, original_tty) != 0);
     assert(tcgetattr(STDIN_FILENO, &restored_attributes) == 0);
     assert(original_attributes.c_iflag == restored_attributes.c_iflag &&
            original_attributes.c_oflag == restored_attributes.c_oflag &&

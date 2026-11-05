@@ -113,7 +113,9 @@ static void message(cai_cli_transcript_message *m, cai_protocol_kind kind) {
           : m->header.request;
   m->header.sequence = kind == CAI_PROTOCOL_STREAM_BEGIN ||
                                kind == CAI_PROTOCOL_STREAM_CHUNK ||
-                               kind == CAI_PROTOCOL_STREAM_END
+                               kind == CAI_PROTOCOL_STREAM_END ||
+                               kind == CAI_PROTOCOL_SHELL_OUTPUT ||
+                               kind == CAI_PROTOCOL_SHELL_OUTPUT_END
                            ? UINT64_MAX
                            : 0U;
   m->event.session = "conversation";
@@ -136,11 +138,12 @@ static void message(cai_cli_transcript_message *m, cai_protocol_kind kind) {
 static void roundtrips(void) {
   static const int64_t limits[] = {-1, 0, 1, 10, INT64_MAX};
   static const cai_protocol_kind kinds[] = {
-      CAI_PROTOCOL_SUBSCRIBE,         CAI_PROTOCOL_HISTORY_GET,
-      CAI_PROTOCOL_UNSUBSCRIBE,       CAI_PROTOCOL_REPLAY_BEGIN,
-      CAI_PROTOCOL_STREAM_BEGIN,      CAI_PROTOCOL_STREAM_CHUNK,
-      CAI_PROTOCOL_STREAM_END,        CAI_PROTOCOL_REPLAY_END,
-      CAI_PROTOCOL_SUBSCRIPTION_ERROR};
+      CAI_PROTOCOL_SUBSCRIBE,          CAI_PROTOCOL_HISTORY_GET,
+      CAI_PROTOCOL_UNSUBSCRIBE,        CAI_PROTOCOL_REPLAY_BEGIN,
+      CAI_PROTOCOL_STREAM_BEGIN,       CAI_PROTOCOL_STREAM_CHUNK,
+      CAI_PROTOCOL_STREAM_END,         CAI_PROTOCOL_REPLAY_END,
+      CAI_PROTOCOL_SUBSCRIPTION_ERROR, CAI_PROTOCOL_SHELL_OUTPUT,
+      CAI_PROTOCOL_SHELL_OUTPUT_END};
   fixture *f = calloc(1U, sizeof(*f));
   unsigned char *binary = malloc(CAI_CLI_TRANSCRIPT_CHUNK);
   cai_cli_transcript_message m;
@@ -171,9 +174,16 @@ static void roundtrips(void) {
       assert(got->timestamp_ns == m.event.timestamp_ns &&
              got->utc_offset_seconds == -12600 && got->has_data &&
              strcmp(got->type, m.event.type) == 0);
-    if (kinds[i] == CAI_PROTOCOL_STREAM_CHUNK)
+    if (kinds[i] == CAI_PROTOCOL_STREAM_CHUNK ||
+        kinds[i] == CAI_PROTOCOL_SHELL_OUTPUT)
       assert(got->length == CAI_CLI_TRANSCRIPT_CHUNK && got->offset == 255U &&
              memcmp(got->data, binary, got->length) == 0);
+    if (kinds[i] == CAI_PROTOCOL_SHELL_OUTPUT)
+      assert(got->kind == CAI_TRANSCRIPT_SHELL_OUTPUT && got->position == 0U &&
+             got->sequence == UINT64_MAX);
+    if (kinds[i] == CAI_PROTOCOL_SHELL_OUTPUT_END)
+      assert(got->kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END &&
+             got->offset == 255U && got->length == 0U && got->position == 0U);
     if (kinds[i] == CAI_PROTOCOL_STREAM_END)
       assert(got->position == m.event.position && got->offset == 255U);
     if (kinds[i] == CAI_PROTOCOL_REPLAY_END)

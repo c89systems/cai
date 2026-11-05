@@ -33,8 +33,14 @@ explicit transport target. It uses the same terminal implementation, resolves
 frontend preferences and opens no runtime, authentication store or SDK client.
 It never starts a server process. Explicit local shell/pager actions use the
 same PTY adapter as the executable. The CLI's discovery/fork/exec scaffolding is separate
-from this library receiver. Existing `cai_app.run` composition has not yet been
-cut over; asynchronous server lifecycle APIs remain the backend entry points.
+from this library receiver. Interactive `cai_app.run` (excluding `--temp`) now
+composes the same controller and socket frontend in-process: the calling
+thread owns runtime callbacks and a default-stack worker owns the terminal.
+It never forks an embedding host. Its frontend uses no second SDK client or
+runtime. A separate lifecycle wake channel cannot consume the host observer's
+status notification. Closing this owned frontend stops/joins its controller;
+closing a terminal attached to an independently started owner obeys that
+owner's persistence policy.
 The initial terminal displays the host's banner and configured Markdown
 introduction through the shared renderer before replay, including introduction
 margins and NO_COLOR. Switching workspaces does not repeat that introduction.
@@ -176,12 +182,28 @@ external-first selection. Preferences belong to each frontend attachment.
 ## Remaining cutover work
 
 This is a working terminal/socket composition, not a claim of complete feature
-parity. Remaining review progress parity,
-full startup-control parity and validation of extended configuration outside
+parity. Full startup-control parity and validation of extended configuration outside
 the startup inventory still require
 integration. Automatic executable-path discovery currently
-uses Linux `/proc/self/exe`. Batch/temp and the original synchronous app receiver
-still use their existing composition. These remain part of the active goal.
+uses Linux `/proc/self/exe`. Batch/temp and utility invocations still use their
+existing composition. These remain part of the active goal.
+
+Softline 0.16's unconditional trigger stripping also needs a pre-activation
+eligibility API: typed shell words starting with `$` (when skills are loaded)
+or `@` can lose their introductory byte even without selecting a completion.
+Empty skill catalogs no longer register `$`, preserving ordinary shell syntax
+in that case. The remaining context-sensitive activation gap affects both
+terminal compositions and is recorded upstream as
+`cr-completion-activation-predicate.md`.
+
+The socket presenter now preserves reviewer/worker start receipts, relative
+theme regions, cancellation notices and source headings in replay. Manual and
+model-invoked reviewers share boundary titles. Operator queries do not reset a
+running child's theme. Replay waits for actual streamed records and includes
+failed manual preparation documents, matching what was displayed live.
+Provider, turn and compaction failures, retries and compaction lifecycle notices
+use the core structured execution renderer; their saved diagnostic fields do
+not disappear when only the socket frontend is attached.
 
 Verification uses real Unix sockets, a local HTTP provider and native PTYs.
 `cai_cli_attach` exercises named attach, observer rejection/takeover, conversation

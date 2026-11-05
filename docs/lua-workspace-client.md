@@ -81,4 +81,5 @@ before explicitly choosing that scope. The binding never refreshes it for you.
 
 The [Lua owner lifecycle](lua-workspace-owner.md) can start the native owner in
 the same host; streaming observations remain on this client pump thread.
-Conversion of the synchronous `app:run` composition remains cutover work.
+Interactive `app:run` uses the same owner/socket frontend composition;
+batch/temp and utility modes remain cutover work.

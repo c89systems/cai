@@ -853,6 +853,7 @@ typedef struct typed_view {
   uint64_t history_limit;
   int history_code;
   size_t shell_results;
+  size_t shell_raw_offset, shell_raw_ends;
   cai_input_result shell_result;
 } typed_view;
 static int typed_history(void *context, const cai_transcript_event *event,
@@ -889,6 +890,8 @@ static int typed_transcript(void *context, const cai_transcript_event *event,
     v->transcript_offset = v->transcript_length = 0U;
     v->transcript_text[0] = '\0';
     snprintf(v->transcript_type, sizeof(v->transcript_type), "%s", event->type);
+    if (strcmp(event->type, "user_shell_started") == 0)
+      v->shell_raw_offset = 0U;
   } else if (event->kind == CAI_TRANSCRIPT_DATA) {
     size_t n = event->length;
     assert(event->sequence == v->transcript_sequence &&
@@ -916,7 +919,15 @@ static int typed_transcript(void *context, const cai_transcript_event *event,
       ++v->streaming_seen;
   } else if (event->kind == CAI_TRANSCRIPT_REPLAY_END)
     ++v->replay_ends;
-  else {
+  else if (event->kind == CAI_TRANSCRIPT_SHELL_OUTPUT) {
+    assert(event->position == 0U && event->offset == v->shell_raw_offset &&
+           event->length > 0U && event->length <= 4096U);
+    v->shell_raw_offset += event->length;
+  } else if (event->kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END) {
+    assert(event->position == 0U && event->length == 0U &&
+           event->offset == v->shell_raw_offset);
+    ++v->shell_raw_ends;
+  } else {
     assert(event->code != CAI_OK && event->reason != NULL);
     if (event->failure != CAI_TRANSCRIPT_CONTEXT_CLOSED)
       fprintf(stderr, "transcript failed: %d %s\n", event->code, event->reason);
@@ -1443,6 +1454,8 @@ static void server_commands(int argc, char **argv) {
   typed_command(a, 25U, "/log", 1); /* Quit is local, owner remains alive. */
   typed_command(a, 26U, "!printf 'SOCKET SHELL\\n'", 1);
   typed_wait(a, &a->shell_ended, 1U);
+  assert(a->shell_raw_offset == strlen("SOCKET SHELL\n") &&
+         a->shell_raw_ends == 1U);
   typed_command(a, 27U, "/review custom Inspect the fixture", 1);
   wait_count(&h, 2, 0);
   typed_wait(a, &a->review_ended, 1U);

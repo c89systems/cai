@@ -3,6 +3,7 @@
 #include "pouch_stream.h"
 #include <errno.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
@@ -18,6 +19,17 @@ static void free_string(const char *string) {
 static void status_wake(cai_app_bridge *b) {
   uint64_t value = 1U;
   while (write(b->status_fd, &value, sizeof(value)) < 0 && errno == EINTR) {
+  }
+  if (b->frontend_fd >= 0 &&
+      (b->frontend_running != b->status.running ||
+       b->frontend_ready != b->status.runtime_ready ||
+       b->frontend_phase !=
+           (b->status.has_server ? (int)b->status.server.phase : -1))) {
+    b->frontend_running = b->status.running;
+    b->frontend_ready = b->status.runtime_ready;
+    b->frontend_phase = b->status.has_server ? (int)b->status.server.phase : -1;
+    while (write(b->frontend_fd, &value, sizeof(value)) < 0 && errno == EINTR) {
+    }
   }
 }
 
@@ -110,6 +122,7 @@ int cai_app_bridge_open(cai_app_bridge **out, const cai_app_config *config,
   *out = NULL;
   if (b == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "allocate host controls");
+  b->frontend_fd = -1;
   if (pthread_mutex_init(&b->lock, NULL) != 0) {
     free(b);
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "initialize host controls");
@@ -143,6 +156,7 @@ void cai_app_bridge_begin(cai_app_bridge *b) {
   b->accepting = 1;
   b->failed = 0;
   b->stop_requested = 0;
+  b->frontend_done = 0;
   memset(&b->stop, 0, sizeof(b->stop));
   b->next_id = 0U;
   status_wake(b);
@@ -171,7 +185,9 @@ int cai_app_bridge_control(cai_app_bridge *b, cai_app_control_type type,
     c->type = type;
   }
   pthread_mutex_lock(&b->lock);
-  if (!b->accepting || (!b->status.runtime_ready && type != CAI_APP_STOP) ||
+  if (!b->accepting ||
+      (b->frontend_done && !(type == CAI_APP_STOP && b->stop_requested)) ||
+      (!b->status.runtime_ready && type != CAI_APP_STOP) ||
       (type != CAI_APP_STOP && b->count >= 64U)) {
     pthread_mutex_unlock(&b->lock);
     if (c != NULL)
@@ -221,7 +237,7 @@ int cai_app_bridge_stopping(cai_app_bridge *b) {
   if (b == NULL)
     return 0;
   pthread_mutex_lock(&b->lock);
-  stopping = b->stop_requested;
+  stopping = b->stop_requested || b->frontend_done;
   pthread_mutex_unlock(&b->lock);
   return stopping;
 }
@@ -300,6 +316,78 @@ int cai_app_bridge_observe(cai_app_bridge *b, cai_app_status *out,
   pthread_mutex_unlock(&b->lock);
   return rc;
 }
+int cai_app_bridge_frontend_open(cai_app_bridge *b, cai_error *error) {
+  int fd;
+  if (b == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID, "application bridge required");
+  pthread_mutex_lock(&b->lock);
+  if (b->frontend_fd >= 0) {
+    pthread_mutex_unlock(&b->lock);
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "terminal observer already open");
+  }
+  fd = eventfd(0U, EFD_CLOEXEC | EFD_NONBLOCK);
+  b->frontend_fd = fd;
+  b->frontend_running = b->frontend_ready = b->frontend_phase = -2;
+  if (fd >= 0)
+    status_wake(b);
+  pthread_mutex_unlock(&b->lock);
+  return fd >= 0 ? CAI_OK
+                 : cai_cli_error(error, CAI_ERR_TRANSPORT,
+                                 "open terminal status wakeup");
+}
+int cai_app_bridge_frontend_observe(cai_app_bridge *b,
+                                    cai_app_frontend_status *out,
+                                    cai_error *error) {
+  uint64_t value;
+  int rc;
+  if (b == NULL || out == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "terminal status output required");
+  pthread_mutex_lock(&b->lock);
+  rc = b->frontend_fd >= 0 ? CAI_OK
+                           : cai_cli_error(error, CAI_ERR_INVALID,
+                                           "terminal observer is closed");
+  if (rc == CAI_OK) {
+    out->running = b->status.running;
+    out->ready = b->status.runtime_ready;
+    out->has_server = b->status.has_server;
+    out->exit_code = b->status.exit_code;
+    out->code = b->status.error.code;
+    out->phase = b->status.server.phase;
+    memcpy(out->instance, b->status.server_instance, sizeof(out->instance));
+    snprintf(out->reason, sizeof(out->reason), "%s",
+             b->status.error.message != NULL ? b->status.error.message : "");
+    while (read(b->frontend_fd, &value, sizeof(value)) > 0 || errno == EINTR) {
+    }
+  }
+  pthread_mutex_unlock(&b->lock);
+  return rc;
+}
+void cai_app_bridge_frontend_close(cai_app_bridge *b) {
+  pthread_mutex_lock(&b->lock);
+  if (b->frontend_fd >= 0)
+    close(b->frontend_fd);
+  b->frontend_fd = -1;
+  pthread_mutex_unlock(&b->lock);
+}
+void cai_app_bridge_frontend_done(cai_app_bridge *b) {
+  uint64_t value = 1U;
+  pthread_mutex_lock(&b->lock);
+  b->frontend_done = 1;
+  while (write(b->fd, &value, sizeof(value)) < 0 && errno == EINTR) {
+  }
+  pthread_mutex_unlock(&b->lock);
+}
+int cai_app_bridge_frontend_ended(cai_app_bridge *b) {
+  int ended = 0;
+  if (b != NULL) {
+    pthread_mutex_lock(&b->lock);
+    ended = b->frontend_done;
+    pthread_mutex_unlock(&b->lock);
+  }
+  return ended;
+}
 void cai_app_bridge_bind_input(cai_app_bridge *b, cai_input_controller *input) {
   if (b == NULL)
     return;
@@ -366,8 +454,8 @@ int cai_app_bridge_input(cai_app_bridge *b, uint64_t attachment,
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "input connection output required");
   pthread_mutex_lock(&b->lock);
-  if (!b->accepting || b->stop_requested || !b->status.runtime_ready ||
-      b->input == NULL)
+  if (!b->accepting || b->stop_requested || b->frontend_done ||
+      !b->status.runtime_ready || b->input == NULL)
     rc = cai_cli_error(error, CAI_ERR_INVALID,
                        "application input backend is not ready");
   else
@@ -498,6 +586,7 @@ void cai_app_bridge_end(cai_app_bridge *b, int code, const cai_error *error) {
 void cai_app_bridge_close(cai_app_bridge *b) {
   if (b == NULL)
     return;
+  cai_app_bridge_frontend_close(b);
   cai_app_status_cleanup(&b->status);
   close(b->fd);
   close(b->status_fd);

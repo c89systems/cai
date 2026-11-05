@@ -197,6 +197,7 @@ typedef struct cli_state {
   cai_cli_reasoning reasoning;
   int list_line_start;
   cai_cli_shell shell;
+  unsigned long long shell_sequence, shell_offset;
   sl_watch_id_t shell_watches[3];
   int shell_watched[3];
   char workspace[PATH_MAX];
@@ -512,8 +513,8 @@ static int cli_event_theme_scope(const cai_agent_runtime_event *event) {
 
 static int cli_review_boundary(cli_state *state, int start, cai_error *error) {
   int rc = cli_set_theme_scope(state, 2, error);
-  if (rc == CAI_OK && cli_markdown(state, start ? "**Review started**"
-                                                : "**Review finished**") != 0)
+  if (rc == CAI_OK && cli_markdown(state, start ? CAI_CLI_REVIEW_START
+                                                : CAI_CLI_REVIEW_END) != 0)
     rc = CAI_ERR_TRANSPORT;
   if (rc == CAI_OK) {
     state->review_block = start;
@@ -560,8 +561,26 @@ static int cli_shell_output(void *context, const char *bytes, size_t length,
       cai_agent_runtime_user_shell_write(state->runtime, bytes, length, error);
   if (rc != CAI_OK)
     return rc;
-  if (state->controller)
-    return CAI_OK; /* Raw shell bytes already have their own history kind. */
+  if (state->controller) {
+    size_t at = 0U;
+    if (length > ULLONG_MAX - state->shell_offset)
+      return cai_cli_error(error, CAI_ERR_LIMIT, "live shell offset overflow");
+    while (at < length) {
+      size_t n = length - at;
+      if (n > 4096U)
+        n = 4096U;
+      rc = cai_cli_workspace_host_shell(
+          state->workspace_host, state->shell_sequence, state->shell_offset,
+          bytes + at, n, 0, error);
+      if (rc != CAI_OK)
+        return rc;
+      state->shell_offset += n;
+      at += n;
+    }
+    /* The shell already progresses through the owner's descriptor loop.
+     * Publish into its existing ring without a per-chunk socket flush. */
+    return CAI_OK;
+  }
   if (cli_finish_response(state) != 0 || cli_finish_reasoning(state) != 0)
     return cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "cannot finish output before shell text");
@@ -593,7 +612,9 @@ static int cli_shell_pump(cli_state *state, cai_error *error) {
   }
   if (state->shell.exited && state->shell.eof) {
     rc = state->controller
-             ? CAI_OK
+             ? cai_cli_workspace_host_shell(
+                   state->workspace_host, state->shell_sequence,
+                   state->shell_offset, NULL, 0U, 1, error)
              : cai_cli_shell_plain(&state->shell.text, NULL, 0U, 1,
                                    cli_shell_literal, state, error);
     if (rc == CAI_OK)
@@ -663,6 +684,14 @@ static int cli_shell_start(cli_state *state, const char *command,
                                           state->options.shell_context, error);
   if (rc != CAI_OK)
     return rc;
+  state->shell_offset = 0U;
+  {
+    unsigned long long last;
+    rc = cai_agent_runtime_user_shell_range(
+        state->runtime, &state->shell_sequence, &last, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
   rc = cai_cli_shell_start(&state->shell, command, state->workspace, error);
   if (rc != CAI_OK) {
     cai_error record_error;
@@ -3440,7 +3469,7 @@ static int cli_goal_command(cli_state *state, const char *arg,
   char metrics[256];
   const char *objective = NULL;
   const char *action;
-  int rc;
+  int rc, starts_goal = 0;
 
   arg += strspn(arg, " \t\r\n");
   if (strcmp(arg, "help") == 0) {
@@ -3507,6 +3536,7 @@ static int cli_goal_command(cli_state *state, const char *arg,
                            "Goal pursuit requires goal tools; enable --goals "
                            "or [agent] goals=true and restart.");
     action = "new";
+    starts_goal = 1;
     rc = cai_agent_runtime_replace_goal(state->runtime, objective, error);
   } else if (strcmp(arg, "pause") == 0) {
     rc = cai_agent_runtime_get_goal(state->runtime, &goal, error);
@@ -3528,6 +3558,7 @@ static int cli_goal_command(cli_state *state, const char *arg,
     if (!goal.has_goal || strcmp(goal.status, "complete") == 0)
       return cai_cli_error(error, CAI_ERR_INVALID, "goal is not resumable");
     action = "resume";
+    starts_goal = 1;
     rc = cai_agent_runtime_resume_goal(state->runtime, error);
   } else if (strcmp(arg, "clear") == 0) {
     action = "clear";
@@ -3539,7 +3570,7 @@ static int cli_goal_command(cli_state *state, const char *arg,
     return rc;
   if (state->starting_goal)
     state->startup_goal_pending++;
-  if (objective != NULL || strcmp(action, "resume") == 0)
+  if (starts_goal)
     state->goal_starts_pending++;
   fields[0] = pslog_str("command", action);
   fields[1] = pslog_str("prompt_kind", "goal_control");
@@ -3549,7 +3580,7 @@ static int cli_goal_command(cli_state *state, const char *arg,
                    "**Goal control queued** for the next safe model/tool "
                    "boundary.\n") != 0)
     return CAI_ERR_TRANSPORT;
-  if (objective == NULL && strcmp(action, "resume") != 0) {
+  if (!starts_goal) {
     state->automation_done = 1;
     return CAI_OK;
   }
@@ -3558,6 +3589,10 @@ static int cli_goal_command(cli_state *state, const char *arg,
   /* Settle all startup goal controls before choosing the first prompt. A
    * replacement here must not submit work alongside the startup prompt. */
   if (state->starting_goal)
+    return CAI_OK;
+  /* Accepted host controls retain FIFO application, but a pending STOP must
+   * prevent a goal control from starting inference before that STOP applies. */
+  if (cai_app_bridge_stopping(state->bridge))
     return CAI_OK;
   rc = cai_agent_runtime_state(state->runtime, &run_state, error);
   if (rc != CAI_OK)
@@ -3595,6 +3630,11 @@ static int cli_host_process(cli_state *state, cai_error *error) {
   cai_app_command *command;
   size_t count;
   int rc;
+  if (cai_app_bridge_frontend_ended(state->bridge)) {
+    rc = cli_stop(state, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
   for (count = 0U;
        count < 64U && (command = cai_app_bridge_take(state->bridge)) != NULL;
        count++) {
@@ -3605,9 +3645,6 @@ static int cli_host_process(cli_state *state, cai_error *error) {
       rc = cai_cli_error(&applied, CAI_ERR_INVALID, "application is stopping");
     } else if (command->type == CAI_APP_STOP) {
       rc = cli_stop(state, &applied);
-    } else if (state->controller && cai_app_bridge_stopping(state->bridge)) {
-      rc =
-          cai_cli_error(&applied, CAI_ERR_CANCELLED, "application is stopping");
     } else if (state->runtime == NULL) {
       rc = cai_cli_error(&applied, CAI_ERR_INVALID,
                          "agent runtime is not ready");
@@ -3626,9 +3663,11 @@ static int cli_host_process(cli_state *state, cai_error *error) {
           state->automation_done = 0;
         }
       } else {
-        rc = cli_input_request(state, CAI_INPUT_OFFER, command->text,
-                               CAI_INPUT_QUEUED, !state->controller, NULL, NULL,
-                               &applied);
+        rc = cli_input_request(
+            state, CAI_INPUT_OFFER, command->text, CAI_INPUT_QUEUED,
+            !state->controller ||
+                (state->bridge != NULL && state->bridge->frontend_fd >= 0),
+            NULL, NULL, &applied);
       }
     } else if (command->type == CAI_APP_STEER) {
       rc = state->controller
@@ -6661,5 +6700,22 @@ int cai_cli_app_controller_run(int argc, char **argv,
 }
 
 int cai_cli_app_main(int argc, char **argv, const cai_app_config *application) {
-  return cai_cli_app_run(argc, argv, application, NULL);
+  cai_app *app = NULL;
+  cai_error error;
+  int code = 1, rc;
+  cai_error_init(&error);
+  rc = cai_app_open(application, &app, &error);
+  if (rc == CAI_OK)
+    rc = cai_app_run(app, argc - 1, (const char *const *)(argv + 1), &code,
+                     &error);
+  if (rc != CAI_OK) {
+    if (application != NULL && application->logger != NULL)
+      cai_cli_log_error(application->logger, "application", &error);
+    else
+      fprintf(stderr, "application: %s\n",
+              error.message != NULL ? error.message : cai_status_string(rc));
+  }
+  cai_app_close(app);
+  cai_error_cleanup(&error);
+  return rc == CAI_OK ? code : 1;
 }

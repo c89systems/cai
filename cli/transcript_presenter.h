@@ -19,6 +19,11 @@ int cai_cli_transcript_presenter_open(cai_cli_presenter *,
  * This is presentation, not default tail/visibility selection. */
 int cai_cli_transcript_presenter_event(void *, const cai_transcript_event *,
                                        cai_error *);
+/** Display an accepted command receipt. A subsequent shell-start record still
+ * establishes its identity, but does not repeat a bang command already shown.
+ * Old/imported journals without command receipts retain their shell prompt. */
+int cai_cli_transcript_presenter_command(cai_cli_transcript_presenter *,
+                                         const char *);
 /** Abandon unfinished renderer documents without flushing, acknowledging
  * cursors, resubmitting input or changing the draft. Pending Markdown words
  * can span already accepted delta records: restarting this view must replay

@@ -2,6 +2,7 @@
 #include "app_internal.h"
 #include "identity.h"
 #include "pouch_stream.h"
+#include "run_terminal.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -123,7 +124,7 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
   app_impl *app;
   process_state saved;
   char **arguments;
-  int i, rc;
+  int i, rc, handled = 0;
   if (self == NULL || exit_code == NULL || argc < 0 || argc == INT_MAX ||
       (argc > 0 && argv == NULL))
     return cai_cli_error(error, CAI_ERR_INVALID,
@@ -133,9 +134,6 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
   if (app->running)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "application is already running");
-  if (pthread_mutex_trylock(&application_lock) != 0)
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "an application is already running");
   app->running = 1;
   cai_app_bridge_begin(app->bridge);
   arguments = calloc((size_t)argc + 2U, sizeof(*arguments));
@@ -153,13 +151,23 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
   if (rc != CAI_OK) {
     cai_cli_error(error, rc, "copy application arguments");
   } else {
-    rc = process_save(&saved, error);
-    if (rc == CAI_OK) {
-      *exit_code =
-          cai_cli_app_run(argc + 1, arguments, &app->config, app->bridge);
-      rc = process_restore(&saved, error);
+    rc = cai_cli_run_terminal(&app->config, app->bridge, argc + 1, arguments,
+                              &handled, exit_code, error);
+    if (rc == CAI_OK && !handled) {
+      if (pthread_mutex_trylock(&application_lock) != 0)
+        rc = cai_cli_error(error, CAI_ERR_INVALID,
+                           "a batch or utility application is already running");
+      else {
+        rc = process_save(&saved, error);
+        if (rc == CAI_OK) {
+          *exit_code =
+              cai_cli_app_run(argc + 1, arguments, &app->config, app->bridge);
+          rc = process_restore(&saved, error);
+        }
+        process_free(&saved);
+        pthread_mutex_unlock(&application_lock);
+      }
     }
-    process_free(&saved);
   }
   if (arguments != NULL) {
     for (i = 0; i <= argc; i++)
@@ -169,7 +177,6 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
   cai_app_bridge_end(app->bridge, rc == CAI_OK ? *exit_code : 1,
                      rc != CAI_OK ? error : NULL);
   app->running = 0;
-  pthread_mutex_unlock(&application_lock);
   return rc;
 }
 static void controller_arguments_close(app_impl *app) {

@@ -33,6 +33,8 @@ struct cai_cli_transcript_presenter {
   cai_cli_shell_text shell;
   int hex_digit, skip_shell_end;
   uint64_t skip_shell_first, skip_shell_last;
+  uint64_t shell_anchor, live_offset;
+  int live_seen, live_complete, shell_echo;
 };
 
 static int failure(cai_cli_transcript_presenter *p, cai_error *error, int code,
@@ -214,6 +216,30 @@ static int event_body(cai_cli_transcript_presenter *p,
     p->skip_shell_first = p->skip_shell_last = 0U;
     return CAI_OK;
   }
+  if (event->kind == CAI_TRANSCRIPT_SHELL_OUTPUT ||
+      event->kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END) {
+    if (p->active || p->stream != event->stream ||
+        event->sequence != p->shell_anchor || p->live_complete ||
+        event->offset != p->live_offset ||
+        event->length > UINT64_MAX - p->live_offset)
+      return failure(p, error, CAI_ERR_PROTOCOL,
+                     "live shell presentation identity changed");
+    if (!p->live_seen) {
+      rc = cai_cli_presenter_finish_response(ui);
+      if (rc == 0)
+        rc = cai_cli_presenter_finish_reasoning(ui);
+    }
+    if (rc == 0)
+      rc = cai_cli_shell_plain(&p->shell, event->data, event->length,
+                               event->kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END,
+                               shell_output, ui, error);
+    if (rc != 0)
+      return failure(p, error, rc, "cannot present live shell output");
+    p->live_seen = 1;
+    p->live_offset += event->length;
+    p->live_complete = event->kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END;
+    return CAI_OK;
+  }
   if (event->kind == CAI_TRANSCRIPT_EVENT_BEGIN) {
     if (p->active || event->type == NULL || event->sequence == 0U ||
         event->stream == 0U || (p->stream != 0U && p->stream != event->stream))
@@ -223,6 +249,29 @@ static int event_body(cai_cli_transcript_presenter *p,
     p->sequence = event->sequence;
     p->timestamp_ns = event->timestamp_ns;
     p->kind = kind_for(event->type);
+    if (p->kind == PRESENT_SHELL_COMMAND) {
+      p->shell_anchor = event->sequence;
+      p->live_offset = 0U;
+      p->live_seen = p->live_complete = 0;
+      if (p->shell_echo)
+        p->kind = PRESENT_SKIP;
+      p->shell_echo = 0;
+    } else if (p->kind == PRESENT_SHELL_TAIL && p->live_seen) {
+      if (p->live_complete)
+        p->kind = PRESENT_SKIP;
+      else {
+        static const char notice[] =
+            "\n**Live shell output interrupted; retained tail follows.**\n";
+        rc = cai_cli_shell_plain(&p->shell, NULL, 0U, 1, shell_output, ui,
+                                 error);
+        if (rc == 0)
+          rc = cai_cli_presenter_text(ui, notice, sizeof(notice) - 1U);
+        if (rc == 0)
+          rc = cai_cli_presenter_finish_response(ui);
+        if (rc != 0)
+          return failure(p, error, rc, "cannot restore saved shell tail");
+      }
+    }
     p->skip_shell_end = 0;
     if (p->kind >= PRESENT_SHELL_COMMAND && p->skip_shell_first != 0U &&
         event->sequence >= p->skip_shell_first &&
@@ -304,6 +353,10 @@ static int event_body(cai_cli_transcript_presenter *p,
     }
     if (p->skip_shell_end)
       p->skip_shell_first = p->skip_shell_last = 0U;
+    if (p->kind == PRESENT_SHELL_END || p->skip_shell_end) {
+      p->shell_anchor = p->live_offset = 0U;
+      p->live_seen = p->live_complete = 0;
+    }
     p->active = 0;
   } else
     return failure(p, error, CAI_ERR_PROTOCOL,
@@ -367,6 +420,11 @@ void cai_cli_transcript_presenter_reset(cai_cli_transcript_presenter *p) {
   p->presenter = ui;
 }
 
+int cai_cli_transcript_presenter_command(cai_cli_transcript_presenter *p,
+                                         const char *command) {
+  p->shell_echo = command[0] == '!';
+  return cai_cli_presenter_input(p->presenter, command, 1);
+}
 void cai_cli_transcript_presenter_skip_shell(cai_cli_transcript_presenter *p,
                                              uint64_t first, uint64_t last) {
   p->skip_shell_first = first;

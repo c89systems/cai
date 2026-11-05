@@ -408,6 +408,30 @@ static void following(void) {
   assert(strstr(strstr(f.text, "Ran") + 3U, "Ran") == NULL);
   close_fixture(&f);
 }
+static void following_subagents(void) {
+  fixture f;
+  open_fixture(&f, 0);
+  f.phase = 2;
+  FEED("s", "review", "run_review", "tool.started", NULL, "", 1U);
+  assert(strstr(f.text, "Starting run_review") != NULL &&
+         strstr(f.text, "Completed") == NULL);
+  FEED("s", "review", "run_review", "tool.completed", NULL, "", 1U);
+  assert(strstr(f.text, "Completed run_review") != NULL);
+  FEED("s", "worker", "run_worker", "tool.started", NULL, "", 1U);
+  assert(strstr(f.text, "Starting run_worker") != NULL);
+  FEED("s", "worker", "run_worker", "tool.completed", NULL, "", 1U);
+  assert(strstr(f.text, "Completed run_worker") != NULL);
+  FEED("s", "failed-review", "run_review", "tool.started", NULL, "", 1U);
+  FEED("s", "failed-review", "run_review", "tool.failed", "message",
+       "failure details", 1U);
+  {
+    size_t length = f.length;
+    FEED("s", "failed-review", "run_review", "tool.partial_output", "data", "",
+         1U);
+    assert(f.length == length);
+  }
+  close_fixture(&f);
+}
 
 static void following_cache(void) {
   fixture f;
@@ -453,6 +477,7 @@ int main(void) {
   large_output();
   invalid_output();
   following();
+  following_subagents();
   following_cache();
   puts("replay tool presentation passed");
   return 0;

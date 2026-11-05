@@ -33,7 +33,10 @@ static const char *shape(cai_protocol_kind kind) {
   case CAI_PROTOCOL_STREAM_BEGIN:
     return "uisb";
   case CAI_PROTOCOL_STREAM_CHUNK:
+  case CAI_PROTOCOL_SHELL_OUTPUT:
     return "ud";
+  case CAI_PROTOCOL_SHELL_OUTPUT_END:
+    return "u";
   case CAI_PROTOCOL_STREAM_END:
     return "uu";
   case CAI_PROTOCOL_REPLAY_END:
@@ -56,7 +59,9 @@ static size_t capacity(cai_protocol_kind kind, size_t index) {
 static int valid_header(const cai_protocol_header *h) {
   int record = h->kind == CAI_PROTOCOL_STREAM_BEGIN ||
                h->kind == CAI_PROTOCOL_STREAM_CHUNK ||
-               h->kind == CAI_PROTOCOL_STREAM_END;
+               h->kind == CAI_PROTOCOL_STREAM_END ||
+               h->kind == CAI_PROTOCOL_SHELL_OUTPUT ||
+               h->kind == CAI_PROTOCOL_SHELL_OUTPUT_END;
   if (shape(h->kind) == NULL || h->request == 0U ||
       (record ? h->sequence == 0U : h->sequence != 0U))
     return 0;
@@ -98,9 +103,15 @@ static int pack(const cai_cli_transcript_message *m, field *f,
     f[3].value = e->has_data;
     break;
   case CAI_PROTOCOL_STREAM_CHUNK:
+  case CAI_PROTOCOL_SHELL_OUTPUT:
+    if (m->header.kind == CAI_PROTOCOL_SHELL_OUTPUT && e->length == 0U)
+      return invalid(error);
     f[0].value = e->offset;
     f[1].bytes = e->data;
     f[1].length = e->length;
+    break;
+  case CAI_PROTOCOL_SHELL_OUTPUT_END:
+    f[0].value = e->offset;
     break;
   case CAI_PROTOCOL_STREAM_END:
     f[0].value = e->position;
@@ -164,6 +175,18 @@ static int unpack(cai_cli_transcript_decoder *d, cai_error *error) {
     e->offset = f[0].value;
     e->data = f[1].bytes;
     e->length = f[1].length;
+    break;
+  case CAI_PROTOCOL_SHELL_OUTPUT:
+    if (f[1].length == 0U)
+      return invalid(error);
+    e->kind = CAI_TRANSCRIPT_SHELL_OUTPUT;
+    e->offset = f[0].value;
+    e->data = f[1].bytes;
+    e->length = f[1].length;
+    break;
+  case CAI_PROTOCOL_SHELL_OUTPUT_END:
+    e->kind = CAI_TRANSCRIPT_SHELL_OUTPUT_END;
+    e->offset = f[0].value;
     break;
   case CAI_PROTOCOL_STREAM_END:
     e->kind = CAI_TRANSCRIPT_EVENT_END;

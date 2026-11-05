@@ -118,6 +118,14 @@ static int expand_files(sl_t *editor, const char *completed,
   (void)editor;
   return complete_files(context, completed, emit, emit_context);
 }
+/** An empty skill catalog is not a completion context. Registering it with
+ * strip_trigger would remove literal '$' words despite offering no skill. */
+static int count_skill(const char *name, void *context) {
+  size_t *count = context;
+  if (name != NULL && name[0] == '$' && name[1] != '\0')
+    ++*count;
+  return SL_OK;
+}
 int cai_cli_completions_open(cai_cli_completions *completions, sl_t *editor,
                              const char *workspace,
                              cai_cli_completion_catalog_fn catalog,
@@ -126,15 +134,18 @@ int cai_cli_completions_open(cai_cli_completions *completions, sl_t *editor,
       {'/', SL_COMPLETION_START, 0, complete, NULL, NULL},
       {'@', SL_COMPLETION_WORD, 1, complete, NULL, expand_files},
       {'$', SL_COMPLETION_WORD, 1, complete, NULL, NULL}};
-  size_t i;
+  size_t i, skills = 0U;
+  int rc;
   if (completions == NULL || workspace == NULL || workspace[0] == '\0' ||
       catalog == NULL)
     return SL_ERROR_INVALID;
   completions->workspace = workspace;
   completions->catalog = catalog;
   completions->context = context;
+  rc = catalog(context, '$', count_skill, &skills);
+  if (rc != SL_OK)
+    return rc;
   for (i = 0U; i < sizeof(providers) / sizeof(providers[0]); ++i)
     providers[i].userdata = completions;
-  return sl_set_completion_providers(editor, providers,
-                                     sizeof(providers) / sizeof(providers[0]));
+  return sl_set_completion_providers(editor, providers, skills != 0U ? 3U : 2U);
 }

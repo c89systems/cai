@@ -216,14 +216,18 @@ typedef struct cai_app_config {
 } cai_app_config;
 
 typedef struct cai_app cai_app;
-/** Application receiver. The synchronous run uses the host's main thread.
- * That terminal run owns process terminal, environment, locale and signals;
- * hosts must serialize other use of those resources. They are restored before
- * return, including error paths. Workspace selection never changes the host
- * cwd; subprocesses receive an explicit working directory. Repeated runs are
- * supported; concurrent or recursive runs are rejected. start instead selects
- * an independent terminal-free controller owner. Borrowed loggers may receive
- * calls from native workers and must be thread-safe. */
+/** Application receiver. Interactive run (excluding --temp) keeps the common
+ * controller and host callbacks on its calling thread, with a default-stack
+ * terminal worker attached through the public Unix socket client. It captures
+ * directory/environment views without installing process environment or
+ * locale. Its controller installs no signal state. Hosts give the adapter
+ * exclusive use of stdin/stdout; its
+ * temporary terminal/signal modes are restored before return, including
+ * failures. Batch, utility and temporary modes still use the legacy
+ * resource-saving composition and must be serialized with other
+ * process-resource users. Repeated runs are supported; one run per instance may
+ * be active. start selects an independent terminal-free owner. Borrowed loggers
+ * can receive calls from native workers and must be thread-safe. */
 struct cai_app {
   /** argv contains only CAI options (exclude the program name). Empty is valid.
    * Returns CAI status for invocation/restoration errors. On CAI_OK, exit_code

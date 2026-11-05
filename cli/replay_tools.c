@@ -28,7 +28,7 @@ typedef struct replay_call {
   long long exit_code, signal;
   int parsing, invalid, output, rendering, opened, patch, has_preview,
       bad_output;
-  int replayed, busy;
+  int replayed, busy, subagent_started;
   size_t active_command_length;
   cai_cli_tool_text markdown;
   lonejson_curl_parse parser;
@@ -471,6 +471,17 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
   }
   if (same(c->name, "set_reasoning") && !c->failed)
     return CAI_OK;
+  if (c->failed && same(record->kind, "tool.partial_output") &&
+      record->offset == 0U && record->final && record->data[0] == '\0')
+    return CAI_OK; /* The failure receipt already carries its diagnostic. */
+  if (r->following && same(record->kind, "tool.started") &&
+      c->action == CAI_AGENT_TOOL_ACTION_SUBAGENT && !c->subagent_started) {
+    c->event.type = CAI_AGENT_EVENT_TOOL_CALL_STARTED;
+    rc = cai_tool_display_event(display, &c->event, error);
+    if (rc == CAI_OK)
+      c->subagent_started = 1;
+    return rc;
+  }
   /* The runner's failure message is a diagnostic. Only its captured output
    * value contains raw subprocess bytes, including partial output on failure.
    */

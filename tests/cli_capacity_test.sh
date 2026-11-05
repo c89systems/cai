@@ -6,7 +6,7 @@ chat=false
 [[ "$protocol" != chat_completions ]] || chat=true
 printf '[client]\napi_protocol = %s\n' "$protocol" >"$root/protocol.ini"
 base+=(--config "$root/protocol.ini")
-export CAI_TEST_VOLATILE_SESSION=1 CAI_TEST_CAPACITY_WAIT=1
+export CAI_TEST_CAPACITY_WAIT=1
 failure='{"error":"Selected model is at capacity","error_code":"server_is_overloaded"}'
 plan "{\"chat\":$chat,\"plan\":[$failure,$failure,\"RECOVERED\"]}"
 run -Nni original; ok

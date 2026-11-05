@@ -45,7 +45,10 @@ typedef enum cai_protocol_kind {
   /** Producer-scoped settlement watermark; no request or receipt ID. */
   CAI_PROTOCOL_INPUT_SETTLED,
   /** Explicit frontend-owned shell capture, in bounded acknowledged chunks. */
-  CAI_PROTOCOL_USER_SHELL
+  CAI_PROTOCOL_USER_SHELL,
+  /** Ephemeral backend shell output, ordered within its presentation stream. */
+  CAI_PROTOCOL_SHELL_OUTPUT,
+  CAI_PROTOCOL_SHELL_OUTPUT_END
 } cai_protocol_kind;
 /** Each record is a definite eight-pair map, with ascending integer keys:
  * 0 kind, 1 request, 2 conversation, 3 generation, 4 sequence, 5 stream,

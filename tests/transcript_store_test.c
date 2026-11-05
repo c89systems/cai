@@ -226,6 +226,44 @@ static void publisher(cai_cli_pouch *pouch) {
       assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
              (uint64_t)now.tv_sec < until && poll(&fd, 1U, 1000) >= 0);
   }
+  /* Live-only output uses the existing fixed rings. A slow peer loses only
+   * this transient suffix/end; a draining peer remains ordered. Neither
+   * publication advances a durable cursor nor opens another storage client. */
+  {
+    unsigned char bytes[4096];
+    size_t fast = 0U, stalled = 0U;
+    memset(bytes, 'p', sizeof(bytes));
+    bytes[0] = 0U;
+    assert(cai_cli_transcript_feed_shell(feed, 0U, 0U, bytes, 1U, 0, NULL) ==
+           CAI_ERR_INVALID);
+    assert(cai_cli_transcript_feed_shell(feed, 43U, UINT64_MAX, bytes, 1U, 0,
+                                         NULL) == CAI_ERR_INVALID);
+    assert(cai_cli_transcript_feed_shell(feed, 43U, 0U, NULL, 1U, 0, NULL) ==
+           CAI_ERR_INVALID);
+    for (i = 0U; i < 64U; ++i) {
+      assert(cai_cli_transcript_feed_shell(feed, 43U, i * sizeof(bytes), bytes,
+                                           sizeof(bytes), 0, NULL) == CAI_OK);
+      assert(cai_cli_transcript_feed_next(feed, 2U, &frame));
+      assert(frame.event.kind == CAI_TRANSCRIPT_SHELL_OUTPUT &&
+             frame.event.sequence == 43U && frame.event.position == 0U &&
+             frame.event.offset == i * sizeof(bytes) &&
+             frame.event.length == sizeof(bytes) &&
+             memcmp(frame.event.data, bytes, sizeof(bytes)) == 0);
+      ++fast;
+    }
+    assert(cai_cli_transcript_feed_shell(feed, 43U, 64U * sizeof(bytes), NULL,
+                                         0U, 1, NULL) == CAI_OK);
+    assert(cai_cli_transcript_feed_next(feed, 2U, &frame) &&
+           frame.event.kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END &&
+           frame.event.offset == 64U * sizeof(bytes));
+    while (cai_cli_transcript_feed_next(feed, 1U, &frame)) {
+      assert(frame.event.kind == CAI_TRANSCRIPT_SHELL_OUTPUT &&
+             frame.event.offset == stalled * sizeof(bytes));
+      ++stalled;
+    }
+    assert(stalled == 32U && fast == 64U &&
+           cai_test_storage_open_count() == opens);
+  }
   /* The real durable-cut hook invalidates all subscribed views. Exercising
    * its consumer contract here avoids inventing a model-context fixture. */
   {
