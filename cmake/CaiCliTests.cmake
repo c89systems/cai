@@ -24,6 +24,10 @@
     cai_cli_use_storage_fixture(cai_cli_mock_fixture)
     target_link_options(cai_cli_mock_fixture PRIVATE "-Wl,--wrap=cai_mcp_streamable_http_client_open")
     add_executable(cai_terminal_peer tests/terminal_peer.c)
+    add_test(NAME cai_cli_pipe COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pipe_test.sh" "$<TARGET_FILE:cai_cli>"
+      "$<TARGET_FILE:cai_app_existing_host>")
+    set_tests_properties(cai_cli_pipe PROPERTIES TIMEOUT 45)
     cai_configure_cli_target(cai_terminal_peer)
     add_test(NAME cai_cli_terminal_peer
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/terminal_peer_test.sh"
@@ -916,7 +920,7 @@
     # Tests consume this public client host too. Keep its statically linked
     # protocol/presenter in step with the owner in targeted CLI builds.
     add_dependencies(cai_cli_tests cai_app_terminal_host cai_app_utility_host
-      cai_transcript_selection_test)
+      cai_transcript_selection_test cai_line_input_test cai_plain_feed_test cai_app_existing_host)
     add_test(NAME cai_cli_kanban COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_kanban_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")

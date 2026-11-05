@@ -33,7 +33,11 @@ live output, with correlated real completion rather than launch acknowledgement.
 Combined `-g`/`-i` startup now uses a single durable queued goal/initial-input
 action; explicit headless startup calls the same core operation. The old batch
 loops and response spool are removed. Plain redirected input without `-i`
-still uses the older terminal receiver. Maintenance now
+uses that same socket producer with bounded line input and live presentation;
+EOF drains admitted work, and no complete input stream or response is staged.
+Native `run --server` discovers and attaches without a local runtime or store;
+host STOP detaches its client. The old combined readline/runtime loop is removed.
+Maintenance now
 has its own [utility dispatcher](application-utilities.md), retaining the serialized
 environment wrapper for its remaining process-owned helpers. Owner and batch
 logging now resolve `LOG_` settings from captured views through public libpslog
@@ -56,7 +60,7 @@ remaining cutover work, [workspace process handoff](workspace-process.md) for
 executable ownership, and [command execution](workspace-commands.md) for backend
 admission/delegation. The confirmed decisions and specification below remain
 the target contract; an implemented boundary is not a claim of complete feature
-parity. Redirected-input composition, remaining terminal receiver removal,
+parity. Removal of remaining unused terminal helpers from the owner source,
 extended startup parity and optional frontend packaging remain unfinished.
 
 The optional [Lua workspace client](lua-workspace-client.md) exposes the typed

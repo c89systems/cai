@@ -47,6 +47,13 @@ struct cai_cli_replay_tools {
 static int same(const char *a, const char *b) {
   return a != NULL && strcmp(a, b) == 0;
 }
+int cai_cli_replay_tools_command_output(const cai_execution_record *record) {
+  return record != NULL &&
+         (same(record->kind, "tool.output") ||
+          same(record->kind, "tool.partial_output")) &&
+         (same(record->tool_name, "exec_command") ||
+          same(record->tool_name, "write_stdin"));
+}
 static int path_is(const lonejson_value_path *p, const char *key) {
   return p->segment_count == 1U && p->segments[0].len == strlen(key) &&
          memcmp(p->segments[0].data, key, strlen(key)) == 0;

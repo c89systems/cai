@@ -15,7 +15,10 @@
 enum {
   CAI_CLI_FRONTEND_EXISTING = 1,
   CAI_CLI_FRONTEND_STARTED = 2,
-  CAI_CLI_FRONTEND_STOPPED = 3
+  CAI_CLI_FRONTEND_STOPPED = 3,
+  /** Local host cancellation: detach without waiting for a remote owner to
+   * close. STOPPED retains the owned-server shutdown/drain semantics. */
+  CAI_CLI_FRONTEND_DETACH = 4
 };
 typedef struct cai_cli_frontend_boot {
   void *context;

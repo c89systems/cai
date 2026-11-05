@@ -809,8 +809,9 @@ static int execution_body(void *context, const cai_app_execution_event *event,
       strcmp(r->kind, "hosted.tool") == 0 ||
       strcmp(r->kind, "reasoning.receipt") == 0) {
     int handled = 0;
-    if (cai_cli_presenter_finish_response(f->ui) != 0 ||
-        cai_cli_presenter_finish_reasoning(f->ui) != 0)
+    if (cai_cli_replay_tools_command_output(r) &&
+        (cai_cli_presenter_finish_response(f->ui) != 0 ||
+         cai_cli_presenter_finish_reasoning(f->ui) != 0))
       return CAI_ERR_TRANSPORT;
     rc = cai_cli_replay_tools_follow(&f->tools, r, f->ui->tool_display,
                                      f->full_output, 72U, tool_markdown, f,
@@ -1286,6 +1287,10 @@ static int service(frontend *f) {
         f->boot->pump(f->boot->context, clock_ms(), &target, &ready, &f->error);
     if (rc != CAI_OK)
       return -1;
+    if (ready == CAI_CLI_FRONTEND_DETACH) {
+      f->expected_close = f->quit = 1;
+      return 0;
+    }
     if (ready == CAI_CLI_FRONTEND_STOPPED) {
       f->expected_close = 1;
       if (f->client == NULL) {
@@ -2041,6 +2046,44 @@ static int terminal_service(void *context, int epoll_fd, int *timeout,
     unsigned int flags;
     if (p->client == NULL || p->handoff_failed)
       continue;
+    if (p->boot != NULL) {
+      cai_app_client_config target = p->target;
+      struct pollfd boot_fd;
+      uint64_t boot_deadline = 0U;
+      int ready = 0;
+      if (p->boot->pump(p->boot->context, now, &target, &ready, &p->error) !=
+              CAI_OK ||
+          p->boot->prepare(p->boot->context, &boot_fd, &boot_deadline,
+                           &p->error) != CAI_OK) {
+        active->handoff_failed = 1;
+        break;
+      }
+      if (ready == CAI_CLI_FRONTEND_DETACH ||
+          ready == CAI_CLI_FRONTEND_STOPPED) {
+        active->expected_close = active->quit = 1;
+        return cai_cli_error(error, CAI_ERR_CANCELLED,
+                             "terminal attachment stopped during handoff");
+      }
+      /* After attachment these are retained lifetime interests, not new
+       * discovery clients. The relay owns this transient epoll registration. */
+      if (boot_fd.fd >= 0) {
+        memset(&event, 0, sizeof(event));
+        event.events = EPOLLET | (boot_fd.events & POLLIN ? EPOLLIN : 0U) |
+                       (boot_fd.events & POLLOUT ? EPOLLOUT : 0U);
+        event.data.fd = boot_fd.fd;
+        if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, boot_fd.fd, &event) != 0 &&
+            (errno != EEXIST ||
+             epoll_ctl(epoll_fd, EPOLL_CTL_MOD, boot_fd.fd, &event) != 0))
+          return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                               "watch frontend lifetime during handoff");
+      }
+      if (boot_deadline != 0U) {
+        uint64_t remaining = boot_deadline > now ? boot_deadline - now : 0U;
+        int wait = remaining > INT_MAX ? INT_MAX : (int)remaining;
+        if (*timeout < 0 || wait < *timeout)
+          *timeout = wait;
+      }
+    }
     if (cai_app_client_pump(p->client, now, &p->error) != CAI_OK ||
         cai_app_client_get_state(p->client, &p->state, &p->error) != CAI_OK ||
         p->state.transport.phase == CAI_WORKSPACE_DISCONNECTED ||
@@ -2237,7 +2280,7 @@ static int pager_cancel(void *context) {
   p->next = now + 50U;
   return terminal_service(p->frontend, p->epoll, &timeout,
                           &p->frontend->error) != CAI_OK ||
-         p->frontend->handoff_failed;
+         p->frontend->handoff_failed || p->frontend->quit;
 }
 static int native_pager(frontend *f, const char *log, int help) {
   pager_service service;
@@ -2394,6 +2437,15 @@ static int terminal_action(frontend *f, int kind) {
         rc = cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
                            "restore output after terminal relay");
     }
+  }
+  if (f->quit && (rc == CAI_OK || rc == CAI_ERR_CANCELLED)) {
+    /* Terminal ownership has been restored. Connection detach will settle an
+     * interrupted recording; do not resynchronize an editor that is exiting. */
+    f->group->terminal_active = 0;
+    f->presentation_parked = f->transcript_entry = 0;
+    cai_error_cleanup(&f->error);
+    cai_error_init(&f->error);
+    goto done;
   }
   if (kind == 4 && f->capture_id != 0U) {
     if (rc == CAI_OK && f->capture_pending) {

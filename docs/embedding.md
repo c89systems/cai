@@ -281,6 +281,15 @@ renders those replies through the shared presenter. Owner startup does not
 fork or install signals. Explicit frontend shell/pager actions follow the
 [terminal handoff contract](terminal-attachment.md#local-terminal-handoff).
 
+Synchronous `run` composes the same owner and a terminal or batch socket client;
+plain redirected input uses bounded lines and live transcript rendering. An
+explicit `--server SELECTOR` instead discovers and attaches to that owner,
+without a local runtime, SDK storage client or process launch. Runtime/tool
+callbacks remain with the remote owner; use typed client observations for its
+status and transcript. Native host STOP detaches this frontend, preserving the
+remote owner's persistence policy. Configured environment/directory views do
+not replace the embedding process's environment, cwd or locale.
+
 `cai -x` / `cai --headless` is the standalone process composition of this API,
 with a default of `persist = true`, JSON logging to stderr and automatic color.
 An explicit INI, environment or flag setting can override persistence;

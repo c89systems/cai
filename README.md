@@ -1553,6 +1553,15 @@ a durable goal; the agent keeps working until the goal completes or stops.
 reading terminal input. For example, `cai -Nni 'write a snake game in Lua'
 -i 'rewrite it in Go'` starts fresh, completes both turns, then exits.
 
+With redirected input and no supplied instruction, goal or review, CAI accepts
+newline-separated prompts and slash commands through the workspace server.
+Responses and tool activity render as they arrive, without an editor, status
+rows or interactive margins. Commands retain their normal scheduling: `/status`
+can run while inference is in flight, and `/goal pause` applies at a request
+boundary. EOF or `/quit` stops further admission and drains accepted work.
+The final line need not end with a newline. `-s NAME` selects an existing owner
+for either terminal or redirected input.
+
 Cai uses `pslog_new_from_env("LOG_", ...)` for all diagnostics and runtime
 activity, including libcai, liblockdc, tools, and subagents. JSON is the default
 format. Ordinary prompts, assistant text, and provider reasoning summaries

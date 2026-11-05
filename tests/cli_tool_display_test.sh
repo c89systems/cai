@@ -240,7 +240,7 @@ unset NO_COLOR
 cp "$root/original" "$work/file.c"; patch_plan 'FINAL ONLY'
 run -Nni 'apply patch'; ok
 [[ $(stdout_text) == 'FINAL ONLY' ]]
-jq -se 'any(.[]; .event == "tool_patch")' "$root/stderr" >/dev/null
+jq -se 'any(.[]; .event == "tool.patch" and .tool == "apply_patch")' "$root/stderr" >/dev/null
 for marker in between1 before0 after1; do contains "$root/stderr" "$marker"; done
 absent "$root/stderr" $'\033'
 plan '{"plan":[{"tool":"exec_command","arguments":{"cmd":"sh command.sh","yield_time_ms":1000}},{"tool":"write_stdin","arguments":{"session_id":"terminal-1","chars":"","yield_time_ms":1000}},"LAST RESPONSE"]}'
@@ -250,5 +250,5 @@ contains "$root/stderr" OUT06; contains "$root/stderr" OUT07; jq -e . "$root/std
 color_plan
 run -Nni 'check structured command output'; ok
 [[ $(stdout_text) == 'COLOR OUTPUT DONE' ]]
-jq -se 'any(.[]; (.event == "terminal_output" or .event == "terminal_command_completed") and (.msg | contains("\u001b[32mCOLORED_BRANCH")))' "$root/stderr" >/dev/null
+jq -se 'any(.[]; .event == "tool.output" and .tool == "exec_command" and (.msg | fromjson? | .output | contains("\u001b[32mCOLORED_BRANCH")))' "$root/stderr" >/dev/null
 run --tool-output invalid; bad; contains "$root/stderr" 'compact or full'

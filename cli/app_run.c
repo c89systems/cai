@@ -5361,6 +5361,7 @@ static int cli_dispatch_command(cli_state *state, const char *line,
                : cli_handle_command(state, command, error, handled);
     if (state->documents.active)
       rc = cai_cli_documents_complete(&state->documents, rc, error);
+    state->settlement_pending = 1;
     free(normalized);
     return rc;
   }
@@ -5635,25 +5636,6 @@ static int cli_publish_settlement(cli_state *state, cai_error *error) {
   return rc;
 }
 
-static int cli_drain(cli_state *state, cai_error *error) {
-  cai_agent_run_state run_state;
-  int rc;
-  for (;;) {
-    rc = cli_pump(state, 100L, error);
-    if (rc != CAI_OK)
-      return rc;
-    if (state->host_stopped)
-      return CAI_OK;
-    rc = cai_agent_runtime_state(state->runtime, &run_state, error);
-    if (rc != CAI_OK)
-      return rc;
-    if (!state->awaiting_turn && run_state != CAI_AGENT_SAMPLING &&
-        run_state != CAI_AGENT_DISPATCHING_TOOL) {
-      return cli_pump(state, 0L, error);
-    }
-  }
-}
-
 static int cli_temp_stop(void *context) {
   cli_state *state = context;
   if (cai_app_bridge_cleanup_stop(state->bridge))
@@ -5673,12 +5655,9 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   cai_cli_pouch *auth_store = NULL;
   sl_config_t prompt_config;
   cai_error error;
-  sl_readline_status_t prompt_status;
-  sl_prompt_source_t prompt_source;
   char auth_path[PATH_MAX];
   const char *auth_file;
   char *metadata_json;
-  char *line;
   int parsed;
   int rc;
   int result;
@@ -5735,13 +5714,6 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
                   "must use cai_app_start_server");
     parsed = -1;
   }
-  /* Process installation belongs to this legacy synchronous receiver, whose
-   * wrapper owns/restores process resources. Configuration resolution itself
-   * is reusable by an independent controller without mutating its host. */
-  if (parsed > 0 && !state->controller &&
-      state->configuration->apply_environment(state->configuration, &error) !=
-          CAI_OK)
-    parsed = -1;
   if (parsed > 0) {
     const char *reason =
         cai_cli_theme_parse(state->options.theme, &state->ui.theme);
@@ -6241,113 +6213,18 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     cli_print_error(state, "start work", &error);
     goto cleanup;
   }
-  if (state->controller) {
-    while (!state->exit_requested) {
-      rc = cli_pump(state, 0L, &error);
-      if (rc == CAI_OK)
-        rc = cli_advance_automation(state, &error);
-      if (rc == CAI_OK)
-        rc = cli_sync_status(state, &error);
-      if (rc == CAI_OK)
-        rc = cli_publish_settlement(state, &error);
-      if (rc == CAI_OK && !state->exit_requested)
-        rc = cli_pump(state, -1L, &error);
-      if (rc != CAI_OK) {
-        cli_print_error(state, "controller event", &error);
-        goto cleanup;
-      }
-    }
-    result = 0;
-    goto cleanup;
-  }
   while (!state->exit_requested) {
-    if (cai_cli_log_notices(state->log, cli_notice, state) != 0)
-      goto cleanup;
-    line = sl_next_prompt(state->sl, "> ", &prompt_source);
-    if (state->exit_requested) {
-      if (line != NULL)
-        sl_free_string(state->sl, line);
-      break;
-    }
-    if (line == NULL) {
-      prompt_status = sl_last_readline_status(state->sl);
-      if (prompt_status == SL_READLINE_SUSPENDED) {
-        rc = cli_terminal_shell(state, 0, &error);
-        if (rc != CAI_OK) {
-          cli_print_error(state, "interactive shell", &error);
-          if (state->exit_requested)
-            goto cleanup;
-          cai_error_cleanup(&error);
-          cai_error_init(&error);
-        }
-        if (!state->exit_requested &&
-            cli_sync_status(state, &error) != CAI_OK) {
-          cli_print_error(state, "status", &error);
-          goto cleanup;
-        }
-        continue;
-      }
-      if (prompt_status == SL_READLINE_CANCELLED ||
-          prompt_status == SL_READLINE_INTERRUPTED) {
-        if (state->shell.pid > 0) {
-          cai_cli_shell_cancel(&state->shell);
-          continue;
-        }
-        cai_cli_messages_cancel_send(state->messages);
-        rc = cai_agent_runtime_cancel_turn(state->review_runtime != NULL
-                                               ? state->review_runtime
-                                               : state->runtime,
-                                           &error);
-        if (rc != CAI_OK) {
-          if (rc != CAI_ERR_INVALID)
-            cli_print_error(state, "cancel turn", &error);
-          cai_error_cleanup(&error);
-          cai_error_init(&error);
-        }
-        continue;
-      }
-      if (prompt_status == SL_READLINE_ERROR) {
-        /* A failed observer has already reported its detailed error through
-         * the watched callback. Softline's generic I/O wrapper adds no cause.
-         */
-        if (bridge == NULL || !bridge->failed) {
-          cai_cli_error(&error, CAI_ERR_TRANSPORT, sl_last_error(state->sl));
-          cli_print_error(state, "prompt input failed", &error);
-        }
-        goto cleanup;
-      }
-      break;
-    }
-    if (line[0] != '\0') {
-      rc = cli_input_request(state, CAI_INPUT_OFFER, line, CAI_INPUT_QUEUED, 0,
-                             NULL, NULL, &error);
-      if (rc == CAI_OK)
-        rc = cli_messages_process(state, 0, &error);
-      if (rc != CAI_OK) {
-        cli_print_error(state, "input", &error);
-        if (state->ui.sink_failed || rc == CAI_ERR_NOMEM ||
-            state->runtime == NULL || state->exit_requested) {
-          sl_free_string(state->sl, line);
-          goto cleanup;
-        }
-        cai_error_cleanup(&error);
-        cai_error_init(&error);
-      }
-    }
-    sl_free_string(state->sl, line);
-    if (state->runtime != NULL && cli_sync_status(state, &error) != CAI_OK) {
-      cli_print_error(state, "status", &error);
-      goto cleanup;
-    }
-  }
-  if (state->shell.pid > 0 && cli_shell_stop(state, &error) != CAI_OK) {
-    cli_print_error(state, "finish user shell command", &error);
-    goto cleanup;
-  }
-  if (state->runtime != NULL && !state->exit_requested) {
-    rc = cli_drain(state, &error);
+    rc = cli_pump(state, 0L, &error);
+    if (rc == CAI_OK)
+      rc = cli_advance_automation(state, &error);
+    if (rc == CAI_OK)
+      rc = cli_sync_status(state, &error);
+    if (rc == CAI_OK)
+      rc = cli_publish_settlement(state, &error);
+    if (rc == CAI_OK && !state->exit_requested)
+      rc = cli_pump(state, -1L, &error);
     if (rc != CAI_OK) {
-      cli_print_error(state, "finish agent turn", &error);
+      cli_print_error(state, "controller event", &error);
       goto cleanup;
     }
   }
@@ -6535,11 +6412,6 @@ cli_app_receive(int argc, char **argv, const cai_app_config *application,
   free(state);
   return code;
 }
-int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
-                    cai_app_bridge *bridge) {
-  return cli_app_receive(argc, argv, application, bridge, NULL, NULL, 0, 0,
-                         NULL);
-}
 int cai_cli_app_controller_run(int argc, char **argv,
                                const cai_app_config *application,
                                cai_app_bridge *bridge,
@@ -6547,6 +6419,15 @@ int cai_cli_app_controller_run(int argc, char **argv,
                                const cai_attachment_config *server,
                                int lifetime_explicit, int frontend_startup,
                                const cai_cli_prepared *prepared) {
+  if (startup == NULL) {
+    cai_error error;
+    cai_error_init(&error);
+    cai_cli_error(&error, CAI_ERR_INVALID,
+                  "controller startup context is required");
+    cai_app_bridge_error(bridge, &error);
+    cai_error_cleanup(&error);
+    return 2;
+  }
   return cli_app_receive(argc, argv, application, bridge, startup, server,
                          lifetime_explicit, frontend_startup, prepared);
 }

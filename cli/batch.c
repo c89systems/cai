@@ -1,9 +1,12 @@
 #define _POSIX_C_SOURCE 200809L
 #include "batch.h"
 #include "batch_document.h"
+#include "commands.h"
 #include "error.h"
 #include "goal_input.h"
+#include "line_input.h"
 #include "log.h"
+#include "plain_feed.h"
 #include "startup.h"
 #include <cai/transcript_selection.h>
 #include <errno.h>
@@ -23,6 +26,16 @@ typedef struct batch {
   cai_app_client_state state;
   cai_cli_startup startup;
   cai_cli_log *log;
+  cai_cli_line_input *lines;
+  cai_cli_plain_feed *feed;
+  int input_ready, input_eof, source_quit;
+  unsigned long long plain_turns, plain_commands;
+  int plain_quiet, plain_handoff_drain;
+  unsigned long long plain_barrier, plain_quit;
+  int hide_handoff_replay;
+  char action_prefix[64];
+  size_t action_prefix_used;
+  unsigned long long action_offset;
   cai_transcript_position at;
   cai_transcript_selection *selection;
   cai_transcript_selection_result result;
@@ -58,8 +71,6 @@ typedef struct batch {
 int cai_cli_batch_mode(const cai_cli_options *o) {
   size_t i;
   if (o->headless || cai_cli_options_utility(o) ||
-      (o->instruction_count == 0U && o->goal == NULL && !o->review_and_fix &&
-       !o->review) ||
       (!o->review && !o->non_interactive && isatty(STDIN_FILENO) &&
        isatty(STDOUT_FILENO)))
     return 0;
@@ -105,6 +116,83 @@ static int observe(void *context, const cai_app_client_event *e,
   }
   return CAI_OK;
 }
+/** Retain only counts/labels, never another queue of accepted input. Ordered
+ * application settlement confirms EOF drain after every accepted outcome. */
+static int plain_execution(batch *b, const cai_app_execution_event *e,
+                           cai_error *error) {
+  const cai_execution_record *r = e->record;
+  char kind[16], session[129], tail;
+  unsigned long long producer, request, item;
+  int owned = !e->subagent && r->call_id != NULL &&
+              sscanf(r->call_id, "%15[^:]:%128[^:]:%llu:%llu:%llu%c", kind,
+                     session, &producer, &request, &item, &tail) == 5 &&
+              ((!e->replay && producer == b->state.producer &&
+                strcmp(session, b->at.session) == 0) ||
+               (b->plain_barrier != 0U && strcmp(r->call_id, b->call) == 0));
+  int rc = e->replay && b->hide_handoff_replay && !owned
+               ? CAI_OK
+               : cai_cli_plain_feed_execution(b->feed, e, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (owned && strcmp(kind, "command") == 0) {
+    if (strcmp(r->kind, "command.handoff") == 0) {
+      b->handoff = 1;
+      b->old_conversation = e->boundary->conversation;
+      b->plain_handoff_drain = 1;
+    }
+    if (strcmp(r->kind, "command.settled") == 0 && r->final) {
+      if (b->plain_commands == 0U)
+        return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                             "unmatched pipe command settlement");
+      --b->plain_commands;
+      if (request == b->plain_barrier)
+        b->plain_barrier = 0U;
+    }
+    if (strcmp(r->kind, "command.frontend") == 0) {
+      size_t n = strlen(r->data), keep;
+      if (r->offset == 0U) {
+        b->action_prefix_used = 0U;
+        b->action_offset = 0U;
+      }
+      if (r->offset != b->action_offset || n > ULLONG_MAX - b->action_offset)
+        return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                             "invalid pipe frontend action");
+      keep = sizeof(b->action_prefix) - 1U - b->action_prefix_used;
+      if (keep > n)
+        keep = n;
+      memcpy(b->action_prefix + b->action_prefix_used, r->data, keep);
+      b->action_prefix_used += keep;
+      b->action_prefix[b->action_prefix_used] = '\0';
+      b->action_offset += n;
+      if (r->final) {
+        if (request == b->plain_quit ||
+            strcmp(b->action_prefix, "/quit") == 0 ||
+            strcmp(b->action_prefix, "/exit") == 0)
+          b->input_eof = 1;
+        else
+          rc = cai_cli_plain_feed_notice(
+              b->feed,
+              strncmp(b->action_prefix, "/shell", 6U) == 0 ||
+                      strncmp(b->action_prefix, "!sh", 3U) == 0
+                  ? "interactive shell requires terminal input and output"
+                  : "This command requires an interactive terminal attachment.",
+              error);
+      }
+    }
+  } else if (owned && strcmp(kind, "input") == 0 &&
+             strcmp(r->kind, "turn.settled") == 0 && r->final) {
+    if (b->plain_turns == 0U)
+      return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                           "unmatched pipe turn settlement");
+    --b->plain_turns;
+  }
+  if ((!e->replay || b->plain_handoff_drain) && !e->subagent && !b->pending &&
+      b->plain_turns == 0U && b->plain_commands == 0U &&
+      strcmp(r->kind, "application.settled") == 0 && r->field == NULL &&
+      r->final)
+    b->plain_quiet = 1;
+  return rc;
+}
 static int execution(void *context, const cai_app_execution_event *e,
                      cai_error *error) {
   batch *b = context;
@@ -117,6 +205,8 @@ static int execution(void *context, const cai_app_execution_event *e,
     return cai_cli_error(error, e->code != CAI_OK ? e->code : CAI_ERR_PROTOCOL,
                          e->reason != NULL ? e->reason
                                            : "invalid execution history");
+  if (b->feed != NULL)
+    return plain_execution(b, e, error);
   if (b->pending && (b->command || b->shell_command) && !e->subagent &&
       r->call_id != NULL && strcmp(r->call_id, b->call) == 0) {
     if (b->shell_command && strcmp(r->kind, "command.shell_started") == 0)
@@ -260,6 +350,13 @@ static int transcript(void *context, const cai_transcript_event *e,
                          e->reason != NULL ? e->reason
                                            : "batch transcript unavailable");
   }
+  if (b->feed != NULL && (!b->replaying || !b->hide_handoff_replay ||
+                          e->kind == CAI_TRANSCRIPT_REPLAY_BEGIN ||
+                          e->kind == CAI_TRANSCRIPT_REPLAY_END)) {
+    rc = cai_cli_plain_feed_transcript(b->feed, e, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
   if (b->pending && b->shell_command && b->shell_sequence != 0U &&
       e->sequence == b->shell_sequence &&
       (e->kind == CAI_TRANSCRIPT_SHELL_OUTPUT ||
@@ -270,7 +367,9 @@ static int transcript(void *context, const cai_transcript_event *e,
     if (e->kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END)
       b->shell_end = 1;
     else {
-      if (b->shell_last) {
+      if (b->feed != NULL) {
+        /* The ordinary transcript presenter owns live/tail deduplication. */
+      } else if (b->shell_last) {
         if (fwrite(e->data, 1U, e->length, stdout) != e->length ||
             fflush(stdout) != 0)
           return cai_cli_error(error, CAI_ERR_TRANSPORT,
@@ -363,6 +462,12 @@ static int transcript(void *context, const cai_transcript_event *e,
   } else if (e->kind == CAI_TRANSCRIPT_REPLAY_END) {
     b->at.position = e->watermark;
     b->replaying = 0;
+    b->hide_handoff_replay = 0;
+    if (b->feed != NULL && b->handoff &&
+        b->at.conversation != b->old_conversation) {
+      b->handoff = 0;
+      b->plain_handoff_drain = 0;
+    }
   }
   return CAI_OK;
 }
@@ -481,13 +586,13 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
     snprintf(b->call, sizeof(b->call), "%s:%s:%llu:%llu:%llu",
              b->command ? "command" : "input", b->state.session,
              b->state.producer, b->request, b->item);
-    if (b->command) {
+    if (b->command && b->feed == NULL) {
       rc = cai_cli_batch_document_init(&b->command_document, "command.markdown",
                                        NULL, b->call, NULL, error);
       if (rc != CAI_OK)
         return rc;
     }
-    if (!b->command || b->goal_command || b->goal_start) {
+    if (b->feed == NULL && (!b->command || b->goal_command || b->goal_start)) {
       b->goal_follow = b->goal_command;
       rc = cai_transcript_selection_open(
           &b->at, b->goal_follow ? NULL : b->call, &b->selection, error);
@@ -507,6 +612,17 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
     if (rc != CAI_OK)
       return rc;
     b->receipt = 2;
+    if (b->feed != NULL) {
+      if (b->command)
+        ++b->plain_commands;
+      else
+        ++b->plain_turns;
+      if (b->source_quit) {
+        b->input_eof = 1;
+        b->plain_quit = b->request;
+      }
+      b->pending = 0;
+    }
   }
   if (b->command_done) {
     b->command_done = b->handoff = 0;
@@ -514,12 +630,12 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
     if (!b->goal_command && !b->goal_start && !b->review_command &&
         !b->shell_command)
       b->pending = 0;
-    if (b->command_code != CAI_OK)
+    if (b->command_code != CAI_OK && b->feed == NULL)
       return cai_cli_error(
           error, b->command_code,
           "batch startup command failed; instructions not submitted");
-    if (!b->startup_control && !b->goal_command && !b->goal_start &&
-        !b->review_command && !b->shell_command) {
+    if (b->feed == NULL && !b->startup_control && !b->goal_command &&
+        !b->goal_start && !b->review_command && !b->shell_command) {
       rc = cai_cli_batch_document_finish(&b->command_document, CAI_OK, error);
       if (rc != CAI_OK)
         return rc;
@@ -534,7 +650,7 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
                            "batch shell settled without complete live output");
     b->pending = b->shell_done = 0;
     b->has_result = b->output_document = b->selected_review = 0;
-    if (b->shell_code != CAI_OK) {
+    if (b->shell_code != CAI_OK && b->feed == NULL) {
       b->work_failed = 1;
       b->startup.stage = CAI_CLI_STARTUP_DONE;
     }
@@ -558,17 +674,39 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
       b->has_result = 0;
     }
   }
-  if (!b->pending && b->startup.stage < CAI_CLI_STARTUP_DONE) {
+  if (!b->pending && !b->plain_barrier && !b->work_failed &&
+      (b->startup.stage < CAI_CLI_STARTUP_DONE ||
+       (b->lines != NULL && !b->input_eof))) {
     cai_input_request request = {0};
     char *text = NULL;
-    int control;
+    int control = 0;
     rc = cai_cli_startup_next(&b->startup, o, b->state.session, &text, &control,
                               error);
+    if (rc == CAI_OK && text == NULL && b->lines != NULL && !b->input_eof) {
+      rc = cai_cli_line_input_next(b->lines, b->input_ready, &text,
+                                   &b->input_eof, error);
+      b->input_ready = 0;
+    }
     if (rc != CAI_OK || text == NULL)
       return rc;
     b->request = b->state.last_request + 1U;
     b->startup_control = control;
+    b->source_quit = 0;
     b->command = control || text[0] == '/' || text[0] == '!';
+    if (b->feed != NULL) {
+      size_t name_length = strcspn(text, " \t");
+      const char *name = cai_cli_command_name(text, &name_length);
+      const char *argument = text + strcspn(text, " \t");
+      argument += strspn(argument, " \t");
+      if (*argument == '\0' &&
+          ((name_length == 5U && memcmp(name, "/quit", 5U) == 0) ||
+           (name_length == 5U && memcmp(name, "/exit", 5U) == 0)))
+        b->source_quit = 1;
+      if ((name_length == 4U && memcmp(name, "/new", 4U) == 0) ||
+          (name_length == 7U && memcmp(name, "/resume", 7U) == 0))
+        b->plain_barrier = b->request;
+      b->plain_quiet = 0;
+    }
     b->goal_command =
         b->command && (strncmp(text, "/goal new ", 10U) == 0 ||
                        strncmp(text, "/review-and-fix", 15U) == 0);
@@ -608,14 +746,22 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
   if (b == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "allocate batch adapter");
   b->shared_logger = app->logger != NULL;
+  b->plain_quiet = 1;
   rc = cai_cli_log_new_at(&b->log, PSLOG_LEVEL_INFO, 0, app->logger,
                           options->environment, options->directory, error);
+  if (rc == CAI_OK && !options->non_interactive && !options->review &&
+      !options->review_and_fix && options->instruction_count == 0U &&
+      options->goal == NULL) {
+    rc = cai_cli_line_input_open(STDIN_FILENO, &b->lines, error);
+    if (rc == CAI_OK)
+      rc = cai_cli_plain_feed_open(options, &b->feed, error);
+  }
   while (rc == CAI_OK) {
-    struct pollfd fds[2];
+    struct pollfd fds[3];
     uint64_t now = clock_ms(), deadline = 0U, boot_deadline = 0U;
     int ready = 0, timeout = -1;
     memset(fds, 0, sizeof(fds));
-    fds[0].fd = fds[1].fd = -1;
+    fds[0].fd = fds[1].fd = fds[2].fd = -1;
     if (boot != NULL) {
       rc = boot->pump(boot->context, now, &target, &ready, error);
       if (rc != CAI_OK) {
@@ -629,7 +775,8 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
         }
         break;
       }
-      if (ready == CAI_CLI_FRONTEND_STOPPED) {
+      if (ready == CAI_CLI_FRONTEND_STOPPED ||
+          ready == CAI_CLI_FRONTEND_DETACH) {
         if (!b->detaching)
           b->work_failed = 0; /* Explicit native host STOP owns this outcome. */
         break;
@@ -690,16 +837,31 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
           b->awaiting_bind = 1;
         }
         if (rc == CAI_OK && b->state.ready && !b->subscribed) {
-          rc = cai_app_client_subscribe(
-              b->client, ++b->subscription, b->state.conversation,
-              b->state.session, NULL, 0U, 0U, b->handoff ? 1LL : 0LL, error);
+          long long replay = b->feed != NULL ? options->replay_turns : 0LL;
+          /* Catch up an accepted context-changing command's result even when
+           * console replay is disabled. Only its exact result is displayed. */
+          b->hide_handoff_replay =
+              b->feed != NULL && b->handoff && replay == 0LL;
+          if (b->handoff && replay == 0LL)
+            replay = 1LL;
+          rc = cai_app_client_subscribe(b->client, ++b->subscription,
+                                        b->state.conversation, b->state.session,
+                                        NULL, 0U, 0U, replay, error);
           b->subscribed = 1;
           b->replaying = 1;
         }
         if (rc == CAI_OK && !b->projecting)
           rc = advance(b, options, error);
         if (rc == CAI_OK && !b->projecting && !b->pending &&
-            b->startup.stage == CAI_CLI_STARTUP_DONE) {
+            b->startup.stage == CAI_CLI_STARTUP_DONE &&
+            (b->lines == NULL ||
+             (b->input_eof && b->plain_quiet && b->plain_turns == 0U &&
+              b->plain_commands == 0U) ||
+             b->work_failed)) {
+          if (b->feed != NULL) {
+            rc = cai_cli_plain_feed_finish(b->feed, error);
+            b->has_result = b->output_document = 0;
+          }
           if ((b->output_document && b->output.range.text_bytes != 0U) ||
               (b->has_result && b->result.text_bytes != 0U))
             rc = projection_open(b, options, error);
@@ -738,6 +900,10 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
       rc = boot->prepare(boot->context, &fds[1], &boot_deadline, error);
     if (rc != CAI_OK)
       break;
+    if (b->lines != NULL && !b->input_eof && !b->pending && !b->plain_barrier &&
+        b->state.bound && b->state.ready && b->subscribed && !b->replaying &&
+        !b->projecting && b->startup.stage == CAI_CLI_STARTUP_DONE)
+      cai_cli_line_input_prepare(b->lines, &fds[2]);
     if (boot_deadline && (!deadline || boot_deadline < deadline))
       deadline = boot_deadline;
     if (b->detaching && (!deadline || detach_deadline < deadline))
@@ -751,9 +917,17 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
       timeout = deadline <= now            ? 0
                 : deadline - now > INT_MAX ? INT_MAX
                                            : (int)(deadline - now);
-    if (poll(fds, 2U, timeout) < 0 && errno != EINTR) {
+    if (poll(fds, 3U, timeout) < 0 && errno != EINTR) {
       rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "wait for batch attachment");
       break;
+    }
+    if (fds[2].revents != 0) {
+      if (fds[2].revents & POLLNVAL) {
+        rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
+                           "redirected input is closed");
+        break;
+      }
+      b->input_ready = 1;
     }
   }
   if (rc == CAI_OK)
@@ -772,6 +946,8 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
     cai_error_cleanup(&failed);
   }
   cai_app_client_close(b->client);
+  cai_cli_line_input_close(b->lines);
+  cai_cli_plain_feed_close(b->feed);
   cai_transcript_selection_close(b->selection);
   cai_transcript_projector_close(b->projector);
   cai_sink_close(b->sink);

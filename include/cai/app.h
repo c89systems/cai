@@ -216,18 +216,22 @@ typedef struct cai_app_config {
 } cai_app_config;
 
 typedef struct cai_app cai_app;
-/** Application receiver. Interactive run keeps the common
+/** Application receiver. A locally owned run keeps the common
  * controller and host callbacks on its calling thread, with a default-stack
- * terminal worker attached through the public Unix socket client. It captures
- * directory/environment views without installing process environment or
- * locale. Its controller installs no signal state. Hosts give the adapter
+ * terminal or batch worker attached through the public Unix socket client. It
+ * captures directory/environment views without installing process environment
+ * or locale. Its controller installs no signal state. Hosts give the adapter
  * exclusive use of stdin/stdout; its
  * temporary terminal/signal modes are restored before return, including
  * failures. Temporary runs use an ephemeral owner, joined before a plain
  * default-no workspace cleanup question; host STOP interrupts that question.
- * Batch mode still uses the combined receiver; maintenance utilities have a
- * separate dispatcher. Both retain the process-resource wrapper for configured
- * logging/environment behavior and must be serialized with other
+ * Redirected input uses bounded lines and live transcript presentation through
+ * the same owner. Explicit --server attaches to an existing owner without
+ * creating a runtime or invoking this instance's runtime/tool callbacks; use
+ * the typed client APIs for remote runtime/status observations. Host STOP
+ * detaches that client without stopping its remote server.
+ * Maintenance utilities retain a separate process-resource wrapper for
+ * configured logging/environment behavior and must be serialized with other
  * process-resource users. Repeated runs are supported; one run per instance may
  * be active. start selects an independent terminal-free owner. Borrowed loggers
  * can receive calls from native workers and must be thread-safe. */

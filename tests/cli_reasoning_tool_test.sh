@@ -25,7 +25,7 @@ acknowledged() {
   absent "$root/acknowledged-request" 'requested normal ('
 }
 receipt() {
-  jq -se --arg text "$1" 'any(.[]; .event == "reasoning_tool_result" and .msg == $text)' "$root/stderr" >/dev/null
+  jq -se --arg text "$1" 'any(.[]; .event == "reasoning.receipt" and .msg == $text)' "$root/stderr" >/dev/null
 }
 metadata '["low","medium","high","xhigh"]'
 if [[ "$scenario" == persistence ]]; then
@@ -69,8 +69,12 @@ for supported in '["low"]' '[]' null; do
   run -Nni 'focus on the task' -r low --reasoning-tool; ok
   [[ $(stdout_text) == 'CONTINUE TASK' && $(requests) == "$((count+4))" ]]
   efforts '["low","low","low","low"]'
-  contains "$root/stderr" --high-reasoning-effort
-  jq -se '[.[] | select(.event == "cai.reasoning_tool.unavailable")] | length == 2 and all(.lvl == "warn")' "$root/stderr" >/dev/null
+  # Runtime configuration diagnostics stay with the owner. The socket-side
+  # batch stream carries the semantic reasoning receipt, not a log relay.
+  session=$(jq -rs 'first(.[] | select(.event == "reasoning.receipt")) | .session_id' "$root/stderr")
+  runtime_log="$root/cache/cai/$session.log"
+  contains "$runtime_log" --high-reasoning-effort
+  jq -se '[.[] | select(.event == "cai.reasoning_tool.unavailable")] | length == 2 and all(.lvl == "warn")' "$runtime_log" >/dev/null
   tail -1 "$root/peer/requests.jsonl" >"$root/request"
   absent "$root/request" --high-reasoning-effort
   absent "$root/request" 'has no effect'

@@ -34,13 +34,12 @@ int cai_cli_presenter_sink(void *context, const char *bytes, size_t count) {
   if (count == 0U)
     return 0;
   if (state->batch) {
-    if (fwrite(bytes, 1U, count, stdout) == count)
-      return 0;
-    state->sink_failed = 1;
-    return -1;
-  }
-  if (cai_cli_presenter_reconcile_output(state) != 0 ||
-      sl_output_stream_write(state->sl, bytes, count) != SL_OK) {
+    if (fwrite(bytes, 1U, count, stdout) != count) {
+      state->sink_failed = 1;
+      return -1;
+    }
+  } else if (cai_cli_presenter_reconcile_output(state) != 0 ||
+             sl_output_stream_write(state->sl, bytes, count) != SL_OK) {
     state->sink_failed = 1;
     return -1;
   }
@@ -80,6 +79,10 @@ static int cai_cli_presenter_tool_sink(void *context, const void *bytes,
 
 static int cai_cli_presenter_tool_begin_block(void *context, cai_error *error) {
   cai_cli_presenter *state = context;
+  if (cai_cli_presenter_finish_response(state) != 0 ||
+      cai_cli_presenter_finish_reasoning(state) != 0)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "finish Markdown before tool activity");
   while (state->feed_breaks < 2) {
     if (cai_cli_presenter_sink(state, "\n", 1U) != 0)
       return cai_cli_error(error, CAI_ERR_TRANSPORT,

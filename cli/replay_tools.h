@@ -4,6 +4,10 @@
 #include <cai/execution.h>
 
 typedef struct cai_cli_replay_tools cai_cli_replay_tools;
+/** This record can write subprocess bytes directly to the output sink.
+ * Finish a preceding Markdown document before following it; other tool-body
+ * chunks retain their parser until a semantic boundary or display receipt. */
+int cai_cli_replay_tools_command_output(const cai_execution_record *);
 /* Index only bounded labels/status, never tool output. Older selected turns
  * can be evicted while the normal recovery/index pass advances. */
 int cai_cli_replay_tools_index(cai_cli_replay_tools **tools,

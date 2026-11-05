@@ -90,8 +90,6 @@ int cai_app_bridge_stopping(cai_app_bridge *bridge);
 void cai_app_bridge_ack(cai_app_bridge *bridge, cai_app_command *command,
                         int status, const cai_error *error);
 void cai_app_bridge_outcome(cai_app_bridge *bridge, cai_app_outcome outcome);
-int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
-                    cai_app_bridge *bridge);
 int cai_cli_app_controller_run(int argc, char **argv,
                                const cai_app_config *application,
                                cai_app_bridge *bridge,

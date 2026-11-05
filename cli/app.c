@@ -157,15 +157,12 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
     if (rc == CAI_OK && !handled) {
       if (pthread_mutex_trylock(&application_lock) != 0)
         rc = cai_cli_error(error, CAI_ERR_INVALID,
-                           "a batch or utility application is already running");
+                           "a utility application is already running");
       else {
         rc = process_save(&saved, error);
         if (rc == CAI_OK) {
-          *exit_code = cai_cli_utility_invocation(argc + 1, arguments)
-                           ? cai_cli_utility_run(argc + 1, arguments,
-                                                 &app->config, app->bridge)
-                           : cai_cli_app_run(argc + 1, arguments, &app->config,
-                                             app->bridge);
+          *exit_code = cai_cli_utility_run(argc + 1, arguments, &app->config,
+                                           app->bridge);
           rc = process_restore(&saved, error);
         }
         process_free(&saved);

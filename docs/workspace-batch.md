@@ -80,8 +80,26 @@ resetting goal accounting or undoing later host goal controls. This marker
 belongs to the scope, session and accepted journal sequence; importing the
 state into a different conversation cannot suppress a new goal start.
 The old batch/review loops and private final-response spool are removed.
-Plain redirected input without `-i` still uses the older terminal receiver;
-its removal and terminal-independent packaging remain cutover work.
+Plain redirected input without `-i` uses this producer with a bounded line
+reader and live shared presentation. Its complete input stream and responses
+are never collected: one admission receipt is settled before the next line is
+offered. The backend owns queued input and applies commands at their declared
+boundaries, including `/status` while inference is in flight and `/goal pause`
+at a request boundary. Only explicit conversation changes hold further source
+admission until the new binding is ready.
+The last unterminated line is valid; NUL and oversized lines fail explicitly.
+EOF drains accepted work, `/quit` stops further admission, and terminal-only
+commands report inline errors without entering a shell. Existing replay limits
+apply to this frontend. Native `run --server` attaches without a runtime,
+storage client or process launch; host STOP detaches only that client. The
+old combined readline loop is removed. Remaining terminal helper removal and
+terminal-independent packaging remain cutover work.
+
+Batch stderr activity uses semantic execution names such as `tool.patch`,
+`tool.output` and `reasoning.receipt`; command output in a tool result retains
+its structured JSON envelope. Runtime-only configuration warnings stay in the
+owner's log, whose path is available through status. The frontend does not
+relay that logger or treat diagnostics as model input.
 
 Slash commands finish at `command.settled`, after all command error fields.
 When a host clears or pauses a newly accepted goal before inference, ordered

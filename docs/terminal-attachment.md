@@ -200,8 +200,12 @@ the startup inventory still require
 integration. Automatic executable-path discovery currently
 uses Linux `/proc/self/exe`. Batch prompts, standalone goals, reviews, slash
 commands, pipe-shell commands and combined goal-plus-prompt startup use the
-owner/socket adapter. Plain redirected input without `-i` still uses the older
-terminal receiver; its removal remains part of the separation work.
+owner/socket adapter. Plain redirected input without `-i` now shares that
+producer and renders live output without an editor. Native `run --server`
+uses verified discovery and the same socket frontends, without a local runtime
+or storage client; STOP detaches only that client. The old combined readline
+loop is removed. Unused terminal helpers still need removal from the owner
+source before frontend-independent application packaging is complete.
 Maintenance uses the separate [utility dispatcher](application-utilities.md);
 its remaining process-global logging/browser environment boundary is explicit.
 These remain part of the active goal.

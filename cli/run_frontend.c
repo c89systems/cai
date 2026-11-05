@@ -3,6 +3,7 @@
 #include "batch.h"
 #include "config.h"
 #include "error.h"
+#include "existing_frontend.h"
 #include "frontend.h"
 #include "log.h"
 #include <errno.h>
@@ -31,8 +32,8 @@ typedef struct frontend_run {
 
 static int agent_mode(const cai_cli_options *o) {
   return cai_cli_batch_mode(o) ||
-         (!o->headless && o->server == NULL && !o->non_interactive &&
-          !o->review && !cai_cli_options_utility(o) && isatty(STDIN_FILENO) &&
+         (!o->headless && !o->non_interactive && !o->review &&
+          !cai_cli_options_utility(o) && isatty(STDIN_FILENO) &&
           isatty(STDOUT_FILENO));
 }
 static int prepare(void *context, struct pollfd *fd, uint64_t *deadline,
@@ -159,6 +160,11 @@ int cai_cli_run_frontend(const cai_app_config *application,
     r->prepared.temporary = &r->temporary;
   }
   r->prepared.options = r->options;
+  if (r->options.server != NULL) {
+    rc = cai_cli_existing_frontend(application, bridge, &r->options,
+                                   r->configuration, exit_code, error);
+    goto done;
+  }
   cai_app_client_config_init(&r->target);
   r->target.runtime_directory = r->options.runtime_dir;
   r->target.workspace = r->options.directory;

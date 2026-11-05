@@ -39,13 +39,6 @@ static int native_host(int argc, char **argv) {
   return argc > 1 && (strncmp(argv[1], "chrome-extension://", 19U) == 0 ||
                       strcmp(argv[1], "--chrome-native-host") == 0);
 }
-int cai_cli_utility_invocation(int argc, char **argv) {
-  cai_cli_options options;
-  if (native_host(argc, argv))
-    return 1;
-  return cai_cli_read_options(argc, argv, NULL, &options) != 1 ||
-         cai_cli_options_utility(&options);
-}
 static int dispatch(utility_run *u) {
   cai_cli_options selected;
   cai_sink *destination = NULL;
@@ -182,6 +175,13 @@ int cai_cli_utility_run(int argc, char **argv,
     result = parsed == 0 ? 0 : 2;
     if (parsed < 0 && u->error.code == CAI_OK)
       cai_cli_error(&u->error, CAI_ERR_INVALID, u->options.diagnostic);
+    goto done;
+  }
+  if (u->options.headless && !cai_cli_options_utility(&u->options)) {
+    cai_cli_error(&u->error, CAI_ERR_INVALID,
+                  "--headless is an executable process mode; native hosts "
+                  "must use cai_app_start_server");
+    result = 2;
     goto done;
   }
   rc = u->configuration->apply_environment(u->configuration, &u->error);
