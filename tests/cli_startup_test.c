@@ -1,3 +1,4 @@
+#include "../cli/goal_input.h"
 #include "../cli/input_wire.h"
 #include "../cli/startup.h"
 #include <assert.h>
@@ -156,6 +157,49 @@ int main(void) {
   options.new_session = 1;
   memset(&cursor, 0, sizeof(cursor));
   expect(&cursor, &options, "current", "/new", 1);
+  {
+    cai_cli_goal_input decoded;
+    const char *combined[] = {
+        "cai", "-ng",  "goal with \"quotes\"\n€", "-i", "prompt \\u0000\n€",
+        "-i",  "later"};
+    size_t count = sizeof(combined) / sizeof(combined[0]);
+    char *combined_args[7];
+    copy_args(combined_args, combined, count);
+    assert(cai_cli_parse_options((int)count, combined_args, &options) == 1);
+    memset(&cursor, 0, sizeof(cursor));
+    cai_error_init(&error);
+    assert(cai_cli_startup_next(&cursor, &options, "current", &text, &control,
+                                &error) == CAI_OK);
+    assert(control && strncmp(text, "/goal start ", 12U) == 0);
+    assert(cai_cli_goal_input_parse(text + 12U, &decoded, &error) == CAI_OK);
+    assert(strcmp(decoded.objective, combined[2]) == 0 &&
+           strcmp(decoded.prompt, combined[4]) == 0);
+    cai_cli_goal_input_close(&decoded);
+    free(text);
+    expect(&cursor, &options, "current", "later", 0);
+    expect(&cursor, &options, "current", NULL, 0);
+    free_args(combined_args, count);
+    {
+      static const char *invalid[] = {
+          "{}",
+          "[]",
+          "{\"objective\":\"a\"}",
+          "{\"objective\":\"\",\"prompt\":\"b\"}",
+          "{\"objective\":\"a\",\"prompt\":null}",
+          "{\"objective\":\"a\",\"prompt\":\"x\\u0000suffix\"}",
+          "{\"objective\":\"a\",\"objective\":\"b\",\"prompt\":\"c\"}",
+          "{\"objective\":\"a\",\"prompt\":\"\\ud800\"}"};
+      size_t at;
+      for (at = 0U; at < sizeof(invalid) / sizeof(invalid[0]); ++at) {
+        assert(cai_cli_goal_input_parse(invalid[at], &decoded, &error) !=
+               CAI_OK);
+        cai_cli_goal_input_close(&decoded);
+        cai_error_cleanup(&error);
+        cai_error_init(&error);
+      }
+    }
+    cai_error_cleanup(&error);
+  }
 
   cai_cli_options_init(&options);
   options.review_and_fix = 1;

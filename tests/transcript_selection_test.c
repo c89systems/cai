@@ -149,7 +149,7 @@ static int replay(stream *s, uint64_t through) {
   e.watermark = through;
   return s->event(s->context, &e, NULL);
 }
-static void last_response(size_t fragment) {
+static void last_response(size_t fragment, const char *identity) {
   stream s, p;
   cai_transcript_selection *selection = NULL;
   cai_transcript_selection_result result, saved;
@@ -158,7 +158,7 @@ static void last_response(size_t fragment) {
   output out;
   base(&s);
   s.fragment = fragment;
-  assert(cai_transcript_selection_open(&s.at, work, &selection, NULL) ==
+  assert(cai_transcript_selection_open(&s.at, identity, &selection, NULL) ==
          CAI_OK);
   s.event = cai_transcript_selection_event;
   s.context = selection;
@@ -168,19 +168,19 @@ static void last_response(size_t fragment) {
   assert(cai_transcript_selection_get(selection, &result, NULL) == CAI_OK &&
          result.state == CAI_TRANSCRIPT_WORK_WAITING &&
          result.text_bytes == 0U);
-  execution(&s, "turn.started", work, "parent", 0);
+  execution(&s, "turn.started", identity, "parent", 0);
   assert(emit(&s, "assistant_text_delta", "commentary", 10U) == CAI_OK);
-  execution(&s, "response.completed", work, "parent", 0);
+  execution(&s, "response.completed", identity, "parent", 0);
   assert(emit(&s, "subagent", "CHILD TEXT", 10U) == CAI_OK);
-  execution(&s, "turn.completed", work, "child", 0);
+  execution(&s, "turn.completed", identity, "child", 0);
   assert(cai_transcript_selection_get(selection, &result, NULL) == CAI_OK &&
          result.state == CAI_TRANSCRIPT_WORK_ACTIVE &&
          result.text_bytes == 10U);
   assert(emit(&s, "assistant_text_delta", "final", 5U) == CAI_OK);
   assert(emit(&s, "reasoning_summary", "PRIVATE", 7U) == CAI_OK);
   assert(emit(&s, "assistant_text_delta", " λ", 3U) == CAI_OK);
-  execution(&s, "response.completed", work, "parent", 0);
-  execution(&s, "turn.completed", work, "parent", 0);
+  execution(&s, "response.completed", identity, "parent", 0);
+  execution(&s, "turn.completed", identity, "parent", 0);
   assert(cai_transcript_selection_get(selection, &result, NULL) == CAI_OK &&
          result.state == CAI_TRANSCRIPT_WORK_COMPLETED &&
          result.text_bytes == 8U);
@@ -489,7 +489,7 @@ static void invalid_and_allocation(void) {
   sink = sink_open(&out);
   assert(cai_transcript_selection_open(NULL, work, &selection, NULL) ==
          CAI_ERR_INVALID);
-  assert(cai_transcript_selection_open(&s.at, "tool-call", &selection, NULL) ==
+  assert(cai_transcript_selection_open(&s.at, "", &selection, NULL) ==
          CAI_ERR_INVALID);
   assert(cai_transcript_selection_event(NULL, NULL, NULL) == CAI_ERR_INVALID);
   assert(cai_transcript_selection_get(NULL, &range, NULL) == CAI_ERR_INVALID);
@@ -555,8 +555,11 @@ static void unowned_turn(void) {
 static void *worker(void *unused) {
   size_t i;
   (void)unused;
-  for (i = 1U; i <= 17U; ++i)
-    last_response(i);
+  for (i = 1U; i <= 17U; ++i) {
+    last_response(i, work);
+    last_response(i, "command:parent:2:3:4");
+    last_response(i, "native-goal-start");
+  }
   terminal_cases();
   unowned_turn();
   join_unowned_response();

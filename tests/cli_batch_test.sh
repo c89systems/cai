@@ -115,6 +115,25 @@ contains "$root/stdout" 'before?after?control'
 # a tool during an ordinary accepted prompt. Continuations need no new prompt
 # receipt and must never cause a second runtime to open the same collection.
 before=$(requests)
+goal_text=$'Combined "goal"\nwith \\ escapes and €'
+first_text=$'Initial "prompt"\nwith \\ escapes and €'
+plan '{"plan":["INITIAL COMBINED REPLY","__complete_goal__","COMBINED GOAL FINISHED","SECOND INSTRUCTION FINISHED"]}'
+run -s batch-fixture -ng "$goal_text" -i "$first_text" -i 'second instruction after achievement'; ok
+[[ $(cat "$root/stdout") == 'SECOND INSTRUCTION FINISHED' && $(requests) == $((before+4)) ]]
+sed -n "$((before+1))p" "$root/peer/requests.jsonl" >"$root/combined-first"
+jq -e --arg prompt "$first_text" '([.input[]? | select(.role == "user") | .content[]? | .text?] | last == $prompt) and any(.input[]?; .role == "developer" and any(.content[]?; (.text? // "") | contains("Combined")))' "$root/combined-first" >/dev/null
+contains "$root/stderr" 'COMBINED GOAL FINISHED'
+before=$(requests)
+plan '{"plan":[{"tool":"update_goal","arguments":{"status":"paused"}},"COMBINED NEEDS ANSWER"]}'
+run -s batch-fixture -ng 'Pause the combined goal' -i 'initial question' -i 'MUST NOT FOLLOW PAUSE'; bad
+[[ $(cat "$root/stdout") == 'COMBINED NEEDS ANSWER' && $(requests) == $((before+2)) ]]
+absent "$root/peer/requests.jsonl" 'MUST NOT FOLLOW PAUSE'
+before=$(requests)
+run -s batch-fixture -ni '/goal start {"objective":"a","objective":"b","prompt":"MUST NOT RUN DUPLICATE"}' -i 'MUST NOT FOLLOW REJECTION'; bad
+[[ ! -s "$root/stdout" && $(requests) == "$before" ]]
+run -s batch-fixture -ni '/goal start {"objective":"a","prompt":"bad\u0000suffix"}'; bad
+[[ ! -s "$root/stdout" && $(requests) == "$before" ]]
+before=$(requests)
 plan '{"plan":["GOAL FIRST TURN","__complete_goal__","GOAL FINAL TURN"]}'
 run -s batch-fixture -ng 'finish the attached goal'; ok
 [[ $(cat "$root/stdout") == 'GOAL FINAL TURN' && $(requests) == $((before+3)) ]]
@@ -152,4 +171,14 @@ wait_for has "$root/batch.err" '/goal new Replacement background goal'
 release
 wait "$batch_pid"; batch_pid=
 [[ $(cat "$root/batch.out") == 'REPLACED BACKGROUND GOAL DONE' && $(requests) == $((before+3)) ]]
+kill -TERM "$owner_pid"; wait "$owner_pid"; owner_pid=
+
+# Explicit headless startup uses the same core action without an attachment.
+before=$(requests)
+plan '{"plan":["HEADLESS INITIAL REPLY","__complete_goal__","HEADLESS COMBINED DONE"]}'
+"${base[@]}" -x -N -g 'Headless combined objective' -i 'Headless initial prompt' --workspace-name batch-fixture </dev/null >"$root/owner.out" 2>"$root/owner.log" & owner_pid=$!
+wait_for has "$root/owner.log" 'HEADLESS COMBINED DONE'
+[[ $(requests) == $((before+3)) ]]
+sed -n "$((before+1))p" "$root/peer/requests.jsonl" >"$root/headless-first"
+jq -e '[.input[]? | select(.role == "user") | .content[]? | .text?] | last == "Headless initial prompt"' "$root/headless-first" >/dev/null
 kill -TERM "$owner_pid"; wait "$owner_pid"; owner_pid=

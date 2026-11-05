@@ -530,6 +530,7 @@ if(CAI_BUILD_TESTS)
     agent_runtime_capacity
     agent_runtime_capacity_websocket
     agent_runtime_goal_restart
+    agent_runtime_goal_input
     agent_runtime_execution
     runtime_operator_execution
     execution_record

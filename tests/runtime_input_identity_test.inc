@@ -91,14 +91,17 @@ static int input_identity_count(const input_identity_trace *trace,
  * Only the fixture's closed local journal is shortened; no live store or real
  * user history is modified. Later commits/results deliberately do not survive.
  */
-static int input_identity_cut_delivery(const char *root, const char *scope) {
+static int input_identity_cut_event(const char *root, const char *scope,
+                                    const char *type) {
   static const char hex[] = "0123456789abcdef";
   unsigned char digest[SHA256_DIGEST_LENGTH];
   char hash[65], path[PATH_MAX];
+  char needle[128];
   char *line = NULL;
   size_t i, capacity = 0U;
   FILE *file;
   int rc = -1;
+  snprintf(needle, sizeof(needle), "\"type\":\"%s\"", type);
   if (SHA256((const unsigned char *)scope, strlen(scope), digest) == NULL)
     return -1;
   for (i = 0U; i < sizeof(digest); ++i) {
@@ -111,7 +114,7 @@ static int input_identity_cut_delivery(const char *root, const char *scope) {
   if (file == NULL)
     return -1;
   while (getline(&line, &capacity, file) >= 0)
-    if (strstr(line, "\"type\":\"input_queue_delivery\"") != NULL) {
+    if (strstr(line, needle) != NULL) {
       off_t end = ftello(file);
       if (end >= 0)
         rc = ftruncate(fileno(file), end);

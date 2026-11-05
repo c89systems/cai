@@ -131,6 +131,9 @@ cli_command_boundary cai_cli_command_delivery(const char *line) {
       !cli_word_is(arg, word_length, "refresh"))
     return CLI_COMMAND_FEED;
   if (cli_word_is(name, length, "/goal") &&
+      cli_word_is(arg, word_length, "start"))
+    return CLI_COMMAND_TURN;
+  if (cli_word_is(name, length, "/goal") &&
       (cli_word_is(arg, arg_length, "status") ||
        cli_word_is(arg, arg_length, "help")))
     return CLI_COMMAND_FEED;

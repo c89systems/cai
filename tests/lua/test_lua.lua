@@ -1131,6 +1131,9 @@ do
   assert_runtime_argument_error_releases_activity("runtime goal replacement", function(runtime)
     runtime:replace_goal({})
   end)
+  assert_runtime_argument_error_releases_activity("runtime goal initial input", function(runtime)
+    runtime:start_goal("objective", {})
+  end)
   assert_runtime_argument_error_releases_activity("runtime goal budget", function(runtime)
     runtime:set_goal_token_budget({})
   end)
@@ -1433,6 +1436,12 @@ do
     assert(not goal.has_token_budget and goal.tokens_used == 0,
       "Lua fresh goal resets budget and accounting")
     assert_not_ok(goal_runtime:replace_goal(""))
+    assert(type(goal_runtime.start_goal) == "function", "Lua atomic goal/input method")
+    assert_not_ok(goal_runtime:start_goal("", "initial prompt"))
+    assert_not_ok(goal_runtime:start_goal("objective", ""))
+    assert_not_ok(goal_runtime:start_goal("objective", "initial prompt", string.rep("x", 256)))
+    assert_throws(function() goal_runtime:start_goal("goal\0suffix", "prompt") end)
+    assert_throws(function() goal_runtime:start_goal("goal", "prompt\0suffix") end)
     assert_ok(goal_runtime:clear_goal())
     for _ = 1, 10 do
       goal_runtime:pump(10)

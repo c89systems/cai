@@ -26945,6 +26945,10 @@ static int test_runtime_input_boundary(void *context,
 #include "runtime_goal_restart_test.inc"
 #include "runtime_input_ack_test.inc"
 #include "runtime_input_identity_test.inc"
+
+/* Compound goal fixtures reuse the queue identity/recovery helpers above. */
+#include "runtime_goal_input_test.inc"
+
 #include "runtime_queue_test.inc"
 #include "runtime_responsiveness_test.inc"
 
@@ -54768,6 +54772,7 @@ static const test_entry test_entries[] = {
     {"agent_runtime_capacity", test_agent_runtime_capacity},
     {"agent_runtime_capacity_websocket", test_agent_runtime_capacity_websocket},
     {"agent_runtime_goal_restart", test_agent_runtime_goal_restart},
+    {"agent_runtime_goal_input", test_agent_runtime_goal_input},
     {"agent_runtime_execution", test_agent_runtime_execution},
     {"runtime_operator_execution", test_runtime_operator_execution},
     {"execution_record", test_execution_record},

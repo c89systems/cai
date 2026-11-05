@@ -549,7 +549,7 @@
         PROPERTIES LABELS "cli;local;offline" TIMEOUT 15)
     endforeach()
     add_executable(cai_cli_log_test tests/cli_log_test.c
-      cli/identity.c cli/log.c cli/log_environment.c cli/response.c cli/pouch_stream.c cli/error.c)
+      cli/identity.c cli/log.c cli/log_environment.c cli/pouch_stream.c cli/error.c)
     target_link_libraries(cai_cli_log_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_log_test)
     add_test(NAME cai_cli_log COMMAND cai_cli_log_test "${CMAKE_CURRENT_BINARY_DIR}")

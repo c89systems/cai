@@ -199,8 +199,9 @@ parity. Full startup-control parity and validation of extended configuration out
 the startup inventory still require
 integration. Automatic executable-path discovery currently
 uses Linux `/proc/self/exe`. Batch prompts, standalone goals, reviews, slash
-commands and pipe-shell commands use the owner/socket adapter; combined
-goal-plus-prompt startup still uses the older receiver.
+commands, pipe-shell commands and combined goal-plus-prompt startup use the
+owner/socket adapter. Plain redirected input without `-i` still uses the older
+terminal receiver; its removal remains part of the separation work.
 Maintenance uses the separate [utility dispatcher](application-utilities.md);
 its remaining process-global logging/browser environment boundary is explicit.
 These remain part of the active goal.

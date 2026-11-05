@@ -1168,6 +1168,17 @@ int cai_agent_runtime_create_goal(cai_agent_runtime *runtime,
  */
 int cai_agent_runtime_replace_goal(cai_agent_runtime *runtime,
                                    const char *objective, cai_error *error);
+/** Admit one queued turn that replaces the goal with an unbudgeted objective
+ * immediately before its prompt enters context. Both strings are required,
+ * copied before return and durably accepted together; their combined length
+ * must not exceed 66048 bytes. Other turns retain FIFO order. Cancellation
+ * and recovery use the ordinary input consumption/commit boundary.
+ * call_id is optional presentation correlation (at most 255 bytes), never
+ * authority. Owner-thread-only. This is a bounded input action, not a stream.
+ */
+int cai_agent_runtime_start_goal(cai_agent_runtime *runtime,
+                                 const char *objective, const char *prompt,
+                                 const char *call_id, cai_error *error);
 /** Pause an active durable goal. */
 int cai_agent_runtime_pause_goal(cai_agent_runtime *runtime, cai_error *error);
 /**

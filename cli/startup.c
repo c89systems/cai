@@ -1,5 +1,6 @@
 #include "startup.h"
 #include "error.h"
+#include "goal_input.h"
 #include "input_wire.h"
 #include <stdlib.h>
 #include <string.h>
@@ -115,6 +116,15 @@ int cai_cli_startup_next(cai_cli_startup *cursor, const cai_cli_options *o,
       break;
     case CAI_CLI_STARTUP_GOAL:
       if (o->goal != NULL) {
+        const char *initial = cai_cli_instruction_at(o, 0U);
+        if (initial != NULL) {
+          int rc = cai_cli_goal_input_encode(o->goal, initial, text, error);
+          if (rc == CAI_OK) {
+            cursor->instruction = 1U;
+            *control = 1;
+          }
+          return rc;
+        }
         prefix = "/goal new ";
         value = o->goal;
       }

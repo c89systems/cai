@@ -73,10 +73,20 @@ attaches to an existing one. Native `run()` uses the same calling-thread owner
 and a default-stack batch adapter. Temporary runs share this composition;
 noninteractive cleanup never asks a terminal question. Direct `--review` and
 slash `-i` commands and explicit pipe-shell instructions use the same adapter.
-Combined `-g` plus `-i` startup still uses the old receiver, so its removal and
-terminal-independent packaging remain cutover work.
+Combined `-g` plus `-i` startup uses one queued goal/initial-input action.
+The runtime records which accepted goal input it already applied. Recovery
+after a preflight compaction commit consumes the pending prompt without
+resetting goal accounting or undoing later host goal controls. This marker
+belongs to the scope, session and accepted journal sequence; importing the
+state into a different conversation cannot suppress a new goal start.
+The old batch/review loops and private final-response spool are removed.
+Plain redirected input without `-i` still uses the older terminal receiver;
+its removal and terminal-independent packaging remain cutover work.
 
 Slash commands finish at `command.settled`, after all command error fields.
+When a host clears or pauses a newly accepted goal before inference, ordered
+application settlement also releases the batch waiter: no model turn needs
+to run merely to acknowledge that control.
 An unsuccessful startup control prevents dependent prompts from being offered.
 Frontend-only actions fail explicitly in batch mode. Ordinary command output
 is selected by the exact admitted command identity; another producer's reply
@@ -149,6 +159,33 @@ both must publish the original identity. `cai_app_workspace_server` checks the
 accepted OFFER's exact identity at the typed client's completed-turn boundary,
 including producer reconnection and approval after an edit lease is released.
 These prove correlation, not the subsequent batch adapter cutover.
+
+## Combined goal and initial prompt
+
+`--goal OBJECTIVE -i PROMPT` compiles into one ordinary turn-only queue action:
+`/goal start {"objective":"OBJECTIVE","prompt":"PROMPT"}`. Both fields are
+required nonempty strings. This advanced command uses JSON escaping; neither
+field is split on whitespace or interpreted as another command. Later `-i`
+instructions retain their normal sequential behavior. A goal paired with an
+initial instruction therefore never starts an automatic continuation first.
+
+Core `cai_agent_runtime_start_goal` admits one queued turn carrying its new,
+unbudgeted objective and optional caller correlation ID. It copies both strings
+and durably accepts them together. At that turn's actual start the worker
+replaces the goal before adding the prompt to context. The ordinary input
+consumption/commit boundary covers both, including crash recovery and failed
+preflight. There is no second queue, approval hold, delayed client release,
+objective-comparison wait, implicit retry or new journal version. This is a
+bounded individual input action; it is not a streaming document API.
+
+The application supplies the admitted command's identity to that core turn.
+The batch adapter selects its response using that exact identity and waits for
+the turn and any goal continuations to settle. Command acknowledgement alone
+does not complete it. Rejected admission submits no prompt. Runtime failure
+retains the correlated failure and prevents subsequent batch instructions.
+Cancellation, queue limits, stopped/edited entries and controller loss retain
+their existing owner/queue semantics. The new C entry point remains independent
+of the application, terminal and transport.
 
 ## Shell batch cutover contract
 

@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <openssl/evp.h>
 #include <openssl/sha.h>
 #include <pslog.h>
 #include <pthread.h>
@@ -433,6 +434,8 @@ cai_runtime_subagent_result_cleanup(cai_runtime_subagent_result *result);
 
 typedef struct cai_runtime_input_node {
   char *text;
+  /** Optional replacement applied atomically with this turn's initial input. */
+  char *goal_objective;
   /** Original accepted queue identity; empty for direct/unowned input. */
   char call_id[256];
   unsigned long long *input_events;
@@ -456,7 +459,8 @@ typedef enum cai_runtime_input_kind {
   CAI_RUNTIME_INPUT_STEERING = 1,
   CAI_RUNTIME_INPUT_QUEUED_TURN = 2,
   CAI_RUNTIME_INPUT_INTERACTIVE = 3,
-  CAI_RUNTIME_INPUT_GOAL = 4
+  CAI_RUNTIME_INPUT_GOAL = 4,
+  CAI_RUNTIME_INPUT_START_GOAL = 5
 } cai_runtime_input_kind;
 
 /** Claimed work is execution state, never another editable frontend queue. */
@@ -1287,9 +1291,12 @@ static void cai_runtime_input_node_free(cai_runtime_input_node *node) {
     return;
   }
   cai_free_mem(NULL, node->text);
+  cai_free_mem(NULL, node->goal_objective);
   cai_free_mem(NULL, node->input_events);
   cai_free_mem(NULL, node);
 }
+
+#include "cai_runtime_goal_input.inc"
 
 static void
 cai_runtime_goal_control_node_free(cai_runtime_goal_control_node *node) {
@@ -5539,7 +5546,7 @@ static int cai_runtime_replay_journal_event(
   cai_agent_runtime *runtime;
   cai_runtime_input_node *input;
   int input_event;
-  int goal_kind;
+  int goal_kind, rc;
 
   runtime = (cai_agent_runtime *)context;
   if (runtime == NULL || event == NULL || event->type == NULL ||
@@ -5585,6 +5592,7 @@ static int cai_runtime_replay_journal_event(
     return CAI_OK;
   }
   input_event = strcmp(event->type, "steering_queued") == 0 ||
+                strcmp(event->type, "goal_start") == 0 ||
                 strcmp(event->type, "goal_continuation") == 0 ||
                 strcmp(event->type, "turn_queued") == 0 ||
                 strcmp(event->type, "turn_submitted") == 0 ||
@@ -5742,7 +5750,8 @@ static int cai_runtime_replay_journal_event(
     return cai_set_error(error, CAI_ERR_INVALID,
                          "queued agent input event has no text");
   }
-  if (strcmp(event->type, "turn_queued") == 0 &&
+  if ((strcmp(event->type, "turn_queued") == 0 ||
+       strcmp(event->type, "goal_start") == 0) &&
       runtime->turn_count >= runtime->turn_limit) {
     return cai_set_error(
         error, CAI_ERR_LIMIT,
@@ -5754,20 +5763,28 @@ static int cai_runtime_replay_journal_event(
                          "failed to restore queued agent input");
   }
   memset(input, 0, sizeof(*input));
-  input->text = cai_strdup(NULL, event->data);
-  if (input->text == NULL) {
+  if (strcmp(event->type, "goal_start") == 0)
+    rc = cai_runtime_goal_input_parse(event->data, input, error);
+  else {
+    input->text = cai_strdup(NULL, event->data);
+    rc = input->text != NULL ? CAI_OK : CAI_ERR_NOMEM;
+  }
+  if (rc != CAI_OK) {
     cai_runtime_input_node_free(input);
-    return cai_set_error(error, CAI_ERR_NOMEM,
-                         "failed to copy queued agent input");
+    return rc == CAI_ERR_NOMEM
+               ? cai_set_error(error, rc, "failed to copy queued agent input")
+               : rc;
   }
   input->journal_sequence = event->sequence;
   input->goal_continuation = strcmp(event->type, "goal_continuation") == 0;
   /* A restored immediate submission needs the same worker-side activation as
    * a queued turn, but it must not consume queued-turn capacity. */
   input->queued_turn = strcmp(event->type, "turn_queued") == 0 ||
+                       input->goal_objective != NULL ||
                        strcmp(event->type, "turn_submitted") == 0 ||
                        input->goal_continuation;
-  input->counts_toward_turn_limit = strcmp(event->type, "turn_queued") == 0;
+  input->counts_toward_turn_limit =
+      strcmp(event->type, "turn_queued") == 0 || input->goal_objective != NULL;
   if (strcmp(event->type, "user_shell_completed") == 0 ||
       strcmp(event->type, "user_shell_unshared") == 0) {
     input->unshared_shell = strcmp(event->type, "user_shell_unshared") == 0;
@@ -6041,7 +6058,9 @@ static void *cai_runtime_worker(void *context) {
           runtime->user_shell_command != NULL) ||
          (runtime->shell_context_head == NULL &&
           runtime->goal_control_head == NULL &&
-          (runtime->goal_control_failed ||
+          ((runtime->goal_control_failed &&
+            (runtime->turn_head == NULL ||
+             runtime->turn_head->goal_objective == NULL)) ||
            (runtime->turn_head == NULL && !runtime->manual_compaction_pending &&
             !runtime->mcp_refresh_pending) ||
            runtime->subagent_active || runtime->active_review != NULL ||
@@ -6190,7 +6209,39 @@ static void *cai_runtime_worker(void *context) {
       budget_limited = 0;
       goto finish_turn;
     }
-    if (cai_runtime_goal_budget_limited(runtime)) {
+    if (input->goal_objective != NULL) {
+      cai_runtime_goal_control_node control;
+      cai_session_impl *goal = CAI_SESSION_IMPL(runtime->session);
+      char identity[65];
+      char *copy = NULL;
+      memset(&control, 0, sizeof(control));
+      control.kind = CAI_RUNTIME_GOAL_REPLACE;
+      control.text = input->goal_objective;
+      rc = cai_runtime_goal_input_identity(runtime, input->journal_sequence,
+                                           identity, &error);
+      if (rc == CAI_OK &&
+          (input->journal_sequence == 0U || goal->goal_input_applied == NULL ||
+           strcmp(goal->goal_input_applied, identity) != 0)) {
+        copy = cai_strdup(&CAI_SESSION_CLIENT_IMPL(runtime->session)->allocator,
+                          identity);
+        rc = copy != NULL
+                 ? cai_runtime_apply_goal_control(runtime, &control, &error)
+                 : cai_set_error(&error, CAI_ERR_NOMEM,
+                                 "copy applied goal input identity");
+        if (rc == CAI_OK) {
+          cai_free_mem(&CAI_SESSION_CLIENT_IMPL(runtime->session)->allocator,
+                       goal->goal_input_applied);
+          goal->goal_input_applied = copy;
+          copy = NULL;
+        }
+        cai_free_mem(&CAI_SESSION_CLIENT_IMPL(runtime->session)->allocator,
+                     copy);
+      }
+      pthread_mutex_lock(&runtime->lock);
+      runtime->goal_control_failed = rc != CAI_OK;
+      pthread_mutex_unlock(&runtime->lock);
+    }
+    if (rc == CAI_OK && cai_runtime_goal_budget_limited(runtime)) {
       static const char message[] = "queued user turn rejected because the "
                                     "goal token budget is exhausted";
 
@@ -8942,6 +8993,7 @@ static int cai_runtime_enqueue_input_origin(
   cai_runtime_event_node *event_node;
   cai_agent_run_state previous_state;
   const char *journal_type;
+  const char *goal_data = kind == CAI_RUNTIME_INPUT_START_GOAL ? text : NULL;
   int activated;
   int type;
   int rc;
@@ -8970,10 +9022,19 @@ static int cai_runtime_enqueue_input_origin(
     memcpy(node->call_id, input_call, call_length + 1U);
   }
   event_node = NULL;
-  node->text = cai_strdup(NULL, text);
-  if (node->text == NULL) {
+  if (goal_data != NULL) {
+    rc = cai_runtime_goal_input_parse(goal_data, node, error);
+    kind = CAI_RUNTIME_INPUT_QUEUED_TURN;
+    text = node->text;
+  } else {
+    node->text = cai_strdup(NULL, text);
+    rc = node->text != NULL ? CAI_OK : CAI_ERR_NOMEM;
+  }
+  if (rc != CAI_OK) {
     cai_runtime_input_node_free(node);
-    return cai_set_error(error, CAI_ERR_NOMEM, "failed to copy agent input");
+    return rc == CAI_ERR_NOMEM
+               ? cai_set_error(error, rc, "failed to copy agent input")
+               : rc;
   }
   if (input_event_count != 0U) {
     if (input_events == NULL ||
@@ -9073,7 +9134,8 @@ static int cai_runtime_enqueue_input_origin(
                          "shell context persistence failed; reopen the session "
                          "before continuing");
   }
-  if (runtime->goal_control_failed && runtime->goal_control_head == NULL &&
+  if (goal_data == NULL && runtime->goal_control_failed &&
+      runtime->goal_control_head == NULL &&
       runtime->goal_control_inflight == 0U) {
     pthread_mutex_unlock(&runtime->lock);
     cai_runtime_input_node_free(node);
@@ -9169,7 +9231,8 @@ static int cai_runtime_enqueue_input_origin(
   if (kind == CAI_RUNTIME_INPUT_TURN && runtime->review_mode) {
     cai_runtime_clear_review_report_locked(runtime);
   }
-  journal_type = node->goal_continuation                 ? "goal_continuation"
+  journal_type = goal_data != NULL                       ? "goal_start"
+                 : node->goal_continuation               ? "goal_continuation"
                  : kind == CAI_RUNTIME_INPUT_STEERING    ? "steering_queued"
                  : kind == CAI_RUNTIME_INPUT_QUEUED_TURN ? "turn_queued"
                                                          : "turn_submitted";
@@ -9210,8 +9273,10 @@ static int cai_runtime_enqueue_input_origin(
   if (rc == CAI_OK)
     rc = cai_runtime_append_journal_event_locked(
         runtime, origin != NULL ? "input_queue_delivery" : journal_type,
-        origin != NULL ? delivery_data : node->text, &node->journal_sequence,
-        error);
+        origin != NULL      ? delivery_data
+        : goal_data != NULL ? goal_data
+                            : node->text,
+        &node->journal_sequence, error);
   cai_free_mem(NULL, delivery_data);
   /* A child append can commit before its parent observation fails. Keep the
    * committed work and receipt; the caller resolves its original identity. */
@@ -9284,6 +9349,24 @@ static int cai_runtime_enqueue_input(cai_agent_runtime *runtime,
                                      cai_error *error) {
   return cai_runtime_enqueue_input_origin(runtime, text, kind, started, NULL,
                                           0U, NULL, 0U, NULL, error);
+}
+
+int cai_agent_runtime_start_goal(cai_agent_runtime *runtime,
+                                 const char *objective, const char *prompt,
+                                 const char *call_id, cai_error *error) {
+  char *data = NULL;
+  int rc = cai_runtime_owner(runtime, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (runtime->review_mode)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "review runtimes cannot start goals");
+  rc = cai_runtime_goal_input_encode(objective, prompt, call_id, &data, error);
+  if (rc == CAI_OK)
+    rc = cai_runtime_enqueue_input(runtime, data, CAI_RUNTIME_INPUT_START_GOAL,
+                                   NULL, error);
+  cai_free_mem(NULL, data);
+  return rc;
 }
 
 int cai_agent_runtime_pending_input(cai_agent_runtime *runtime,

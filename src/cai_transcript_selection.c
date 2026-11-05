@@ -105,7 +105,7 @@ int cai_transcript_selection_open(const cai_transcript_position *after,
     *out = NULL;
   length = call != NULL ? strlen(call) : 0U;
   if (out == NULL || !position_valid(after) ||
-      (call != NULL && strncmp(call, "input:", 6U) != 0) || length >= 256U)
+      (call != NULL && call[0] == '\0') || length >= 256U)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "accepted cursor and queued work identity required");
   s = cai_alloc(NULL, sizeof(*s));

@@ -167,6 +167,7 @@ typedef struct cai_session_state_doc {
   char *conversation_id;
   char *goal_objective;
   char *goal_status;
+  char *goal_input_applied;
   long long goal_token_budget;
   int has_goal_token_budget;
   long long goal_token_usage_baseline;
@@ -245,6 +246,8 @@ static const lonejson_field cai_session_state_fields[] = {
                                           "goal_objective"),
     LONEJSON_FIELD_STRING_ALLOC_OMIT_NULL(cai_session_state_doc, goal_status,
                                           "goal_status"),
+    LONEJSON_FIELD_STRING_ALLOC_OMIT_NULL(
+        cai_session_state_doc, goal_input_applied, "goal_input_applied"),
     LONEJSON_FIELD_I64_PRESENT(cai_session_state_doc, goal_token_budget,
                                has_goal_token_budget, "goal_token_budget"),
     LONEJSON_FIELD_I64(cai_session_state_doc, goal_token_usage_baseline,
@@ -1219,6 +1222,7 @@ int cai_agent_new_session(cai_agent *agent, cai_session **out,
   impl->state_preset_prompt_version = NULL;
   impl->goal_objective = NULL;
   impl->goal_status = NULL;
+  impl->goal_input_applied = NULL;
   impl->goal_token_budget = 0LL;
   impl->goal_has_token_budget = 0;
   impl->goal_token_usage_baseline = 0LL;
@@ -2708,6 +2712,7 @@ void cai_session_destroy(cai_session *session) {
   cai_free_mem(allocator, impl->state_preset_prompt_version);
   cai_free_mem(allocator, impl->goal_objective);
   cai_free_mem(allocator, impl->goal_status);
+  cai_free_mem(allocator, impl->goal_input_applied);
   cai_free_mem(allocator, impl);
   session->impl = NULL;
   cai_free_mem(allocator, session);
@@ -7698,6 +7703,7 @@ cai_session_state_fill(cai_session *session, cai_session_state_doc *doc,
       CAI_SESSION_IMPL(session)->state_preset_prompt_version;
   doc->goal_objective = CAI_SESSION_IMPL(session)->goal_objective;
   doc->goal_status = CAI_SESSION_IMPL(session)->goal_status;
+  doc->goal_input_applied = CAI_SESSION_IMPL(session)->goal_input_applied;
   doc->goal_token_budget = CAI_SESSION_IMPL(session)->goal_token_budget;
   doc->has_goal_token_budget = CAI_SESSION_IMPL(session)->goal_has_token_budget;
   doc->goal_token_usage_baseline =
@@ -7893,6 +7899,7 @@ static int cai_session_import_state(cai_session *session, cai_source *source,
   char *next_state_preset_prompt_version;
   char *next_goal_objective;
   char *next_goal_status;
+  char *next_goal_input_applied = NULL;
   int rc;
 
   if (session == NULL || (source == NULL && metadata == NULL)) {
@@ -8030,6 +8037,21 @@ static int cai_session_import_state(cai_session *session, cai_source *source,
     rc = cai_set_error(error, CAI_ERR_INVALID,
                        "session state has incomplete goal data");
     goto done;
+  }
+  if (doc.goal_input_applied != NULL) {
+    const char *p = doc.goal_input_applied;
+    if (strlen(p) != 64U || strspn(p, "0123456789abcdef") != 64U) {
+      rc = cai_set_error(error, CAI_ERR_INVALID,
+                         "session state has invalid goal input identity");
+      goto done;
+    }
+    next_goal_input_applied =
+        cai_strdup(&CAI_SESSION_CLIENT_IMPL(session)->allocator, p);
+    if (next_goal_input_applied == NULL) {
+      rc = cai_set_error(error, CAI_ERR_NOMEM,
+                         "copy applied goal input identity");
+      goto done;
+    }
   }
   if (doc.goal_status != NULL &&
       !cai_session_goal_status_is_valid(doc.goal_status)) {
@@ -8219,6 +8241,10 @@ static int cai_session_import_state(cai_session *session, cai_source *source,
                  CAI_SESSION_IMPL(session)->goal_status);
     CAI_SESSION_IMPL(session)->goal_objective = next_goal_objective;
     CAI_SESSION_IMPL(session)->goal_status = next_goal_status;
+    cai_free_mem(&CAI_SESSION_CLIENT_IMPL(session)->allocator,
+                 CAI_SESSION_IMPL(session)->goal_input_applied);
+    CAI_SESSION_IMPL(session)->goal_input_applied = next_goal_input_applied;
+    next_goal_input_applied = NULL;
     CAI_SESSION_IMPL(session)->goal_token_budget = doc.goal_token_budget;
     CAI_SESSION_IMPL(session)->goal_has_token_budget =
         doc.has_goal_token_budget;
@@ -8292,6 +8318,8 @@ done:
   cai_free_mem(&CAI_SESSION_CLIENT_IMPL(session)->allocator,
                next_goal_objective);
   cai_free_mem(&CAI_SESSION_CLIENT_IMPL(session)->allocator, next_goal_status);
+  cai_free_mem(&CAI_SESSION_CLIENT_IMPL(session)->allocator,
+               next_goal_input_applied);
   return rc;
 }
 

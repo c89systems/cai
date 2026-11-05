@@ -34,7 +34,8 @@ typedef struct cai_transcript_selection_result {
 } cai_transcript_selection_result;
 typedef struct cai_transcript_selection cai_transcript_selection;
 /** Observe from an accepted cursor before admitting work. call_id is the
- * queued turn identity input:SESSION:PRODUCER:REQUEST:ITEM. NULL explicitly
+ * exact accepted work identity, such as input:SESSION:PRODUCER:REQUEST:ITEM
+ * or a command that starts a turn. NULL explicitly
  * observes unowned/direct work in this session (for example goal pursuit).
  * It may join an already-active unowned turn at its next response boundary;
  * only text after the supplied cursor is available. Tagged turns and child

@@ -1,8 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../cli/log.h"
-#include "../cli/response.h"
 
-#include <dirent.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -178,9 +176,7 @@ static int structured_notices(cai_cli_log *log) {
 
 int main(int argc, char **argv) {
   cai_cli_log log;
-  cai_cli_response response;
   cai_error error;
-  cai_source *source;
   pslog_field field;
   pslog_logger *child;
   pthread_t worker;
@@ -192,15 +188,10 @@ int main(int argc, char **argv) {
   char tee_output[4140];
   char startup_path[4096];
   char input[30001];
-  char output[8192];
   char *record;
   char *cursor;
   size_t length;
-  size_t offset;
   size_t i;
-  size_t n;
-  DIR *directory;
-  struct dirent *entry;
 
   CHECK(argc == 2);
   CHECK(snprintf(root, sizeof(root), "%s/startup-logging-XXXXXX", argv[1]) <
@@ -368,52 +359,6 @@ int main(int argc, char **argv) {
   CHECK(strstr(log.directory, "/.cache/cai") != NULL);
   CHECK(cai_cli_log_close(&log) == 0);
 
-  memset(&response, 0, sizeof(response));
-  source = NULL;
-  CHECK(cai_cli_response_source(&response, &source, &error) == CAI_OK &&
-        source == NULL);
-  CHECK(cai_cli_response_append(&response, root, input, sizeof(input) - 1U,
-                                &error) == CAI_OK);
-  cai_cli_response_boundary(&response);
-  CHECK(cai_cli_response_append(&response, root, "", 0U, &error) == CAI_OK);
-  CHECK(cai_cli_response_source(&response, &source, &error) == CAI_OK);
-  offset = 0U;
-  while ((n = cai_source_read(source, output, sizeof(output), &error)) > 0U) {
-    CHECK(offset + n <= sizeof(input) - 1U &&
-          memcmp(output, input + offset, n) == 0);
-    offset += n;
-  }
-  CHECK(offset == sizeof(input) - 1U && error.code == CAI_OK);
-  cai_source_close(source);
-  cai_cli_response_boundary(&response);
-  CHECK(cai_cli_response_source(&response, &source, &error) == CAI_OK &&
-        source == NULL);
-  cai_cli_response_boundary(&response);
-  CHECK(cai_cli_response_source(&response, &source, &error) == CAI_OK &&
-        source == NULL);
-  CHECK(cai_cli_response_append(&response, root, "latest ", 7U, &error) ==
-        CAI_OK);
-  CHECK(cai_cli_response_append(&response, root, "response", 8U, &error) ==
-        CAI_OK);
-  CHECK(cai_cli_response_source(&response, &source, &error) == CAI_OK);
-  CHECK(cai_source_read(source, output, sizeof(output), &error) == 15U &&
-        memcmp(output, "latest response", 15U) == 0);
-  CHECK(cai_source_read(source, output, sizeof(output), &error) == 0U);
-  cai_source_close(source);
-  cai_cli_response_boundary(&response);
-  CHECK(cai_cli_response_source(&response, &source, &error) == CAI_OK &&
-        source != NULL);
-  CHECK(cai_source_read(source, output, sizeof(output), &error) == 15U &&
-        memcmp(output, "latest response", 15U) == 0);
-  cai_source_close(source);
-  CHECK(fstat(fileno(response.file), &status) == 0 && status.st_nlink == 0 &&
-        (status.st_mode & 0777U) == 0600U);
-  directory = opendir(root);
-  CHECK(directory != NULL);
-  while ((entry = readdir(directory)) != NULL)
-    CHECK(strncmp(entry->d_name, ".response-", 10U) != 0);
-  closedir(directory);
-  cai_cli_response_close(&response);
   cai_error_cleanup(&error);
   return 0;
 }

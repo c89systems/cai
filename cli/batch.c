@@ -2,6 +2,7 @@
 #include "batch.h"
 #include "batch_document.h"
 #include "error.h"
+#include "goal_input.h"
 #include "log.h"
 #include "startup.h"
 #include <cai/transcript_selection.h>
@@ -35,7 +36,7 @@ typedef struct batch {
   int awaiting_bind, subscribed, replaying, entry_open;
   int pending, command, receipt, command_done, command_code, handoff;
   int work_failed, has_result, projecting, detaching;
-  int goal_command, goal_follow, settled;
+  int goal_command, goal_start, goal_follow, settled;
   int awaiting_application, application_settled;
   int shared_logger;
   cai_cli_batch_document command_document, review_candidate, review_json;
@@ -57,7 +58,6 @@ typedef struct batch {
 int cai_cli_batch_mode(const cai_cli_options *o) {
   size_t i;
   if (o->headless || cai_cli_options_utility(o) ||
-      (o->goal != NULL && o->instruction_count != 0U) ||
       (o->instruction_count == 0U && o->goal == NULL && !o->review_and_fix &&
        !o->review) ||
       (!o->review && !o->non_interactive && isatty(STDIN_FILENO) &&
@@ -200,7 +200,7 @@ static int execution(void *context, const cai_app_execution_event *e,
   /* An earlier background turn may settle after the goal's OFFER receipt but
    * before that command applies. Only its actual command outcome releases
    * this dependency, including when both records arrive in the same pump. */
-  if (b->awaiting_application &&
+  if ((b->awaiting_application || (b->pending && b->goal_command)) &&
       (!b->goal_command || !b->command || b->command_done) &&
       strcmp(r->kind, "application.settled") == 0 &&
       strcmp(r->session_id, b->at.session) == 0 && r->field == NULL && r->final)
@@ -487,7 +487,7 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
       if (rc != CAI_OK)
         return rc;
     }
-    if (!b->command || b->goal_command) {
+    if (!b->command || b->goal_command || b->goal_start) {
       b->goal_follow = b->goal_command;
       rc = cai_transcript_selection_open(
           &b->at, b->goal_follow ? NULL : b->call, &b->selection, error);
@@ -511,14 +511,15 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
   if (b->command_done) {
     b->command_done = b->handoff = 0;
     b->command = 0;
-    if (!b->goal_command && !b->review_command && !b->shell_command)
+    if (!b->goal_command && !b->goal_start && !b->review_command &&
+        !b->shell_command)
       b->pending = 0;
     if (b->command_code != CAI_OK)
       return cai_cli_error(
           error, b->command_code,
           "batch startup command failed; instructions not submitted");
-    if (!b->startup_control && !b->goal_command && !b->review_command &&
-        !b->shell_command) {
+    if (!b->startup_control && !b->goal_command && !b->goal_start &&
+        !b->review_command && !b->shell_command) {
       rc = cai_cli_batch_document_finish(&b->command_document, CAI_OK, error);
       if (rc != CAI_OK)
         return rc;
@@ -571,6 +572,9 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
     b->goal_command =
         b->command && (strncmp(text, "/goal new ", 10U) == 0 ||
                        strncmp(text, "/review-and-fix", 15U) == 0);
+    b->goal_start = strncmp(text, "/goal", 5U) == 0 &&
+                    strchr(" \t\r\n", text[5]) != NULL &&
+                    cai_cli_goal_input_argument(text + 5U) != NULL;
     b->review_command = b->command && (strcmp(text, "/review") == 0 ||
                                        strncmp(text, "/review ", 8U) == 0);
     b->shell_command = text[0] == '!';

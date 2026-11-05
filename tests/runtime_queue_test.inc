@@ -183,7 +183,8 @@ static void test_agent_runtime_pending_input(test_state *state) {
                     input_identity_collect, &identity, &error) == CAI_OK);
   expect_int(state, "pending_input_recovered_claim_identity",
              input_identity_count(&identity, "turn.completed", input_call), 1L);
-  QUEUE_REQUIRE(input_identity_cut_delivery(root, config.session_scope) == 0);
+  QUEUE_REQUIRE(input_identity_cut_event(root, config.session_scope,
+                                         "input_queue_delivery") == 0);
   QUEUE_REQUIRE(
       cai_agent_runtime_open(mock.client, &config, &runtime, &error) == CAI_OK);
   memset(&identity, 0, sizeof(identity));

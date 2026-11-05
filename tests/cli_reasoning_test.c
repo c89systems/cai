@@ -290,6 +290,10 @@ static int test_command_queue_modes(void) {
       return 1;
   }
   state.foreground_subagent = 1;
+  if (cai_cli_command_delivery("/goal start {}") != CLI_COMMAND_TURN ||
+      cli_prompt_mode(&state, "/goal start {}", SL_PROMPT_QUEUE_MODE_STEER) !=
+          SL_PROMPT_QUEUE_MODE_QUEUED)
+    return 1;
   state.options.subagent_steering = 0;
   memset(&policy, 0, sizeof(policy));
   if (cli_prompt_classify(&state, "ordinary prompt", &policy, NULL) != CAI_OK ||
@@ -373,11 +377,8 @@ static int test_event_logging(void) {
   cli_state state;
   cai_agent_runtime_event event;
   cai_error error;
-  cai_source *source;
   pslog_config config;
   event_log_capture capture;
-  char bytes[128];
-  size_t count;
   int rc;
   memset(&state, 0, sizeof(state));
   memset(&event, 0, sizeof(event));
@@ -442,20 +443,10 @@ static int test_event_logging(void) {
   event.data_length = strlen(event.data);
   if (rc == CAI_OK)
     rc = cli_event(&state, &event, &error);
-  source = NULL;
-  if (rc == CAI_OK)
-    rc = cai_cli_response_source(&state.final_response, &source, &error);
-  count = source != NULL ? cai_source_read(source, bytes, sizeof(bytes), &error)
-                         : 0U;
-  cai_source_close(source);
-  cai_cli_response_close(&state.final_response);
   state.log->logger->destroy(state.log->logger);
   free(state.log);
   cai_error_cleanup(&error);
-  if (rc != CAI_OK || count != strlen("parent answer continues") ||
-      memcmp(bytes, "parent answer continues", count) != 0 ||
-      state.review_report != NULL ||
-      strstr(capture.bytes, "\"lvl\":\"info\"") == NULL ||
+  if (rc != CAI_OK || strstr(capture.bytes, "\"lvl\":\"info\"") == NULL ||
       strstr(capture.bytes, "\"role\":\"user\"") == NULL ||
       strstr(capture.bytes, "\"role\":\"assistant\"") == NULL ||
       strstr(capture.bytes, "\"prompt_kind\":\"normal\"") == NULL ||
@@ -465,8 +456,7 @@ static int test_event_logging(void) {
       strstr(capture.bytes, "\"parent_tool_call_id\":\"child-invocation\"") ==
           NULL ||
       strstr(capture.bytes, "\"app\"") != NULL) {
-    fprintf(stderr, "event logging or parent output selection failed: %s\n",
-            capture.bytes);
+    fprintf(stderr, "event logging failed: %s\n", capture.bytes);
     return 1;
   }
   return 0;

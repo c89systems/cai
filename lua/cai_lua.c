@@ -5705,6 +5705,27 @@ static int cai_lua_agent_runtime_create_goal(lua_State *L) {
 static int cai_lua_agent_runtime_replace_goal(lua_State *L) {
   return cai_lua_agent_runtime_goal_control(L, CAI_LUA_GOAL_REPLACE);
 }
+/** Queue the same atomic goal/initial-input action as native hosts. */
+static int cai_lua_agent_runtime_start_goal(lua_State *L) {
+  cai_lua_agent_runtime *self = cai_lua_check_agent_runtime(L, 1);
+  size_t objective_length, prompt_length, call_length;
+  const char *objective = luaL_checklstring(L, 2, &objective_length);
+  const char *prompt = luaL_checklstring(L, 3, &prompt_length);
+  const char *call = luaL_optlstring(L, 4, NULL, &call_length);
+  cai_error error;
+  int rc;
+  luaL_argcheck(L, memchr(objective, '\0', objective_length) == NULL, 2,
+                "goal objective cannot contain NUL");
+  luaL_argcheck(L, memchr(prompt, '\0', prompt_length) == NULL, 3,
+                "goal prompt cannot contain NUL");
+  luaL_argcheck(L, call == NULL || memchr(call, '\0', call_length) == NULL, 4,
+                "goal correlation cannot contain NUL");
+  cai_error_init(&error);
+  cai_lua_agent_runtime_enter(self);
+  rc = cai_agent_runtime_start_goal(self->ptr, objective, prompt, call, &error);
+  cai_lua_agent_runtime_leave(self);
+  return cai_lua_bool_result(L, rc, &error);
+}
 static int cai_lua_agent_runtime_pause_goal(lua_State *L) {
   return cai_lua_agent_runtime_goal_control(L, CAI_LUA_GOAL_PAUSE);
 }
@@ -12570,6 +12591,7 @@ static const luaL_Reg cai_lua_agent_runtime_methods[] = {
     {"goal", cai_lua_agent_runtime_goal},
     {"create_goal", cai_lua_agent_runtime_create_goal},
     {"replace_goal", cai_lua_agent_runtime_replace_goal},
+    {"start_goal", cai_lua_agent_runtime_start_goal},
     {"pause_goal", cai_lua_agent_runtime_pause_goal},
     {"resume_goal", cai_lua_agent_runtime_resume_goal},
     {"set_goal_objective", cai_lua_agent_runtime_set_goal_objective},

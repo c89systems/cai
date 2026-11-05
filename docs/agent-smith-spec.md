@@ -1426,7 +1426,14 @@ the explicit objective update path. `cai_agent_runtime_replace_goal` atomically
 starts a fresh, unbudgeted goal, replacing any current or pending goal in queue
 order and resetting accounting. Lua exposes the same operation as
 `runtime:replace_goal(objective)`. The TUI uses it for `/goal new TEXT` and
-startup `--goal`; `/goal [status|help|pause|resume|clear]` exposes explicit
+standalone startup `--goal`. Paired `--goal`/`-i` startup uses
+`cai_agent_runtime_start_goal(runtime, objective, prompt, call_id, error)`:
+one bounded durable queued input replaces the goal at its own turn start,
+before its prompt enters context. Lua exposes
+`runtime:start_goal(objective, prompt [, call_id])`. The optional call ID is
+correlation metadata, not authority. `/goal start` takes a JSON object with
+`objective` and `prompt` fields through the same application queue.
+`/goal [status|help|pause|resume|clear]` exposes explicit
 controls. Prefer requesting goal lifecycle through the agent. Unknown slash
 subcommands are errors, rather than implicit objective text.
 

@@ -43,7 +43,12 @@ run -ni '!printf "%s" "$CAI_RUN_ENV"'; ok
 [[ $(cat "$root/stdout") == configured && $(requests) == 5 ]]
 jq -e '.calls == 0 and .ready == 1' "$CAI_RUN_REPORT" >/dev/null
 [[ -z $(find "$runtime_root" -name 'ws-*.info' -print -quit) ]]
+plan '{"plan":["NATIVE COMBINED FIRST","__complete_goal__","NATIVE COMBINED FINAL"]}'
+run -ng 'Native combined objective' -i 'Native initial prompt'; ok
+[[ $(cat "$root/stdout") == 'NATIVE COMBINED FINAL' && $(requests) == 8 ]]
+sed -n '6p' "$root/peer/requests.jsonl" >"$root/first"
+jq -e '[.input[]? | select(.role == "user") | .content[]? | .text?] | last == "Native initial prompt"' "$root/first" >/dev/null
 export CAI_RUN_FAIL_START=1
 run -Nni 'MUST NOT REACH INFERENCE'; bad
-[[ ! -s "$root/stdout" && $(requests) == 5 ]]
+[[ ! -s "$root/stdout" && $(requests) == 8 ]]
 [[ -z $(find "$runtime_root" -name 'ws-*.info' -print -quit) ]]

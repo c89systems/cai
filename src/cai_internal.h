@@ -223,6 +223,9 @@ typedef struct cai_session_impl {
   char *state_preset_prompt_version;
   char *goal_objective;
   char *goal_status;
+  /** Accepted compound input already applied, even if preflight committed
+   * before consuming its prompt. Independent of subsequent goal controls. */
+  char *goal_input_applied;
   long long goal_token_budget;
   int goal_has_token_budget;
   /** Cumulative session usage at goal creation; not user-visible accounting. */
