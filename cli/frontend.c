@@ -461,12 +461,6 @@ static int observed(void *context, const cai_app_client_event *event,
   }
   if (event->type == CAI_APP_CLIENT_STATUS && event->status->available)
     cai_cli_status_maybe_refresh_branch(&f->status, f->target.workspace);
-  if (event->type == CAI_APP_CLIENT_STATUS && event->status->available &&
-      f->pending_context && event->status->conversation != f->current->epoch) {
-    snprintf(f->next_session, sizeof(f->next_session), "%s",
-             event->status->session_id);
-    f->switching = 1;
-  }
   if (event->type == CAI_APP_CLIENT_CONTROL_RESULT &&
       event->input->result.code != CAI_OK) {
     f->expected_close = 0;
@@ -965,6 +959,16 @@ static int event_ready(sl_t *sl, const sl_watch_event_t *event, void *context) {
     return sl_suspend(f->ui->sl);
   return SL_OK;
 }
+/** Native idle follows buffered keys, receipt resolution and deferred edits.
+ * Socket watches must never substitute for this editor-owned boundary. */
+static void editor_idle(sl_t *editor, void *context) {
+  frontend *f = context;
+  if (f->queue != NULL &&
+      cai_cli_input_socket_idle(f->queue, editor, &f->error) != CAI_OK) {
+    f->failed = f->quit = 1;
+    (void)sl_suspend(editor);
+  }
+}
 static int watch(frontend *f, sl_watch_id_t *id, int *old,
                  const struct pollfd *fd) {
   unsigned int flags = (fd->events & POLLIN ? SL_WATCH_READ : 0U) |
@@ -1155,8 +1159,21 @@ static int service(frontend *f) {
       return cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
                            "workspace server disconnected");
     }
-    if (f->pending_context)
+    if (f->pending_context) {
+      const cai_app_view *view = NULL;
+      /* Status and queue reset are independent ordered channels. The new
+       * completed status can precede RESET, so reconcile the cached view
+       * after the pump instead of waiting for another status change. */
+      if (cai_app_client_get_view(f->client, &view, &f->error) != CAI_OK)
+        return -1;
+      if (view != NULL && view->available &&
+          view->conversation != f->current->epoch) {
+        snprintf(f->next_session, sizeof(f->next_session), "%s",
+                 view->session_id);
+        f->switching = 1;
+      }
       return status(f) == 0 ? interests(f) : -1;
+    }
     if (f->state.transport.phase == CAI_WORKSPACE_CONNECTED && !f->bound &&
         !f->awaiting_bind) {
       rc = cai_app_client_bind(
@@ -1413,6 +1430,7 @@ static int select_view(frontend *f, const char *session) {
         sl_set_prompt_queue_profile(
             f->ui->sl, SL_PROMPT_QUEUE_PROFILE_QUEUED_TURNS) != SL_OK ||
         sl_set_prompt_theme(f->ui->sl, f->theme.prompt) != SL_OK ||
+        sl_set_idle_callback(f->ui->sl, editor_idle, f) != SL_OK ||
         cai_cli_completions_open(&v->completions, f->ui->sl,
                                  f->target.workspace, completion_catalog,
                                  f) != SL_OK ||
@@ -1848,7 +1866,10 @@ static int terminal_service(void *context, int epoll_fd, int *timeout,
         *timeout = wait;
     }
   }
-  return CAI_OK;
+  return active->handoff_failed
+             ? cai_cli_error(error, CAI_ERR_CANCELLED,
+                             "workspace owner stopped during terminal handoff")
+             : CAI_OK;
 }
 /** Resolve a fixed local executable using the frontend's captured PATH and
  * selected workspace, including relative/empty PATH components. No shell. */
@@ -2046,8 +2067,12 @@ static int terminal_action(frontend *f, int kind) {
         result = -1;
         goto done;
       }
-    } else if (p->queue != NULL)
+    } else if (p->queue != NULL) {
       (void)cai_cli_input_socket_disconnect(p->queue, NULL);
+      /* The parked view retains its editor/queue. A conversation reset while
+       * the terminal was lent out must not route new events to that queue. */
+      p->queue = NULL;
+    }
     if (p->handoff_failed)
       p->parked_failed = 1;
   }
@@ -2120,7 +2145,12 @@ int cai_cli_frontend_run(const cai_app_config *application,
     f->failed = 1;
   while (!f->quit && !f->failed) {
     sl_prompt_source_t source;
-    char *line = sl_next_prompt(f->ui->sl, "> ", &source);
+    char *line = NULL;
+    /* A local terminal handoff can finish with a pending context change.
+     * Apply it at this seam before entering an editor whose queue is parked;
+     * there need not be another socket event to wake that editor. */
+    if (!group.switching && !f->switching && !f->control && !f->shell)
+      line = sl_next_prompt(f->ui->sl, "> ", &source);
     if (line != NULL) {
       /* The remote backend accepts every submission; a returned unmanaged
        * line would otherwise bypass receipt/queue ownership. */

@@ -22,7 +22,9 @@ struct cai_cli_input_wire_decoder {
 static const char *format(cai_protocol_kind kind) {
   switch (kind) {
   case CAI_PROTOCOL_SYNCHRONIZE:
-    return "us";
+    return "usb";
+  case CAI_PROTOCOL_INPUT_SETTLED:
+    return "u";
   case CAI_PROTOCOL_HISTORY_APPEND:
     return "t";
   case CAI_PROTOCOL_REQUEST:
@@ -106,6 +108,10 @@ static int pack(const cai_cli_input_wire_message *m, field *f,
   case CAI_PROTOCOL_SYNCHRONIZE:
     f[0].number = m->producer;
     f[1].text = m->session;
+    f[2].number = m->managed_delivery;
+    break;
+  case CAI_PROTOCOL_INPUT_SETTLED:
+    f[0].number = m->delivery_after;
     break;
   case CAI_PROTOCOL_REQUEST:
     if (r->operation < CAI_INPUT_OFFER || r->operation > CAI_INPUT_RESOLVE ||
@@ -187,6 +193,10 @@ static int unpack(cai_cli_input_wire_decoder *d, cai_error *error) {
   case CAI_PROTOCOL_SYNCHRONIZE:
     m->producer = f[0].number;
     m->session = f[1].text;
+    m->managed_delivery = (int)f[2].number;
+    break;
+  case CAI_PROTOCOL_INPUT_SETTLED:
+    m->delivery_after = f[0].number;
     break;
   case CAI_PROTOCOL_REQUEST:
     if (f[0].number > CAI_INPUT_RESOLVE || f[5].number > CAI_INPUT_STEERING)
@@ -310,6 +320,9 @@ int cai_cli_input_wire_decode(cai_cli_input_wire_decoder *d,
   if (event->type == CAI_PROTOCOL_HEADER) {
     const char *f = format(event->header->kind);
     if (f == NULL || event->header->stream != 0U ||
+        (event->header->kind == CAI_PROTOCOL_INPUT_SETTLED &&
+         (event->header->request != 0U || event->header->sequence != 0U ||
+          event->header->conversation == 0U)) ||
         (event->header->kind == CAI_PROTOCOL_RESULT &&
          event->header->sequence != 0U) ||
         ((event->header->kind == CAI_PROTOCOL_REQUEST ||

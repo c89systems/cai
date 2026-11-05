@@ -108,10 +108,11 @@ static int send(fixture *f, const cai_cli_input_wire_message *message) {
 }
 static void roundtrips(void) {
   static const cai_protocol_kind kinds[] = {
-      CAI_PROTOCOL_SYNCHRONIZE, CAI_PROTOCOL_REQUEST,
-      CAI_PROTOCOL_QUEUE_BEGIN, CAI_PROTOCOL_QUEUE_ITEM,
-      CAI_PROTOCOL_QUEUE_END,   CAI_PROTOCOL_QUEUE_CHANGE,
-      CAI_PROTOCOL_RESULT,      CAI_PROTOCOL_HISTORY_APPEND};
+      CAI_PROTOCOL_SYNCHRONIZE,  CAI_PROTOCOL_REQUEST,
+      CAI_PROTOCOL_QUEUE_BEGIN,  CAI_PROTOCOL_QUEUE_ITEM,
+      CAI_PROTOCOL_QUEUE_END,    CAI_PROTOCOL_QUEUE_CHANGE,
+      CAI_PROTOCOL_RESULT,       CAI_PROTOCOL_HISTORY_APPEND,
+      CAI_PROTOCOL_INPUT_SETTLED};
   fixture *f = calloc(1U, sizeof(*f));
   cai_cli_input_wire_message message;
   char *text = malloc(CAI_CLI_INPUT_TEXT_MAX + 2U);
@@ -124,16 +125,19 @@ static void roundtrips(void) {
     const cai_cli_input_wire_message *got;
     memset(&message, 0, sizeof(message));
     message.header.kind = kinds[i];
-    message.header.request = 24U;
+    message.header.request = kinds[i] == CAI_PROTOCOL_INPUT_SETTLED ? 0U : 24U;
     message.header.conversation = 256U;
     message.header.sequence = kinds[i] == CAI_PROTOCOL_REQUEST ||
                                       kinds[i] == CAI_PROTOCOL_HISTORY_APPEND ||
                                       kinds[i] == CAI_PROTOCOL_SYNCHRONIZE ||
+                                      kinds[i] == CAI_PROTOCOL_INPUT_SETTLED ||
                                       kinds[i] == CAI_PROTOCOL_RESULT
                                   ? 0U
                                   : 65536U;
     message.session = "session_with_128_byte_capacity";
     message.producer = 19U;
+    message.managed_delivery = 1;
+    message.delivery_after = ~(unsigned long long)0;
     message.request.operation = CAI_INPUT_OFFER;
     message.request.text = text;
     message.request.intent = CAI_INPUT_STEERING;
@@ -172,6 +176,10 @@ static void roundtrips(void) {
     assert(send(f, &message) == CAI_OK && f->complete != NULL);
     got = f->complete;
     assert(got->header.kind == message.header.kind);
+    if (kinds[i] == CAI_PROTOCOL_SYNCHRONIZE)
+      assert(got->managed_delivery == 1 && got->producer == 19U);
+    if (kinds[i] == CAI_PROTOCOL_INPUT_SETTLED)
+      assert(got->delivery_after == ~(unsigned long long)0);
     if (kinds[i] == CAI_PROTOCOL_REQUEST)
       assert(strcmp(got->request.text, text) == 0 &&
              got->request.item_revision == ~(unsigned long long)0 &&

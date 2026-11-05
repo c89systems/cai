@@ -41,6 +41,9 @@ struct cai_input_connection {
   cai_input_state snapshot_state;
   size_t snapshot_index;
   uint64_t attachment;
+  cai_input_scope delivery_scope;
+  unsigned long long delivery_after;
+  int managed_delivery, delivery_settled;
   cai_input_result binding_error;
   int fd, wake_fd, detached, synchronized, needs_snapshot, snapshot_started,
       binding_failed;
@@ -535,6 +538,109 @@ int cai_input_controller_resume(cai_input_controller *controller,
   return connect_input(controller, attachment, conversation, producer, out,
                        error);
 }
+int cai_input_connection_manage_delivery(cai_input_connection *connection,
+                                         const cai_input_scope *scope,
+                                         cai_error *error) {
+  int rc;
+  if (connection == NULL || scope == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID, "producer scope required");
+  rc = owner(connection->controller, error);
+  if (rc != CAI_OK)
+    return rc;
+  pthread_mutex_lock(&connection->controller->lock);
+  if (connection->detached || connection->binding_failed ||
+      scope->conversation != connection->conversation) {
+    pthread_mutex_unlock(&connection->controller->lock);
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "producer conversation changed");
+  }
+  /* A role update can follow an already-validated settlement in the same
+   * transport pump. Rearm only a changed scope, preserving that notification.
+   */
+  if (!connection->managed_delivery ||
+      connection->delivery_scope.conversation != scope->conversation ||
+      connection->delivery_scope.generation != scope->generation) {
+    connection->managed_delivery = 1;
+    connection->delivery_settled = 0;
+    connection->delivery_scope = *scope;
+  }
+  pthread_mutex_unlock(&connection->controller->lock);
+  return CAI_OK;
+}
+int cai_input_connection_settled(cai_input_connection *connection,
+                                 const cai_input_scope *scope,
+                                 unsigned long long after_request,
+                                 cai_error *error) {
+  cai_input_controller *controller;
+  int rc;
+  if (connection == NULL || scope == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID, "producer scope required");
+  controller = connection->controller;
+  rc = owner(controller, error);
+  if (rc != CAI_OK)
+    return rc;
+  /* This is availability metadata, not a mutation with a receipt. An old
+   * role or context can legitimately arrive while its revocation is in flight.
+   */
+  if (controller->config.authorize != NULL &&
+      controller->config.authorize(controller->config.authorize_context,
+                                   connection->attachment, scope->generation,
+                                   NULL) != CAI_OK)
+    return CAI_OK;
+  pthread_mutex_lock(&controller->lock);
+  if (!connection->detached && !connection->binding_failed &&
+      connection->managed_delivery &&
+      scope->conversation == connection->conversation) {
+    connection->delivery_scope = *scope;
+    connection->delivery_after = after_request;
+    connection->delivery_settled = 1;
+  }
+  pthread_mutex_unlock(&controller->lock);
+  signal_fd(controller->wake_fd);
+  return CAI_OK;
+}
+int cai_input_controller_producer_ready(cai_input_controller *controller,
+                                        unsigned long long producer,
+                                        int *settled, cai_error *error) {
+  cai_input_connection *connection;
+  int rc = owner(controller, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (settled == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "producer and outputs required");
+  *settled = 1;
+  pthread_mutex_lock(&controller->lock);
+  connection = controller->connections;
+  pthread_mutex_unlock(&controller->lock);
+  for (; connection != NULL; connection = connection->next) {
+    cai_input_scope scope;
+    uint64_t attachment;
+    int match, announced;
+    pthread_mutex_lock(&controller->lock);
+    match = !connection->detached && !connection->binding_failed &&
+            connection->client != NULL && connection->managed_delivery &&
+            cai_input_queue_client_id(connection->client) == producer;
+    scope = connection->delivery_scope;
+    attachment = connection->attachment;
+    announced = match && connection->delivery_settled &&
+                connection->head == NULL &&
+                scope.conversation == controller->conversation &&
+                connection->delivery_after ==
+                    cai_input_queue_client_last_request(connection->client);
+    pthread_mutex_unlock(&controller->lock);
+    if (!match)
+      continue;
+    if (controller->config.authorize != NULL &&
+        controller->config.authorize(controller->config.authorize_context,
+                                     attachment, scope.generation,
+                                     NULL) != CAI_OK)
+      continue;
+    *settled = announced;
+    break;
+  }
+  return CAI_OK;
+}
 static int reserved(cai_input_operation operation) {
   return operation == CAI_INPUT_SYNCHRONIZE ? 0
          : operation == CAI_INPUT_RESOLVE   ? 1
@@ -596,6 +702,7 @@ int cai_input_connection_request(cai_input_connection *connection,
   else
     connection->head = submission;
   connection->tail = submission;
+  connection->delivery_settled = 0;
   ++connection->submitted;
   pthread_mutex_unlock(&controller->lock);
   signal_fd(controller->wake_fd);

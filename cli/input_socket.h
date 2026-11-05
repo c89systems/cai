@@ -24,6 +24,9 @@ void cai_cli_input_socket_set_wakeup(cai_cli_input_socket *, int descriptor);
 void cai_cli_input_socket_prompt(cai_cli_input_socket *,
                                  void (*)(void *, const cai_input_request *),
                                  void *);
+/** Call only from Softline's native idle callback. Pending receipts and
+ * deferred edit actions must settle before announcing remote delivery. */
+int cai_cli_input_socket_idle(cai_cli_input_socket *, sl_t *, cai_error *);
 cai_cli_input_adapter *cai_cli_input_socket_adapter(cai_cli_input_socket *);
 /* Forward public client events; transcript spans use a separate callback.
  * The first accepted baseline establishes request-ID mapping. Later baselines

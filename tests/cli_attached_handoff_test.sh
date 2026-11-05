@@ -135,6 +135,21 @@ send '/takeover\r'; wait_for not_observing
 send '/status\r'; expect 'Session ID'
 [[ $(requests) == 6 ]]
 
+# Markdown help uses the same display handoff as the text log viewer. Work
+# accepted while either pager owns the alternate screen must finish there and
+# appear exactly once after returning to the original conversation surface.
+pager_offset=$(wc -c <"$term/raw")
+send '/help -p\r'; wait_for pager_opened
+plan '{"plan":["HELPPAGERANSWER"]}'
+"$controller" "$runtime_root" "$work" work >"$root/help-control.out" 2>"$root/help-control.err"
+absent "$term/feed" HELPPAGERANSWER
+send q; expect 'Pager closed.'
+expect HELPPAGERANSWER
+[[ $(grep -o HELPPAGERANSWER "$term/feed" | wc -l) == 1 ]]
+wait_for has "$term/message" 'Observing workspace.'
+send '/takeover\r'; wait_for not_observing
+[[ $(requests) == 7 ]]
+
 # The fallback viewer redraws after a second terminal resize, then restores
 # the same editor/attachment without injecting pager keys as agent input.
 pager_offset=$(wc -c <"$term/raw")
@@ -147,7 +162,7 @@ resize 83
 wait_for pager_drawn
 send q; expect 'Pager closed.'
 send '/status\r'; expect 'Session ID'
-[[ $(requests) == 6 ]]
+[[ $(requests) == 7 ]]
 
 # Owner loss must cancel the finite viewer and restore its terminal, rather
 # than leaving a dead pager waiting for a key with no working attachment.

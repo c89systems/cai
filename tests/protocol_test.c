@@ -170,7 +170,13 @@ static void malformed(void) {
       bytes[4] = 0xbf; /* indefinite outer schema */
       break;
     case 3:
-      bytes[6] = (unsigned char)(CAI_PROTOCOL_REJECT + 1); /* unknown kind */
+      /* Valid CBOR for an unknown kind, rather than an invalid additional
+       * information byte masquerading as a kind above 23. */
+      memmove(bytes + 8U, bytes + 7U, n - 7U);
+      bytes[6] = 0x18;
+      bytes[7] = (unsigned char)(CAI_PROTOCOL_INPUT_SETTLED + 1);
+      ++n;
+      bytes[3] = (unsigned char)(n - 4U);
       break;
     case 4:
       bytes[9] = 1; /* duplicate key */
@@ -329,7 +335,7 @@ static void socket_stream(void) {
   }
   assert(c.bytes == 32U * 1024U * 1024U);
   /* Reject impossible sizes/unknown kinds before emitting any prefix. */
-  c.expected.kind = (cai_protocol_kind)(CAI_PROTOCOL_REJECT + 1);
+  c.expected.kind = (cai_protocol_kind)(CAI_PROTOCOL_INPUT_SETTLED + 1);
   assert(cai_protocol_peer_begin(sender, &c.expected, 1U, NULL) ==
          CAI_ERR_INVALID);
   assert(cai_wire_peer_pending(sender) == 0U);

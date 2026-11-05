@@ -30,7 +30,7 @@ struct cai_app_client {
   uint64_t binding_request, snapshot_request;
   char wanted_session[129], baseline_session[129];
   size_t index;
-  int snapshot, pumping;
+  int snapshot, pumping, managed_delivery;
   uint64_t wanted_stream, wanted_conversation, wanted_position, wanted_sequence,
       stream_high, event_sequence, event_offset;
   char transcript_session[129], transcript_collection[21];
@@ -861,6 +861,7 @@ int cai_app_client_bind(cai_app_client *client, uint64_t request,
   m.header.generation = client->state.transport.generation;
   m.producer = producer;
   m.session = session;
+  m.managed_delivery = client->managed_delivery;
   rc = send(client, &m, error);
   if (rc == CAI_OK) {
     client->binding_request = request;
@@ -872,6 +873,36 @@ int cai_app_client_bind(cai_app_client *client, uint64_t request,
     client->state.binding = 1;
   }
   return rc;
+}
+int cai_app_client_manage_delivery(cai_app_client *client, cai_error *error) {
+  int rc = valid(client, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (client->state.bound || client->state.binding)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "register managed delivery before producer binding");
+  client->managed_delivery = 1;
+  return CAI_OK;
+}
+int cai_app_client_settled(cai_app_client *client, const cai_input_scope *scope,
+                           unsigned long long after_request, cai_error *error) {
+  cai_cli_input_wire_message m;
+  int rc = valid(client, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (scope == NULL || !client->managed_delivery || !client->state.ready ||
+      !client->state.bound ||
+      scope->conversation != client->state.conversation ||
+      after_request != client->state.last_request)
+    return cai_cli_error(
+        error, CAI_ERR_INVALID,
+        "bound producer scope and observed watermark required");
+  memset(&m, 0, sizeof(m));
+  m.header.kind = CAI_PROTOCOL_INPUT_SETTLED;
+  m.header.conversation = scope->conversation;
+  m.header.generation = scope->generation;
+  m.delivery_after = after_request;
+  return send(client, &m, error);
 }
 int cai_app_client_request(cai_app_client *client, const cai_input_scope *scope,
                            const cai_input_request *request, cai_error *error) {

@@ -1041,6 +1041,12 @@ static int cli_sync_queue(cli_state *state, int at_boundary, cai_error *error) {
     if (rc == CAI_OK)
       rc =
           cli_prompt_ready(state, entry.text, mode, at_boundary, &ready, error);
+    if (rc == CAI_OK && ready) {
+      int settled = 0;
+      rc = cai_input_controller_producer_ready(
+          state->input_controller, entry.client_id, &settled, error);
+      ready = ready && settled;
+    }
     if (rc == CAI_OK)
       rc = cai_input_queue_set_ready(state->input, entry.id, ready, error);
   }

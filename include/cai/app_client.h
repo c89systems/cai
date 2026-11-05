@@ -140,6 +140,16 @@ int cai_app_client_get_view(cai_app_client *, const cai_app_view **,
 int cai_app_client_bind(cai_app_client *, uint64_t request,
                         unsigned long long epoch, unsigned long long producer,
                         const char *session, cai_error *);
+/** Opt this unbound producer into acknowledged delivery before bind. It stays
+ * gated until settled; producers without dependent asynchronous requests keep
+ * ordinary delivery. No frontend draft or editing state is transmitted. */
+int cai_app_client_manage_delivery(cai_app_client *, cai_error *);
+/** Announce that receipts and dependent producer requests have settled.
+ * Scope is explicit; after_request is the observed processed watermark.
+ * Ephemeral availability only: no request identity, receipt or queue mutation.
+ * Announce again after each request or role change. */
+int cai_app_client_settled(cai_app_client *, const cai_input_scope *,
+                           unsigned long long after_request, cai_error *);
 /** Send original scope and request unchanged. Authority is checked by the
  * server after durable receipt lookup, including retries from an observer or
  * old generation. No blind retries, ID allocation or optimistic queue changes.

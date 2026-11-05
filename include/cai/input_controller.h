@@ -98,6 +98,28 @@ int cai_input_connection_release_edits(cai_input_connection *, cai_error *);
  * admitting requests under the new generation. */
 int cai_input_controller_release_edits(cai_input_controller *,
                                        uint64_t attachment, cai_error *);
+/** Owner-only: bind a producer's ephemeral delivery gate before its initial
+ * snapshot. Every subsequent request closes the gate until settled.
+ * Call again when this producer gains a new authority generation. Repeating
+ * the same scope preserves an already-received settlement. Does not change
+ * accepted input, durable receipts or edit holds. */
+int cai_input_connection_manage_delivery(cai_input_connection *,
+                                         const cai_input_scope *, cai_error *);
+/** Owner-only: announce that producer receipts and dependent requests have
+ * settled. after_request is the observed processed watermark, not a new ID.
+ * Delivery stays gated until all handed-off requests have been processed at
+ * exactly that watermark. Stale authority/epoch announcements do not release
+ * the gate. No acknowledgement, journal record or automatic retry is created.
+ */
+int cai_input_connection_settled(cai_input_connection *,
+                                 const cai_input_scope *,
+                                 unsigned long long after_request, cai_error *);
+/** Owner-only: inspect one producer's delivery gate. Unmanaged, disconnected
+ * or revoked producers do not hold accepted work. No draft state crosses this
+ * boundary; this readiness is independent of frontend editing policies. */
+int cai_input_controller_producer_ready(cai_input_controller *,
+                                        unsigned long long producer,
+                                        int *settled, cai_error *);
 /** Copy and signal only. Success means transport handoff, not acceptance.
  * scope is copied from the frontend's latest snapshot/role. Conversation zero
  * is valid only for initial SYNCHRONIZE. Request IDs never repeat on one

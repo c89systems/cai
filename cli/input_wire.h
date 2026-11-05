@@ -16,6 +16,8 @@ typedef struct cai_cli_input_wire_message {
   cai_input_observation observation;
   unsigned long long producer;
   const char *session;
+  unsigned long long delivery_after;
+  int managed_delivery;
   cai_cli_input_result_kind category;
 } cai_cli_input_wire_message;
 typedef struct cai_cli_input_wire_decoder cai_cli_input_wire_decoder;

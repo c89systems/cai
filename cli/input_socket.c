@@ -14,6 +14,9 @@ struct cai_cli_input_socket {
   char session[129];
   unsigned long long producer, base, highest, source_high, item_namespace;
   int fixed, detached;
+  int idle_announced;
+  uint64_t idle_generation;
+  unsigned long long idle_after;
   int wakeup;
   void (*submitted)(void *, const cai_input_request *);
   void *submitted_context;
@@ -21,6 +24,15 @@ struct cai_cli_input_socket {
 };
 static int unavailable(cai_error *error, const char *message) {
   return cai_cli_error(error, CAI_ERR_INVALID, message);
+}
+static void wake(cai_cli_input_socket *s) {
+  char byte = 'q';
+  ssize_t n;
+  if (s->wakeup < 0)
+    return;
+  do {
+    n = write(s->wakeup, &byte, 1U);
+  } while (n < 0 && errno == EINTR);
 }
 static int submit(cai_cli_input_socket *s, const cai_input_scope *scope,
                   const cai_input_request *source, cai_error *error) {
@@ -62,6 +74,7 @@ static int request(void *context, const cai_input_scope *scope,
                    const cai_input_request *value, cai_error *error) {
   cai_cli_input_socket *s = context;
   int rc;
+  s->idle_announced = 0;
   cai_error_cleanup(&s->error);
   if (s->submitted != NULL &&
       (value->operation == CAI_INPUT_OFFER ||
@@ -69,13 +82,8 @@ static int request(void *context, const cai_input_scope *scope,
       value->text != NULL)
     s->submitted(s->submitted_context, value);
   rc = submit(s, scope, value, &s->error);
-  if (rc == CAI_OK && s->wakeup >= 0) {
-    char byte = 'q';
-    ssize_t n;
-    do {
-      n = write(s->wakeup, &byte, 1U);
-    } while (n < 0 && errno == EINTR);
-  }
+  if (rc == CAI_OK)
+    wake(s);
   if (rc != CAI_OK)
     cai_cli_error(error, rc,
                   s->error.message != NULL ? s->error.message
@@ -123,7 +131,10 @@ int cai_cli_input_socket_open(cai_app_client *client,
   transport.close = detached;
   transport.identity = item_identity;
   rc = cai_cli_input_adapter_open(&transport, &s->adapter, error);
+  if (rc == CAI_OK && client != NULL)
+    rc = cai_app_client_manage_delivery(client, error);
   if (rc != CAI_OK) {
+    cai_cli_input_adapter_close(s->adapter);
     free(s);
     return rc;
   }
@@ -151,6 +162,7 @@ int cai_cli_input_socket_disconnect(cai_cli_input_socket *s, cai_error *error) {
   if (s == NULL || s->detached)
     return unavailable(error, "Live socket queue binding required");
   s->paused_client = NULL;
+  s->idle_announced = 0;
   s->synchronizing = s->resumed_snapshot = 0;
   if (s->client == NULL)
     return CAI_OK;
@@ -300,8 +312,55 @@ int cai_cli_input_socket_reconnect(cai_cli_input_socket *s,
     return unavailable(error,
                        "Disconnect the old transport and explicitly rebind "
                        "the replacement");
+  rc = cai_app_client_manage_delivery(client, error);
+  if (rc != CAI_OK)
+    return rc;
+  s->idle_announced = 0;
   s->client = client;
   return CAI_OK;
+}
+int cai_cli_input_socket_idle(cai_cli_input_socket *s, sl_t *editor,
+                              cai_error *error) {
+  cai_app_client_state state;
+  sl_queue_backend_info_t info;
+  cai_input_scope scope;
+  size_t i;
+  int rc;
+  if (s == NULL || editor == NULL)
+    return unavailable(error, "editor binding required");
+  if (s->client == NULL || s->detached || !s->fixed || s->synchronizing)
+    return CAI_OK;
+  rc = cai_app_client_get_state(s->client, &state, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (!state.ready || !state.bound ||
+      state.transport.controller != state.transport.attachment)
+    return CAI_OK;
+  if (sl_queue_backend_info(editor, &info) != SL_OK)
+    return unavailable(error, "inspect native editor receipts");
+  if (!info.synchronized)
+    return CAI_OK;
+  for (i = 0U; i < info.pending_count; ++i) {
+    sl_queue_pending_info_t pending;
+    if (sl_queue_backend_pending(editor, i, &pending) != SL_OK)
+      return unavailable(error, "inspect native editor receipt");
+    if (pending.pending || pending.status == SL_QUEUE_ACCEPTED ||
+        pending.status == SL_QUEUE_UNKNOWN)
+      return CAI_OK;
+  }
+  if (s->idle_announced && s->idle_generation == state.transport.generation &&
+      s->idle_after == state.last_request)
+    return CAI_OK;
+  scope.conversation = state.conversation;
+  scope.generation = state.transport.generation;
+  rc = cai_app_client_settled(s->client, &scope, state.last_request, error);
+  if (rc == CAI_OK) {
+    s->idle_announced = 1;
+    s->idle_generation = scope.generation;
+    s->idle_after = state.last_request;
+    wake(s);
+  }
+  return rc;
 }
 const cai_error *cai_cli_input_socket_error(const cai_cli_input_socket *s) {
   return s != NULL ? &s->error : NULL;

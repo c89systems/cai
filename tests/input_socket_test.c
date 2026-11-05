@@ -31,6 +31,7 @@ typedef struct frontend {
   size_t control_results;
   int control_code;
   int paused;
+  uint64_t takeover_request;
   cai_input_result result;
 } frontend;
 typedef struct fixture {
@@ -215,7 +216,8 @@ static sl_queue_request_id_t request(frontend *v,
   return id;
 }
 static void takeover(fixture *f, frontend *v) {
-  assert(cai_app_client_takeover(v->client, 80U, v->state.transport.generation,
+  assert(cai_app_client_takeover(v->client, 80U + ++v->takeover_request,
+                                 v->state.transport.generation,
                                  NULL) == CAI_OK);
   assert(drive(f, v, NULL) == CAI_OK &&
          v->state.transport.controller == v->state.transport.attachment);
@@ -530,6 +532,122 @@ static void pause_cases(fixture *f) {
   free(a);
   free(b);
 }
+static void settlement_cases(fixture *f) {
+  frontend *a = calloc(1U, sizeof(*a));
+  frontend *b = calloc(1U, sizeof(*b));
+  cai_input_scope scope;
+  sl_queue_pending_info_t pending;
+  cai_input_state before, after;
+  struct pollfd descriptor;
+  uint64_t deadline;
+  int ready;
+  assert(a != NULL && b != NULL);
+  open_frontend(f, a, 1, 0U, 0U);
+  takeover(f, a);
+  assert(cai_app_client_manage_delivery(a->client, NULL) == CAI_ERR_INVALID);
+  assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
+                                             &ready, NULL) == CAI_OK &&
+         !ready);
+  scope.conversation = a->state.conversation;
+  scope.generation = a->state.transport.generation;
+  assert(cai_app_client_settled(a->client, &scope, a->state.last_request + 1U,
+                                NULL) == CAI_ERR_INVALID);
+  assert(cai_input_queue_get_state(f->queue, &before, NULL) == CAI_OK);
+  assert(cai_cli_input_socket_idle(a->queue, a->editor, NULL) == CAI_OK);
+  assert(drive(f, a, NULL) == CAI_OK);
+  assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
+                                             &ready, NULL) == CAI_OK &&
+         ready);
+  assert(cai_input_queue_get_state(f->queue, &after, NULL) == CAI_OK &&
+         before.revision == after.revision &&
+         before.view_revision == after.view_revision);
+  assert(sl_set_buffer(a->editor, "a private draft must not reach the wire") ==
+         SL_OK);
+  assert(cai_cli_input_socket_idle(a->queue, a->editor, NULL) == CAI_OK);
+  assert(cai_app_client_prepare(a->client, &descriptor, &deadline, NULL) ==
+         CAI_OK);
+  assert(!(descriptor.events & POLLOUT));
+  assert(request(a, SL_QUEUE_OFFER, "a new gated item", 0U, 0U) == 1U);
+  assert(cai_cli_input_socket_idle(a->queue, a->editor, NULL) == CAI_OK);
+  assert(drive(f, a, NULL) == CAI_OK);
+  assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
+                                             &ready, NULL) == CAI_OK &&
+         !ready);
+  assert(cai_cli_input_socket_idle(a->queue, a->editor, NULL) == CAI_OK);
+  assert(drive(f, a, NULL) == CAI_OK);
+  assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
+                                             &ready, NULL) == CAI_OK &&
+         ready);
+  /* Revoked producers do not hold work. Regaining control rearms the same
+   * bound producer, even without reconnecting or offering another item. */
+  open_frontend(f, b, 1, 0U, 0U);
+  takeover(f, b);
+  assert(drive(f, a, b) == CAI_OK);
+  assert(cai_input_controller_producer_ready(f->controller, b->state.producer,
+                                             &ready, NULL) == CAI_OK &&
+         !ready);
+  assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
+                                             &ready, NULL) == CAI_OK &&
+         ready);
+  takeover(f, a);
+  assert(drive(f, a, b) == CAI_OK);
+  assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
+                                             &ready, NULL) == CAI_OK &&
+         !ready);
+  assert(request(a, SL_QUEUE_OFFER, "offer after takeover", 0U, 0U) == 2U);
+  assert(drive(f, a, b) == CAI_OK);
+  assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
+                                             &ready, NULL) == CAI_OK &&
+         !ready);
+  assert(cai_cli_input_socket_idle(a->queue, a->editor, NULL) == CAI_OK);
+  assert(drive(f, a, b) == CAI_OK);
+  assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
+                                             &ready, NULL) == CAI_OK &&
+         ready);
+  /* Force TAKEOVER and its valid settlement into the same server pump. The
+   * later role bookkeeping must preserve an already-current notification. */
+  takeover(f, b);
+  assert(drive(f, a, b) == CAI_OK);
+  scope.conversation = a->state.conversation;
+  scope.generation = a->state.transport.generation + 1U;
+  assert(cai_app_client_takeover(a->client, 80U + ++a->takeover_request,
+                                 a->state.transport.generation,
+                                 NULL) == CAI_OK);
+  assert(cai_app_client_settled(a->client, &scope, a->state.last_request,
+                                NULL) == CAI_OK);
+  assert(drive(f, a, b) == CAI_OK);
+  assert(a->state.transport.generation == scope.generation);
+  assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
+                                             &ready, NULL) == CAI_OK &&
+         ready);
+  /* Receipt loss must be resolved before settlement. An ordinary local draft
+   * never substitutes for that protocol decision or reaches the socket. */
+  assert(request(a, SL_QUEUE_OFFER, "a receipt to reconcile", 0U, 0U) == 3U);
+  assert(cai_cli_input_socket_pause(a->queue, NULL) == CAI_OK);
+  a->paused = 1;
+  assert(drive(f, a, b) == CAI_OK);
+  assert(cai_cli_input_socket_resume(a->queue, a->client, NULL) == CAI_OK);
+  a->paused = 0;
+  assert(request(a, SL_QUEUE_SYNCHRONIZE, NULL, 0U, 0U) == 4U);
+  assert(drive(f, a, b) == CAI_OK);
+  assert(sl_queue_backend_pending(a->editor, 0U, &pending) == SL_OK &&
+         pending.status == SL_QUEUE_UNKNOWN);
+  assert(cai_cli_input_socket_idle(a->queue, a->editor, NULL) == CAI_OK);
+  assert(cai_app_client_prepare(a->client, &descriptor, &deadline, NULL) ==
+             CAI_OK &&
+         !(descriptor.events & POLLOUT));
+  assert(request(a, SL_QUEUE_RESOLVE, NULL, 0U, 3U) == 5U);
+  assert(drive(f, a, b) == CAI_OK);
+  assert(cai_cli_input_socket_idle(a->queue, a->editor, NULL) == CAI_OK);
+  assert(drive(f, a, b) == CAI_OK);
+  assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
+                                             &ready, NULL) == CAI_OK &&
+         ready);
+  close_frontend(a);
+  close_frontend(b);
+  free(a);
+  free(b);
+}
 static void *run(void *unused) {
   fixture *f = calloc(1U, sizeof(*f));
   cai_attachment_config lifetime;
@@ -561,6 +679,7 @@ static void *run(void *unused) {
   cancellation_cases(f);
   cases(f);
   pause_cases(f);
+  settlement_cases(f);
   assert(cai_cli_workspace_host_input(f->host, NULL, NULL, NULL) == CAI_OK);
   cai_cli_workspace_host_close(f->host);
   cai_input_controller_close(f->controller);

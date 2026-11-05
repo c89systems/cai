@@ -749,6 +749,10 @@
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_queue_policy_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>" "${_steering_protocol}")
       set_tests_properties(cai_cli_queue_policy_${_steering_protocol} PROPERTIES TIMEOUT 10)
+      add_test(NAME cai_cli_queue_edit_${_steering_protocol} COMMAND bash
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_queue_edit_test.sh"
+        "$<TARGET_FILE:cai_cli>" "${_steering_protocol}")
+      set_tests_properties(cai_cli_queue_edit_${_steering_protocol} PROPERTIES TIMEOUT 30)
       add_test(NAME cai_cli_yolo_live_${_steering_protocol} COMMAND bash
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_yolo_live_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>" "${_steering_protocol}")

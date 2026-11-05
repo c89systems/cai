@@ -14,7 +14,8 @@ lengths from those fields, with no preliminary serialization.
 
 | Envelope kind | Payload |
 | --- | --- |
-| SYNCHRONIZE | `[producer, session]` |
+| SYNCHRONIZE | `[producer, session, managed_delivery]` |
+| INPUT_SETTLED | `[after_request]` |
 | REQUEST | `[operation, item, item_revision, queue_revision, edit_token, intent, enabled, target_request, text]` |
 | QUEUE_BEGIN | `[producer, last_request, revision, count, stopped, auto_approval, uncertain, session]` |
 | QUEUE_ITEM | `[index, id, revision, client, request, edit_owner, edit_token, intent, held, edit_held, ready, stopped, action, independent, origin, text]` |
@@ -41,6 +42,17 @@ epoch must also match; after verifying a changed server instance a client may
 use zero to resolve that session's new epoch. Failure must never silently
 reserve a replacement producer. Binding is read-only with respect to accepted
 inputs. A validated greeting alone neither binds nor submits anything.
+
+Managed producers start with delivery gated. Each handed-off queue request
+closes the gate again. INPUT_SETTLED has zero request/sequence/stream metadata,
+and the original conversation and authority generation. It is ephemeral
+availability, not a mutation or receipt: all pending requests and accepted
+receipts awaiting dependent requests must settle before it is sent.
+The controller permits delivery only after draining requests at exactly the
+announced processed watermark. Stale epochs/generations cannot release a new
+binding; unavailable or revoked producers do not gate other producers. Drafts,
+cursor state, history search and keystrokes stay entirely in the frontend.
+See [producer-settled delivery](workspace-producer-delivery.md).
 
 REQUEST uses the bound producer, the original authority generation and the
 original request ID. It may be admitted only after full record validation.

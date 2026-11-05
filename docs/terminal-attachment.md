@@ -138,6 +138,10 @@ No terminal callback reenters Softline queue/history/status APIs. After return,
 the original producer synchronizes receipts and resumes from its displayed
 journal position. Takeover or conversation changes during handoff retain their
 normal authority and context rules. Shell bytes never enter model context.
+Returning from a handoff reconciles the current conversation before entering
+its editor again, including when a completed status update arrived before the
+old producer's reset. The old view retains its local draft and queue receipts;
+it cannot receive events belonging to the replacement conversation.
 
 `/help -p` and `/help less` always use libmdf in Markdown mode, including when
 `less` is installed. The same finite help source drives inline and paged help;
@@ -181,6 +185,9 @@ completion tests attach from another directory and resolve files at the owner.
 `cai_cli_attached_handoff_native` and `cai_cli_attached_handoff_embed` exercise
 draft retention, active generation, resize, interrupts, local-program errors,
 takeover, context changes and suffix-only replay across shell/pager handoff.
+Both help and log pagers are tested with work completed while the alternate
+screen is open: no transcript output enters that screen, and the missed output
+appears exactly once after closing it.
 The embedding guard rejects editor API reentry during the Softline relay and
 checks that the host environment and cwd remain unchanged. The queue unit test
 resolves a receipt lost during paused routing without offering the input twice.

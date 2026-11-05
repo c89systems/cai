@@ -7,7 +7,7 @@
 
 typedef struct frontend {
   cai_input_connection *connection;
-  unsigned long long conversation, request, item, revision, token;
+  unsigned long long conversation, request, item, revision, token, producer;
   size_t results, changes, snapshots, disconnected;
   cai_input_result result;
 } frontend;
@@ -18,6 +18,8 @@ static void drain(frontend *client) {
            CAI_OK);
     if (observation == NULL)
       return;
+    if (observation->producer != 0U)
+      client->producer = observation->producer;
     if (observation->type == CAI_INPUT_OBSERVATION_RESULT) {
       ++client->results;
       client->result = observation->result;
@@ -159,6 +161,159 @@ static void concurrent_selection(void) {
   cai_input_queue_close(b);
   pthread_mutex_destroy(&fixture.lock);
 }
+static int producer_authorize(void *context, uint64_t attachment,
+                              uint64_t generation, cai_error *error) {
+  (void)error;
+  return attachment == 7U && generation == *(uint64_t *)context
+             ? CAI_OK
+             : CAI_ERR_INVALID;
+}
+static void producer_delivery(void) {
+  cai_input_controller *controller;
+  cai_input_queue *queue, *second;
+  cai_input_controller_config config;
+  cai_input_scope scope, stale;
+  cai_input_state before, after;
+  cai_input_claim claim;
+  frontend a, b;
+  uint64_t generation = 0U;
+  int ready;
+  memset(&config, 0, sizeof(config));
+  memset(&a, 0, sizeof(a));
+  memset(&b, 0, sizeof(b));
+  config.authorize = producer_authorize;
+  config.authorize_context = &generation;
+  assert(cai_input_queue_open(NULL, &queue, NULL) == CAI_OK);
+  assert(cai_input_queue_open(NULL, &second, NULL) == CAI_OK);
+  assert(cai_input_controller_open(&config, &controller, NULL) == CAI_OK);
+  assert(cai_input_controller_select(controller, queue, NULL) == CAI_OK);
+  assert(cai_input_controller_connect(controller, 7U, &a.connection, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_conversation(controller, &scope.conversation,
+                                           NULL) == CAI_OK);
+  scope.generation = generation;
+  assert(cai_input_connection_manage_delivery(a.connection, &scope, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
+  drain(&a);
+  assert(a.snapshots == 1U && a.producer != 0U);
+  assert(cai_input_controller_connect(controller, 7U, &b.connection, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
+  drain(&b);
+  assert(b.producer != 0U && b.producer != a.producer);
+  assert(cai_input_controller_producer_ready(controller, b.producer, &ready,
+                                             NULL) == CAI_OK &&
+         ready);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         !ready);
+  assert(cai_input_connection_settled(a.connection, &scope, 0U, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         ready);
+  assert(send(&a, CAI_INPUT_OFFER, "editable before delivery") == CAI_OK);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         !ready);
+  /* An old settlement notice cannot release a later accepted offer, even if it
+   * arrives before the controller has drained that asynchronous handoff. */
+  assert(cai_input_connection_settled(a.connection, &scope, 0U, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
+  drain(&a);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         !ready);
+  assert(cai_input_queue_get_state(queue, &before, NULL) == CAI_OK);
+  assert(cai_input_connection_settled(a.connection, &scope, a.request, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         ready);
+  assert(cai_input_queue_get_state(queue, &after, NULL) == CAI_OK);
+  assert(before.revision == after.revision &&
+         before.view_revision == after.view_revision);
+  assert(send(&a, CAI_INPUT_BEGIN_EDIT, NULL) == CAI_OK);
+  assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
+  drain(&a);
+  assert(a.token != 0U);
+  assert(cai_input_connection_settled(a.connection, &scope, a.request, NULL) ==
+         CAI_OK);
+  assert(cai_input_queue_set_ready(queue, a.item, 1, NULL) == CAI_OK);
+  assert(cai_input_queue_claim(queue, a.item, a.revision, &claim, NULL) ==
+         CAI_ERR_INVALID);
+  assert(send(&a, CAI_INPUT_END_EDIT, "edited input") == CAI_OK);
+  assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
+  drain(&a);
+  stale = scope;
+  ++stale.conversation;
+  assert(cai_input_connection_settled(a.connection, &stale, a.request, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         !ready);
+  /* Authority revocation releases availability only, never durable edit
+   * holds. A new authority starts gated; stale notices cannot unlock it. */
+  ++generation;
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         ready);
+  stale = scope;
+  scope.generation = generation;
+  assert(cai_input_connection_manage_delivery(a.connection, &scope, NULL) ==
+         CAI_OK);
+  assert(cai_input_connection_settled(a.connection, &stale, a.request, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         !ready);
+  assert(cai_input_connection_settled(a.connection, &scope, a.request, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         ready);
+  assert(cai_input_controller_select(controller, second, NULL) == CAI_OK);
+  assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
+  drain(&a);
+  assert(cai_input_connection_settled(a.connection, &scope, a.request, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         !ready);
+  scope.conversation = a.conversation;
+  assert(cai_input_connection_settled(a.connection, &scope, 0U, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         ready);
+  cai_input_connection_close(a.connection);
+  assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         ready);
+  assert(cai_input_controller_resume(controller, 7U, scope.conversation,
+                                     a.producer, &a.connection,
+                                     NULL) == CAI_OK);
+  assert(cai_input_connection_manage_delivery(a.connection, &scope, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
+  drain(&a);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         !ready);
+  assert(cai_input_connection_settled(a.connection, &scope, 0U, NULL) ==
+         CAI_OK);
+  assert(cai_input_controller_producer_ready(controller, a.producer, &ready,
+                                             NULL) == CAI_OK &&
+         ready);
+  cai_input_connection_close(a.connection);
+  cai_input_connection_close(b.connection);
+  cai_input_controller_close(controller);
+  cai_input_queue_close(queue);
+  cai_input_queue_close(second);
+}
 int main(void) {
   cai_input_queue_config config;
   cai_input_queue *first = NULL, *second = NULL;
@@ -171,6 +326,7 @@ int main(void) {
   size_t i;
   unsigned long long old_conversation;
   concurrent_selection();
+  producer_delivery();
   memset(&a, 0, sizeof(a));
   memset(&b, 0, sizeof(b));
   cai_input_queue_config_init(&config);

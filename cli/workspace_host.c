@@ -28,7 +28,7 @@ typedef struct host_peer {
   int prompt_code;
   unsigned long long prompt_position;
   char prompt_reason[192];
-  int detached, binding;
+  int detached, binding, managed_delivery;
   uint64_t cancel_request, cancel_generation, cancel_conversation;
   int cancel_code;
   char cancel_reason[192];
@@ -560,6 +560,21 @@ static int message(void *context, const cai_workspace_server_event *event,
                : cai_input_controller_connect(host->input, peer->attachment,
                                               &peer->input, &binding);
     if (rc == CAI_OK) {
+      if (m->managed_delivery) {
+        cai_input_scope scope;
+        cai_attachment_state role;
+        scope.conversation = epoch;
+        rc = cai_workspace_server_get_state(host->server, &role, error);
+        if (rc != CAI_OK)
+          return rc;
+        /* Binding is read-only. Gate the producer under the live role;
+         * subsequent mutation requests retain their original generation. */
+        scope.generation = role.generation;
+        rc = cai_input_connection_manage_delivery(peer->input, &scope, error);
+        if (rc != CAI_OK)
+          return rc;
+      }
+      peer->managed_delivery = m->managed_delivery;
       peer->binding_request = m->header.request;
       peer->binding = 1;
     } else {
@@ -587,6 +602,9 @@ static int message(void *context, const cai_workspace_server_event *event,
     cai_input_scope scope;
     scope.conversation = m->header.conversation;
     scope.generation = m->header.generation;
+    if (m->header.kind == CAI_PROTOCOL_INPUT_SETTLED)
+      return cai_input_connection_settled(peer->input, &scope,
+                                          m->delivery_after, error);
     rc = cai_input_connection_request(peer->input, &scope, &m->request, error);
     return rc;
   }
@@ -975,6 +993,18 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
             host->input, host->peers[i].attachment, error);
         if (rc != CAI_OK)
           return rc;
+        if (host->peers[i].input != NULL && host->peers[i].managed_delivery &&
+            host->peers[i].attachment == snapshot.controller) {
+          cai_input_scope scope;
+          rc = cai_input_controller_conversation(host->input,
+                                                 &scope.conversation, error);
+          scope.generation = snapshot.generation;
+          if (rc == CAI_OK)
+            rc = cai_input_connection_manage_delivery(host->peers[i].input,
+                                                      &scope, error);
+          if (rc != CAI_OK)
+            return rc;
+        }
       }
   host->generation = snapshot.generation;
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
