@@ -66,10 +66,9 @@ authorizes a new submission.
    last detach stops a normal owner. Disconnect or ownership/context loss must
    report a known failure or an unknown outcome, never silently reexecute.
 
-The first implementation step establishes queued turn correlation in core
-runtime execution history. The batch adapter and final-output range projection
-are subsequent cutover work; this document does not claim the old noninteractive
-receiver has already been removed.
+Queued turn correlation, bounded final-response selection/projection, and quiet
+owner startup deferral are implemented. The batch frontend adapter remains
+cutover work; the old noninteractive receiver has not yet been removed.
 
 Proof covers equal-text submissions, unrelated work before the claimed turn,
 multiple producers, live and restored claims/deliveries, success, provider and
@@ -89,3 +88,40 @@ both must publish the original identity. `cai_app_workspace_server` checks the
 accepted OFFER's exact identity at the typed client's completed-turn boundary,
 including producer reconnection and approval after an edit lease is released.
 These prove correlation, not the subsequent batch adapter cutover.
+
+## Streaming final-response projection
+
+Core `cai/transcript_selection.h` supplies two owner-thread adapters, independent
+of sockets, application owners, SDK clients, renderers and storage backends.
+The caller gives the selector an accepted subscription cursor and its queued
+work identity before admitting the prompt. The selector consumes ordinary
+transcript spans, incrementally decodes bounded execution records, and matches
+only that session's exact turn identity. Other turns, tools and child execution
+records cannot complete the selected work.
+
+The selector retains fixed cursors and byte counts for the latest top-level
+assistant response. It never retains response text. Every completed provider
+response replaces the selection, including an empty/reasoning-only response.
+A failure or cancellation may retain the current accepted partial response.
+Completion, failure and cancellation remain distinct results; a preflight
+failure does not require a start record. Success does require one. Missing
+terminal records never imply success. Span offsets, ordered identities and
+accepted event boundaries are validated before publishing selection metadata.
+
+After the matching terminal record, the caller may open a range projector with
+that fixed result and a borrowed sink. For nonempty output it requests ordinary
+cursor continuation from the range's `after` cursor, using the original session
+and collection, then feeds the resulting replay to the projector. Only
+top-level assistant text through the selected final position reaches the sink.
+Other event kinds and later replies are skipped. Replay must contain the whole
+selected range; collection/context loss, missing boundaries, changed lengths,
+bad offsets and sink failures are explicit failures. Empty output is complete
+without opening another reader. No retry or model input is generated.
+
+Both adapters use bounded state regardless of response or history size. Text
+is written as it arrives on the range pass; a failing source or sink can leave
+partial output, as with other streaming APIs. There is no whole-message RAM
+buffer, response spool, temporary file, hidden full-history scan or new wire
+format. The caller owns subscription lifetime and stops it once projection is
+complete. This projection is a prerequisite of the batch cutover; it does not
+itself choose startup, owner creation, takeover or goal continuation policy.

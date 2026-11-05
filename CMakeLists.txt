@@ -708,6 +708,7 @@ set(CAI_SOURCES
   src/cai_plugins.c
   src/cai_plugin_process.c
   src/cai_execution.c
+  src/cai_transcript_selection.c
   src/cai_dtg.c
   src/cai_dtg_time.c
   src/cai_terminal_text.c
@@ -1084,6 +1085,14 @@ if(CAI_BUILD_TESTS)
   add_test(NAME cai_attachment COMMAND cai_attachment_test)
   set_tests_properties(cai_attachment PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   add_executable(cai_execution_decoder_test tests/execution_decoder_test.c)
+  add_executable(cai_transcript_selection_test tests/transcript_selection_test.c)
+  target_link_libraries(cai_transcript_selection_test PRIVATE ${_cai_internal_link_target})
+  target_link_options(cai_transcript_selection_test PRIVATE -Wl,--wrap=malloc
+    -Wl,--wrap=calloc -Wl,--wrap=realloc)
+  cai_configure_cli_target(cai_transcript_selection_test)
+  target_compile_options(cai_transcript_selection_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_transcript_selection COMMAND cai_transcript_selection_test)
+  set_tests_properties(cai_transcript_selection PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   target_link_libraries(cai_execution_decoder_test PRIVATE ${_cai_internal_link_target})
   target_link_options(cai_execution_decoder_test PRIVATE -Wl,--wrap=malloc
     -Wl,--wrap=calloc -Wl,--wrap=realloc)

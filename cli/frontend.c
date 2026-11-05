@@ -1303,7 +1303,7 @@ static int service(frontend *f) {
         return cai_cli_error(&f->error, CAI_ERR_TRANSPORT,
                              "select verified completion directory");
       f->startup.stage = ready == CAI_CLI_FRONTEND_STARTED
-                             ? CAI_CLI_STARTUP_DONE
+                             ? CAI_CLI_STARTUP_REVIEW_AND_FIX
                              : CAI_CLI_STARTUP_SELECT;
       if (connect_target(f) != CAI_OK)
         return -1;
@@ -1581,6 +1581,10 @@ static int select_view(frontend *f, const char *session) {
   f->boot_fd = v->boot_fd;
   if (fresh) {
     f->ui->interactive = 1;
+    /* A new output surface starts on the terminal's current line boundary.
+     * Banner bytes below replace this baseline, including an unfinished line.
+     * Requiring two newlines from zero added two blank rows before replay. */
+    f->ui->feed_breaks = 1;
     f->ui->utc = f->options->utc;
     f->ui->tool_output = f->full_output ? "full" : "compact";
     memcpy(f->ui->theme_offsets, f->theme_offsets, sizeof(f->theme_offsets));

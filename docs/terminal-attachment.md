@@ -70,10 +70,14 @@ the original producer and recall without moving input between conversations.
 [Prompt recall](workspace-wire-history.md) loads through a separate bounded
 channel on the same reader worker. Alt-Q waits for a durable draft-save receipt;
 neither draft text nor stored recall enters model context. Explicit
-startup inputs for an existing owner pass through the same editor/backend queue;
-commands wait for application before subsequent inputs. A newly launched owner
-receives the startup arguments itself, avoiding duplicate submission.
-The existing-owner invocation compiler translates explicit model, effort,
+startup inputs pass through the same editor/backend queue; commands wait for
+application before subsequent inputs. A quietly launched owner resolves its
+configuration and selects the initial conversation, then defers invocation
+actions to the attaching frontend. The frontend skips already-applied settings
+and conversation selection; goals and instructions receive ordinary queue
+identities. An existing owner's explicit setting changes also use the queue.
+Explicit headless startup keeps owner-side automation.
+The shared invocation compiler translates explicit model, effort,
 summary, service-tier, execution-yield, YOLO, reasoning-tool, shell-context,
 effort-tool mappings, prompt-history, retention and automatic-queue controls
 into the same public commands used interactively, before submitting `-i`

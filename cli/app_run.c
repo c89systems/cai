@@ -150,6 +150,7 @@ typedef struct cli_state {
   cai_cli_log *log;
   cai_cli_response final_response;
   int batch;
+  int frontend_startup;
   sl_watch_id_t log_watch_id;
   int has_log_watch;
   char *review_report;
@@ -5382,6 +5383,11 @@ static int cli_start_automation(cli_state *state, cai_error *error) {
   const char *instruction;
   int rc;
 
+  if (state->frontend_startup) {
+    state->next_instruction = state->options.instruction_count;
+    state->automation_done = 1;
+    return CAI_OK;
+  }
   objective = state->options.goal;
   if (state->options.review_and_fix) {
     rc = cli_review_fix_goal(state, state->options.review_uncommitted,
@@ -5631,7 +5637,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
                              cai_app_bridge *bridge,
                              const cai_config_context *startup,
                              const cai_attachment_config *server,
-                             int lifetime_explicit,
+                             int lifetime_explicit, int frontend_startup,
                              const cai_cli_prepared *prepared) {
   cai_client_config client_config;
   cai_chatgpt_auth_config auth_config;
@@ -5653,6 +5659,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   state->application = application;
   state->bridge = bridge;
   state->controller = startup != NULL;
+  state->frontend_startup = frontend_startup;
   state->timer_fd = -1;
   cai_cli_shell_init(&state->shell);
   result = 1;
@@ -5666,8 +5673,8 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       result = 2;
       goto cleanup;
     }
-    if (valid <= 0 || cai_cli_options_utility(&early) || early.review ||
-        early.non_interactive) {
+    if (valid <= 0 || cai_cli_options_utility(&early) ||
+        (!frontend_startup && (early.review || early.non_interactive))) {
       cai_cli_error(&error, CAI_ERR_INVALID,
                     "controller startup accepts agent options, not utility or "
                     "terminal modes");
@@ -5746,6 +5753,11 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   }
   snprintf(state->welcome, sizeof(state->welcome),
            "Welcome to %s. Send /help for usage.", state->options.program_name);
+  if (state->controller && frontend_startup) {
+    state->options.review = state->options.review_and_fix = 0;
+    state->options.non_interactive = 0;
+    state->options.out = NULL;
+  }
   state->batch = state->options.review || state->options.non_interactive;
   if (cai_cli_log_new(&state->log, PSLOG_LEVEL_TRACE,
                       !state->batch && (!state->controller || server != NULL),
@@ -6497,7 +6509,7 @@ static int
 cli_app_receive(int argc, char **argv, const cai_app_config *application,
                 cai_app_bridge *bridge, const cai_config_context *startup,
                 const cai_attachment_config *server, int lifetime_explicit,
-                const cai_cli_prepared *prepared) {
+                int frontend_startup, const cai_cli_prepared *prepared) {
   cli_state *state = calloc(1U, sizeof(*state));
   int code;
   if (state == NULL) {
@@ -6508,24 +6520,26 @@ cli_app_receive(int argc, char **argv, const cai_app_config *application,
       fputs("cannot allocate application state\n", stderr);
     return 1;
   }
-  code = cli_app_run_state(state, argc, argv, application, bridge, startup,
-                           server, lifetime_explicit, prepared);
+  code =
+      cli_app_run_state(state, argc, argv, application, bridge, startup, server,
+                        lifetime_explicit, frontend_startup, prepared);
   free(state);
   return code;
 }
 int cai_cli_app_run(int argc, char **argv, const cai_app_config *application,
                     cai_app_bridge *bridge) {
-  return cli_app_receive(argc, argv, application, bridge, NULL, NULL, 0, NULL);
+  return cli_app_receive(argc, argv, application, bridge, NULL, NULL, 0, 0,
+                         NULL);
 }
 int cai_cli_app_controller_run(int argc, char **argv,
                                const cai_app_config *application,
                                cai_app_bridge *bridge,
                                const cai_config_context *startup,
                                const cai_attachment_config *server,
-                               int lifetime_explicit,
+                               int lifetime_explicit, int frontend_startup,
                                const cai_cli_prepared *prepared) {
   return cli_app_receive(argc, argv, application, bridge, startup, server,
-                         lifetime_explicit, prepared);
+                         lifetime_explicit, frontend_startup, prepared);
 }
 
 int cai_cli_app_main(int argc, char **argv, const cai_app_config *application) {

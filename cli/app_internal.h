@@ -97,8 +97,14 @@ int cai_cli_app_controller_run(int argc, char **argv,
                                cai_app_bridge *bridge,
                                const cai_config_context *context,
                                const cai_attachment_config *server,
-                               int lifetime_explicit,
+                               int lifetime_explicit, int frontend_startup,
                                const struct cai_cli_prepared *prepared);
+/** Private composition entry: resolve/open the owner, but leave invocation
+ * actions to its attaching frontend's accepted queue. Public headless owners
+ * retain their explicit startup automation. No new public configuration flag.
+ */
+int cai_app_start_frontend_owner(cai_app *, const cai_config_context *, int,
+                                 const char *const *, cai_error *);
 int cai_cli_app_main(int argc, char **argv, const cai_app_config *application);
 size_t cai_cli_help_count(void);
 const cai_app_option *cai_cli_help_at(size_t index);

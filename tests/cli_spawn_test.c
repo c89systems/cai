@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../cli/spawn.h"
 #include <assert.h>
+#include <cai/app_client.h>
 #include <cai/workspace_client.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -291,11 +292,71 @@ static void send_control(cai_workspace_client *client, int shutdown) {
   assert(cai_workspace_client_pump(client, clock_ms(), NULL) == CAI_OK);
   cai_workspace_client_close(client);
 }
+static int admission(void *context, const cai_app_client_event *event,
+                     cai_error *error) {
+  int *accepted = context;
+  (void)error;
+  if (event->type == CAI_APP_CLIENT_INPUT && event->input != NULL &&
+      event->input->type == CAI_INPUT_OBSERVATION_RESULT) {
+    assert(event->input->result.outcome == CAI_INPUT_ACCEPTED);
+    *accepted = 1;
+  }
+  return CAI_OK;
+}
+/** Quiet owners open the runtime but cannot consume argv instructions. Only
+ * this subsequent authenticated queue admission starts inference. */
+static cai_app_client *admit_after_ready(const unsigned char *instance,
+                                         int *accepted) {
+  cai_app_client_config config;
+  cai_app_client_state state;
+  cai_app_client *client = NULL;
+  uint64_t until = clock_ms() + 5000U;
+  int bound = 0, offered = 0;
+  cai_app_client_config_init(&config);
+  config.runtime_directory = getenv("CAI_TEST_SERVER_RUNTIME");
+  config.workspace = getenv("CAI_TEST_CONTROLLER_WORK");
+  config.expected_instance = instance;
+  config.event = admission;
+  config.context = accepted;
+  assert(cai_app_client_open(&config, clock_ms(), &client, NULL) == CAI_OK);
+  while (!*accepted) {
+    struct pollfd fd;
+    uint64_t deadline;
+    assert(clock_ms() < until);
+    assert(cai_app_client_pump(client, clock_ms(), NULL) == CAI_OK);
+    assert(cai_app_client_get_state(client, &state, NULL) == CAI_OK);
+    if (state.transport.phase == CAI_WORKSPACE_CONNECTED && !bound) {
+      assert(cai_app_client_bind(client, 1U, 0U, 0U, NULL, NULL) == CAI_OK);
+      bound = 1;
+    }
+    if (state.ready && !offered) {
+      cai_input_request request;
+      cai_input_scope scope;
+      struct stat st;
+      assert(state.queue.count == 0U && state.last_request == 0U);
+      assert(stat(getenv("CAI_TEST_SPAWN_REQUESTS"), &st) != 0 ||
+             st.st_size == 0);
+      memset(&request, 0, sizeof(request));
+      request.request_id = 1U;
+      request.text = "Admitted after readiness";
+      scope.conversation = state.conversation;
+      scope.generation = state.transport.generation;
+      assert(cai_app_client_request(client, &scope, &request, NULL) == CAI_OK);
+      offered = 1;
+    }
+    if (!*accepted) {
+      assert(cai_app_client_prepare(client, &fd, &deadline, NULL) == CAI_OK);
+      assert(poll(&fd, 1U, 1000) >= 0);
+    }
+  }
+  return client;
+}
 int main(int argc, char **argv) {
   cai_workspace_client *client;
+  cai_app_client *admitted = NULL;
   const cai_cli_spawn_state *state;
   const char *mode = getenv("CAI_TEST_SPAWN_MODE");
-  int persistent;
+  int persistent, admitted_receipt = 0;
   if (argc > 1 && strcmp(argv[1], "--_workspace-owner") == 0) {
     fake_child(argc, argv);
     return 0;
@@ -352,6 +413,8 @@ int main(int argc, char **argv) {
       const char *path = getenv("CAI_TEST_SPAWN_REQUESTS");
       uint64_t until = clock_ms() + 5000U;
       assert(path != NULL);
+      admitted =
+          admit_after_ready(state->observation.instance, &admitted_receipt);
       while (stat(path, &request) != 0 || request.st_size == 0) {
         assert(clock_ms() < until);
         (void)poll(NULL, 0U, 1);
@@ -359,6 +422,7 @@ int main(int argc, char **argv) {
     }
     assert(kill(cai_cli_spawn_pid(active), SIGTERM) == 0);
     finish(&active, CAI_CLI_SPAWN_EXITED);
+    cai_app_client_close(admitted);
     return 0;
   }
   if (strcmp(mode, "half-close") == 0) {

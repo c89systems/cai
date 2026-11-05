@@ -42,7 +42,9 @@ for mode in shell banner unterminated-banner; do
   tmux_run respawn-pane -k -t spacing:0.0 "exec bash '$root/runner'"
   ready() {
     tmux_run capture-pane -p -t spacing:0.0 >"$root/screen"
-    grep -Fq 'Conversation resumed.' "$root/screen"
+    # The sticky greeting may already have advanced to the idle status. This
+    # fixture tests rendered rows; the completed replay body is its boundary.
+    grep -Fq 'REPLAY READY' "$root/screen"
   }
   wait_for ready
   awk -v marker="$marker" '

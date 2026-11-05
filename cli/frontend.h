@@ -7,9 +7,10 @@
 /** Executable/native host startup adapter. prepare/pump belong to the frontend
  * owner and never block. A completed target is borrowed until the next pump.
  * pump sets ready to EXISTING or STARTED only after verifying the target.
- * STARTED means the new owner already received the original startup inputs;
- * EXISTING submits them through the frontend queue. Until ready, the initial
- * target is only the editor's provisional directory. NULL boot attaches
+ * STARTED means the new owner applied initial settings and selected its
+ * conversation; the frontend queues goals and instructions. EXISTING queues
+ * explicit controls too. Until ready, the
+ * initial target is only the editor's provisional directory. NULL boot attaches
  * immediately to target; libraries never implicitly fork. */
 enum {
   CAI_CLI_FRONTEND_EXISTING = 1,

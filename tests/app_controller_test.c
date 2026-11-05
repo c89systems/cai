@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <cai/app.h>
 #include <cai/app_client.h>
+#include <cai/transcript_selection.h>
 #include <cai/workspace_client.h>
 #include <libmdf/mdf.h>
 #include <locale.h>
@@ -839,6 +840,9 @@ typedef struct typed_view {
   size_t execution_chunks;
   size_t input_completed;
   char input_call[256];
+  cai_transcript_selection *selection;
+  cai_transcript_projector *projector;
+  size_t projection_done;
   size_t command_inputs, command_completed, command_failed, command_frontend;
   size_t command_handoffs, shell_ended, review_ended, review_finished;
   size_t streaming_seen;
@@ -882,7 +886,18 @@ static int typed_history(void *context, const cai_transcript_event *event,
 static int typed_transcript(void *context, const cai_transcript_event *event,
                             cai_error *error) {
   typed_view *v = context;
-  (void)error;
+  if (v->selection != NULL) {
+    int rc = cai_transcript_selection_event(v->selection, event, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
+  if (v->projector != NULL) {
+    int rc = cai_transcript_projector_event(v->projector, event, error);
+    if (rc != CAI_OK)
+      return rc;
+    if (cai_transcript_projector_done(v->projector))
+      v->projection_done = 1U;
+  }
   if (event->kind == CAI_TRANSCRIPT_REPLAY_BEGIN) {
     ++v->replay_begins;
     assert(event->collection != NULL && event->session != NULL);
@@ -1116,6 +1131,16 @@ static void typed_request(typed_view *v, unsigned long long id,
   assert(cai_app_client_request(v->client, &scope, &r, NULL) == CAI_OK);
   typed_wait(v, &v->results, results + 1U);
 }
+static int typed_final_write(void *context, const void *bytes, size_t n,
+                             cai_error *error) {
+  char *text = context;
+  size_t used = strlen(text);
+  (void)error;
+  assert(n < 128U - used);
+  memcpy(text + used, bytes, n);
+  text[used + n] = '\0';
+  return CAI_OK;
+}
 static void typed_server(int argc, char **argv) {
   host h;
   typed_view a, b;
@@ -1180,9 +1205,30 @@ static void typed_server(int argc, char **argv) {
   assert(a.result.outcome == CAI_INPUT_ACCEPTED && a.state.last_request == 2U);
   {
     char expected_call[256];
+    char final_text[128] = {0};
+    cai_transcript_position baseline;
+    cai_transcript_selection_result selected;
+    cai_sink_callbacks output;
+    cai_sink *sink = NULL;
     snprintf(expected_call, sizeof(expected_call), "input:%s:%llu:%llu:%llu",
              a.state.session, a.entry.client_id, a.entry.request_id,
              a.entry.id);
+    cursor = a.state.transcript;
+    a.transcript_sequence = cursor.sequence;
+    assert(cai_app_client_subscribe(a.client, 2U, a.state.conversation,
+                                    a.state.session, cursor.collection,
+                                    cursor.position, cursor.sequence, -1LL,
+                                    NULL) == CAI_OK);
+    typed_wait(&a, &a.replay_ends, 2U);
+    memset(&baseline, 0, sizeof(baseline));
+    strcpy(baseline.session, a.state.transcript.session);
+    strcpy(baseline.collection, a.state.transcript.collection);
+    baseline.stream = a.state.transcript.stream;
+    baseline.conversation = a.state.transcript.conversation;
+    baseline.position = a.state.transcript.position;
+    baseline.sequence = a.state.transcript.sequence;
+    assert(cai_transcript_selection_open(&baseline, expected_call, &a.selection,
+                                         NULL) == CAI_OK);
     typed_request(&a, 3U, CAI_INPUT_APPROVE, NULL,
                   a.state.transport.generation);
     assert(a.result.outcome == CAI_INPUT_ACCEPTED);
@@ -1192,20 +1238,42 @@ static void typed_server(int argc, char **argv) {
            a.execution_chunks != 0U);
     typed_wait(&a, &a.input_completed, 1U);
     assert(strcmp(a.input_call, expected_call) == 0);
+    assert(cai_transcript_selection_get(a.selection, &selected, NULL) ==
+               CAI_OK &&
+           selected.state == CAI_TRANSCRIPT_WORK_COMPLETED);
+    cai_transcript_selection_close(a.selection);
+    a.selection = NULL;
+    memset(&output, 0, sizeof(output));
+    output.context = final_text;
+    output.write = typed_final_write;
+    assert(cai_sink_from_callbacks(&output, &sink, NULL) == CAI_OK);
+    assert(cai_transcript_projector_open(&selected, sink, &a.projector, NULL) ==
+           CAI_OK);
+    a.transcript_sequence = selected.after.sequence;
+    assert(cai_app_client_subscribe(
+               a.client, 3U, a.state.conversation, selected.after.session,
+               selected.after.collection, selected.after.position,
+               selected.after.sequence, -1LL, NULL) == CAI_OK);
+    typed_wait(&a, &a.projection_done, 1U);
+    typed_wait(&a, &a.replay_ends, 3U);
+    assert(strcmp(final_text, "Background work finished") == 0);
+    cai_transcript_projector_close(a.projector);
+    a.projector = NULL;
+    cai_sink_close(sink);
   }
   cursor = a.state.transcript;
-  assert(cai_app_client_subscribe(a.client, 2U, a.state.conversation,
+  assert(cai_app_client_subscribe(a.client, 4U, a.state.conversation,
                                   "not-the-active-session", NULL, 0U, 0U, -1LL,
                                   NULL) == CAI_OK);
   typed_wait(&a, &a.transcript_failures, 1U);
   assert(!a.state.transcript.active && !a.state.transcript.subscribing &&
          a.state.ready && a.state.transcript.position == cursor.position);
   a.transcript_sequence = cursor.sequence;
-  assert(cai_app_client_subscribe(a.client, 3U, a.state.conversation,
+  assert(cai_app_client_subscribe(a.client, 5U, a.state.conversation,
                                   a.state.session, cursor.collection,
                                   cursor.position, cursor.sequence, -1LL,
                                   NULL) == CAI_OK);
-  typed_wait(&a, &a.replay_ends, 2U);
+  typed_wait(&a, &a.replay_ends, 4U);
   assert(cai_app_client_unsubscribe(a.client, NULL) == CAI_OK);
   typed_wait(&a, &a.transcript_failures, 2U);
   assert(!a.state.transcript.active && a.state.ready);

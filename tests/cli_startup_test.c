@@ -157,6 +157,43 @@ int main(void) {
   memset(&cursor, 0, sizeof(cursor));
   expect(&cursor, &options, "current", "/new", 1);
 
+  cai_cli_options_init(&options);
+  options.review_and_fix = 1;
+  memset(&cursor, 0, sizeof(cursor));
+  expect(&cursor, &options, "current", "/review-and-fix", 1);
+  expect(&cursor, &options, "current", NULL, 0);
+  options.review_uncommitted = 1;
+  memset(&cursor, 0, sizeof(cursor));
+  expect(&cursor, &options, "current", "/review-and-fix uncommitted", 1);
+  options.review_uncommitted = 0;
+  options.base = "HEAD";
+  memset(&cursor, 0, sizeof(cursor));
+  expect(&cursor, &options, "current", "/review-and-fix base HEAD", 1);
+  options.review_and_fix = 0;
+  options.base = NULL;
+  options.review = 1;
+  memset(&cursor, 0, sizeof(cursor));
+  expect(&cursor, &options, "current", "/review", 1);
+  expect(&cursor, &options, "current", NULL, 0);
+  options.base = "HEAD";
+  memset(&cursor, 0, sizeof(cursor));
+  expect(&cursor, &options, "current", "/review base HEAD", 1);
+  options.base = NULL;
+  options.review_uncommitted = 1;
+  memset(&cursor, 0, sizeof(cursor));
+  expect(&cursor, &options, "current", "/review uncommitted", 1);
+  {
+    const char *review_input[] = {"cai", "--review", "-i", "Inspect only this"};
+    char *review_args[4];
+    copy_args(review_args, review_input, 4U);
+    assert(cai_cli_parse_options(4, review_args, &options) == 1);
+    memset(&cursor, 0, sizeof(cursor));
+    expect(&cursor, &options, "current", "/review custom Inspect only this", 1);
+    expect(&cursor, &options, "current", NULL, 0);
+    free_args(review_args, 4U);
+  }
+  cai_cli_options_init(&options);
+
   /* No truncation or oversized allocation for generated controls. */
   large = malloc(CAI_CLI_INPUT_TEXT_MAX + 1U);
   assert(large != NULL);

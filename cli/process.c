@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "process.h"
+#include "app_internal.h"
 #include "bootstrap.h"
 #include "error.h"
 #include <cai/workspace.h>
@@ -278,7 +279,8 @@ static int process_run(const cai_app_config *base, int argc,
   if (rc == CAI_OK)
     rc = cai_app_open(&config, &app, error);
   if (rc == CAI_OK) {
-    rc = cai_app_start_server(app, NULL, argc, argv, NULL, error);
+    rc = quiet ? cai_app_start_frontend_owner(app, NULL, argc, argv, error)
+               : cai_app_start_server(app, NULL, argc, argv, NULL, error);
     started = rc == CAI_OK;
   }
   if (rc == CAI_OK)

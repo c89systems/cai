@@ -168,7 +168,7 @@ int cai_cli_run_terminal(const cai_app_config *application,
   started = 1;
   cai_attachment_config_init(&lifetime);
   code = cai_cli_app_controller_run(argc, argv, application, bridge,
-                                    &r->startup, &lifetime, 0, &r->prepared);
+                                    &r->startup, &lifetime, 0, 1, &r->prepared);
   /* Wake a terminal whose owner failed or stopped before it could attach.
    * The outer run finalizes the same status after joining this receiver. */
   cai_app_bridge_frontend_owner_end(bridge, code);

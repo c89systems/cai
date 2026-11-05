@@ -105,10 +105,30 @@ int cai_cli_startup_next(cai_cli_startup *cursor, const cai_cli_options *o,
         value = o->enable_auto_enqueue ? "on" : "off";
       }
       break;
+    case CAI_CLI_STARTUP_REVIEW_AND_FIX:
+      if (o->review_and_fix) {
+        prefix = o->review_uncommitted ? "/review-and-fix uncommitted"
+                 : o->base != NULL     ? "/review-and-fix base "
+                                       : "/review-and-fix";
+        value = !o->review_uncommitted && o->base != NULL ? o->base : "";
+      }
+      break;
     case CAI_CLI_STARTUP_GOAL:
       if (o->goal != NULL) {
         prefix = "/goal new ";
         value = o->goal;
+      }
+      break;
+    case CAI_CLI_STARTUP_REVIEW:
+      if (o->review) {
+        value = cai_cli_instruction_at(o, 0U);
+        prefix = value != NULL           ? "/review custom "
+                 : o->base != NULL       ? "/review base "
+                 : o->review_uncommitted ? "/review uncommitted"
+                                         : "/review";
+        if (value == NULL)
+          value = o->base != NULL ? o->base : "";
+        cursor->stage = CAI_CLI_STARTUP_DONE;
       }
       break;
     case CAI_CLI_STARTUP_INSTRUCTIONS:

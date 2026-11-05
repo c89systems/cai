@@ -21,14 +21,18 @@ for mode in fixtures temporary persistent half-close signal cancel disconnect in
   fi
   if [[ $mode == active ]]; then
     plan '{"plan":[{"pause":true,"pause_text":"Pending work ","text":"Must not finish"}]}'
-    args+=(-i 'Start work for cancellation')
+    args+=(-n -i 'Start work for cancellation')
   fi
   "$watch" "$cli" "${args[@]}" >"$root/watch.out" 2>"$root/watch.err" || {
     cat "$root/watch.err" >&2
     fail "quiet workspace case failed: $mode"
   }
   [[ ! -s "$root/watch.out" && ! -s "$root/watch.err" ]]
-  if [[ $mode == active ]]; then [[ $(requests) == 1 ]]; else [[ $(requests) == 0 ]]; fi
+  if [[ $mode == active ]]; then
+    [[ $(requests) == 1 ]]
+    contains "$root/peer/requests.jsonl" 'Admitted after readiness'
+    absent "$root/peer/requests.jsonl" 'Start work for cancellation'
+  else [[ $(requests) == 0 ]]; fi
 done
 # The private handoff parser is strict and ordinary instruction values cannot
 # select it. Malformed entry points start no owner and write no UI.

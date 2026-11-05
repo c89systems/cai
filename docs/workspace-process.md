@@ -1,5 +1,11 @@
 # Workspace process handoff
 
+Quiet automatic startup defers invocation actions until the frontend has
+attached and admitted them through the ordinary queue. READY proves a restored
+owner and selected conversation, not execution of its original `-i` arguments.
+This applies to terminal and future batch attachments. Explicit `-x` startup
+retains its owner-side automation and persistence policy.
+
 This is executable scaffolding for the workspace frontend cutover. Native
 embedding continues to use `cai_app_start_server`; libraries never fork a
 workspace owner. The executable's
