@@ -48,8 +48,12 @@ option(CAI_REGISTER_API_KEY_EXAMPLE_SMOKE
 option(CAI_BUILD_EXAMPLES "Build cai examples." ON)
 option(CAI_BUILD_CLI "Build the standalone cai terminal agent." OFF)
 option(CAI_BUILD_APP "Build the embeddable CAI terminal application." OFF)
+option(CAI_BUILD_APP_CLIENT "Build the terminal-independent application socket client." OFF)
 if(CAI_BUILD_CLI)
   set(CAI_BUILD_APP ON)
+endif()
+if(CAI_BUILD_APP)
+  set(CAI_BUILD_APP_CLIENT ON)
 endif()
 option(CAI_BUILD_LUA "Build the Lua 5.5 binding and Lua tests." OFF)
 option(CAI_BUILD_LUA_TOOLS "Build the optional embedded Lua tool executor." ${CAI_BUILD_APP})
@@ -921,16 +925,18 @@ function(cai_configure_cli_target target)
 endfunction()
 
 include(CaiLuaTools)
+include(CaiAppClient)
 
 if(CAI_BUILD_APP)
   find_package(lockdc CONFIG REQUIRED COMPONENTS static)
   # The product and fixture entrypoints share these exact sources/options.
   # Compile them once per configuration; keep fixture substitutions in main.
-  add_library(cai_cli_support OBJECT cli/identity.c cli/app_control.c cli/workspace_host.c cli/input_wire.c cli/commands.c cli/completion.c cli/input_adapter.c cli/input_local.c cli/options.c cli/help.c cli/config.c cli/runtime_options.c cli/mcp.c cli/skills.c cli/status.c cli/reasoning.c cli/literal.c cli/shell.c cli/shell_text.c cli/login.c
-    cli/startup.c cli/goal_input.c cli/line_input.c cli/plain_feed.c cli/statusline.c cli/command_help.c cli/catalog_wire.c cli/review_report.c cli/pouch.c cli/pouch_stream.c cli/error.c cli/pouch_transcript.c cli/transcript.c cli/transcript_feed.c cli/transcript_wire.c cli/status_wire.c cli/quota_refresh.c cli/session_commands.c cli/workspace_claims.c
+  add_library(cai_cli_support OBJECT cli/identity.c cli/app_control.c cli/workspace_host.c cli/commands.c cli/completion.c cli/input_adapter.c cli/input_local.c cli/options.c cli/help.c cli/config.c cli/runtime_options.c cli/mcp.c cli/skills.c cli/status.c cli/reasoning.c cli/literal.c cli/shell.c cli/shell_text.c cli/login.c
+    cli/startup.c cli/goal_input.c cli/line_input.c cli/plain_feed.c cli/statusline.c cli/command_help.c cli/review_report.c cli/pouch.c cli/pouch_stream.c cli/pouch_transcript.c cli/transcript.c cli/transcript_feed.c cli/quota_refresh.c cli/session_commands.c cli/workspace_claims.c
     cli/log.c cli/log_environment.c cli/softline_presenter.c cli/transcript_presenter.c cli/documents.c cli/messages.c cli/message_names.c cli/todo.c cli/theme.c cli/stores.c cli/temp.c cli/replay.c cli/replay_tools.c cli/tool_result.c)
   target_link_libraries(cai_cli_support PUBLIC cai_static
     softline::softline_static libmdf::mdf_static lockdc::static)
+  target_link_libraries(cai_cli_support PUBLIC cai_app_client_static)
   cai_configure_c_target(cai_cli_support)
   include(CaiApp)
 endif()

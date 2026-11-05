@@ -3,10 +3,12 @@ add_library(cai_app_owner_objects OBJECT cli/app_run.c)
 # directories, renderer declarations or editor usage requirements propagate.
 target_link_libraries(cai_app_owner_objects PRIVATE cai_static lockdc::static)
 cai_configure_c_target(cai_app_owner_objects)
-add_library(cai_app_objects OBJECT cli/app.c cli/app_client.c cli/input_socket.c cli/frontend.c cli/batch.c cli/batch_document.c cli/terminal_program.c cli/run_frontend.c cli/existing_frontend.c cli/utility.c cli/kanban.c)
+add_library(cai_app_objects OBJECT cli/app.c cli/input_socket.c cli/frontend.c cli/batch.c cli/batch_document.c cli/terminal_program.c cli/run_frontend.c cli/existing_frontend.c cli/utility.c cli/kanban.c)
 target_link_libraries(cai_app_objects PRIVATE cai_cli_support)
 cai_configure_c_target(cai_app_objects)
 add_library(cai_app_static STATIC $<TARGET_OBJECTS:cai_app_objects>
+  $<TARGET_OBJECTS:cai_app_client_objects>
+  $<TARGET_OBJECTS:cai_app_wire_objects>
   $<TARGET_OBJECTS:cai_app_owner_objects>
   $<TARGET_OBJECTS:cai_cli_support>)
 add_library(cai::app_static ALIAS cai_app_static)
@@ -31,6 +33,8 @@ endif()
 if(CAI_BUILD_SHARED)
   find_package(lockdc CONFIG REQUIRED COMPONENTS shared)
   add_library(cai_app_shared SHARED $<TARGET_OBJECTS:cai_app_objects>
+    $<TARGET_OBJECTS:cai_app_client_objects>
+    $<TARGET_OBJECTS:cai_app_wire_objects>
     $<TARGET_OBJECTS:cai_app_owner_objects>
     $<TARGET_OBJECTS:cai_cli_support>)
   add_library(cai::app_shared ALIAS cai_app_shared)
@@ -134,9 +138,6 @@ if(CAI_BUILD_TESTS)
   target_compile_options(cai_transcript_wire_test PRIVATE -UNDEBUG)
   add_test(NAME cai_transcript_wire COMMAND cai_transcript_wire_test)
   set_tests_properties(cai_transcript_wire PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
-  add_executable(cai_app_client_test tests/app_client_test.c
-    cli/app_client.c cli/input_wire.c cli/status_wire.c cli/transcript_wire.c
-    cli/catalog_wire.c cli/error.c)
   add_executable(cai_app_terminal_host tests/app_terminal_host.c)
   target_link_libraries(cai_app_terminal_host PRIVATE cai_app_static)
   target_link_options(cai_app_terminal_host PRIVATE -Wl,--wrap=lc_client_open)
@@ -156,11 +157,6 @@ if(CAI_BUILD_TESTS)
   target_compile_options(cai_input_socket_test PRIVATE -UNDEBUG)
   add_test(NAME cai_input_socket COMMAND cai_input_socket_test)
   set_tests_properties(cai_input_socket PROPERTIES LABELS "unit;local;offline" TIMEOUT 10)
-  target_link_libraries(cai_app_client_test PRIVATE cai_static)
-  cai_configure_cli_target(cai_app_client_test)
-  target_compile_options(cai_app_client_test PRIVATE -UNDEBUG)
-  add_test(NAME cai_app_client COMMAND cai_app_client_test)
-  set_tests_properties(cai_app_client PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   add_executable(cai_input_wire_test tests/input_wire_test.c)
   target_link_libraries(cai_input_wire_test PRIVATE cai_app_static)
   cai_configure_cli_target(cai_input_wire_test)

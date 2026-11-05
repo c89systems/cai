@@ -922,6 +922,9 @@
     # protocol/presenter in step with the owner in targeted CLI builds.
     add_dependencies(cai_cli_tests cai_app_terminal_host cai_app_utility_host
       cai_transcript_selection_test cai_line_input_test cai_plain_feed_test cai_presenter_test cai_app_existing_host)
+    if(TARGET cai_app_client_shared)
+      add_dependencies(cai_cli_tests cai_app_client_shared)
+    endif()
     add_test(NAME cai_cli_kanban COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_kanban_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")

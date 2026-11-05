@@ -1,0 +1,81 @@
+cmake_minimum_required(VERSION 3.21)
+set(root "${CAI_BINARY_DIR}/app-client-install-test")
+file(REMOVE_RECURSE "${root}")
+file(MAKE_DIRECTORY "${root}/source")
+foreach(component Unspecified cai-app-client)
+  execute_process(COMMAND "${CMAKE_COMMAND}" --install "${CAI_BINARY_DIR}"
+    --prefix "${root}/stage" --component "${component}"
+    RESULT_VARIABLE result OUTPUT_QUIET)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "Install core/client SDK failed: ${component}")
+  endif()
+endforeach()
+file(RENAME "${root}/stage" "${root}/relocated")
+set(prefix "${root}/relocated")
+if(EXISTS "${prefix}/lib/libcai_app.a" OR EXISTS "${prefix}/include/cai/app_terminal.h")
+  message(FATAL_ERROR "Client SDK unexpectedly installed the terminal facade")
+endif()
+file(COPY "${CAI_SOURCE_DIR}/tests/app_client_consumer.c" DESTINATION "${root}/source")
+file(WRITE "${root}/source/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.21)
+project(app_client_consumer C)
+find_package(cai_app_client CONFIG REQUIRED)
+foreach(variant static shared)
+  if(TARGET cai::app_client_${variant})
+    add_executable(client_${variant} app_client_consumer.c)
+    target_link_libraries(client_${variant} PRIVATE cai::app_client_${variant})
+    target_compile_options(client_${variant} PRIVATE -std=c89 -Wall -Wextra -Werror -UNDEBUG)
+  endif()
+endforeach()
+if(TARGET softline::softline OR TARGET libmdf::mdf_static OR TARGET lockdc::static)
+  message(FATAL_ERROR "Typed client imported a frontend or storage dependency")
+endif()
+]=])
+execute_process(COMMAND "${CMAKE_COMMAND}" -S "${root}/source" -B "${root}/consumer"
+  -G Ninja "-DCMAKE_C_COMPILER=${CAI_C_COMPILER}"
+  "-DCMAKE_PREFIX_PATH=${prefix};${CAI_DEPENDENCY_PREFIXES}"
+  -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON
+  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE errors)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "Configure installed typed client: ${output}\n${errors}")
+endif()
+execute_process(COMMAND "${CMAKE_COMMAND}" --build "${root}/consumer"
+  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE errors)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "Link installed typed client: ${output}\n${errors}")
+endif()
+set(loader "${prefix}/lib")
+set(pkg "${prefix}/lib/pkgconfig")
+foreach(dependency IN LISTS CAI_DEPENDENCY_PREFIXES)
+  string(APPEND loader ":${dependency}/lib")
+  string(APPEND pkg ":${dependency}/lib/pkgconfig")
+endforeach()
+foreach(variant static shared)
+  if(EXISTS "${root}/consumer/client_${variant}")
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E env "LD_LIBRARY_PATH=${loader}"
+      "${root}/consumer/client_${variant}" RESULT_VARIABLE result)
+    if(NOT result EQUAL 0)
+      message(FATAL_ERROR "Run installed ${variant} typed client failed")
+    endif()
+  endif()
+endforeach()
+find_program(PKG_CONFIG pkg-config REQUIRED)
+execute_process(COMMAND "${CMAKE_COMMAND}" -E env "PKG_CONFIG_PATH=${pkg}"
+  "${PKG_CONFIG}" --cflags --libs --static cai-app-client
+  RESULT_VARIABLE result OUTPUT_VARIABLE flags ERROR_VARIABLE errors
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT result EQUAL 0 OR flags MATCHES "-l(softline|mdf|lockdc|lql|lua)")
+  message(FATAL_ERROR "Invalid client-only pkg-config dependencies: ${flags}\n${errors}")
+endif()
+separate_arguments(arguments UNIX_COMMAND "${flags}")
+execute_process(COMMAND "${CAI_C_COMPILER}" -std=c89 -Wall -Wextra -Werror -UNDEBUG
+  "${root}/source/app_client_consumer.c" ${arguments} -o "${root}/pkg-consumer"
+  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE errors)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "Link pkg-config typed client: ${output}\n${errors}")
+endif()
+execute_process(COMMAND "${CMAKE_COMMAND}" -E env "LD_LIBRARY_PATH=${loader}"
+  "${root}/pkg-consumer" RESULT_VARIABLE result)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "Run pkg-config typed client failed")
+endif()

@@ -15,6 +15,13 @@ Use `find_package(cai_app CONFIG REQUIRED)` and `cai::app_static` or
 `cai::app_shared`, or pkg-config `cai-app`. The application shared library has
 ABI 0; the core libcai ABI is 5.
 
+For a frontend that only attaches to an owner, use the standalone
+[application socket client](application-client.md). `CAI_BUILD_APP_CLIENT=ON`
+builds `libcai_app_client` without selecting the terminal application or its
+dependencies. Its CMake package is `cai_app_client`; pkg-config uses
+`cai-app-client`. The combined application reuses the same compiled client and
+wire codecs, with the existing C API unchanged.
+
 An agent invocation fails before provider access when its canonical workspace
 has no saved approval. Pass `-y` / `--yes` / `--force` to approve that directory
 and its descendants, or `-k` / `--insecure` for an invocation-only bypass.

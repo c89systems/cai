@@ -64,7 +64,9 @@ parity. The owner's former terminal helpers, timers and replay renderer are
 removed. It compiles with SDK/storage dependencies only; a compiled-object
 check guards against editor/renderer references. Its tests cover backend
 policy/lifetime, while presentation tests use the shared frontend adapters.
-Extended startup parity and optional frontend packaging remain unfinished.
+The [typed client package](application-client.md) can now be built and installed
+without terminal/storage dependencies. Extended configuration validation and
+frontend-independent owner packaging remain unfinished.
 
 The optional [Lua workspace client](lua-workspace-client.md) exposes the typed
 C client channels and explicit scopes. Lua drives prepare/pump (or an explicit

@@ -79,7 +79,8 @@ identities. An existing owner's explicit setting changes also use the queue.
 Explicit headless startup keeps owner-side automation.
 The shared invocation compiler translates explicit model, effort,
 summary, service-tier, execution-yield, YOLO, reasoning-tool, shell-context,
-effort-tool mappings, prompt-history, retention and automatic-queue controls
+effort-tool mappings, prompt-history, retention, automatic-queue, Kanban
+layout and board-selection controls
 into the same public commands used interactively, before submitting `-i`
 inputs. Explicit false,
 zero and provider-default selections are retained. Inherited defaults leave
@@ -208,8 +209,10 @@ loop and unused terminal helpers are removed. The owner compiles without
 Softline/libmdf include paths or editor/renderer references. Restoration calls
 the host replay observer once; it does not render or construct another console
 replay. Presentation tests use the actual shared transcript/presenter path.
-The combined application package still includes the terminal facade/adapters;
-frontend-independent application packaging remains unfinished.
+The standalone [typed client package](application-client.md) requires only core
+libcai and reuses the same codec objects as the combined application. The
+combined application still includes the terminal facade/adapters;
+frontend-independent owner packaging remains unfinished.
 Maintenance uses the separate [utility dispatcher](application-utilities.md);
 its remaining process-global logging/browser environment boundary is explicit.
 These remain part of the active goal.

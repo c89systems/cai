@@ -8,6 +8,15 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+/** Owner lifecycle outcome, shared by local snapshots and remote views. */
+typedef enum cai_app_outcome {
+  CAI_APP_NOT_RUN = 0,
+  CAI_APP_RUNNING,
+  CAI_APP_COMPLETED,
+  CAI_APP_STOPPED,
+  CAI_APP_CANCELLED,
+  CAI_APP_FAILED
+} cai_app_outcome;
 typedef struct cai_app_goal_view {
   int has_goal;
   const char *status;

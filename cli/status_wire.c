@@ -1,7 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "status_wire.h"
 #include "error.h"
-#include <cai/app.h>
 #include <limits.h>
 #include <stddef.h>
 #include <stdlib.h>

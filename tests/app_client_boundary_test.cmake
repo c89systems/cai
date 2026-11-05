@@ -1,0 +1,10 @@
+foreach(object IN LISTS CAI_CLIENT_OBJECTS)
+  execute_process(COMMAND "${CAI_NM}" -u "${object}"
+    RESULT_VARIABLE result OUTPUT_VARIABLE symbols ERROR_VARIABLE failure)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "Cannot inspect typed socket client: ${failure}")
+  endif()
+  if(symbols MATCHES "[ \t](sl_|mdf_|lc_|cai_agent_runtime_|cai_cli_pouch_)")
+    message(FATAL_ERROR "Typed socket client requires an application owner/terminal: ${symbols}")
+  endif()
+endforeach()

@@ -1,6 +1,7 @@
 #ifndef CAI_APP_H
 #define CAI_APP_H
 
+#include <cai/app_view.h>
 #include <cai/attachment.h>
 #include <cai/config.h>
 #include <cai/input_controller.h>
@@ -32,15 +33,6 @@ typedef enum cai_app_control_type {
   CAI_APP_RESUME_GOAL,
   CAI_APP_CLEAR_GOAL
 } cai_app_control_type;
-
-typedef enum cai_app_outcome {
-  CAI_APP_NOT_RUN = 0,
-  CAI_APP_RUNNING,
-  CAI_APP_COMPLETED,
-  CAI_APP_STOPPED,
-  CAI_APP_CANCELLED,
-  CAI_APP_FAILED
-} cai_app_outcome;
 
 /** Owned snapshot. Initialize before first use; cleanup after the last use.
  * Getters replace an initialized snapshot atomically on success. Strings and
