@@ -18,8 +18,25 @@ struct bench_frontend {
   const unsigned char *expected;
   size_t length, offset;
   uint64_t records;
-  int verify, text;
+  int verify, text, render;
 };
+/** Count the same decided Markdown emissions in both probes. Mode 2 discards
+ * body output here; mode 1 runs the real CAI/Softline/OS output path. */
+static int renderer_sink(void *context, const char *bytes, size_t length) {
+  bench_frontend *f = context;
+  ++bench_mdf_calls;
+  bench_mdf_bytes += length;
+  return f->render == 2 ? 0
+                        : cai_cli_presenter_renderer_sink(f->ui, bytes, length);
+}
+/** Benchmark-only null Softline method. The CAI sink still does its native
+ * geometry checks and feed bookkeeping; output stops at this boundary. */
+static int discard_softline(sl_t *self, const char *bytes, size_t length) {
+  (void)self;
+  (void)bytes;
+  (void)length;
+  return SL_OK;
+}
 static int protocol_event(void *context, const cai_protocol_event *event,
                           cai_error *error) {
   bench_frontend *f = context;
@@ -50,10 +67,12 @@ int bench_frontend_open(int render, int verify, const void *expected,
                         size_t length, bench_frontend **out) {
   bench_frontend *f = calloc(1U, sizeof(*f));
   sl_config_t config;
+  mdf_sink sink;
   bench_require(f != NULL, "allocate bounded frontend");
   f->expected = expected;
   f->length = length;
   f->verify = verify;
+  f->render = render;
   bench_require(
       cai_cli_transcript_decoder_open(&f->transcript, NULL) == CAI_OK &&
           cai_protocol_decoder_open(protocol_event, f, &f->protocol, NULL) ==
@@ -86,6 +105,13 @@ int bench_frontend_open(int render, int verify, const void *expected,
                       cai_cli_transcript_presenter_open(f->ui, &f->presenter,
                                                         NULL) == CAI_OK,
                   "open output stream and presenter");
+    memset(&sink, 0, sizeof(sink));
+    sink.userdata = f;
+    sink.write = renderer_sink;
+    bench_require(f->ui->renderer->set_sink(f->ui->renderer, &sink) == MDF_OK,
+                  "bind measured renderer sink");
+    if (render == 3)
+      f->ui->sl->output_stream_write = discard_softline;
   }
   *out = f;
   return CAI_OK;
@@ -155,9 +181,13 @@ void bench_frontend_finish(bench_frontend *f, uint64_t records) {
                              !f->ui->sink_failed)),
       "complete transcript presentation");
   if (f->ui != NULL)
-    bench_require(f->ui->width == 80 && bench_output_bytes > 0U &&
-                      bench_output_calls > 0U,
-                  "rendered output reached Softline sink");
+    bench_require(
+        (f->length == 1U || (bench_mdf_calls > 0U && bench_mdf_bytes > 0U)) &&
+            f->ui->width == 80 &&
+            (f->render == 3
+                 ? bench_output_calls == 0U
+                 : bench_output_bytes > 0U && bench_output_calls > 0U),
+        "complete measured renderer boundary");
 }
 void bench_frontend_close(bench_frontend *f) {
   if (f == NULL)

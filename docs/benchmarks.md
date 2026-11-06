@@ -5,6 +5,7 @@ This follows the lifecycle's performance-contract requirement and the compiled C
 It adds no benchmark framework or application dependency.
 Linux, the normal CMake/Ninja/cpkt toolchain prerequisites, Bash, jq, ripgrep and GNU coreutils are required.
 An [initial musl Release baseline](benchmark-baseline.md) records the first measured results and their limits.
+A [component profile and CBOR optimization report](performance-cbor-presentation.md) separates the presentation stages and records subsequent codec improvements.
 
 ```sh
 make benchmark
@@ -41,6 +42,8 @@ The executable also returns failure if its report cannot be written.
 | `unix_rtt`, `wire_rtt` | One request outstanding at a time; the receiver sends the same five-byte framed NULL acknowledgement in both cases. |
 | `transcript_peer` | Production protocol and transcript codecs carrying assistant delta/end events over wire peers. |
 | `transcript_render` | The same transcript workload plus the actual native presenter, libmdf and Softline, writing to `/dev/null`. |
+| `transcript_render_mdf` | The same presenter and libmdf parser/renderer, discarding decided body emissions in a counting sink before CAI's output sink. |
+| `transcript_render_cai` | The same presenter/libmdf and real CAI output sink, replacing Softline's write method with a benchmark-only null method. |
 
 Fixture creation, object construction, socket creation and receiver fork happen before measurement.
 Receiver teardown and process reaping happen afterward.
@@ -64,10 +67,15 @@ Presentation uses an 80-column, plain, UTC frontend and Softline's output stream
 It includes Markdown parsing, wrapping, margins, timestamps and actual output writes.
 It excludes physical terminal rendering, draft editing/redraw, model inference, authentication, workspace discovery, handshake, Pouch reads, and context restoration.
 It is therefore neither a full UI responsiveness benchmark nor a session-startup benchmark.
+The two diagnostic render probes leave body parsing, wrapping and Markdown emissions unchanged, but deliberately cut the output path at different boundaries.
+`transcript_render_mdf` still emits CAI's per-document timestamp headers normally; `transcript_render_cai` discards those at the null Softline method too.
+Both probes count the same renderer body emissions as the full path, with no body buffering or added delivery delay.
+They are diagnostic measurements, not alternative application implementations or performance optimizations.
 
 ## Metrics and interpretation
 
 Each raw sample includes wall seconds, sender and receiver user/system CPU seconds, payload and encoded wire bytes, logical records, MiB/s, records/s, aggregate CPU percentage, RTT p50/p95, send/receive/poll counts, and renderer output bytes/write counts.
+`mdf_calls` and `mdf_bytes` count decided Markdown body sink emissions separately from `output_calls` and `output_bytes`, which count OS output writes.
 Socket counters include both endpoints and unsuccessful nonblocking attempts, including EAGAIN; control-socket reads/writes are excluded.
 CPU percentage is summed process CPU time divided by wall time and can exceed 100% for the two-process cases.
 Output counters measure writes reaching Softline's sink, not Markdown source bytes.
@@ -86,4 +94,5 @@ The harness does not change CPU affinity, frequency governor or system policy.
 It adds consumer work and is intended for correctness checks or explicitly matched comparisons.
 The optional offline CTest contracts exercise every compiled case, repeated rounds, warmups, boundary sizes, UTF-8, metric/report structure, invalid options and unwritable output.
 Application builds also use the existing terminal fixture to verify that presentation output stays identical under narrow and wide caller terminals.
+Render probes must agree on Markdown body counts; the null Softline probe must perform no measured OS output writes.
 They deliberately impose no performance acceptance threshold.

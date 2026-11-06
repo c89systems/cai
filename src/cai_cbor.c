@@ -139,32 +139,54 @@ static int begin(cbor_state *state, const cai_cbor_token *token,
   return CAI_OK;
 }
 static int utf8(cbor_frame *frame, const unsigned char *data, size_t count) {
-  size_t i;
-  for (i = 0U; i < count; ++i) {
+  size_t i = 0U;
+  unsigned int pending = frame->utf8;
+  uint32_t scalar = frame->scalar, minimum = frame->minimum;
+  while (i < count) {
     unsigned int byte = data[i];
-    if (frame->utf8) {
+    /* ASCII has no scalar state. Inspect whole words only inside this span;
+     * memcpy permits unaligned input without aliasing or endian assumptions.
+     * Stop before any non-ASCII byte and resume the scalar validator below. */
+    if (pending == 0U && byte < 0x80U) {
+      while (count - i >= sizeof(uint64_t)) {
+        uint64_t word;
+        memcpy(&word, data + i, sizeof(word));
+        if ((word & UINT64_C(0x8080808080808080)) != 0U)
+          break;
+        i += sizeof(word);
+      }
+      while (i < count && data[i] < 0x80U)
+        ++i;
+      continue;
+    }
+    ++i;
+    if (pending) {
       if ((byte & 0xc0U) != 0x80U)
         return 0;
-      frame->scalar = (frame->scalar << 6U) | (byte & 0x3fU);
-      if (--frame->utf8 == 0U &&
-          (frame->scalar < frame->minimum || frame->scalar > 0x10ffffU ||
-           (frame->scalar >= 0xd800U && frame->scalar <= 0xdfffU)))
+      scalar = (scalar << 6U) | (byte & 0x3fU);
+      if (--pending == 0U && (scalar < minimum || scalar > 0x10ffffU ||
+                              (scalar >= 0xd800U && scalar <= 0xdfffU)))
         return 0;
     } else if (byte >= 0xc2U && byte <= 0xdfU) {
-      frame->utf8 = 1U;
-      frame->scalar = byte & 0x1fU;
-      frame->minimum = 0x80U;
+      pending = 1U;
+      scalar = byte & 0x1fU;
+      minimum = 0x80U;
     } else if (byte >= 0xe0U && byte <= 0xefU) {
-      frame->utf8 = 2U;
-      frame->scalar = byte & 0x0fU;
-      frame->minimum = 0x800U;
+      pending = 2U;
+      scalar = byte & 0x0fU;
+      minimum = 0x800U;
     } else if (byte >= 0xf0U && byte <= 0xf4U) {
-      frame->utf8 = 3U;
-      frame->scalar = byte & 0x07U;
-      frame->minimum = 0x10000U;
+      pending = 3U;
+      scalar = byte & 0x07U;
+      minimum = 0x10000U;
     } else if (byte >= 0x80U)
       return 0;
   }
+  /* Keep continuation state across arbitrary DATA/feed boundaries, without
+   * repeatedly loading/storing the heap frame for each multibyte byte. */
+  frame->utf8 = pending;
+  frame->scalar = scalar;
+  frame->minimum = minimum;
   return 1;
 }
 static int data_room(cbor_state *state, const void *bytes, size_t count,

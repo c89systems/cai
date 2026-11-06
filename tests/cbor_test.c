@@ -1,9 +1,14 @@
 #include <assert.h>
 #include <cai/cbor.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+static void utf8_checks(void);
 
 /* RFC 8949 Appendix A and binary64 boundaries. Tags, nonfinite values and
  * half/single precision are deliberately outside our profile. */
@@ -381,6 +386,7 @@ static void *large_stream(void *unused) {
   (void)unused;
   /* Numeric conversion also runs on the platform's default worker stack. */
   float_values();
+  utf8_checks();
   memset(&value, 0, sizeof(value));
   memset(&callbacks, 0, sizeof(callbacks));
   callbacks.write = stream_write;
@@ -550,6 +556,8 @@ static void reuse(void) {
   cai_cbor_decoder_close(decoder);
   cai_sink_close(sink);
 }
+#include "cbor_utf8_test.inc"
+
 int main(void) {
   static const char *bad[] = {"",
                               "18",

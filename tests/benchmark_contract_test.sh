@@ -18,7 +18,12 @@ jq -se --argjson cases "$(wc -l <"$root/cases")" '
     .records == 3 and .payload_bytes == 12288 and .wire_bytes == 12309) and
   all(.[] | select(.case == "wire_rtt" or .case == "unix_rtt");
     .records == 4 and .rtt_p50_us > 0) and
-  all(.[] | select(.case == "transcript_render"); .output_calls > 0 and .output_bytes > 0)
+  all(.[] | select(.case == "transcript_render" or .case == "transcript_render_mdf");
+    .output_calls > 0 and .output_bytes > 0 and .mdf_calls > 0 and .mdf_bytes > 0) and
+  all(.[] | select(.case == "transcript_render_cai");
+    .output_calls == 0 and .mdf_calls > 0 and .mdf_bytes > 0) and
+  ([.[] | select(.case // "" | startswith("transcript_render")) |
+    [.mdf_calls,.mdf_bytes]] | unique | length) <= 1
 ' "$root/samples.jsonl" >/dev/null
 for size in 1 64 32768; do
   "$binary" --rounds 1 --warmups 0 --bytes "$size" --message-bytes "$size" --iterations 1 --verify >"$root/boundary.jsonl"

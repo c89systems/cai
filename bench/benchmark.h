@@ -26,6 +26,7 @@ typedef struct bench_result {
 extern bench_counts bench_io;
 extern int bench_output_fd;
 extern uint64_t bench_output_calls, bench_output_bytes;
+extern uint64_t bench_mdf_calls, bench_mdf_bytes;
 void bench_require(int condition, const char *operation);
 bench_clock bench_time(void);
 void bench_wait(int fd, short events);
@@ -33,6 +34,9 @@ void bench_transfer(int fd, void *bytes, size_t length, int writing);
 
 #ifdef CAI_BENCH_FRONTEND
 typedef struct bench_frontend bench_frontend;
+/** 0: decode only; 1: native output; 2: discard Markdown body emissions;
+ * 3: run the CAI sink with a null Softline method. Diagnostic cut points only.
+ */
 int bench_frontend_open(int render, int verify, const void *expected,
                         size_t length, bench_frontend **out);
 int bench_frontend_receive(void *, const cai_wire_event *, cai_error *);

@@ -19,6 +19,7 @@
 bench_counts bench_io;
 int bench_output_fd = -1;
 uint64_t bench_output_calls, bench_output_bytes;
+uint64_t bench_mdf_calls, bench_mdf_bytes;
 static pid_t receiver_pid = -1;
 ssize_t __real_send(int, const void *, size_t, int);
 ssize_t __real_recv(int, void *, size_t, int);
@@ -244,7 +245,9 @@ typedef enum mode {
   RAW_RTT,
   PEER_RTT,
   TRANSCRIPT,
-  RENDER
+  RENDER,
+  RENDER_MDF,
+  RENDER_CAI
 } mode;
 typedef struct scenario {
   const char *name;
@@ -267,6 +270,8 @@ static const scenario cases[] = {
 #ifdef CAI_BENCH_FRONTEND
     {"transcript_peer", TRANSCRIPT, 1},
     {"transcript_render", RENDER, 1},
+    {"transcript_render_mdf", RENDER_MDF, 1},
+    {"transcript_render_cai", RENDER_CAI, 1},
 #endif
 };
 static void memory_run(const scenario *s, const bench_options *o,
@@ -398,6 +403,7 @@ typedef struct child_result {
   bench_counts io;
   double user, system;
   uint64_t output_calls, output_bytes;
+  uint64_t mdf_calls, mdf_bytes;
 } child_result;
 static void receiver(int socket, int control, const scenario *s,
                      const bench_options *o, const unsigned char *frame,
@@ -423,9 +429,9 @@ static void receiver(int socket, int control, const scenario *s,
     r.acknowledge = s->operation == PEER_RTT;
   }
 #ifdef CAI_BENCH_FRONTEND
-  if (s->operation == TRANSCRIPT || s->operation == RENDER) {
-    bench_require(bench_frontend_open(s->operation == RENDER, o->verify,
-                                      r.f.payload, r.f.length,
+  if (s->operation >= TRANSCRIPT) {
+    bench_require(bench_frontend_open((int)s->operation - (int)TRANSCRIPT,
+                                      o->verify, r.f.payload, r.f.length,
                                       &frontend) == CAI_OK,
                   "open transcript consumer");
     bench_require(cai_wire_peer_open(socket, 0U, bench_frontend_receive,
@@ -437,6 +443,7 @@ static void receiver(int socket, int control, const scenario *s,
   bench_transfer(control, &ready, 1U, 0);
   memset(&bench_io, 0, sizeof(bench_io));
   bench_output_calls = bench_output_bytes = 0U;
+  bench_mdf_calls = bench_mdf_bytes = 0U;
   start = bench_time();
   if (r.peer == NULL) {
     uint64_t remaining = records * frame_bytes, received = 0U;
@@ -501,6 +508,8 @@ static void receiver(int socket, int control, const scenario *s,
   result.system = end.system - start.system;
   result.output_calls = bench_output_calls;
   result.output_bytes = bench_output_bytes;
+  result.mdf_calls = bench_mdf_calls;
+  result.mdf_bytes = bench_mdf_bytes;
   bench_transfer(control, &result, sizeof(result), 1);
 #ifdef CAI_BENCH_FRONTEND
   bench_frontend_close(frontend);
@@ -575,7 +584,7 @@ static void socket_run(const scenario *s, const bench_options *o,
       socket_bytes(sockets[0], frame, f.encoded_length + 4U, 1);
     else {
 #ifdef CAI_BENCH_FRONTEND
-      if (s->operation == TRANSCRIPT || s->operation == RENDER)
+      if (s->operation >= TRANSCRIPT)
         bench_frontend_send(peer, i + 1U, f.payload, f.length);
       else
 #endif
@@ -634,6 +643,8 @@ static void socket_run(const scenario *s, const bench_options *o,
   /* Renderer output counters are reported independently of socket bytes. */
   bench_output_calls = child.output_calls;
   bench_output_bytes = child.output_bytes;
+  bench_mdf_calls = child.mdf_calls;
+  bench_mdf_bytes = child.mdf_bytes;
   fixture_close(&f);
   free(frame);
   free(latencies);
@@ -701,26 +712,28 @@ static void report(const scenario *s, const bench_options *o,
                    unsigned int round, const bench_result *r) {
   bench_require(r->wall > 0.0 && r->payload > 0U && r->records > 0U,
                 "nonempty timed measurement");
-  printf("{\"kind\":\"sample\",\"case\":\"%s\",\"round\":%u,"
-         "\"message_bytes\":%lu,\"payload_bytes\":%llu,\"records\":%llu,"
-         "\"wire_bytes\":%llu,\"wall_s\":%.9f,\"sender_user_s\":%.9f,"
-         "\"sender_system_s\":%.9f,\"receiver_user_s\":%.9f,"
-         "\"receiver_system_s\":%.9f,\"mib_s\":%.6f,\"records_s\":%.3f,"
-         "\"cpu_pct\":%.3f,\"rtt_p50_us\":%.6f,\"rtt_p95_us\":%.6f,"
-         "\"send_calls\":%llu,\"recv_calls\":%llu,\"poll_calls\":%llu,"
-         "\"output_calls\":%llu,\"output_bytes\":%llu}\n",
-         s->name, round, (unsigned long)o->message_bytes,
-         (unsigned long long)r->payload, (unsigned long long)r->records,
-         (unsigned long long)r->encoded, r->wall, r->user, r->system,
-         r->child_user, r->child_system,
-         (double)r->payload / 1048576.0 / r->wall, (double)r->records / r->wall,
-         100.0 * (r->user + r->system + r->child_user + r->child_system) /
-             r->wall,
-         r->p50, r->p95, (unsigned long long)(r->parent.sends + r->child.sends),
-         (unsigned long long)(r->parent.receives + r->child.receives),
-         (unsigned long long)(r->parent.polls + r->child.polls),
-         (unsigned long long)bench_output_calls,
-         (unsigned long long)bench_output_bytes);
+  printf(
+      "{\"kind\":\"sample\",\"case\":\"%s\",\"round\":%u,"
+      "\"message_bytes\":%lu,\"payload_bytes\":%llu,\"records\":%llu,"
+      "\"wire_bytes\":%llu,\"wall_s\":%.9f,\"sender_user_s\":%.9f,"
+      "\"sender_system_s\":%.9f,\"receiver_user_s\":%.9f,"
+      "\"receiver_system_s\":%.9f,\"mib_s\":%.6f,\"records_s\":%.3f,"
+      "\"cpu_pct\":%.3f,\"rtt_p50_us\":%.6f,\"rtt_p95_us\":%.6f,"
+      "\"send_calls\":%llu,\"recv_calls\":%llu,\"poll_calls\":%llu,"
+      "\"output_calls\":%llu,\"output_bytes\":%llu,"
+      "\"mdf_calls\":%llu,\"mdf_bytes\":%llu}\n",
+      s->name, round, (unsigned long)o->message_bytes,
+      (unsigned long long)r->payload, (unsigned long long)r->records,
+      (unsigned long long)r->encoded, r->wall, r->user, r->system,
+      r->child_user, r->child_system, (double)r->payload / 1048576.0 / r->wall,
+      (double)r->records / r->wall,
+      100.0 * (r->user + r->system + r->child_user + r->child_system) / r->wall,
+      r->p50, r->p95, (unsigned long long)(r->parent.sends + r->child.sends),
+      (unsigned long long)(r->parent.receives + r->child.receives),
+      (unsigned long long)(r->parent.polls + r->child.polls),
+      (unsigned long long)bench_output_calls,
+      (unsigned long long)bench_output_bytes,
+      (unsigned long long)bench_mdf_calls, (unsigned long long)bench_mdf_bytes);
 }
 int main(int argc, char **argv) {
   bench_options options;
@@ -780,6 +793,7 @@ int main(int argc, char **argv) {
       bench_result result;
       memset(&result, 0, sizeof(result));
       bench_output_calls = bench_output_bytes = 0U;
+      bench_mdf_calls = bench_mdf_bytes = 0U;
       if (cases[i].operation <= FRAMED)
         memory_run(&cases[i], &options, &result);
       else
