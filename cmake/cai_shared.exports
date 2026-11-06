@@ -270,6 +270,8 @@ cai_execution_record_cleanup
 cai_execution_record_init
 cai_execution_record_parse
 cai_execution_record_write_markdown
+cai_handover_config_init
+cai_handover_write
 cai_hosted_mcp_tool_config_init
 cai_input_claim_cleanup
 cai_input_connection_close

@@ -212,3 +212,35 @@ with live agents across approved and unapproved roots. `smith_model_prompts`
 compares complete instruction output across the model catalog/fallback,
 disabled patch capability and custom templates while retaining its model-switch
 and captured-policy assertions.
+
+The shared formatter in item 1 is implemented as `cai_handover_write` in
+`cai/handover.h`. The live runtime now supplies borrowed header fields, text
+producers and a retained-history cursor adapter. Its previous private formatter
+and per-item seek/drain implementation are removed. The document format,
+headings, text filtering and omission markers remain the same.
+
+The formatter takes a synchronous history producer and calls it twice over the
+same stable retained view. The first pass keeps only an item category, role,
+bounded tool name and frame length; the second streams the text. Provider member
+order does not require per-item journal rereads. Goal objectives and developer
+instructions are separate text producers, including arbitrarily large values.
+Cancellation is checked during both source consumption and output. The caller
+owns stable-view validation and discards partial output on failure.
+
+`cai_handover` exercises one-byte and awkward UTF-8/escape splits, exact history
+rendering, all message roles, reasoning, tools, non-text omissions, absent text,
+source/sink failure, malformed and changed frames, cancellation and each observed
+allocation failure. It generates a 32 MiB provider text field with identities
+after the text, observes text delivery before the second producer call finishes,
+and rejects allocations above 64 KiB or aggregate tracked allocations above
+1 MiB. A separate 1,000-item case asserts exactly two history producer calls.
+Generated 8 MiB goal and instruction sources also flow without whole-value
+allocation under those guards.
+Both this check and the journal projector use the same allocation guard and run
+on default worker stacks. Existing runtime Markdown checks cover the thin live
+adapter, header fields and file publication.
+
+The application's native retained-view adapter and execution-history projection
+in item 3 are still required. Consequently `cli/session_commands.c` still opens
+its offline runtime for Markdown, and the long-export owner-dispatch requirement
+above remains incomplete. The core formatter alone does not complete that cutover.
