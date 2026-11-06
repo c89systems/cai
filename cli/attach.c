@@ -3,6 +3,7 @@
 #include "batch.h"
 #include "config.h"
 #include "error.h"
+#include "executable_path.h"
 #include "frontend.h"
 #include "identity.h"
 #include "run_frontend.h"
@@ -67,11 +68,9 @@ static int launch(cai_cli_attach_boot *s, uint64_t now, cai_error *error) {
   char program[PATH_MAX];
   const char *executable = s->program;
   if (executable == NULL) {
-    ssize_t n = readlink("/proc/self/exe", program, sizeof(program) - 1U);
-    if (n <= 0 || (size_t)n >= sizeof(program) - 1U)
-      return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                           "resolve executable for quiet workspace startup");
-    program[n] = '\0';
+    int rc = cai_cli_executable_path(program, sizeof(program), error);
+    if (rc != CAI_OK)
+      return rc;
     executable = program;
   }
   return cai_cli_spawn_open(executable, s->argc, s->argv, now, 0U, &s->child,

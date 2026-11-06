@@ -198,8 +198,10 @@ external-first selection. Preferences belong to each frontend attachment.
 This is a working terminal/socket composition, not a claim of complete feature
 parity. Startup controls use ordered acknowledgements, and supplemental schema
 configuration uses the same pre-admission inventory as resolved CLI settings.
-Automatic executable-path discovery currently
-uses Linux `/proc/self/exe`. Batch prompts, standalone goals, reviews, slash
+Automatic executable-path discovery uses Linux `/proc/self/exe` or macOS
+`_NSGetExecutablePath`, canonicalizing dyld's potentially relative or symbolic
+path. It does not trust PATH or `argv[0]` when restarting itself. Batch prompts,
+standalone goals, reviews, slash
 commands, pipe-shell commands and combined goal-plus-prompt startup use the
 owner/socket adapter. Plain redirected input without `-i` now shares that
 producer and renders live output without an editor. Native `run --server`
@@ -216,16 +218,18 @@ independent [workspace owner SDK](application-server.md). Owner lifecycle,
 configuration and semantic command services have no renderer dependency.
 Maintenance uses the separate [utility dispatcher](application-utilities.md);
 its logging/browser helpers now use captured views without installing process
-state. Offline export's read-only context reconstruction remains part of the
-active goal.
+state. JSONL export reads the journal directly; offline Markdown export's
+read-only context reconstruction remains part of the active goal. See the
+[completion audit](workspace-verification.md) for the requirement-level evidence
+and remaining Markdown implementation.
 
 Softline 0.16's unconditional trigger stripping also needs a pre-activation
 eligibility API: typed shell words starting with `$` (when skills are loaded)
 or `@` can lose their introductory byte even without selecting a completion.
 Empty skill catalogs no longer register `$`, preserving ordinary shell syntax
 in that case. The remaining context-sensitive activation gap affects both
-terminal compositions and is recorded upstream as
-`cr-completion-activation-predicate.md`.
+terminal compositions and is described in the local request
+`stash/softline-completion-context-and-literal-triggers.md`.
 
 The socket presenter now preserves reviewer/worker start receipts, relative
 theme regions, cancellation notices and source headings in replay. Manual and

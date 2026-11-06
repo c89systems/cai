@@ -14,8 +14,8 @@ renderer. JSONL export projects the saved journal directly without creating a
 client or runtime, restoring model context or consuming pending input. Active
 and offline exports use the same implementation. Markdown export still uses a
 read-only runtime with no-op write callbacks and execution-only replay. Its
-[storage-only content contract](workspace-export.md) needs the product decision
-recorded in that design before implementation.
+[runtime-free cutover](workspace-export.md) preserves the current handover
+contract; the recorded-only proposal remains an optional content change.
 Session selection/export/deletion share the existing storage helpers
 used by application commands; there is no second persistence implementation.
 Import/export retain their existing source/sink behavior and paths. Utilities

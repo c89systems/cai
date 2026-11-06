@@ -1,14 +1,15 @@
-# Storage-only conversation export
+# Runtime-free conversation export
 
-Workspace-server export cutover, 2026-11-06. The JSONL projection is implemented;
-the Markdown content decision below is awaiting confirmation.
+Workspace-server export cutover, 2026-11-06. The storage-only JSONL projection
+is implemented. Markdown's existing handover content is the refactor baseline;
+the recorded-only document below remains an optional product change.
 
 ## Current boundary
 
 For Markdown, `cli/session_commands.c` opens an `offline-export` client and an
 agent runtime when exporting a closed conversation. No inference is requested,
-but runtime construction still restores the retained provider context, prepares application
-instructions and reconstructs session state. The context uses the ordinary
+but runtime construction still restores the retained provider context, prepares
+application instructions and reconstructs session state. The context uses the ordinary
 history backing store. Streaming its subsequent serialization does not make
 that reconstruction a storage-only export.
 
@@ -80,18 +81,54 @@ The current application Markdown is a runtime handover. In particular, its
 rather than what was recorded in the conversation. A storage-only projection
 cannot claim those instructions came from the saved session.
 
-Recommended: both `/export` and `--export` produce a document of recorded
+An optional proposal is for both `/export` and `--export` to produce a document of recorded
 conversation data, saved metadata and execution history. Preserve original
 ordering, attribution, timestamps, reasoning and tool failures, with explicit
 omission markers for unavailable non-text payloads. Reuse the existing
 incremental transcript/execution decoders. Do not load current workspace
 instructions or initialize tools, authentication or a model to generate it.
 
-The alternative is to preserve the current handover semantics, including
-current instructions. That requires an explicit instructions/configuration
-projection separate from the stored transcript. The pending product decision
-selects which document the application promises; implementation must not
-silently substitute one for the other.
+Until that change is explicitly selected, preserve the current handover
+semantics, including the instructions/configuration available to that export.
+Preserving this existing contract needs no new approval. The outstanding work
+is an implementation gap, not a reason to wait for a product decision.
+
+## Markdown implementation baseline
+
+Separate these responsibilities without adding another runtime or keeping a
+parallel Markdown formatter:
+
+1. Extract the existing handover renderer from `cai_agent_runtime.c` into a
+   reusable core formatter. Live runtime export supplies its existing metadata,
+   instruction view and history producer; the application supplies native
+   journal projections. Keep the handover sections, attribution, omission
+   markers and execution history rather than silently replacing them with a
+   different document.
+2. Factor instruction preparation from `cai_smith.c` so the offline application
+   can prepare the same effective preset/configuration without constructing a
+   client, agent, tool runtime or model context. Reuse the same instruction
+   compiler and access policy; do not duplicate templates, broaden workspace
+   instruction approval, execute tools or open integrations. Configured global
+   instructions remain distinguishable from recorded conversation content.
+3. Expose the existing native journal index through a private retained view:
+   one collection receiver, one captured head and metadata/byte references.
+   Supply retained history to the formatter through bounded source/sink
+   callbacks. Both application formats use that same view and publication
+   lifecycle; no context spool or full JSON value is introduced.
+4. Provider object member order is arbitrary. The current renderer solves this
+   with a metadata scan and render scan per seekable history item. Replace
+   that seek assumption with a linear metadata pass over retained items, keeping
+   only bounded item identities, followed by a linear streaming render pass.
+   Do not reread the whole journal for each item. Arbitrarily large text, goal
+   objectives and tool bodies still flow in chunks; only bounded configuration
+   and control records may use their existing explicit limits.
+
+Compare the resulting handover with the existing core exporter in tests,
+including current instructions, fields after large text, opaque compaction,
+trimmed observations, interrupted tools and non-text omission markers. Remove
+the application's offline runtime helper and its utility-boundary exception
+only after both formats use the new projection. The recorded-only proposal
+must not be selected merely because it is easier to implement.
 
 ## Publication and lifecycle
 
@@ -107,6 +144,17 @@ read/format work without reentering command execution or mutating the selected
 conversation. Completion/failure retains the admitted command identity, and
 resources close once the export context exits. Native utility callbacks retain
 their documented thread affinity.
+
+This owner-dispatch cutover is not implemented: `/export` still calls the
+shared exporter synchronously, including the JSONL selection pass. A retained
+job/reader context must preserve its accepted command identity, keep the SDK
+client open through its actual lifetime and marshal completion back to the
+owner. It must not start a thread per request or call the runtime's owner-only
+API from an export worker. A deterministic gated-read fixture must prove
+concurrent status and cancellation progress. Durable queue admission itself
+appends journal records, so prove snapshot behavior under those appends and
+destructive edits before changing head preconditions. Do not substitute a
+complete context buffer or temporary journal copy for a missing read contract.
 
 ## Required proof
 
