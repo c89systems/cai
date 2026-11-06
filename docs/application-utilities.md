@@ -13,7 +13,9 @@ never run an agent loop or create a workspace server, Softline editor or libmdf
 renderer. Offline export still uses the shared helper's read-only runtime to
 restore saved context, with no-op write callbacks and execution-only replay;
 it cannot consume pending model input. Removing that reconstruction in favor
-of a storage-only export projection remains part of the separation work.
+of a [storage-only export projection](workspace-export.md) remains part of the
+separation work. Its Markdown content contract needs the product decision
+recorded in that design before implementation.
 Session selection/export/deletion share the existing storage helpers
 used by application commands; there is no second persistence implementation.
 Import/export retain their existing source/sink behavior and paths. Utilities
