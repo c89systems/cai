@@ -1,8 +1,8 @@
 # Runtime-free conversation export
 
-Workspace-server export cutover, 2026-11-06. Both offline export formats now
-read native journal ranges. Markdown preserves the existing handover baseline;
-the recorded-only document below remains an optional product change.
+Workspace-server export cutover, 2026-11-06.
+Both formats now read native journal ranges, including interactive exports.
+Markdown preserves the existing baseline; the recorded-only document below remains an optional product change.
 
 ## Current boundary
 
@@ -17,14 +17,15 @@ Model/settings strings are explicitly limited to 8,191 bytes; oversized or
 malformed control values fail the candidate. Goal and provider text have no
 such control-value limit.
 
-Active `/export` already uses the native view for JSONL. Its Markdown header,
-captured instructions and resident history still come from its existing live
-runtime, preserving live configuration semantics. That remaining owner-only
-adapter must be addressed when moving long exports out of owner dispatch.
+Active `/export` captures its live header, instructions and goal at admission through `cai_agent_runtime_prepare_handover`.
+Bounded control strings are copied; instruction and goal text retain immutable references to their existing owned allocations.
+Subsequent updates replace those allocations, leaving the capture unchanged.
+Neither payload is copied or spooled.
+The capture has no runtime or session pointer, and its text producers can run after runtime closure.
+A custom allocator's context must remain alive until the last retained allocation closes.
 
-The existing core runtime handover/export APIs remain useful for callers that
-explicitly own a live runtime. Removing the application's dependency on them
-does not require removing those public APIs.
+Both formats then share one native history view.
+The core live-runtime APIs still support explicit callers using resident context; the application no longer calls those APIs to produce either file format.
 
 ## Preserve the portable JSONL contract
 
@@ -45,11 +46,20 @@ is sufficient to reproduce the existing recovery semantics.
 
 ## Read a stable native view
 
-Open one collection receiver for the export and capture its head identity and
-upper position. Reuse that receiver for bounded native range reads. Apply the
-head precondition across passes so a concurrent append, trim, expiry or
-replacement produces an explicit failure instead of two inconsistent files.
-Use the existing store/client registry; do not open a client per pass or entry.
+Open one incarnation-bound collection receiver and capture its upper position and live-entry count.
+Reuse that receiver for bounded native range reads.
+Liblockdc 0.27's public contract makes entry bodies and permanent positions immutable.
+No subsequent append can introduce an entry below that upper bound.
+Reading exactly the original live count therefore proves that no original entry disappeared from the selected prefix.
+Both the initial index pass and full observation passes enforce that count.
+Selected metadata, checkpoints and history ranges additionally enforce presence, identities, revisions and byte lengths.
+A missing required value fails the unpublished candidate.
+
+This permits later queue/status observations to append without invalidating the export.
+It replaces whole-head equality, which would reject those harmless appends.
+A receiver cannot silently bind a replacement collection incarnation.
+No per-entry hash index, second journal copy or extra head read is required.
+Use the existing store/client registry; never open a client per pass or entry.
 
 The selection pass reads journal edits incrementally and retains references
 and metadata only. A history reference identifies its native commit position
@@ -91,10 +101,8 @@ omission markers for unavailable non-text payloads. Reuse the existing
 incremental transcript/execution decoders. Do not load current workspace
 instructions or initialize tools, authentication or a model to generate it.
 
-Until that change is explicitly selected, preserve the current handover
-semantics, including the instructions/configuration available to that export.
-Preserving this existing contract needs no new approval. The outstanding work
-is an implementation gap, not a reason to wait for a product decision.
+The implementation preserves the current handover semantics, including the instructions/configuration available to that export.
+The recorded-only proposal remains a separate product decision.
 
 ## Markdown implementation baseline
 
@@ -139,7 +147,8 @@ Retain the existing basename/suffix rules, default destination, private output
 permissions and sibling-file publication. These files are the requested output
 artifacts, not a hidden staging substitute for a streaming context reader.
 Generate every selected projection successfully before publishing destinations.
-Failures preserve the previous outputs and remove incomplete export artifacts.
+Failures before publication preserve the previous outputs and remove incomplete export artifacts.
+Sibling renames are separate filesystem operations; a publication failure can leave one sibling published.
 
 Keep long export work separate from rendering and normal owner dispatch.
 Frontend typing must remain responsive. Cancellation must interrupt bounded
@@ -148,16 +157,24 @@ conversation. Completion/failure retains the admitted command identity, and
 resources close once the export context exits. Native utility callbacks retain
 their documented thread affinity.
 
-This owner-dispatch cutover is not implemented: `/export` still calls the
-shared exporter synchronously, including the JSONL selection pass. A retained
-job/reader context must preserve its accepted command identity, keep the SDK
-client open through its actual lifetime and marshal completion back to the
-owner. It must not start a thread per request or call the runtime's owner-only
-API from an export worker. A deterministic gated-read fixture must prove
-concurrent status and cancellation progress. Durable queue admission itself
-appends journal records, so prove snapshot behavior under those appends and
-destructive edits before changing head preconditions. Do not substitute a
-complete context buffer or temporary journal copy for a missing read contract.
+`cai_cli_export_prepare` pins the conversation against deletion and captures that bounded admission state.
+Its short metadata lookup lease is released before payload work, so durable input/goal updates can proceed.
+A single retained worker per workspace runs the native index, formatting and file generation.
+It is created on the first interactive export, waits on a condition while idle and is reused for later exports.
+An eventfd announces completion; the owner resumes the original command document and emits its real outcome.
+No runtime owner API, renderer or application observer runs in the file producer.
+
+TURN actions remain editable while the export is pending.
+Read-only feed commands and status/cancellation controls continue to run.
+Escape cancels the export and pauses an active goal rather than restarting pursuit after the cancelled export.
+STOP/last-client shutdown cancel and join before closing storage or the runtime.
+A persistent server continues its export after detach.
+Utility `--export` calls the same prepare/run implementation synchronously on its calling thread; no utility callback affinity changes.
+
+Cancellation is checked during bounded source consumption, formatting and file writes.
+The final pre-publication check is its decision point: after that, publish the already-generated siblings without reporting a late cancellation.
+Failures before publication preserve previous destinations and remove temporary output artifacts.
+These temporary files are the requested export artifacts, not a staged context or journal copy.
 
 ## Required proof
 
@@ -262,17 +279,16 @@ oversized settings, early allocation failures, and source/sink failures.
 the live agent across ten model profiles after changing the source file;
 the original captured policy survives in both.
 
-The long-export owner-dispatch requirement remains incomplete. Removing the
-offline runtime does not by itself make active `/export` asynchronous.
+The owner-dispatch requirement uses the same streaming producers, with an immutable header capture and retained worker lifetime rather than a second export implementation.
 
 `cai_cli_journal_view` now owns the native retained selection for one borrowed
 collection receiver and captured head. It exposes retained JSONL, final metadata,
 decoded framed history and visible event producers. The JSONL entry point uses
 this view. Successful calls can be composed without rescanning the selection or
 opening another receiver; read or consumer failure makes the view terminal.
-All range reads retain the captured head precondition. Cancellation options are
-copied at open, forwarded to the SDK, and checked before/during payload parsing
-and output, including the initial index scan. No read callback reenters storage.
+All range reads retain the captured prefix bounds and immutable-entry checks.
+Cancellation options are copied at open, forwarded to the SDK, and checked before/during payload parsing and output, including the initial index scan.
+No read callback reenters storage.
 
 The journal check now composes the view's history producer with the core
 handover formatter, checks repeated JSONL/metadata/history/event operations,
@@ -283,3 +299,12 @@ constant number of reads. Cancellation stops a generated index/read after
 8 KiB rather than consuming the whole value. This private view is the adapter
 boundary now used by both offline formats, including header/instruction
 preparation and streamed execution-record rendering.
+
+`cai_handover_capture` retains a 3 MiB instruction allocation while rejecting allocations above 64 KiB.
+It checks every observed capture-allocation failure and the 8,191-byte control limit, then reads the original goal/instructions on a different default-stack thread after goal removal and runtime/client closure.
+The model-switch test compares the entire captured instruction text before and after a real model switch and runtime closure.
+The native-view check also allows appends after head capture and rejects deleted original entries or missing selected history.
+
+`cai_cli_export_job_*` gates actual SDK delivery during the index or Markdown render pass for Responses and Chat Completions.
+It verifies status and durable queue admission during that read, isolation of the accepted export prefix, Escape and goal-pause behavior, existing-destination preservation, partial-file cleanup, inline read errors, worker reuse, noninteractive settlement and last-client shutdown.
+`cai_cli_export_persist` verifies completion after detach from a headless persistent owner and visible completion after reconnect.

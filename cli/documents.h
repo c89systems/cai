@@ -22,6 +22,10 @@ int cai_cli_documents_write(cai_cli_documents *, const void *, size_t);
 int cai_cli_documents_finish(cai_cli_documents *);
 int cai_cli_documents_delegate(cai_cli_documents *, const char *, cai_error *);
 int cai_cli_documents_complete(cai_cli_documents *, int, cai_error *);
+/** Finish the current document and retain completion externally by its call
+ * identity. Resume attaches that identity without echoing the input again. */
+int cai_cli_documents_suspend(cai_cli_documents *, cai_error *);
+int cai_cli_documents_resume(cai_cli_documents *, const char *, cai_error *);
 /** Asynchronous operation metadata belongs to the original command even when
  * another command is being rendered. Does not replace the active document. */
 int cai_cli_documents_operation(cai_cli_documents *, const char *call,

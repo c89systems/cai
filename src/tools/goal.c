@@ -155,6 +155,8 @@ static int cai_goal_create(void *value, const void *params, void *out,
   char *objective;
   char *trimmed;
   char *end;
+  cai_shared_text *text = NULL;
+  int rc;
   long long now;
 
   context = (cai_goal_context *)value;
@@ -198,8 +200,16 @@ static int cai_goal_create(void *value, const void *params, void *out,
   if (trimmed != objective) {
     memmove(objective, trimmed, strlen(trimmed) + 1U);
   }
-  cai_free_mem(&CAI_SESSION_CLIENT_IMPL(context->session)->allocator,
-               session->goal_objective);
+  rc = cai_shared_text_adopt(
+      &CAI_SESSION_CLIENT_IMPL(context->session)->allocator, objective, &text,
+      error);
+  if (rc != CAI_OK) {
+    cai_free_mem(&CAI_SESSION_CLIENT_IMPL(context->session)->allocator,
+                 objective);
+    return rc;
+  }
+  cai_shared_text_release(session->goal_text);
+  session->goal_text = text;
   session->goal_objective = NULL;
   cai_free_mem(&CAI_SESSION_CLIENT_IMPL(context->session)->allocator,
                session->goal_status);
@@ -216,8 +226,8 @@ static int cai_goal_create(void *value, const void *params, void *out,
   session->goal_status = cai_strdup(
       &CAI_SESSION_CLIENT_IMPL(context->session)->allocator, "active");
   if (session->goal_status == NULL) {
-    cai_free_mem(&CAI_SESSION_CLIENT_IMPL(context->session)->allocator,
-                 session->goal_objective);
+    cai_shared_text_release(session->goal_text);
+    session->goal_text = NULL;
     session->goal_objective = NULL;
     return cai_set_error(error, CAI_ERR_NOMEM, "failed to store goal status");
   }
@@ -310,8 +320,8 @@ static int cai_goal_clear(void *value, const void *params, void *out,
   }
   session = CAI_SESSION_IMPL(context->session);
   if (session->goal_status != NULL) {
-    cai_free_mem(&CAI_SESSION_CLIENT_IMPL(context->session)->allocator,
-                 session->goal_objective);
+    cai_shared_text_release(session->goal_text);
+    session->goal_text = NULL;
     cai_free_mem(&CAI_SESSION_CLIENT_IMPL(context->session)->allocator,
                  session->goal_status);
   }

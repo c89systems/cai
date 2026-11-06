@@ -3772,7 +3772,7 @@ cai_runtime_apply_goal_control(cai_agent_runtime *runtime,
                                cai_runtime_goal_control_node *control,
                                cai_error *error) {
   cai_session_impl *goal;
-  char *copy;
+  cai_shared_text *copy = NULL;
   long long now;
   const char *event_data;
   int rc;
@@ -3798,17 +3798,16 @@ cai_runtime_apply_goal_control(cai_agent_runtime *runtime,
           "cannot create a new goal because this session has an unfinished "
           "goal; complete or clear the existing goal first");
     }
-    copy = cai_strdup(&CAI_SESSION_CLIENT_IMPL(runtime->session)->allocator,
-                      control->text);
-    if (copy == NULL) {
-      return cai_set_error(error, CAI_ERR_NOMEM,
-                           "failed to preserve goal objective");
-    }
+    rc = cai_shared_text_create(
+        &CAI_SESSION_CLIENT_IMPL(runtime->session)->allocator, control->text,
+        &copy, error);
+    if (rc != CAI_OK)
+      return rc;
     rc = cai_runtime_goal_replace_status(runtime->session, "active", error);
     if (rc == CAI_OK) {
-      cai_free_mem(&CAI_SESSION_CLIENT_IMPL(runtime->session)->allocator,
-                   goal->goal_objective);
-      goal->goal_objective = copy;
+      cai_shared_text_release(goal->goal_text);
+      goal->goal_text = copy;
+      goal->goal_objective = copy->data;
       copy = NULL;
       goal->goal_has_token_budget = control->has_token_budget;
       goal->goal_token_budget = control->token_budget;
@@ -3829,7 +3828,7 @@ cai_runtime_apply_goal_control(cai_agent_runtime *runtime,
               : "A host created a new goal.",
           error);
     }
-    cai_free_mem(&CAI_SESSION_CLIENT_IMPL(runtime->session)->allocator, copy);
+    cai_shared_text_release(copy);
   } else if (goal->goal_status == NULL &&
              control->kind != CAI_RUNTIME_GOAL_CLEAR) {
     return cai_set_error(error, CAI_ERR_INVALID, "no goal exists");
@@ -3866,15 +3865,14 @@ cai_runtime_apply_goal_control(cai_agent_runtime *runtime,
       }
     }
   } else if (control->kind == CAI_RUNTIME_GOAL_SET_OBJECTIVE) {
-    copy = cai_strdup(&CAI_SESSION_CLIENT_IMPL(runtime->session)->allocator,
-                      control->text);
-    if (copy == NULL) {
-      return cai_set_error(error, CAI_ERR_NOMEM,
-                           "failed to preserve goal objective");
-    }
-    cai_free_mem(&CAI_SESSION_CLIENT_IMPL(runtime->session)->allocator,
-                 goal->goal_objective);
-    goal->goal_objective = copy;
+    rc = cai_shared_text_create(
+        &CAI_SESSION_CLIENT_IMPL(runtime->session)->allocator, control->text,
+        &copy, error);
+    if (rc != CAI_OK)
+      return rc;
+    cai_shared_text_release(goal->goal_text);
+    goal->goal_text = copy;
+    goal->goal_objective = copy->data;
     goal->goal_updated_at = now;
     event_data = "objective_changed";
     rc = cai_runtime_goal_add_context(
@@ -3907,8 +3905,8 @@ cai_runtime_apply_goal_control(cai_agent_runtime *runtime,
           error);
     }
   } else if (control->kind == CAI_RUNTIME_GOAL_CLEAR) {
-    cai_free_mem(&CAI_SESSION_CLIENT_IMPL(runtime->session)->allocator,
-                 goal->goal_objective);
+    cai_shared_text_release(goal->goal_text);
+    goal->goal_text = NULL;
     cai_free_mem(&CAI_SESSION_CLIENT_IMPL(runtime->session)->allocator,
                  goal->goal_status);
     goal->goal_objective = NULL;
@@ -6687,8 +6685,9 @@ static int cai_runtime_handover_history(void *context, cai_sink *sink,
 
 static int cai_runtime_handover_text(void *context, cai_sink *sink,
                                      cai_error *error) {
-  const char *text = (const char *)context;
-  size_t length = text != NULL ? strlen(text) : 0U;
+  const cai_shared_text *value = context;
+  const char *text = value != NULL ? value->data : NULL;
+  size_t length = value != NULL ? value->length : 0U;
   int rc;
   while (length != 0U) {
     size_t take = length > 4096U ? 4096U : length;
@@ -6701,9 +6700,8 @@ static int cai_runtime_handover_text(void *context, cai_sink *sink,
   return CAI_OK;
 }
 
-static int cai_runtime_export_handover_markdown(cai_agent_runtime *runtime,
-                                                cai_sink *sink,
-                                                cai_error *error) {
+static void cai_runtime_handover_config(cai_agent_runtime *runtime,
+                                        cai_handover_config *out) {
   const cai_session_impl *session = CAI_SESSION_IMPL(runtime->session);
   const cai_agent_impl *agent = CAI_SESSION_AGENT_IMPL(runtime->session);
   cai_handover_config config;
@@ -6728,10 +6726,17 @@ static int cai_runtime_export_handover_markdown(cai_agent_runtime *runtime,
       cai_session_goal_elapsed_seconds(runtime->session, (long long)time(NULL));
   if (session->goal_objective != NULL) {
     config.goal_objective.write = cai_runtime_handover_text;
-    config.goal_objective.context = session->goal_objective;
+    config.goal_objective.context = session->goal_text;
   }
   config.developer_instructions.write = cai_runtime_handover_text;
-  config.developer_instructions.context = agent->developer_instructions;
+  config.developer_instructions.context = agent->instruction_text;
+  *out = config;
+}
+static int cai_runtime_export_handover_markdown(cai_agent_runtime *runtime,
+                                                cai_sink *sink,
+                                                cai_error *error) {
+  cai_handover_config config;
+  cai_runtime_handover_config(runtime, &config);
   config.history.write = cai_runtime_handover_history;
   config.history.context = runtime->session;
   return cai_handover_write(&config, sink, error);
@@ -7814,6 +7819,7 @@ int cai_agent_runtime_open(cai_client *client,
               cai_runtime_effective_settings(runtime);
           cai_runtime_settings_owned active_copy, smith_copy;
           char *model_instructions;
+          cai_shared_text *model_text = NULL;
           size_t model_prefix_length;
           if (config->model == NULL && (saved->state_request_model != NULL ||
                                         saved->state_model != NULL))
@@ -7843,13 +7849,19 @@ int cai_agent_runtime_open(cai_client *client,
                     ? runtime->smith_identity
                     : runtime->preset_default_identity,
                 &model_instructions, &model_prefix_length, error);
-          if (rc == CAI_OK) {
-            if (model_instructions != NULL) {
-              cai_free_mem(&CAI_CLIENT_IMPL(client)->allocator,
-                           agent->developer_instructions);
-              agent->developer_instructions = model_instructions;
-              agent->smith_prompt_prefix_length = model_prefix_length;
+          if (rc == CAI_OK && model_instructions != NULL) {
+            rc = cai_shared_text_adopt(&CAI_CLIENT_IMPL(client)->allocator,
+                                       model_instructions, &model_text, error);
+            if (rc == CAI_OK)
               model_instructions = NULL;
+          }
+          if (rc == CAI_OK) {
+            if (model_text != NULL) {
+              cai_shared_text_release(agent->instruction_text);
+              agent->instruction_text = model_text;
+              agent->developer_instructions = model_text->data;
+              agent->smith_prompt_prefix_length = model_prefix_length;
+              model_text = NULL;
             }
             cai_free_mem(&CAI_CLIENT_IMPL(client)->allocator, agent->model);
             cai_free_mem(&CAI_CLIENT_IMPL(client)->allocator,
@@ -7879,6 +7891,7 @@ int cai_agent_runtime_open(cai_client *client,
           cai_runtime_settings_clear(&active_copy);
           cai_runtime_settings_clear(&smith_copy);
           cai_free_mem(&CAI_CLIENT_IMPL(client)->allocator, model_instructions);
+          cai_shared_text_release(model_text);
         }
         if (rc == CAI_OK) {
           if (CAI_SESSION_IMPL(runtime->session)->goal_status != NULL) {
@@ -8503,6 +8516,7 @@ static int cai_runtime_set_model_internal(
   char *old_smith_model;
   char *old_compaction_hash;
   char *next_instructions, *old_instructions;
+  cai_shared_text *next_instruction_text = NULL, *old_instruction_text;
   size_t next_prompt_prefix_length, old_prompt_prefix_length;
   cai_runtime_settings_owned next_reasoning, next_smith_reasoning;
   cai_agent_runtime_settings reasoning;
@@ -8684,7 +8698,13 @@ static int cai_runtime_set_model_internal(
         runtime->smith_identity != NULL ? runtime->smith_identity
                                         : runtime->preset_default_identity,
         &next_instructions, &next_prompt_prefix_length, error);
+  if (rc == CAI_OK && next_instructions != NULL)
+    rc =
+        cai_shared_text_adopt(&CAI_CLIENT_IMPL(runtime->client)->allocator,
+                              next_instructions, &next_instruction_text, error);
   if (rc != CAI_OK) {
+    cai_free_mem(&CAI_CLIENT_IMPL(runtime->client)->allocator,
+                 next_instructions);
     cai_runtime_settings_clear(&next_reasoning);
     cai_runtime_settings_clear(&next_smith_reasoning);
     cai_free_mem(&CAI_CLIENT_IMPL(runtime->client)->allocator, next_model);
@@ -8728,8 +8748,10 @@ static int cai_runtime_set_model_internal(
   cai_runtime_settings_clear(&next_smith_reasoning);
   old_model = agent->model;
   old_instructions = agent->developer_instructions;
+  old_instruction_text = agent->instruction_text;
   old_prompt_prefix_length = agent->smith_prompt_prefix_length;
   if (next_instructions != NULL) {
+    agent->instruction_text = next_instruction_text;
     agent->developer_instructions = next_instructions;
     agent->smith_prompt_prefix_length = next_prompt_prefix_length;
   }
@@ -8755,13 +8777,12 @@ static int cai_runtime_set_model_internal(
   rc = cai_runtime_commit(runtime, requires_compaction ? 0 : 1, error);
   if (next_instructions != NULL) {
     if (rc != CAI_OK) {
-      cai_free_mem(&CAI_CLIENT_IMPL(runtime->client)->allocator,
-                   agent->developer_instructions);
+      cai_shared_text_release(agent->instruction_text);
+      agent->instruction_text = old_instruction_text;
       agent->developer_instructions = old_instructions;
       agent->smith_prompt_prefix_length = old_prompt_prefix_length;
     } else {
-      cai_free_mem(&CAI_CLIENT_IMPL(runtime->client)->allocator,
-                   old_instructions);
+      cai_shared_text_release(old_instruction_text);
     }
   }
   if (rc != CAI_OK) {
@@ -13032,6 +13053,91 @@ int cai_agent_runtime_export_journal_state(cai_agent_runtime *runtime,
     rc = cai_sink_write(sink, "}\n", 2U, error);
   cai_source_close(source);
   pthread_mutex_unlock(&runtime->lock);
+  return rc;
+}
+
+struct cai_agent_handover {
+  cai_handover_config config;
+  cai_shared_text *instructions, *objective;
+  char *strings[10];
+};
+
+const cai_handover_config *
+cai_agent_handover_config(const cai_agent_handover *capture) {
+  return capture != NULL ? &capture->config : NULL;
+}
+void cai_agent_handover_close(cai_agent_handover *capture) {
+  size_t i;
+  if (capture == NULL)
+    return;
+  for (i = 0U; i < sizeof(capture->strings) / sizeof(capture->strings[0]); ++i)
+    cai_free_mem(NULL, capture->strings[i]);
+  cai_shared_text_release(capture->instructions);
+  cai_shared_text_release(capture->objective);
+  cai_free_mem(NULL, capture);
+}
+int cai_agent_runtime_prepare_handover(cai_agent_runtime *runtime,
+                                       cai_agent_handover **out,
+                                       cai_error *error) {
+  cai_agent_handover *capture;
+  const char **fields[10];
+  size_t i, length;
+  int rc;
+  if (out == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "handover capture output required");
+  *out = NULL;
+  rc = cai_runtime_owner(runtime, error);
+  if (rc != CAI_OK)
+    return rc;
+  capture = cai_alloc(NULL, sizeof(*capture));
+  if (capture == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate handover capture");
+  memset(capture, 0, sizeof(*capture));
+  pthread_mutex_lock(&runtime->lock);
+  /* Exclude worker-side controls/model transitions while retaining payload
+   * references. The resulting handle has no runtime/session pointer. */
+  rc = cai_runtime_model_switch_ready_locked(runtime, error);
+  if (rc == CAI_OK) {
+    cai_runtime_handover_config(runtime, &capture->config);
+    capture->instructions = CAI_AGENT_IMPL(runtime->agent)->instruction_text;
+    capture->objective = CAI_SESSION_IMPL(runtime->session)->goal_text;
+    cai_shared_text_retain(capture->instructions);
+    cai_shared_text_retain(capture->objective);
+    fields[0] = &capture->config.preset_name;
+    fields[1] = &capture->config.preset_prompt_version;
+    fields[2] = &capture->config.active_model;
+    fields[3] = &capture->config.recorded_model;
+    fields[4] = &capture->config.reasoning_effort;
+    fields[5] = &capture->config.runtime_state;
+    fields[6] = &capture->config.session_id;
+    fields[7] = &capture->config.workspace_directory;
+    fields[8] = &capture->config.session_scope;
+    fields[9] = &capture->config.goal_status;
+    for (i = 0U; rc == CAI_OK && i < 10U; ++i) {
+      if (*fields[i] == NULL)
+        continue;
+      for (length = 0U; length < 8192U && (*fields[i])[length] != '\0';
+           ++length) {
+      }
+      if (length == 8192U)
+        rc = cai_set_error(error, CAI_ERR_LIMIT,
+                           "handover control value exceeds 8191 bytes");
+      else {
+        capture->strings[i] = cai_strndup(NULL, *fields[i], length);
+        if (capture->strings[i] == NULL)
+          rc = cai_set_error(error, CAI_ERR_NOMEM,
+                             "copy handover control value");
+        else
+          *fields[i] = capture->strings[i];
+      }
+    }
+  }
+  pthread_mutex_unlock(&runtime->lock);
+  if (rc != CAI_OK)
+    cai_agent_handover_close(capture);
+  else
+    *out = capture;
   return rc;
 }
 

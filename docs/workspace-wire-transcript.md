@@ -159,9 +159,8 @@ Typed execution/tool
 records use their separate presentation path; encoded JSON is never dumped by
 the raw span consumer.
 
-The terminal uses selected native replay and the shared typed tool/command
-formatter. The remaining application cutover work is tracked in
-[terminal attachment](terminal-attachment.md).
+The terminal uses selected native replay and the shared typed tool/command formatter.
+Application integration is documented in [terminal attachment](terminal-attachment.md), with requirement-level evidence in the [completion audit](workspace-verification.md).
 
 Verification: `cai_transcript_wire` exercises all shapes, bytewise fragmentation,
 binary data, signed offsets, caps, malformed values and incomplete completion;

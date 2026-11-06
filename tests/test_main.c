@@ -29183,6 +29183,9 @@ static void test_agent_runtime_model_switch(test_state *state) {
   runtime_event_state events;
   cai_client *client;
   cai_agent_runtime *runtime;
+  cai_agent_handover *capture = NULL;
+  cai_buffer_builder before_switch, after_switch;
+  cai_sink capture_sink;
   cai_error error;
   cai_agent_run_state run_state;
   cai_agent_goal_request goal_request;
@@ -29273,6 +29276,22 @@ static void test_agent_runtime_model_switch(test_state *state) {
     expect_substr(state, "runtime_model_metadata_capture_commit_hash",
                   store_state.saved_commit,
                   "\"model_compaction_hash\":\"provider-3000\"");
+    memset(&before_switch, 0, sizeof(before_switch));
+    memset(&after_switch, 0, sizeof(after_switch));
+    memset(&capture_sink, 0, sizeof(capture_sink));
+    capture_sink.callbacks.write = instruction_projection_capture;
+    capture_sink.callbacks.context = &before_switch;
+    expect_int(state, "runtime_model_switch_capture",
+               cai_agent_runtime_prepare_handover(runtime, &capture, &error),
+               CAI_OK);
+    if (capture != NULL) {
+      const cai_handover_config *view = cai_agent_handover_config(capture);
+      expect_int(
+          state, "runtime_model_switch_capture_read",
+          view->developer_instructions.write(
+              view->developer_instructions.context, &capture_sink, &error),
+          CAI_OK);
+    }
     expect_int(
         state, "runtime_model_switch_compatible",
         cai_agent_runtime_set_model(runtime, CAI_MODEL_GPT_6_ASTRA, &error),
@@ -29288,6 +29307,23 @@ static void test_agent_runtime_model_switch(test_state *state) {
                   "\"model_compaction_hash\":\"provider-3000\"");
     cai_agent_runtime_close(runtime);
     runtime = NULL;
+    if (capture != NULL) {
+      const cai_handover_config *view = cai_agent_handover_config(capture);
+      capture_sink.callbacks.context = &after_switch;
+      expect_str(state, "runtime_model_switch_capture_model",
+                 view->active_model, CAI_MODEL_GPT_5_6_LUNA);
+      expect_int(
+          state, "runtime_model_switch_capture_survives_close",
+          view->developer_instructions.write(
+              view->developer_instructions.context, &capture_sink, &error),
+          CAI_OK);
+      expect_str(state, "runtime_model_switch_capture_immutable",
+                 after_switch.data, before_switch.data);
+      cai_agent_handover_close(capture);
+      capture = NULL;
+    }
+    cai_free_mem(NULL, before_switch.data);
+    cai_free_mem(NULL, after_switch.data);
     memset(&store_state, 0, sizeof(store_state));
     store_state.commit_json =
         "{\"version\":1,\"model\":\"gpt-5.5\","

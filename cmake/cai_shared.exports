@@ -8,6 +8,8 @@ cai_agent_execution_finish
 cai_agent_execution_write
 cai_agent_get_instruction_status
 cai_agent_goal_request_init
+cai_agent_handover_close
+cai_agent_handover_config
 cai_agent_instructions_close
 cai_agent_instructions_write
 cai_agent_local_session_store_close
@@ -72,6 +74,7 @@ cai_agent_runtime_model
 cai_agent_runtime_open
 cai_agent_runtime_pause_goal
 cai_agent_runtime_pending_input
+cai_agent_runtime_prepare_handover
 cai_agent_runtime_pump
 cai_agent_runtime_pump_bounded
 cai_agent_runtime_refresh_mcp

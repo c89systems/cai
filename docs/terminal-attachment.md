@@ -216,12 +216,10 @@ libcai and reuses the same codec objects as the combined application. The
 combined application includes the terminal facade/adapters and depends on the
 independent [workspace owner SDK](application-server.md). Owner lifecycle,
 configuration and semantic command services have no renderer dependency.
-Maintenance uses the separate [utility dispatcher](application-utilities.md);
-its logging/browser helpers now use captured views without installing process
-state. JSONL export reads the journal directly; offline Markdown export's
-read-only context reconstruction remains part of the active goal. See the
-[completion audit](workspace-verification.md) for the requirement-level evidence
-and remaining Markdown implementation.
+Maintenance uses the separate [utility dispatcher](application-utilities.md); its logging/browser helpers use captured views without installing process state.
+Both export formats read native journal ranges without context reconstruction.
+Interactive exports use a retained worker so owner controls remain available; utility exports remain synchronous.
+See the [completion audit](workspace-verification.md) for requirement-level evidence and explicit dependency limits.
 
 Softline 0.16's unconditional trigger stripping also needs a pre-activation
 eligibility API: typed shell words starting with `$` (when skills are loaded)

@@ -18,12 +18,14 @@
       target_sources(${target} PRIVATE $<TARGET_OBJECTS:cai_cli_storage_fixture>)
       target_link_options(${target} PRIVATE "-Wl,--wrap=lc_client_open")
     endfunction()
-    add_executable(cai_cli_mock_fixture tests/cli_mock_fixture.c tests/cli_mcp_config_fixture.c)
+    add_executable(cai_cli_mock_fixture tests/cli_mock_fixture.c tests/cli_mcp_config_fixture.c
+      tests/export_gate_fixture.c)
     target_link_libraries(cai_cli_mock_fixture PRIVATE cai_cli_support cai_app_static)
     cai_configure_cli_target(cai_cli_mock_fixture)
     cai_cli_use_storage_fixture(cai_cli_mock_fixture)
     target_link_options(cai_cli_mock_fixture PRIVATE "-Wl,--wrap=cai_mcp_streamable_http_client_open")
     target_link_options(cai_cli_mock_fixture PRIVATE "-Wl,--wrap=cai_cli_pouch_prompt_save")
+    target_link_options(cai_cli_mock_fixture PRIVATE "-Wl,--wrap=cai_cli_journal_view_open")
     add_executable(cai_terminal_peer tests/terminal_peer.c)
     add_test(NAME cai_cli_pipe COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pipe_test.sh" "$<TARGET_FILE:cai_cli>"
@@ -143,10 +145,11 @@
     set_tests_properties(cai_cli_attach_boot PROPERTIES TIMEOUT 30
       LABELS "cli;local;offline"
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
-    add_executable(cai_cli_progress_owner tests/cli_catalog_client_fixture.c
+    add_executable(cai_cli_progress_owner tests/cli_catalog_client_fixture.c tests/export_gate_fixture.c
       cli/main.c cli/process.c cli/bootstrap.c cli/spawn.c cli/attach.c cli/executable_path.c)
     target_link_libraries(cai_cli_progress_owner PRIVATE cai_app_static)
     target_link_options(cai_cli_progress_owner PRIVATE -Wl,--wrap=cai_client_open)
+    target_link_options(cai_cli_progress_owner PRIVATE -Wl,--wrap=cai_cli_journal_view_open)
     cai_configure_cli_target(cai_cli_progress_owner)
     add_executable(cai_cli_terminal_owner_control tests/terminal_owner_control.c)
     target_link_libraries(cai_cli_terminal_owner_control PRIVATE cai_app_static)
@@ -293,7 +296,19 @@
       "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_app_utility_host>")
     set_tests_properties(cai_cli_utility_boundary PROPERTIES TIMEOUT 20)
     set_tests_properties(cai_cli_export_paths cai_cli_export_paths_executable PROPERTIES TIMEOUT 15)
+    foreach(protocol responses chat_completions)
+      foreach(phase 1 3)
+        add_test(NAME cai_cli_export_job_${protocol}_${phase} COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_export_job_test.sh"
+          "$<TARGET_FILE:cai_cli_mock_fixture>" "${phase}" "${protocol}")
+        set_tests_properties(cai_cli_export_job_${protocol}_${phase} PROPERTIES TIMEOUT 30)
+      endforeach()
+    endforeach()
     set(_cai_journal_lua_args)
+    add_test(NAME cai_cli_export_persist COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_export_persist_test.sh"
+      "$<TARGET_FILE:cai_cli_progress_owner>")
+    set_tests_properties(cai_cli_export_persist PROPERTIES TIMEOUT 20)
     if(CAI_BUILD_LUA_RUNNER AND CAI_BUILD_LUA)
       list(APPEND _cai_journal_lua_args "$<TARGET_FILE:cai_lua_runner>" "${CMAKE_CURRENT_BINARY_DIR}/lua")
     endif()
@@ -943,6 +958,9 @@
     add_custom_target(cai_cli_tests DEPENDS ${_cai_cli_targets})
     add_dependencies(cai_cli_tests cai_instruction_writer_test)
     add_dependencies(cai_cli_tests cai_handover_test)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      add_dependencies(cai_cli_tests cai_handover_capture_test)
+    endif()
     if(TARGET cai_app_server_tests)
       add_dependencies(cai_cli_tests cai_app_server_tests)
     endif()

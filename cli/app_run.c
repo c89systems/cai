@@ -12,6 +12,7 @@
 #include "commands.h"
 #include "config.h"
 #include "documents.h"
+#include "export_job.h"
 #include "identity.h"
 #include "log.h"
 #include "mcp.h"
@@ -103,6 +104,7 @@ typedef struct cli_state {
   int mcp_notice_pending;
   cai_cli_messages *messages;
   cai_cli_documents documents;
+  cai_cli_export_job *export_job;
   cai_input_controller *input_controller;
   cai_input_queue *input;
   cai_input_queue_client *input_admin;
@@ -168,6 +170,7 @@ static int cli_submit_automation(cli_state *state, const char *instruction,
 static int cli_continue_goal(cli_state *state, cai_error *error);
 static int cli_host_process(cli_state *state, cai_error *error);
 static int cli_pump(cli_state *state, long timeout, cai_error *error);
+static int cli_export_pump(cli_state *, cai_error *);
 static int cli_sync_queue(cli_state *state, int at_boundary, cai_error *error);
 static int cli_review_pump(void *);
 static int cli_sync_status(cli_state *state, cai_error *error);
@@ -489,7 +492,8 @@ static int cli_command_turn_ready(cli_state *state, int *ready,
   if (rc == CAI_OK)
     rc = cai_agent_runtime_state(state->runtime, &run_state, error);
   if (rc == CAI_OK)
-    *ready = state->shell.pid <= 0 && state->review_runtime == NULL &&
+    *ready = !cai_cli_export_job_active(state->export_job) &&
+             state->shell.pid <= 0 && state->review_runtime == NULL &&
              !metrics.turn_active && !state->awaiting_turn &&
              run_state != CAI_AGENT_SAMPLING &&
              run_state != CAI_AGENT_DISPATCHING_TOOL;
@@ -676,6 +680,17 @@ static int cli_sync_queue(cli_state *state, int at_boundary, cai_error *error) {
  * entering the trusted host mailbox and outliving that authority. */
 static int cli_remote_cancel(void *context, cai_error *error) {
   cli_state *state = context;
+  if (cai_cli_export_job_active(state->export_job)) {
+    cai_agent_goal_snapshot goal;
+    int rc;
+    cai_cli_export_job_cancel(state->export_job);
+    rc = cai_agent_runtime_get_goal(state->runtime, &goal, error);
+    if (rc == CAI_OK && goal.has_goal && strcmp(goal.status, "active") == 0) {
+      state->automation_done = 1;
+      rc = cai_agent_runtime_pause_goal(state->runtime, error);
+    }
+    return rc;
+  }
   cai_cli_messages_cancel_send(state->messages);
   if (state->shell.pid > 0) {
     cai_cli_shell_cancel(&state->shell);
@@ -1600,6 +1615,45 @@ static int cli_list_write(void *context, const void *bytes, size_t count,
   return CAI_OK;
 }
 
+/** Marshal a worker outcome back onto the original command's journal region.
+ * Ordinary export failures are inline results; only persistence/output failure
+ * can fail the owner. No runtime or presentation operation runs on the worker.
+ */
+static int cli_export_result(cli_state *state, cai_cli_export_result *result,
+                             cai_error *error) {
+  int outcome, written, rc;
+  if (result == NULL)
+    return CAI_OK;
+  rc = cai_cli_documents_resume(&state->documents, result->call, error);
+  if (rc != CAI_OK) {
+    cai_cli_export_result_close(result);
+    return rc;
+  }
+  outcome = result->status;
+  if (outcome == CAI_OK) {
+    state->list_line_start = 1;
+    if (cli_text(state, "## Conversation export\n\n", 24U) != 0)
+      outcome = CAI_ERR_TRANSPORT;
+    if (outcome == CAI_OK)
+      outcome =
+          cli_list_write(state, result->paths, result->length, &result->error);
+  }
+  written =
+      cai_cli_documents_complete(&state->documents, outcome, &result->error);
+  rc = state->documents.error.code;
+  if (rc == CAI_OK && written != outcome)
+    rc = written;
+  if (rc != CAI_OK)
+    cai_cli_error(error, rc, "persist export completion");
+  cai_cli_export_result_close(result);
+  state->settlement_pending = 1;
+  return rc;
+}
+static int cli_export_pump(cli_state *state, cai_error *error) {
+  return cli_export_result(state, cai_cli_export_job_take(state->export_job),
+                           error);
+}
+
 static int cli_load_sessions(cli_state *state, cai_error *error) {
   free(state->sessions);
   state->sessions = NULL;
@@ -2110,6 +2164,7 @@ static int cli_stop(cli_state *state, cai_error *error) {
   int rc = CAI_OK;
   state->host_stopped = state->exit_requested = 1;
   state->automation_done = 1;
+  cai_cli_export_job_cancel(state->export_job);
   /* Cancel before acknowledgement. Closing joins workers without draining
    * events that could otherwise start another accepted queued turn. */
   if (state->runtime != NULL) {
@@ -2182,10 +2237,12 @@ static int cli_host_process(cli_state *state, cai_error *error) {
                : cai_agent_runtime_submit_steering(state->runtime,
                                                    command->text, &applied);
     } else if (command->type == CAI_APP_CANCEL_TURN) {
-      rc = cai_agent_runtime_cancel_turn(state->review_runtime != NULL
-                                             ? state->review_runtime
-                                             : state->runtime,
-                                         &applied);
+      rc = cai_cli_export_job_active(state->export_job)
+               ? cli_remote_cancel(state, &applied)
+               : cai_agent_runtime_cancel_turn(state->review_runtime != NULL
+                                                   ? state->review_runtime
+                                                   : state->runtime,
+                                               &applied);
       cai_cli_messages_cancel_send(state->messages);
     } else {
       char *goal_command = NULL;
@@ -2234,7 +2291,7 @@ static int cli_host_process(cli_state *state, cai_error *error) {
 /* Level-triggered runtime, input, store and socket readiness share one owner
  * loop. Idle servers wait indefinitely except for an actual host deadline. */
 static int cli_pump(cli_state *state, long timeout, cai_error *error) {
-  struct pollfd descriptors[10U + CAI_CLI_WORKSPACE_HOST_FDS];
+  struct pollfd descriptors[11U + CAI_CLI_WORKSPACE_HOST_FDS];
   size_t server_count = 0U;
   int fd, rc, stopping;
   rc = cai_cli_pouch_ownership_check(&state->pouch, error);
@@ -2267,17 +2324,19 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
                             : -1;
     descriptors[8].fd = !state->shell.exited ? state->shell.exit_fd : -1;
     descriptors[9].fd = state->shell.timer_fd;
+    descriptors[10].fd = cai_cli_export_job_fd(state->export_job);
     descriptors[0].events = descriptors[1].events = descriptors[2].events =
         descriptors[3].events = descriptors[4].events = descriptors[5].events =
             descriptors[6].events = descriptors[7].events =
-                descriptors[8].events = descriptors[9].events = POLLIN;
+                descriptors[8].events = descriptors[9].events =
+                    descriptors[10].events = POLLIN;
     rc = cai_cli_workspace_host_prepare(
-        state->workspace_host, descriptors + 10U, CAI_CLI_WORKSPACE_HOST_FDS,
+        state->workspace_host, descriptors + 11U, CAI_CLI_WORKSPACE_HOST_FDS,
         &server_count, &timeout, error);
     if (rc != CAI_OK)
       return rc;
     do {
-      rc = poll(descriptors, 10U + server_count, (int)timeout);
+      rc = poll(descriptors, 11U + server_count, (int)timeout);
     } while (rc < 0 && errno == EINTR);
     if (rc < 0)
       return cai_cli_error(error, CAI_ERR_TRANSPORT, "wait for app events");
@@ -2311,6 +2370,8 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
     rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "pump isolated reviewer");
   if (rc == CAI_OK && state->shell.pid > 0)
     rc = cli_shell_pump(state, error);
+  if (rc == CAI_OK)
+    rc = cli_export_pump(state, error);
   if (rc == CAI_OK)
     rc = cli_messages_process(state, 0, error);
   if (rc == CAI_OK && cai_cli_quota_take(&state->quota_refresh, &state->quota))
@@ -3502,8 +3563,8 @@ static int cli_handle_command(cli_state *state, const char *line,
   }
   if (strcmp(line, "/export") == 0 || strncmp(line, "/export ", 8U) == 0 ||
       strncmp(line, "/export\t", 8U) == 0) {
-    cai_sink_callbacks callbacks;
-    cai_sink *destination;
+    cai_cli_export *source = NULL;
+    cai_agent_handover *capture = NULL;
     const char *id = cai_agent_runtime_session_id(state->runtime);
     char basename[PATH_MAX];
     size_t length;
@@ -3517,20 +3578,27 @@ static int cli_handle_command(cli_state *state, const char *line,
     memcpy(basename, arg, length);
     basename[length] = '\0';
     state->list_line_start = 1;
-    if (cli_text(state, "## Conversation export\n\n", 24U) != 0)
+    if (cli_text(state, "## Exporting conversation\n\n", 27U) != 0 ||
+        cli_finish_response(state) != 0)
       return CAI_ERR_TRANSPORT;
-    memset(&callbacks, 0, sizeof(callbacks));
-    callbacks.context = state;
-    callbacks.write = cli_list_write;
-    destination = NULL;
-    rc = cai_sink_from_callbacks(&callbacks, &destination, error);
+    rc = cai_agent_runtime_prepare_handover(state->runtime, &capture, error);
     if (rc == CAI_OK)
-      rc = cai_cli_session_export(
+      rc = cai_cli_export_prepare(
           &state->pouch, id, state->workspace, state->options.export_dir,
-          length != 0U ? basename : NULL, state->runtime, destination, error);
-    cai_sink_close(destination);
-    if (cli_finish_response(state) != 0 && rc == CAI_OK)
-      rc = CAI_ERR_TRANSPORT;
+          length != 0U ? basename : NULL, &source, error);
+    if (rc == CAI_OK && state->export_job == NULL)
+      rc = cai_cli_export_job_open(&state->export_job, error);
+    if (rc == CAI_OK)
+      rc = cai_cli_export_job_start(state->export_job, source, capture,
+                                    state->documents.call, error);
+    if (rc == CAI_OK) {
+      rc = cai_cli_documents_suspend(&state->documents, error);
+      if (rc != CAI_OK)
+        cai_cli_export_job_cancel(state->export_job);
+    } else {
+      cai_cli_export_close(source);
+      cai_agent_handover_close(capture);
+    }
     return rc;
   }
   if (strcmp(line, "/resume") == 0) {
@@ -3709,9 +3777,9 @@ static int cli_advance_automation(cli_state *state, cai_error *error) {
   const char *next;
   int rc;
 
-  if (state->awaiting_turn || state->batch_pending_turns > 0U ||
-      state->exit_requested || state->review_runtime != NULL ||
-      state->shell.pid > 0)
+  if (cai_cli_export_job_active(state->export_job) || state->awaiting_turn ||
+      state->batch_pending_turns > 0U || state->exit_requested ||
+      state->review_runtime != NULL || state->shell.pid > 0)
     return CAI_OK;
   if (state->automation_failed) {
     state->automation_done = 1;
@@ -3784,7 +3852,8 @@ static int cli_publish_settlement(cli_state *state, cai_error *error) {
   cai_input_entry entry;
   size_t i;
   int quiet, pending, rc;
-  if (!state->settlement_pending || state->awaiting_turn ||
+  if (cai_cli_export_job_active(state->export_job) ||
+      !state->settlement_pending || state->awaiting_turn ||
       state->batch_pending_turns > 0U || state->review_runtime != NULL ||
       state->shell.pid > 0 || state->goal_starts_pending > 0U)
     return CAI_OK;
@@ -4275,6 +4344,13 @@ cleanup:
     }
     cai_error_cleanup(&snapshot);
     cai_app_bridge_error(bridge, &error);
+  }
+  {
+    cai_cli_export_result *pending = NULL;
+    cai_cli_export_job_close(state->export_job, &pending);
+    state->export_job = NULL;
+    if (pending != NULL && cli_export_result(state, pending, &error) != CAI_OK)
+      result = 1;
   }
   cai_cli_shell_close(&state->shell);
   if (state->runtime != NULL) {

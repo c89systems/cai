@@ -742,8 +742,15 @@ int cai_client_new_agent(cai_client *client, const cai_agent_config *config,
   cai_agent_init_methods(agent);
   impl->client = client;
   impl->model = cai_strdup(&client_impl->allocator, config->model);
+  rc = cai_shared_text_create(&client_impl->allocator,
+                              config->developer_instructions,
+                              &impl->instruction_text, error);
+  if (rc != CAI_OK) {
+    cai_agent_destroy(agent);
+    return rc;
+  }
   impl->developer_instructions =
-      cai_strdup(&client_impl->allocator, config->developer_instructions);
+      impl->instruction_text != NULL ? impl->instruction_text->data : NULL;
   impl->prompt_cache_key =
       cai_strdup(&client_impl->allocator, config->prompt_cache_key);
   impl->tool_choice = cai_strdup(&client_impl->allocator, config->tool_choice);
@@ -912,7 +919,7 @@ void cai_agent_destroy(cai_agent *agent) {
   allocator = &CAI_CLIENT_IMPL(impl->client)->allocator;
   cai_session_destroy(impl->default_session);
   cai_free_mem(allocator, impl->model);
-  cai_free_mem(allocator, impl->developer_instructions);
+  cai_shared_text_release(impl->instruction_text);
   cai_free_mem(allocator, impl->prompt_cache_key);
   cai_free_mem(allocator, impl->tool_choice);
   cai_free_mem(allocator, impl->tool_choice_json);
@@ -2710,7 +2717,7 @@ void cai_session_destroy(cai_session *session) {
   cai_free_mem(allocator, impl->state_todo_board);
   cai_free_mem(allocator, impl->state_preset_name);
   cai_free_mem(allocator, impl->state_preset_prompt_version);
-  cai_free_mem(allocator, impl->goal_objective);
+  cai_shared_text_release(impl->goal_text);
   cai_free_mem(allocator, impl->goal_status);
   cai_free_mem(allocator, impl->goal_input_applied);
   cai_free_mem(allocator, impl);
@@ -7898,6 +7905,7 @@ static int cai_session_import_state(cai_session *session, cai_source *source,
   char *next_state_preset_name;
   char *next_state_preset_prompt_version;
   char *next_goal_objective;
+  cai_shared_text *next_goal_text = NULL;
   char *next_goal_status;
   char *next_goal_input_applied = NULL;
   int rc;
@@ -8102,6 +8110,11 @@ static int cai_session_import_state(cai_session *session, cai_source *source,
                          "failed to preserve imported session goal");
       goto done;
     }
+    rc = cai_shared_text_adopt(&CAI_SESSION_CLIENT_IMPL(session)->allocator,
+                               next_goal_objective, &next_goal_text, error);
+    if (rc != CAI_OK)
+      goto done;
+    next_goal_objective = NULL;
   }
   if (doc.has_last_usage_input_tokens !=
           doc.has_last_usage_input_cached_tokens ||
@@ -8235,11 +8248,13 @@ static int cai_session_import_state(cai_session *session, cai_source *source,
     next_state_preset_prompt_version = NULL;
   }
   if (rc == CAI_OK) {
-    cai_free_mem(&CAI_SESSION_CLIENT_IMPL(session)->allocator,
-                 CAI_SESSION_IMPL(session)->goal_objective);
+    cai_shared_text_release(CAI_SESSION_IMPL(session)->goal_text);
     cai_free_mem(&CAI_SESSION_CLIENT_IMPL(session)->allocator,
                  CAI_SESSION_IMPL(session)->goal_status);
-    CAI_SESSION_IMPL(session)->goal_objective = next_goal_objective;
+    CAI_SESSION_IMPL(session)->goal_text = next_goal_text;
+    CAI_SESSION_IMPL(session)->goal_objective =
+        next_goal_text != NULL ? next_goal_text->data : NULL;
+    next_goal_text = NULL;
     CAI_SESSION_IMPL(session)->goal_status = next_goal_status;
     cai_free_mem(&CAI_SESSION_CLIENT_IMPL(session)->allocator,
                  CAI_SESSION_IMPL(session)->goal_input_applied);
@@ -8317,6 +8332,7 @@ done:
                next_state_preset_prompt_version);
   cai_free_mem(&CAI_SESSION_CLIENT_IMPL(session)->allocator,
                next_goal_objective);
+  cai_shared_text_release(next_goal_text);
   cai_free_mem(&CAI_SESSION_CLIENT_IMPL(session)->allocator, next_goal_status);
   cai_free_mem(&CAI_SESSION_CLIENT_IMPL(session)->allocator,
                next_goal_input_applied);

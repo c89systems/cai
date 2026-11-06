@@ -11,6 +11,7 @@ add_library(cai_app_server_objects OBJECT cli/server.c cli/identity.c cli/app_co
   cli/pouch_stream.c cli/pouch_transcript.c cli/transcript.c cli/transcript_feed.c
   cli/journal_projection.c
   cli/markdown_export.c
+  cli/export_job.c
   cli/quota_refresh.c cli/session_commands.c cli/workspace_claims.c cli/log.c
   cli/log_environment.c cli/documents.c cli/messages.c cli/message_names.c
   cli/todo.c cli/stores.c cli/temp.c cli/replay.c)

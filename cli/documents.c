@@ -131,6 +131,26 @@ int cai_cli_documents_delegate(cai_cli_documents *d, const char *text,
   return document_record(d, "command.frontend", "text", text, CAI_OK, 0, error);
 }
 
+int cai_cli_documents_suspend(cai_cli_documents *d, cai_error *error) {
+  if (!d->active || cai_cli_documents_finish(d) != 0)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT, "suspend command document");
+  d->active = 0;
+  d->call[0] = '\0';
+  return CAI_OK;
+}
+int cai_cli_documents_resume(cai_cli_documents *d, const char *call,
+                             cai_error *error) {
+  if (d->active || d->runtime == NULL || call == NULL ||
+      strlen(call) >= sizeof(d->call))
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "command continuation unavailable");
+  if (cai_cli_documents_finish(d) != 0)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT, "finish preceding notice");
+  strcpy(d->call, call);
+  d->active = 1;
+  return CAI_OK;
+}
+
 int cai_cli_documents_complete(cai_cli_documents *d, int outcome,
                                cai_error *error) {
   int rc = CAI_OK;

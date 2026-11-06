@@ -11,6 +11,7 @@
 #include <cai/smith.h>
 
 #include "cai_lj.h"
+#include "cai_shared_text.h"
 
 #include <curl/curl.h>
 #include <lonejson.h>
@@ -112,6 +113,8 @@ typedef struct cai_agent_impl {
   cai_client *client;
   char *model;
   char *developer_instructions;
+  /** Immutable owner; developer_instructions is its borrowed address. */
+  cai_shared_text *instruction_text;
   cai_agent_instruction_status instruction_status;
   /* Model-owned prefix; the capability/policy/skills suffix stays captured. */
   size_t smith_prompt_prefix_length;
@@ -222,6 +225,8 @@ typedef struct cai_session_impl {
    */
   char *state_preset_prompt_version;
   char *goal_objective;
+  /** Immutable owner; goal_objective is its borrowed address. */
+  cai_shared_text *goal_text;
   char *goal_status;
   /** Accepted compound input already applied, even if preflight committed
    * before consuming its prompt. Independent of subsequent goal controls. */

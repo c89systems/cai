@@ -5,18 +5,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int bounded;
-static size_t allocation_attempts;
-static size_t allocation_fail_at = SIZE_MAX;
+/* Each checked producer owns its allocations and closes them on its thread.
+ * Runtime workers may allocate concurrently; they must neither consume this
+ * thread's failure injection nor race its allocation ledger. */
+static __thread int bounded;
+static __thread size_t allocation_attempts;
+static __thread size_t allocation_fail_at = SIZE_MAX;
 /* Static musl calloc/realloc can call the wrapped malloc/free internally.
  * Count each public allocation once, like the dynamically linked native case.
  */
-static int allocation_depth;
-static struct allocation {
+static __thread int allocation_depth;
+static __thread struct allocation {
   void *pointer;
   size_t size;
 } allocations[1024];
-static size_t live_bytes, peak_bytes;
+static __thread size_t live_bytes, peak_bytes;
 void *__real_malloc(size_t);
 void *__real_calloc(size_t, size_t);
 void *__real_realloc(void *, size_t);

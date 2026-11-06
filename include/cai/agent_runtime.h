@@ -7,6 +7,7 @@
 #include <cai/cai.h>
 #include <cai/chrome.h>
 #include <cai/execution.h>
+#include <cai/handover.h>
 #include <cai/history.h>
 #include <cai/input_queue.h>
 #include <cai/plugins.h>
@@ -1352,6 +1353,25 @@ void cai_agent_execution_close(cai_agent_execution *writer);
  */
 int cai_agent_runtime_export_markdown(cai_agent_runtime *runtime,
                                       cai_sink *sink, cai_error *error);
+/** Immutable header and text-policy capture for a detached handover producer.
+ * This is not model context or a persisted session snapshot. Preparation on
+ * the runtime owner requires a stable boundary. It copies bounded control
+ * strings (at most 8191 bytes each), and retains the existing instruction and
+ * goal allocations without copying either payload. Later model/goal changes
+ * and runtime closure do not change this capture. A custom client allocator's
+ * context must outlive retained allocations, including this capture.
+ */
+typedef struct cai_agent_handover cai_agent_handover;
+int cai_agent_runtime_prepare_handover(cai_agent_runtime *,
+                                       cai_agent_handover **, cai_error *);
+/** Borrowed immutable configuration until close. History is absent: copy this
+ * configuration and attach a stable streaming history producer. Its text
+ * producers use no runtime APIs and may run on another thread. Serialize uses
+ * of one capture, and do not close it during a producer call. */
+const cai_handover_config *
+cai_agent_handover_config(const cai_agent_handover *);
+/** Release retained text and bounded header strings. NULL is harmless. */
+void cai_agent_handover_close(cai_agent_handover *);
 /** Stream one initialization commit for the retained context as JSONL.
  * Portable exporters may prepend visible journal events. This does not change
  * persistence cursors or write a store snapshot. Requires the same stable,

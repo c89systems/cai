@@ -146,6 +146,7 @@ typedef struct cai_cli_journal_view {
   size_t count, capacity, next_span;
   uint64_t revision, bytes, position, last_commit, checkpoint;
   uint64_t created, applied, decoded, remaining;
+  uint64_t entries_read;
   uint64_t current_revision, frame_length, frame_remaining, frame_count;
   unsigned int revision_digits, frame_digits;
   int frame_phase, frame_started;
@@ -670,9 +671,15 @@ static int boundary(void *context, const lc_collection_read_metadata *entry,
   (void)error;
   if (entry->kind != LC_COLLECTION_READ_METADATA_ENTRY)
     return LC_OK;
+  if (entry->position <= p->position ||
+      entry->position > p->head.upper_position)
+    fail(p, CAI_ERR_PROTOCOL, "invalid immutable journal position");
+  ++p->entries_read;
   if (p->pass == EVENTS) {
-    p->rc = cai_cli_transcript_boundary(p->transcript, entry->position,
-                                        entry->append_id, p->error);
+    if (p->rc == CAI_OK)
+      p->rc = cai_cli_transcript_boundary(p->transcript, entry->position,
+                                          entry->append_id, p->error);
+    p->position = entry->position;
     return p->rc == CAI_OK ? LC_OK : LC_ERR_INVALID;
   }
   if (!p->active || entry->position <= p->position)
@@ -715,11 +722,14 @@ static int read_range(projection *p, pass kind, uint64_t after,
     return p->rc;
   p->pass = kind;
   p->position = after;
+  p->entries_read = 0U;
   lc_collection_read_opts_init(&options);
   lc_collection_read_res_init(&result);
   lc_error_init(&detail);
   memset(&sink, 0, sizeof(sink));
-  options.expected_head = p->head.etag;
+  /* LC receivers bind an incarnation; bodies and positions never change.
+   * A bounded prefix's original live count proves that none were deleted.
+   * Head equality would unnecessarily reject unrelated later appends. */
   options.has_after = options.has_through = 1;
   options.after = after;
   options.through = through;
@@ -736,6 +746,9 @@ static int read_range(projection *p, pass kind, uint64_t after,
     fail(p, CAI_ERR_CANCELLED, "journal projection cancelled");
   if (p->rc == CAI_OK && (!result.complete || p->active))
     fail(p, CAI_ERR_PROTOCOL, "incomplete journal projection range");
+  if (p->rc == CAI_OK && (kind == INDEX || kind == EVENTS) &&
+      p->entries_read != p->head.live_count)
+    fail(p, CAI_ERR_PROTOCOL, "captured journal prefix lost entries");
   if (p->rc == CAI_OK && kind == EVENTS)
     p->rc = cai_cli_transcript_finish(p->transcript, p->error);
   check_cancelled(p);
@@ -1043,8 +1056,10 @@ int cai_cli_journal_view_open(lc_collection *collection,
   p->copy_visitor.boolean_value = copy_bool;
   p->copy_visitor.null_value = copy_null;
   lc_error_init(&detail);
-  if (p->rc == CAI_OK &&
-      collection->head(collection, &p->head, &detail) != LC_OK)
+  if (options != NULL && options->head != NULL)
+    p->head = *options->head;
+  else if (p->rc == CAI_OK &&
+           collection->head(collection, &p->head, &detail) != LC_OK)
     p->rc = cai_cli_lc_error(error, &detail);
   lc_error_cleanup(&detail);
   if (p->rc == CAI_OK)

@@ -1,8 +1,7 @@
 # Workspace client/server completion audit
 
-Workspace completion audit, 2026-11-06, including the native JSONL and offline
-Markdown export cutovers. This checks the whole workspace contract rather
-than treating those individual changes as completion.
+Workspace completion audit, 2026-11-06, including native JSONL/Markdown and asynchronous interactive export.
+This checks the whole workspace contract rather than treating those individual changes as completion.
 
 The controlling specification is [workspace-server.md](workspace-server.md),
 with the [terminal adapter](terminal-attachment.md),
@@ -41,9 +40,10 @@ package test alone does not establish the application's lifecycle behavior.
 | Portable JSONL is a native storage projection | `cli/journal_projection.c`, `cli/pouch_export.inc` | `cai_journal_projection`, CLI export/journal/trim and both compaction tests: bounded generated values, metadata/checkpoint recovery, visible history, usage/goals, source/sink errors, original timestamps and actual imported continuation. Every offline export format is guarded against client/runtime construction. |
 | Runtime-free instruction preparation | `cai_agent_preset_prepare_instructions`, shared `cai_instruction_writer` | `cai_instruction_writer` guards against client/agent construction and large rendered allocations, streams an 8 MiB caller-owned extension on a default worker stack, and covers callback-backed skills, reuse and source/sink/allocation failures. Workspace approval and model-prompt checks compare complete output with live agents, including disabled capabilities and retargeting after source files change. |
 | Runtime-independent handover formatter | `cai/handover.h`, `src/cai_handover.c`; live runtime cursor adapter | `cai_handover` generates 32 MiB of provider text under allocation guards on a default worker stack, verifies output during production and exactly two source passes, and covers metadata after text, roles/tools/reasoning, omitted attachments, malformed frames, failures and cancellation. Existing runtime Markdown tests exercise its migrated adapter. |
-| Native offline Markdown export | `cli/markdown_export.c`, `cli/session_commands.c` | `cai_journal_projection` feeds the application adapter generated 8 MiB goals and provider text under allocation guards on a default worker stack, proves delivery during production and constant native read count, checks metadata/control limits, captured instructions and execution-chunk/error rendering. CLI destination and utility-boundary tests exercise Markdown-only and paired publication without a client/runtime. Active Markdown still uses its existing owner-thread runtime adapter. |
-| Stable native projection context | Private `cai_cli_journal_view` in `cli/journal_projection.c` | `cai_journal_projection` composes native history with both handover adapters, reuses one captured head for metadata/history/events/repeated JSONL, verifies trim visibility and nested-read rejection, and exercises generated 8 MiB values under allocation guards. Callback cancellation stops both indexing and later reads after 8 KiB. Paired application exports reuse one receiver and index. |
-| Owner controls stay responsive during a large export | `cli/app_run.c` currently invokes `cai_cli_session_export` synchronously | **Incomplete.** The native JSONL projector streams, but its index pass runs inside command dispatch. A slow/gated export must be tested against concurrent status/cancellation; socket separation alone is not proof. Retained export work must not create a worker per chunk/request, reenter collection reads or weaken snapshot validation to pass that test. |
+| Native Markdown export | `cli/markdown_export.c`, `cli/session_commands.c` | `cai_journal_projection` feeds the adapter generated 8 MiB goals and provider text under allocation guards on a default worker stack, proves delivery during production and constant read count, checks metadata/control limits and execution-chunk/error rendering. CLI destination and utility-boundary tests exercise Markdown-only and paired publication without a client/runtime. Active exports retain an immutable live header/policy and use native history. |
+| Immutable active header and policy | `cai_agent_runtime_prepare_handover`, private `cai_shared_text` ownership | `cai_handover_capture` retains 3 MiB instructions under allocation guards, covers every observed capture-allocation failure and oversized controls, removes the goal/closes runtime and client, then reads retained values from another default-stack thread. `agent_runtime_model_switch` verifies complete instruction text after a real model replacement and runtime closure. |
+| Stable native projection context | Private `cai_cli_journal_view` in `cli/journal_projection.c` | `cai_journal_projection` reuses one incarnation-bound receiver and captured prefix for metadata/history/events/repeated JSONL, verifies trim visibility, immutable-prefix counts and nested-read rejection, and exercises generated 8 MiB values under allocation guards. It allows appends after head capture and rejects deleted original entries or missing selected history. Cancellation stops indexing/later reads after 8 KiB. |
+| Owner controls stay responsive during a large export | `cli/export_job.c`, owner command continuation | Four `cai_cli_export_job_*` checks gate SDK delivery during index/render for both provider protocols, verify status and durable queue admission, frozen output selection, Escape/active-goal pause, read failure, worker reuse, destination preservation, partial-file cleanup, real batch settlement and shutdown. `cai_cli_export_persist` verifies finish after detach and replay after reconnect. One retained worker serves all exports; utility callbacks retain calling-thread affinity. |
 | Static musl executable/default worker stacks | Musl build preset and owned target | Core streaming workers, owner lifecycle, real CLI socket/PTY fixtures and the journal projection run on default pthread stacks. `file` verifies the rebuilt executable is static x86_64; the existing user symlink targets that artifact. No stack enlargement is introduced. |
 
 ## Explicit dependency and buffering boundaries
@@ -61,29 +61,29 @@ package test alone does not establish the application's lifecycle behavior.
   pager buffering remain rendering policies. They do not authorize collecting
   entire transport payloads or model context behind a streaming API.
 
-## Remaining application requirements
+## Export boundary and verification scope
 
-**The full goal is not complete.** Offline exports now use native storage
-projections. Active Markdown still borrows its live runtime, and long exports
-still run synchronously on the owner.
+Both application formats use native projections.
+Active Markdown retains the actual live header/instructions/goal; history and observations come from the admitted native prefix.
+The consistency checks bind the receiver to an incarnation, rely on immutable entry bodies and permanent positions, and require the original prefix count and selected references to remain present.
+New observations can append during export.
+The [export design](workspace-export.md) describes those checks and publication.
 
-Application `/export` also needs explicit long-operation control proof and an
-owner-responsive dispatch path. Its current synchronous call can occupy the
-owner during journal reads. Retain command identity and storage lifetime until
-completion, keep UI requests/control progress available and make cancellation
-reach bounded source work. Utility `run` callbacks retain their documented
-calling-thread affinity; this is not permission to move every utility to a
-background thread. Concurrent durable queue admissions also append to the
-journal: resolve that interaction with the stable export view explicitly.
+The command remains pending until its real result.
+One retained worker performs payload work and the owner journals completion under its original identity.
+Cancellation reaches bounded reads/formatting/writes.
+Shutdown joins before store closure, while persistent detach leaves work running.
+The existing handover content contract is preserved; the optional recorded-only proposal has not been selected.
 
-The existing handover includes the active developer instructions available to
-that export, which need not match the saved conversation. Preserve those
-semantics in the remaining active-export dispatch work. The runtime-free
-instruction preparation and shared formatter now implement the
-[Markdown baseline](workspace-export.md#markdown-implementation-baseline).
-That remaining work is authorized, not blocked on a new approval. The separate
-recorded-only proposal changes the content contract and remains optional.
+The final local verification passed:
 
-The verification above proves the implemented boundaries, with the stated
-platform/dependency limits. It does not turn this outstanding export work
-into completion or claim a full live/release test matrix was run.
+- 607 checks selected by the normal native Debug unit gate.
+- 27 focused native checks covering owner/client lifecycle, batch execution, replay, goals, trim, compaction, export and symbol boundaries.
+- 40 focused checks against the rebuilt static x86_64 musl artifacts, including immutable capture and large native projections on default worker stacks.
+- 20 consecutive native capture runs after isolating allocation-failure instrumentation by thread.
+- Valgrind checks for detached capture and the native journal projector, with no reported memory errors or leaks.
+- Source formatting, shell syntax and diff-whitespace checks.
+
+The implementation and local verification complete this iteration's workspace client/server scope.
+This audit does not claim a live-provider or complete cross-target release matrix.
+HTTP/Web UI, TCP and a user-wide daemon remain outside this iteration, and the explicit dependency limitations above remain documented.

@@ -46,9 +46,8 @@ delegated instead of executed by the server. A frontend may act only on a live
 record addressed to its own producer, after verifying its current connection
 and conversation. Replay displays history and never repeats frontend actions.
 Other observers do not apply another terminal's theme or quit request. The
-Softline command consumer now applies live actions from its own producer. The
-terminal's remaining delegate/parity work is listed in
-[terminal attachment](terminal-attachment.md).
+Softline command consumer now applies live actions from its own producer.
+The terminal's delegation and verification are documented in [terminal attachment](terminal-attachment.md).
 
 Backend commands keep the current native handler semantics, including context
 selection, goals, inference settings, catalog queries, retention and shell

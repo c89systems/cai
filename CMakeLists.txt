@@ -764,6 +764,7 @@ set(CAI_SOURCES
   src/cai_smith.c
   src/cai_instruction_writer.c
   src/cai_handover.c
+  src/cai_shared_text.c
   src/cai_source.c
   src/cai_stream.c
   src/cai_chat.c

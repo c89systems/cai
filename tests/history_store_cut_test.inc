@@ -212,8 +212,11 @@ static void history_store_cuts(void) {
     memset(&cut, 0, sizeof(cut));
     memset(&request, 0, sizeof(request));
     assert(cai_agent_new_session(agent, &session, &error) == CAI_OK);
+    assert(cai_shared_text_create(NULL, "Goal survives trim",
+                                  &CAI_SESSION_IMPL(session)->goal_text,
+                                  &error) == CAI_OK);
     CAI_SESSION_IMPL(session)->goal_objective =
-        cai_strdup(NULL, "Goal survives trim");
+        CAI_SESSION_IMPL(session)->goal_text->data;
     CAI_SESSION_IMPL(session)->goal_status = cai_strdup(NULL, "paused");
     assert(CAI_SESSION_IMPL(session)->goal_objective != NULL &&
            CAI_SESSION_IMPL(session)->goal_status != NULL);

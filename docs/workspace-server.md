@@ -45,6 +45,13 @@ receive an explicit environment/cwd, and Chrome registration resolves defaults
 before calling core helpers.
 Native library controller startup never forks or installs signal handlers.
 
+Interactive conversation export uses one retained worker per workspace.
+The owner captures bounded header metadata and immutable instruction/goal references, then native journal ranges feed both output formats without runtime restoration or a context copy.
+Read-only commands and cancellation remain available; the original command settles on real completion.
+A persistent owner continues after detach, and shutdown cancels/joins before releasing its store.
+Utility exports remain synchronous on their calling thread.
+See the [export contract](workspace-export.md).
+
 Independent typed channels carry [queue observations](workspace-wire-queue.md),
 [status](workspace-wire-status.md),
 [transcript spans](workspace-wire-transcript.md),
@@ -56,21 +63,15 @@ windows while direct append notifications supply live transcript events.
 Terminal tools share the common one-pass formatter; help and completion
 semantics are shared with the synchronous receiver.
 
-See [terminal attachment](terminal-attachment.md) for current verification and
-remaining cutover work, [workspace process handoff](workspace-process.md) for
-executable ownership, and [command execution](workspace-commands.md) for backend
-admission/delegation. The confirmed decisions and specification below remain
-the target contract; an implemented boundary is not a claim of complete feature
-parity. The owner's former terminal helpers, timers and replay renderer are
-removed. It compiles with SDK/storage dependencies only; a compiled-object
-check guards against editor/renderer references. Its tests cover backend
-policy/lifetime, while presentation tests use the shared frontend adapters.
-The [typed client package](application-client.md) can now be built and installed
-without terminal/storage dependencies. The [workspace owner SDK](application-server.md)
-likewise builds without Softline/libmdf and does not select Lua by default.
-The combined facade uses that same backend, including one process-wide store
-registry. The startup requirement inventory also validates supplemental schema
-fields, named connections and effective environment settings before attachment.
+See [terminal attachment](terminal-attachment.md) for integration and verification, [workspace process handoff](workspace-process.md) for executable ownership, and [command execution](workspace-commands.md) for backend admission/delegation.
+The confirmed decisions and specification below define this iteration; the [completion audit](workspace-verification.md) records requirement-level evidence and dependency limits.
+The owner's former terminal helpers, timers and replay renderer are removed.
+It compiles with SDK/storage dependencies only; a compiled-object check guards against editor/renderer references.
+Its tests cover backend policy/lifetime, while presentation tests use the shared frontend adapters.
+The [typed client package](application-client.md) can be built and installed without terminal/storage dependencies.
+The [workspace owner SDK](application-server.md) likewise builds without Softline/libmdf and does not select Lua by default.
+The combined facade uses that same backend, including one process-wide store registry.
+The startup requirement inventory also validates supplemental schema fields, named connections and effective environment settings before attachment.
 
 The optional [Lua workspace client](lua-workspace-client.md) exposes the typed
 C client channels and explicit scopes. Lua drives prepare/pump (or an explicit

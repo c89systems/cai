@@ -422,23 +422,41 @@ static int export_targets(const cai_cli_pouch *pouch, const char *workspace,
   return CAI_OK;
 }
 
-int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
-                           const char *workspace, const char *export_root,
-                           const char *basename,
-                           cai_agent_runtime *active_runtime,
-                           cai_sink *destination, cai_error *error) {
+struct cai_cli_export {
+  cai_cli_pouch *pouch;
   cai_cli_session metadata;
-  cai_cli_pouch_transcript *reader = NULL;
-  cai_cli_journal_view *view = NULL;
-  cai_sink *sink;
-  char paths[2][PATH_MAX];
-  char temporary[2][PATH_MAX];
-  struct cai_cli_session_guard *use = NULL;
-  const char *cursor;
+  cai_cli_pouch_transcript *reader;
+  cai_cli_journal_view *view;
+  lc_collection_head_res head;
+  char workspace[PATH_MAX], paths[2][PATH_MAX], temporary[2][PATH_MAX];
+  struct cai_cli_session_guard *use;
   FILE *file;
-  lc_lease *lease;
-  int rc;
+  int (*cancelled)(void *);
+  void *cancel_context;
+  int started;
+};
+void cai_cli_export_close(cai_cli_export *e) {
   size_t i;
+  if (e == NULL)
+    return;
+  for (i = 0U; i < 2U; ++i)
+    if (e->temporary[i][0] != '\0')
+      unlink(e->temporary[i]);
+  cai_cli_journal_view_close(e->view);
+  cai_cli_pouch_transcript_close(e->reader);
+  cai_cli_pouch_end_read(e->use);
+  free(e);
+}
+int cai_cli_export_prepare(cai_cli_pouch *pouch, const char *id,
+                           const char *workspace, const char *export_root,
+                           const char *basename, cai_cli_export **out,
+                           cai_error *error) {
+  cai_cli_export *e;
+  const char *cursor;
+  lc_lease *lease = NULL;
+  lc_error detail;
+  int rc;
+  *out = NULL;
   for (cursor = id; *cursor != '\0'; cursor++) {
     if (!((*cursor >= 'a' && *cursor <= 'z') ||
           (*cursor >= 'A' && *cursor <= 'Z') ||
@@ -450,76 +468,134 @@ int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
   }
   if (id[0] == '\0')
     return cai_cli_error(error, CAI_ERR_INVALID, "export session ID is empty");
-  sink = NULL;
-  file = NULL;
-  memset(temporary, 0, sizeof(temporary));
-  lease = NULL;
-  /* Pin metadata/identity and share one captured native view across outputs.
-   * Every range keeps its head precondition; a concurrent change fails the
-   * candidate instead of mixing journal revisions. */
-  rc = cai_cli_pouch_begin_read(pouch, id, &use, error);
+  if (strlen(workspace) >= PATH_MAX)
+    return cai_cli_error(error, CAI_ERR_LIMIT,
+                         "export workspace path too long");
+  e = calloc(1U, sizeof(*e));
+  if (e == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate export context");
+  e->pouch = pouch;
+  strcpy(e->workspace, workspace);
+  rc = cai_cli_pouch_begin_read(pouch, id, &e->use, error);
   if (rc == CAI_OK)
     rc = cai_cli_pouch_lock(pouch, id, &lease, error);
   if (rc == CAI_OK)
-    rc = cai_cli_pouch_session(pouch, id, &metadata, error);
+    rc = cai_cli_pouch_session(pouch, id, &e->metadata, error);
   if (rc == CAI_OK)
-    rc = export_targets(pouch, workspace, export_root, id, basename, paths,
+    rc = export_targets(pouch, workspace, export_root, id, basename, e->paths,
                         error);
   if (rc == CAI_OK)
-    rc = cai_cli_pouch_transcript_open(pouch, metadata.workspace, id, &reader,
-                                       error);
+    rc = cai_cli_pouch_transcript_open(pouch, e->metadata.workspace, id,
+                                       &e->reader, error);
+  lc_error_init(&detail);
   if (rc == CAI_OK)
-    rc = cai_cli_journal_view_open(reader->collection, NULL, &view, error);
+    if (e->reader->collection->head(e->reader->collection, &e->head, &detail) !=
+        LC_OK)
+      rc = cai_cli_lc_error(error, &detail);
+  lc_error_cleanup(&detail);
+  /* The read pin owns deletion exclusion. Release the lookup lease before
+   * returning so durable queue/goal updates can continue during the export. */
+  rc = cai_cli_pouch_unlock(lease, rc, error);
+  if (rc != CAI_OK)
+    cai_cli_export_close(e);
+  else
+    *out = e;
+  return rc;
+}
+static int export_cancelled(cai_cli_export *e, cai_error *error) {
+  return e->cancelled != NULL && e->cancelled(e->cancel_context)
+             ? cai_cli_error(error, CAI_ERR_CANCELLED,
+                             "conversation export cancelled")
+             : CAI_OK;
+}
+static int export_write(void *context, const void *bytes, size_t count,
+                        cai_error *error) {
+  cai_cli_export *e = context;
+  int rc = export_cancelled(e, error);
+  if (rc == CAI_OK && fwrite(bytes, 1U, count, e->file) != count)
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "write conversation export");
+  return rc;
+}
+int cai_cli_export_run(cai_cli_export *e, const cai_handover_config *active,
+                       int (*cancelled)(void *), void *cancel_context,
+                       cai_sink *destination, cai_error *error) {
+  cai_cli_journal_options options;
+  cai_sink sink;
+  size_t i;
+  int rc;
+  if (e == NULL || e->started || destination == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "unused export and destination required");
+  e->started = 1;
+  e->cancelled = cancelled;
+  e->cancel_context = cancel_context;
+  memset(&options, 0, sizeof(options));
+  options.head = &e->head;
+  options.cancelled = cancelled;
+  options.cancel_context = cancel_context;
+  memset(&sink, 0, sizeof(sink));
+  sink.callbacks.write = export_write;
+  sink.callbacks.context = e;
+  rc = cai_cli_journal_view_open(e->reader->collection, &options, &e->view,
+                                 error);
   /* Finish every selected stream before publishing any output. */
   for (i = 0U; rc == CAI_OK && i < 2U; i++) {
-    if (paths[i][0] == '\0')
+    if (e->paths[i][0] == '\0')
       continue;
-    rc =
-        export_file(paths[i], temporary[i], sizeof(temporary[i]), &file, error);
-    if (rc == CAI_OK)
-      rc = cai_sink_file(file, 0, &sink, error);
+    rc = export_file(e->paths[i], e->temporary[i], sizeof(e->temporary[i]),
+                     &e->file, error);
     if (rc == CAI_OK && i == 0U)
-      rc = active_runtime != NULL
-               ? cai_agent_runtime_export_markdown(active_runtime, sink, error)
-               : cai_cli_markdown_export(view, pouch, &metadata, workspace,
-                                         sink, error);
-    if (rc == CAI_OK && i == 0U && active_runtime != NULL)
-      rc = cai_agent_runtime_export_execution_markdown(active_runtime, sink,
-                                                       error);
+      rc = cai_cli_markdown_export(e->view, e->pouch, &e->metadata,
+                                   e->workspace, active, &sink, error);
     if (rc == CAI_OK && i == 1U)
-      rc = cai_cli_journal_view_jsonl(view, sink, error);
-    cai_sink_close(sink);
-    sink = NULL;
-    if (file != NULL) {
-      if (rc == CAI_OK && (fflush(file) != 0 || fsync(fileno(file)) != 0))
+      rc = cai_cli_journal_view_jsonl(e->view, &sink, error);
+    if (e->file != NULL) {
+      if (rc == CAI_OK && (fflush(e->file) != 0 || fsync(fileno(e->file)) != 0))
         rc =
             cai_cli_error(error, CAI_ERR_TRANSPORT, "sync conversation export");
-      if (fclose(file) != 0 && rc == CAI_OK)
+      if (fclose(e->file) != 0 && rc == CAI_OK)
         rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
                            "close conversation export");
-      file = NULL;
+      e->file = NULL;
     }
   }
+  /* Publication is the cancellation decision point. Once accepted, finish
+   * publishing the already-generated siblings without reporting a late cancel.
+   */
+  if (rc == CAI_OK)
+    rc = export_cancelled(e, error);
   for (i = 0U; rc == CAI_OK && i < 2U; i++)
-    if (paths[i][0] != '\0' && rename(temporary[i], paths[i]) != 0)
+    if (e->paths[i][0] != '\0' && rename(e->temporary[i], e->paths[i]) != 0)
       rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
                          "publish conversation export");
   for (i = 0U; i < 2U; i++)
-    if (temporary[i][0] != '\0')
-      unlink(temporary[i]);
-  cai_cli_journal_view_close(view);
-  cai_cli_pouch_transcript_close(reader);
-  rc = cai_cli_pouch_unlock(lease, rc, error);
+    if (e->temporary[i][0] != '\0') {
+      unlink(e->temporary[i]);
+      e->temporary[i][0] = '\0';
+    }
   /* Preserve the CLI utility's JSONL-then-Markdown listing order. */
   for (i = 2U; rc == CAI_OK && i > 0U; i--) {
-    const char *path = paths[i - 1U];
+    const char *path = e->paths[i - 1U];
     if (path[0] != '\0') {
       rc = cai_sink_write(destination, path, strlen(path), error);
       if (rc == CAI_OK)
         rc = cai_sink_write(destination, "\n", 1U, error);
     }
   }
-  cai_cli_pouch_end_read(use);
+  return rc;
+}
+
+int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
+                           const char *workspace, const char *directory,
+                           const char *basename,
+                           const cai_handover_config *active,
+                           cai_sink *destination, cai_error *error) {
+  cai_cli_export *e = NULL;
+  int rc = cai_cli_export_prepare(pouch, id, workspace, directory, basename, &e,
+                                  error);
+  if (rc == CAI_OK)
+    rc = cai_cli_export_run(e, active, NULL, NULL, destination, error);
+  cai_cli_export_close(e);
   return rc;
 }
 

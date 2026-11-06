@@ -63,7 +63,7 @@ typedef struct markdown {
   cai_agent_instructions *instructions;
   cai_execution_decoder *execution;
   cai_execution_record record;
-  int execution_started, selected, execution_error;
+  int execution_started, selected, execution_error, include_subagents;
 } markdown;
 
 static int fail(markdown *m, int code, const char *message) {
@@ -278,7 +278,9 @@ static int execution(void *context, const cai_cli_transcript_event *event,
   markdown *m = context;
   int rc;
   if (event->kind == CAI_CLI_TRANSCRIPT_BEGIN) {
-    m->selected = strcmp(event->type, "execution") == 0;
+    m->selected =
+        strcmp(event->type, "execution") == 0 ||
+        (m->include_subagents && strcmp(event->type, "subagent") == 0);
     m->execution_error = 0;
     if (m->selected)
       return cai_execution_decoder_reset(m->execution, error);
@@ -318,7 +320,8 @@ static int execution(void *context, const cai_cli_transcript_event *event,
 
 int cai_cli_markdown_export(cai_cli_journal_view *view, cai_cli_pouch *pouch,
                             const cai_cli_session *session,
-                            const char *workspace, cai_sink *sink,
+                            const char *workspace,
+                            const cai_handover_config *active, cai_sink *sink,
                             cai_error *error) {
   markdown *m;
   cai_agent_preset preset;
@@ -341,6 +344,11 @@ int cai_cli_markdown_export(cai_cli_journal_view *view, cai_cli_pouch *pouch,
   m->sink = sink;
   m->error = error;
   cai_execution_record_init(&m->record);
+  if (active != NULL) {
+    m->handover = *active;
+    m->include_subagents = 1;
+    goto write;
+  }
   json_config.clear_destination_by_default = 0;
   json_config.json_value_max_total_bytes =
       json_config.json_value_max_string_bytes = 0U;
@@ -433,6 +441,7 @@ int cai_cli_markdown_export(cai_cli_journal_view *view, cai_cli_pouch *pouch,
   }
   m->handover.developer_instructions.write = instructions;
   m->handover.developer_instructions.context = m;
+write:
   m->handover.history.write = cai_cli_journal_view_history;
   m->handover.history.context = view;
   if (m->rc == CAI_OK)

@@ -4,13 +4,17 @@
 #include <cai/cai.h>
 #include <lc/lc.h>
 
-/** One stable retained selection over a borrowed collection receiver. Calls
- * are synchronous and serialized; a read/consumer failure makes the view
+/** One stable retained selection over a borrowed incarnation-bound receiver.
+ * Calls are synchronous and serialized; a read/consumer failure makes the view
  * terminal. Opening streams past payload bytes and keeps only revisions,
  * byte references and metadata. Keep the
  * receiver and its SDK client alive until after closing this view. */
 typedef struct cai_cli_journal_view cai_cli_journal_view;
 typedef struct cai_cli_journal_options {
+  /** Optional previously captured head, copied at open. Immutable permanent
+   * positions plus the original live count define the selected prefix, so
+   * later appends are harmless. Missing original entries fail the candidate. */
+  const lc_collection_head_res *head;
   int (*cancelled)(void *context);
   void *cancel_context;
 } cai_cli_journal_options;

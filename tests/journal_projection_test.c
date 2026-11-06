@@ -48,6 +48,8 @@ typedef struct fixture {
   size_t count, chunk, calls, produced, received, delivered, heads, read_limit;
   char output[8192];
   size_t length, cancel_after, sdk_cancel_checks;
+  size_t deleted_position, delete_from_call;
+  int append_after_head;
   int large, large_markdown, capture, producing, observed_flow, failed_read,
       changed_head, cancelled, no_boundary, incomplete, fail_sink,
       callback_cancelled;
@@ -60,6 +62,9 @@ static int head(lc_collection *collection, lc_collection_head_res *out,
   memset(out, 0, sizeof(*out));
   strcpy(out->etag, "stable-head");
   out->upper_position = f->count;
+  out->live_count = f->count;
+  if (f->append_after_head)
+    ++f->count;
   return LC_OK;
 }
 static int bytes(fixture *f, lc_sink *sink, const void *data, size_t count,
@@ -153,9 +158,8 @@ static int read_collection(lc_collection *collection,
   fixture *f = collection->impl;
   size_t i;
   ++f->calls;
-  assert(f->calls <= f->read_limit); /* Never a read per context item. */
-  assert(options->expected_head != NULL &&
-         strcmp(options->expected_head, "stable-head") == 0);
+  assert(f->calls <= f->read_limit);      /* Never a read per context item. */
+  assert(options->expected_head == NULL); /* Prefix remains valid on append. */
   assert(options->has_after && options->has_through &&
          options->selector_lql == NULL);
   if (options->cancelled != NULL) {
@@ -171,6 +175,8 @@ static int read_collection(lc_collection *collection,
   for (i = 0U; i < f->count; i++) {
     lc_collection_read_metadata entry;
     if (i + 1U <= options->after || i + 1U > options->through)
+      continue;
+    if (i + 1U == f->deleted_position && f->calls >= f->delete_from_call)
       continue;
     if (f->large) {
       if (!large_record(f, i + 1U, sink, error))
@@ -303,6 +309,29 @@ static void edits(void) {
            strstr(f.output, "\"reasoning_tokens\":3"));
     assert(f.calls == 4U);
   }
+}
+static void immutable_prefix(void) {
+  fixture f;
+  static const char appended[] =
+      "{\"record_type\":\"event\",\"sequence\":3,"
+      "\"type\":\"text\",\"data\":\"LATER APPEND\"}\n";
+  size_t call;
+  seed_fixture(&f);
+  f.records[4] = appended;
+  f.ids[4] = "event-00000000000000000003";
+  f.append_after_head = 1;
+  assert(project(&f) == CAI_OK);
+  assert(f.count == 5U && f.heads == 1U && !strstr(f.output, "LATER APPEND"));
+  for (call = 1U; call <= 2U; ++call) {
+    seed_fixture(&f);
+    f.deleted_position = 2U; /* Even an originally hidden record is counted. */
+    f.delete_from_call = call;
+    assert(project(&f) != CAI_OK);
+  }
+  seed_fixture(&f);
+  f.deleted_position = 3U;
+  f.delete_from_call = 4U;
+  assert(project(&f) != CAI_OK);
 }
 static void errors(void) {
   fixture f;
@@ -666,7 +695,7 @@ static int markdown_project(fixture *f, cai_cli_pouch *pouch,
   bounded = 1;
   rc = cai_cli_journal_view_open(&f->collection, NULL, &view, &error);
   if (rc == CAI_OK)
-    rc = cai_cli_markdown_export(view, pouch, session, session->workspace,
+    rc = cai_cli_markdown_export(view, pouch, session, session->workspace, NULL,
                                  &sink, &error);
   cai_cli_journal_view_close(view);
   cai_error_cleanup(&error);
@@ -868,6 +897,7 @@ static void *worker(void *unused) {
   fixture f;
   (void)unused;
   edits();
+  immutable_prefix();
   errors();
   checkpoint();
   views();

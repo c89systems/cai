@@ -2,9 +2,13 @@
 #define CAI_CLI_MARKDOWN_EXPORT_H
 #include "journal_projection.h"
 #include "pouch.h"
-/** Write a closed conversation's existing handover semantics directly from
- * its retained native view. No client, agent, runtime or context spool. */
+#include <cai/handover.h>
+/** Write an existing handover directly from retained native ranges. NULL
+ * active prepares closed-conversation metadata/policy; otherwise the captured
+ * live header, goal and instructions remain authoritative. No runtime calls
+ * or context spool. All source callbacks and their contexts remain borrowed. */
 int cai_cli_markdown_export(cai_cli_journal_view *, cai_cli_pouch *,
                             const cai_cli_session *, const char *workspace,
-                            cai_sink *, cai_error *);
+                            const cai_handover_config *active, cai_sink *,
+                            cai_error *);
 #endif

@@ -2,6 +2,7 @@
  * Socket presentation requires the same journal as production owners. */
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
+#include "../cli/export_job.h"
 #include "../cli/messages.h"
 #include "../cli/pouch.h"
 #include <cai/agent_runtime.h>
@@ -16,6 +17,10 @@ static int fixture_late_steer(void *context,
                               const cai_agent_runtime_event *event,
                               cai_error *error);
 static cai_agent_runtime_event_fn fixture_event_callback;
+static void *fixture_owner_context;
+static int fixture_export_start(cai_cli_export_job *, cai_cli_export *,
+                                cai_agent_handover *, const char *,
+                                cai_error *);
 static cai_agent_session_store fixture_gated_store;
 static int (*fixture_real_append)(void *, const char *, const char *,
                                   const cai_agent_session_event *, cai_error *);
@@ -91,6 +96,7 @@ static int fixture_runtime_open(cai_client *client,
   cai_agent_runtime_config selected = *config;
   cai_agent_preset worker;
   cai_agent_subagent_profile profile;
+  fixture_owner_context = selected.event_context;
   if (getenv("CAI_TEST_APPEND_GATE") != NULL &&
       selected.session_store != NULL) {
     fixture_gated_store = *selected.session_store;
@@ -138,9 +144,29 @@ static int fixture_messages_start(cai_cli_messages *messages, const char *id,
 }
 #define cai_agent_runtime_open fixture_runtime_open
 #define cai_cli_messages_start fixture_messages_start
+#define cai_cli_export_job_start fixture_export_start
 #include "../cli/app_run.c"
+#undef cai_cli_export_job_start
 #undef cai_cli_messages_start
 #undef cai_agent_runtime_open
+
+/* A trusted host may change the goal while the owner has an export pending.
+ * Keep that explicit host action separate from automatic goal continuation. */
+static int fixture_export_start(cai_cli_export_job *job, cai_cli_export *source,
+                                cai_agent_handover *capture, const char *call,
+                                cai_error *error) {
+  static unsigned int starts;
+  cli_state *state = fixture_owner_context;
+  int rc = cai_cli_export_job_start(job, source, capture, call, error);
+  if (rc == CAI_OK && ++starts == 2U &&
+      getenv("CAI_TEST_EXPORT_ACTIVE_GOAL") != NULL) {
+    rc = cai_agent_runtime_replace_goal(state->runtime,
+                                        "ExportCancellationGoal", error);
+    if (rc != CAI_OK)
+      abort();
+  }
+  return rc;
+}
 
 static int fixture_late_steer(void *context,
                               const cai_agent_runtime_event *event,

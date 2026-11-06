@@ -1,6 +1,7 @@
 #ifndef CAI_CLI_SESSION_COMMANDS_H
 #define CAI_CLI_SESSION_COMMANDS_H
 
+#include "journal_projection.h"
 #include "pouch.h"
 #include <cai/agent_runtime.h>
 
@@ -35,7 +36,22 @@ int cai_cli_session_delete(cai_cli_pouch *pouch, cai_cli_pouch *messaging,
 int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
                            const char *workspace, const char *export_directory,
                            const char *basename,
-                           cai_agent_runtime *active_runtime,
+                           const cai_handover_config *active_handover,
                            cai_sink *destination, cai_error *error);
+/** Bounded owner-side admission. Pins metadata/receiver and captures the native
+ * prefix without traversing payloads. Caller keeps the store alive through
+ * close. */
+typedef struct cai_cli_export cai_cli_export;
+int cai_cli_export_prepare(cai_cli_pouch *, const char *id,
+                           const char *workspace, const char *directory,
+                           const char *basename, cai_cli_export **,
+                           cai_error *);
+/** One serialized run on any thread. The immutable header and callback context
+ * remain borrowed. Destination receives only the bounded output path listing.
+ */
+int cai_cli_export_run(cai_cli_export *, const cai_handover_config *,
+                       int (*cancelled)(void *), void *, cai_sink *,
+                       cai_error *);
+void cai_cli_export_close(cai_cli_export *);
 
 #endif
