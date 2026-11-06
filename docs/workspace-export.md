@@ -1,23 +1,26 @@
 # Runtime-free conversation export
 
-Workspace-server export cutover, 2026-11-06. The storage-only JSONL projection
-is implemented. Markdown's existing handover content is the refactor baseline;
+Workspace-server export cutover, 2026-11-06. Both offline export formats now
+read native journal ranges. Markdown preserves the existing handover baseline;
 the recorded-only document below remains an optional product change.
 
 ## Current boundary
 
-For Markdown, `cli/session_commands.c` opens an `offline-export` client and an
-agent runtime when exporting a closed conversation. No inference is requested,
-but runtime construction still restores the retained provider context, prepares
-application instructions and reconstructs session state. The context uses the ordinary
-history backing store. Streaming its subsequent serialization does not make
-that reconstruction a storage-only export.
+`cli/session_commands.c` opens one read-only collection receiver and one
+`journal_projection` view shared by all selected outputs. Neither offline
+format constructs a client, agent or runtime, restores model context, or
+creates a context backing file. JSONL indexes edits, streams visible
+observations and generates one retained initialization from native ranges.
+`cli/markdown_export.c` reads bounded settings, streams the goal and history
+into the core handover formatter and appends bounded execution records.
+Model/settings strings are explicitly limited to 8,191 bytes; oversized or
+malformed control values fail the candidate. Goal and provider text have no
+such control-value limit.
 
-`cli/pouch_export.inc` opens one collection receiver and calls the private
-`journal_projection` module. JSONL-only export constructs no client or runtime.
-It indexes edits, streams visible observations, and generates one retained
-initialization directly from native ranges. Active `/export` uses the same
-projection as offline `--export`, without serializing its live runtime.
+Active `/export` already uses the native view for JSONL. Its Markdown header,
+captured instructions and resident history still come from its existing live
+runtime, preserving live configuration semantics. That remaining owner-only
+adapter must be addressed when moving long exports out of owner dispatch.
 
 The existing core runtime handover/export APIs remain useful for callers that
 explicitly own a live runtime. Removing the application's dependency on them
@@ -158,8 +161,8 @@ complete context buffer or temporary journal copy for a missing read contract.
 
 ## Required proof
 
-- `cai_cli_utility_boundary` rejects client and runtime construction during
-  JSONL-only export. Its Markdown exception remains until that cutover.
+- `cai_cli_utility_boundary` rejects runtime construction for every utility and
+  client construction for every export, including Markdown-only and paired output.
 - Compare retained state and JSONL import/resume against the existing core
   exporter across ordinary turns, steering, tool results, reasoning, goals,
   compaction, trim, queued input and input-checkpoint recovery boundaries.
@@ -199,8 +202,10 @@ callback and never creates a client, agent, tools or rendered instruction
 buffer. Global/workspace files and skill metadata retain their existing
 bounded preparation limits. The ordinary agent constructor still allocates
 its required final instruction string, using a counting pass followed by the
-same writer. This does not yet remove the application's offline runtime:
-the shared handover renderer and retained-history adapter remain to be cut over.
+same writer. The prepared `cai_agent_instructions` handle reads policy once and
+can retarget the model-specific base while retaining its original capability,
+file and skill policy. This matches runtime resume, including model-dependent
+capabilities, without rereading files or accumulating rendered instructions.
 
 `cai_instruction_writer` runs on a default worker stack and exercises an
 8 MiB caller-owned extension while rejecting allocations above 64 KiB and
@@ -240,11 +245,25 @@ Both this check and the journal projector use the same allocation guard and run
 on default worker stacks. Existing runtime Markdown checks cover the thin live
 adapter, header fields and file publication.
 
-The application's header/instruction preparation, native-view integration and
-execution-history rendering in item 3 are still required. Consequently
-`cli/session_commands.c` still opens its offline runtime for Markdown, and the
-long-export owner-dispatch requirement above remains incomplete. The core
-formatter alone does not complete that cutover.
+The application's native Markdown adapter implements item 3 for closed
+conversations. It preserves restored model/effort/preset and goal semantics,
+current authorized instructions, and the execution-history decoding/omission
+contract. It uses two linear history passes, one metadata pass (a second when
+streaming a goal) and one execution pass over the same indexed view. Paired
+exports then reuse that view for JSONL. No read is performed per context item.
+
+`cai_journal_projection` also exercises this actual application adapter on a
+default worker stack. It generates an 8 MiB goal and 8 MiB provider text while
+rejecting allocations over 64 KiB and tracked live memory over 1 MiB, observes
+delivery during production, verifies a constant read count and checks bounded
+execution chunks, malformed-record notices, instruction approval, invalid and
+oversized settings, early allocation failures, and source/sink failures.
+`smith_model_prompts` compares complete retargeted prepared instructions with
+the live agent across ten model profiles after changing the source file;
+the original captured policy survives in both.
+
+The long-export owner-dispatch requirement remains incomplete. Removing the
+offline runtime does not by itself make active `/export` asynchronous.
 
 `cai_cli_journal_view` now owns the native retained selection for one borrowed
 collection receiver and captured head. It exposes retained JSONL, final metadata,
@@ -262,5 +281,5 @@ case streams 8 MiB metadata and history values through repeated projections
 under the existing allocation guards, with exactly one head capture and a
 constant number of reads. Cancellation stops a generated index/read after
 8 KiB rather than consuming the whole value. This private view is the adapter
-boundary; the CLI still needs header/instruction preparation and streamed
-execution-record rendering before removing its offline runtime helper.
+boundary now used by both offline formats, including header/instruction
+preparation and streamed execution-record rendering.

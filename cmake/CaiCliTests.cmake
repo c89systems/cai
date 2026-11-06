@@ -218,7 +218,7 @@
     add_test(NAME cai_cli_tool_result COMMAND cai_cli_tool_result_test)
     add_executable(cai_cli_messages_test tests/cli_messages_test.c
       cli/identity.c cli/pouch.c cli/replay.c cli/pouch_stream.c cli/error.c cli/session_commands.c cli/log.c cli/log_environment.c cli/message_names.c
-      cli/journal_projection.c cli/transcript.c)
+      cli/journal_projection.c cli/transcript.c cli/pouch_transcript.c cli/markdown_export.c)
     target_link_libraries(cai_cli_messages_test PRIVATE cai_static
       softline::softline_static lockdc::static)
     cai_configure_cli_target(cai_cli_messages_test)

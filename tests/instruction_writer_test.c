@@ -295,6 +295,7 @@ static void *run(void *context) {
   cai_agent_preset preset;
   cai_agent_preset_config config;
   cai_agent_instruction_status status;
+  cai_agent_instructions *prepared = NULL;
   cai_blob_store store;
   cai_sink sink;
   cai_error error;
@@ -332,6 +333,35 @@ static void *run(void *context) {
   assert(cai_agent_preset_write_instructions(&preset, &config, NULL, &sink,
                                              NULL, &error) == CAI_OK);
   assert(out.length == large_length + 6U && out.calls > 2048U);
+  assert(cai_agent_preset_prepare_instructions(
+             &preset, &config, NULL, &prepared, &status, &error) == CAI_OK);
+  memset(&out, 0, sizeof(out));
+  out.large = 1;
+  /* A custom template is authoritative even with a model override. */
+  assert(cai_agent_instructions_write(prepared, "gpt-6-luna", &sink, &error) ==
+         CAI_OK);
+  assert(out.length == large_length + 6U && out.calls > 2048U);
+  memset(&out, 0, sizeof(out));
+  out.large = 1;
+  out.fail_at = 4U;
+  assert(cai_agent_instructions_write(prepared, NULL, &sink, &error) ==
+         CAI_ERR_CANCELLED);
+  cai_error_cleanup(&error);
+  cai_error_init(&error);
+  memset(&out, 0, sizeof(out));
+  out.large = 1;
+  assert(cai_agent_instructions_write(prepared, NULL, &sink, &error) == CAI_OK);
+  assert(out.length == large_length + 6U);
+  assert(cai_agent_instructions_write(prepared, "", &sink, NULL) ==
+         CAI_ERR_INVALID);
+  assert(cai_agent_instructions_write(NULL, NULL, &sink, NULL) ==
+         CAI_ERR_INVALID);
+  assert(cai_agent_instructions_write(prepared, NULL, NULL, NULL) ==
+         CAI_ERR_INVALID);
+  cai_agent_instructions_close(prepared);
+  prepared = NULL;
+  assert(cai_agent_preset_prepare_instructions(&preset, &config, NULL, NULL,
+                                               NULL, NULL) == CAI_ERR_INVALID);
   memset(&out, 0, sizeof(out));
   out.large = 1;
   out.fail_at = 4U;

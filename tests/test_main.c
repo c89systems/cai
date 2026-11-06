@@ -25560,6 +25560,9 @@ static void test_smith_model_prompts(test_state *state) {
   cai_agent_preset preset;
   cai_client *client = NULL;
   cai_agent *agent = NULL;
+  cai_agent_instructions *prepared = NULL;
+  cai_buffer_builder rendered;
+  cai_sink sink;
   cai_error error;
   char directory[] = CAI_TEST_BINARY_DIR "/test-tmp/cai-model-prompts-XXXXXX";
   char path[PATH_MAX];
@@ -25633,6 +25636,10 @@ static void test_smith_model_prompts(test_state *state) {
                 "disabled terminal advertised");
     /* Retarget only the base. The already-captured suffix survives even if
      * repository files change while the session is open. */
+    expect_int(state, "smith_model_prepare_projection",
+               cai_agent_preset_prepare_instructions(&preset, &config, NULL,
+                                                     &prepared, NULL, &error),
+               CAI_OK);
     write_file_or_die(path, "Changed repository sentinel.");
     next = NULL;
     expect_int(state, "smith_model_prepare",
@@ -25641,6 +25648,19 @@ static void test_smith_model_prompts(test_state *state) {
                    config.agent_identity, &next, &prefix_length, &error),
                CAI_OK);
     if (next != NULL) {
+      memset(&rendered, 0, sizeof(rendered));
+      memset(&sink, 0, sizeof(sink));
+      sink.callbacks.write = instruction_projection_capture;
+      sink.callbacks.context = &rendered;
+      expect_int(state, "smith_model_retarget_projection",
+                 cai_agent_instructions_write(
+                     prepared,
+                     i >= 3U && i <= 7U ? "gpt-5.6-luna" : "gpt-6-luna", &sink,
+                     &error),
+                 CAI_OK);
+      expect_str(state, "smith_model_retarget_projection_content",
+                 rendered.data, next);
+      cai_free_mem(NULL, rendered.data);
       expect_substr(state, "smith_model_captured_policy", next,
                     "Repository prompt sentinel.");
       if (strstr(next, "Changed repository sentinel.") != NULL)
@@ -25653,6 +25673,8 @@ static void test_smith_model_prompts(test_state *state) {
       test_fail(state, "smith_model_prepare_result",
                 "different profile produced no instructions");
     }
+    cai_agent_instructions_close(prepared);
+    prepared = NULL;
     write_file_or_die(path, "Repository prompt sentinel.");
     cai_agent_destroy(agent);
     agent = NULL;

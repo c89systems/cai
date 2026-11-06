@@ -16,6 +16,10 @@ run --export "$session" --export-out result.md; ok
 [[ -s "$work/result.md" && ! -e "$work/result.jsonl" ]]
 run --export "$session" --export-out records.jsonl; ok
 [[ -s "$work/records.jsonl" ]]
+run --export "$session" --export-out combined; ok
+[[ -s "$work/combined.md" && -s "$work/combined.jsonl" ]]
+contains "$work/combined.md" 'UTILITY_SEED'
+contains "$work/combined.md" 'räv 東京 utility source'
 run --import records.jsonl; ok
 imported=$(stdout_text)
 [[ -n "$imported" && "$imported" != "$session" ]]

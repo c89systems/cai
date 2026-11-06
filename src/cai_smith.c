@@ -982,40 +982,98 @@ static int cai_smith_prepare_instruction_inputs(
   return rc;
 }
 
+struct cai_agent_instructions {
+  cai_instruction_template input;
+  char *repository, *skills, *contract;
+  int model_specific;
+};
+
+int cai_agent_preset_prepare_instructions(const cai_agent_preset *preset,
+                                          const cai_agent_preset_config *config,
+                                          pslog_logger *logger,
+                                          cai_agent_instructions **out,
+                                          cai_agent_instruction_status *status,
+                                          cai_error *error) {
+  cai_agent_instructions *prepared;
+  cai_agent_instruction_status prepared_status;
+  cai_skill_catalog *catalog;
+  unsigned long capabilities;
+  int rc;
+  if (status != NULL)
+    memset(status, 0, sizeof(*status));
+  if (out == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "prepared instruction output is required");
+  *out = NULL;
+  prepared = cai_alloc(NULL, sizeof(*prepared));
+  if (prepared == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate prepared instructions");
+  memset(prepared, 0, sizeof(*prepared));
+  rc = cai_smith_prepare_instruction_inputs(
+      NULL, logger, preset, config, &prepared->repository, &prepared->skills,
+      &catalog, &prepared_status, &capabilities, error);
+  if (rc == CAI_OK)
+    rc = cai_smith_instruction_template(
+        NULL, preset, config, capabilities, prepared->repository,
+        prepared->skills, &prepared->input, &prepared->contract, error);
+  if (catalog != NULL)
+    cai_skills_catalog_cleanup(catalog);
+  if (rc != CAI_OK) {
+    cai_agent_instructions_close(prepared);
+    return rc;
+  }
+  prepared->model_specific = preset->developer_instructions == NULL;
+  if (status != NULL)
+    *status = prepared_status;
+  *out = prepared;
+  return CAI_OK;
+}
+
+int cai_agent_instructions_write(cai_agent_instructions *prepared,
+                                 const char *model, cai_sink *sink,
+                                 cai_error *error) {
+  cai_instruction_template input;
+  size_t length, prefix;
+  if (prepared == NULL || sink == NULL || sink->callbacks.write == NULL ||
+      (model != NULL && model[0] == '\0'))
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "prepared instructions, model and sink must be valid");
+  input = prepared->input;
+  if (model != NULL && prepared->model_specific)
+    input.text = cai_smith_model_prompt(model);
+  return cai_instruction_template_write(&input, sink, &length, &prefix, error);
+}
+
+void cai_agent_instructions_close(cai_agent_instructions *prepared) {
+  if (prepared != NULL) {
+    cai_free_mem(NULL, prepared->repository);
+    cai_free_mem(NULL, prepared->skills);
+    cai_free_mem(NULL, prepared->contract);
+    cai_free_mem(NULL, prepared);
+  }
+}
+
 int cai_agent_preset_write_instructions(const cai_agent_preset *preset,
                                         const cai_agent_preset_config *config,
                                         pslog_logger *logger, cai_sink *sink,
                                         cai_agent_instruction_status *status,
                                         cai_error *error) {
-  cai_instruction_template input;
+  cai_agent_instructions *prepared = NULL;
   cai_agent_instruction_status prepared_status;
-  cai_skill_catalog *catalog;
-  char *repository, *skills, *contract;
-  unsigned long capabilities;
-  size_t length, prefix;
   int rc;
   if (status != NULL)
     memset(status, 0, sizeof(*status));
   if (sink == NULL || sink->callbacks.write == NULL)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "instruction output sink is required");
-  contract = NULL;
-  rc = cai_smith_prepare_instruction_inputs(
-      NULL, logger, preset, config, &repository, &skills, &catalog,
-      &prepared_status, &capabilities, error);
+  rc = cai_agent_preset_prepare_instructions(preset, config, logger, &prepared,
+                                             &prepared_status, error);
   if (rc == CAI_OK)
-    rc = cai_smith_instruction_template(NULL, preset, config, capabilities,
-                                        repository, skills, &input, &contract,
-                                        error);
-  if (rc == CAI_OK)
-    rc = cai_instruction_template_write(&input, sink, &length, &prefix, error);
+    rc = cai_agent_instructions_write(prepared, NULL, sink, error);
   if (rc == CAI_OK && status != NULL)
     *status = prepared_status;
-  cai_free_mem(NULL, contract);
-  cai_free_mem(NULL, repository);
-  cai_free_mem(NULL, skills);
-  if (catalog != NULL)
-    cai_skills_catalog_cleanup(catalog);
+  cai_agent_instructions_close(prepared);
   return rc;
 }
 

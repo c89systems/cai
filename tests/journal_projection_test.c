@@ -1,14 +1,44 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../cli/journal_projection.h"
+#include "../cli/markdown_export.h"
 #include "../src/cai_input_queue_codec.h"
 #include <assert.h>
+#include <cai/execution.h>
 #include <cai/handover.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "bounded_allocator.h"
+
+/* Normal checks stress multi-MiB values; memory diagnostics use the same
+ * paths with values still larger than the maximum permitted allocation. */
+static size_t generated_bytes = 8U * 1024U * 1024U;
+
+int __wrap_cai_client_open(const cai_client_config *, cai_client **,
+                           cai_error *);
+int __wrap_cai_agent_runtime_open(cai_client *,
+                                  const cai_agent_runtime_config *,
+                                  cai_agent_runtime **, cai_error *);
+int __wrap_cai_client_open(const cai_client_config *config, cai_client **out,
+                           cai_error *error) {
+  (void)config;
+  (void)out;
+  (void)error;
+  abort();
+}
+int __wrap_cai_agent_runtime_open(cai_client *client,
+                                  const cai_agent_runtime_config *config,
+                                  cai_agent_runtime **out, cai_error *error) {
+  (void)client;
+  (void)config;
+  (void)out;
+  (void)error;
+  abort();
+}
 
 /* The fake receiver implements the same authenticated entry seams and head
  * precondition as LC. Payload generation remains bounded and synchronous. */
@@ -18,8 +48,9 @@ typedef struct fixture {
   size_t count, chunk, calls, produced, received, delivered, heads, read_limit;
   char output[8192];
   size_t length, cancel_after, sdk_cancel_checks;
-  int large, capture, producing, observed_flow, failed_read, changed_head,
-      cancelled, no_boundary, incomplete, fail_sink, callback_cancelled;
+  int large, large_markdown, capture, producing, observed_flow, failed_read,
+      changed_head, cancelled, no_boundary, incomplete, fail_sink,
+      callback_cancelled;
 } fixture;
 static int head(lc_collection *collection, lc_collection_head_res *out,
                 lc_error *error) {
@@ -48,7 +79,7 @@ static int repeat(fixture *f, lc_sink *sink, lc_error *error) {
   size_t i;
   memset(chunk, 'x', sizeof(chunk));
   f->producing = 1;
-  for (i = 0U; i < 2048U; i++) {
+  for (i = 0U; i < generated_bytes / sizeof(chunk); i++) {
     f->produced += sizeof(chunk);
     if (!bytes(f, sink, chunk, sizeof(chunk), error)) {
       f->producing = 0;
@@ -60,12 +91,13 @@ static int repeat(fixture *f, lc_sink *sink, lc_error *error) {
 }
 static int large_record(fixture *f, size_t position, lc_sink *sink,
                         lc_error *error) {
-  static const char array_prefix[] = "[{\"role\":\"user\",\"content\":\"";
-  static const char array_suffix[] = "\"}]";
+  const char *array_prefix =
+      f->large_markdown ? "[{\"role\":\"user\",\"content\":[{\"text\":\""
+                        : "[{\"role\":\"user\",\"content\":\"";
+  const char *array_suffix = f->large_markdown ? "\"}]}]" : "\"}]";
   char prefix[1024];
-  size_t payload = 8U * 1024U * 1024U;
-  size_t array =
-      sizeof(array_prefix) - 1U + payload + sizeof(array_suffix) - 1U;
+  size_t payload = generated_bytes;
+  size_t array = strlen(array_prefix) + payload + strlen(array_suffix);
   char number[32];
   int digits =
       snprintf(number, sizeof(number), "%llu", (unsigned long long)array);
@@ -102,14 +134,17 @@ static int large_record(fixture *f, size_t position, lc_sink *sink,
     return 0;
   snprintf(prefix, sizeof(prefix),
            "\"},\"history_append\":\"%llu\\n[{\\\"role\\\":\\\"user\\\","
-           "\\\"content\\\":\\\"",
-           (unsigned long long)array);
+           "\\\"content\\\":%s",
+           (unsigned long long)array,
+           f->large_markdown ? "[{\\\"text\\\":\\\"" : "\\\"");
   if (!bytes(f, sink, prefix, strlen(prefix), error))
     return 0;
   if (!repeat(f, sink, error))
     return 0;
-  return bytes(f, sink, "\\\"}]\\n\"}}\n", sizeof("\\\"}]\\n\"}}\n") - 1U,
-               error);
+  return f->large_markdown ? bytes(f, sink, "\\\"}]}]\\n\"}}\n",
+                                   sizeof("\\\"}]}]\\n\"}}\n") - 1U, error)
+                           : bytes(f, sink, "\\\"}]\\n\"}}\n",
+                                   sizeof("\\\"}]\\n\"}}\n") - 1U, error);
 }
 static int read_collection(lc_collection *collection,
                            const lc_collection_read_opts *options,
@@ -537,6 +572,246 @@ static void native_markdown(void) {
   assert(f.heads == 1U && f.calls == 3U);
   cai_cli_journal_view_close(view);
 }
+/** Scan across arbitrary output seams without retaining the handover. */
+typedef struct markdown_scan {
+  fixture *fixture;
+  char tail[8192];
+  size_t length;
+  unsigned int seen;
+} markdown_scan;
+static const char *const markdown_needles[] = {
+    "restored-model",
+    "recorded-model",
+    "GLOBAL_MARKDOWN_POLICY",
+    "native markdown",
+    "goal objective",
+    "12345",
+    "## Execution history",
+    "first second",
+    "Execution record 3 could not be decoded",
+    "No active durable goal.",
+    "unbounded",
+    "LOCAL_MUST_NOT_LOAD"};
+static int markdown_output(void *context, const void *data, size_t length,
+                           cai_error *error) {
+  markdown_scan *scan = context;
+  size_t i;
+  int rc = receive(scan->fixture, data, length, error);
+  if (rc != CAI_OK)
+    return rc;
+  assert(length <= 4096U);
+  if (scan->fixture->large && scan->fixture->producing) {
+    /* These source chunks contain only generated text. Check every byte in
+     * linear time instead of repeatedly searching for header words in them.
+     * Goal decoding can legitimately forward one-byte fragments. */
+    for (i = 0U; i < length; i++)
+      assert(((const char *)data)[i] == 'x');
+    scan->length = 0U;
+    scan->tail[0] = '\0';
+    return CAI_OK;
+  }
+  assert(scan->length + length < sizeof(scan->tail));
+  memcpy(scan->tail + scan->length, data, length);
+  scan->length += length;
+  scan->tail[scan->length] = '\0';
+  for (i = 0U; i < sizeof(markdown_needles) / sizeof(markdown_needles[0]); i++)
+    if (strstr(scan->tail, markdown_needles[i]) != NULL)
+      scan->seen |= 1U << i;
+  /* Retain only the overlap required by the longest searched marker. */
+  if (scan->length > 128U) {
+    memmove(scan->tail, scan->tail + scan->length - 128U, 128U);
+    scan->length = 128U;
+    scan->tail[scan->length] = '\0';
+  }
+  return CAI_OK;
+}
+static void markdown_seed(fixture *f, char *record, size_t capacity,
+                          const char *metadata) {
+  static const char item[] =
+      "[{\"content\":[{\"text\":\"native markdown\"}],\"role\":\"assistant\"}]";
+  static const char encoded[] =
+      "[{\\\"content\\\":[{\\\"text\\\":\\\"native markdown\\\"}],"
+      "\\\"role\\\":\\\"assistant\\\"}]";
+  char length[32];
+  size_t bytes;
+  init(f);
+  f->capture = 0;
+  f->read_limit = 10U;
+  snprintf(length, sizeof(length), "%lu", (unsigned long)strlen(item));
+  bytes = strlen(length) + 1U + strlen(item) + 1U;
+  assert(snprintf(record, capacity,
+                  "{\"record_type\":\"commit\",\"commit_created_at_ns\":1,"
+                  "\"applied_event_sequence\":0,\"state\":{\"revision\":1,"
+                  "\"base_bytes\":0,\"end_bytes\":%lu,\"blocks_keep\":0,"
+                  "\"hidden_keep\":0,\"owned_keep\":0,\"metadata\":%s,"
+                  "\"history_append\":\"%s\\n%s\\n\"}}\n",
+                  (unsigned long)bytes, metadata, length,
+                  encoded) < (int)capacity);
+  f->count = 1U;
+  f->records[0] = record;
+  f->ids[0] = "commit-00000000000000000001-00000000000000000000";
+}
+static int markdown_project(fixture *f, cai_cli_pouch *pouch,
+                            cai_cli_session *session, markdown_scan *scan) {
+  cai_cli_journal_view *view = NULL;
+  cai_sink sink;
+  cai_error error;
+  int rc;
+  memset(scan, 0, sizeof(*scan));
+  scan->fixture = f;
+  memset(&sink, 0, sizeof(sink));
+  sink.callbacks.write = markdown_output;
+  sink.callbacks.context = scan;
+  cai_error_init(&error);
+  bounded = 1;
+  rc = cai_cli_journal_view_open(&f->collection, NULL, &view, &error);
+  if (rc == CAI_OK)
+    rc = cai_cli_markdown_export(view, pouch, session, session->workspace,
+                                 &sink, &error);
+  cai_cli_journal_view_close(view);
+  cai_error_cleanup(&error);
+  bounded = 0;
+  assert(live_bytes == 0U);
+  return rc;
+}
+/** Exercise the application adapter itself, including instruction policy and
+ * bounded execution decoding, on the same default-stack worker as the view. */
+static void application_markdown(void) {
+  static const char *const invalid[] = {
+      "{\"version\":1,\"model\":true}",
+      "{\"version\":1,\"model\":\"bad\\u0000model\"}",
+      "{\"version\":1,\"reasoning_effort\":[]}",
+      "{\"version\":1,\"preset_name\":\"other\"}",
+      "{\"version\":1,\"goal_status\":\"unknown\"}",
+      "{\"version\":1,\"goal_tokens_used\":-1}",
+      "{\"version\":1,\"goal_token_budget\":123}",
+      "{\"version\":1,\"goal_objective\":\"x\",\"goal_token_budget\":0}",
+      "{\"version\":1,\"goal_objective\":\"x\",\"goal_tokens_used\":1.5}",
+      "{\"version\":1,\"goal_tokens_used\":9223372036854775808}"};
+  static const char execution1[] =
+      "{\"record_type\":\"event\",\"sequence\":1,\"type\":\"execution\","
+      "\"data\":\"{\\\"kind\\\":\\\"tool.output\\\",\\\"session_id\\\":"
+      "\\\"test\\\","
+      "\\\"timestamp_ns\\\":1,\\\"offset\\\":0,\\\"final\\\":false,"
+      "\\\"line_start\\\":true,\\\"field\\\":\\\"output\\\","
+      "\\\"tool_name\\\":\\\"read_file\\\",\\\"data\\\":\\\"first \\\"}\"}\n";
+  static const char execution2[] =
+      "{\"record_type\":\"event\",\"sequence\":2,\"type\":\"execution\","
+      "\"data\":\"{\\\"kind\\\":\\\"tool.output\\\",\\\"session_id\\\":"
+      "\\\"test\\\","
+      "\\\"timestamp_ns\\\":1,\\\"offset\\\":6,\\\"final\\\":true,"
+      "\\\"line_start\\\":false,\\\"field\\\":\\\"output\\\","
+      "\\\"tool_name\\\":\\\"read_file\\\",\\\"data\\\":\\\"second\\\"}\"}\n";
+  static const char bad_execution[] =
+      "{\"record_type\":\"event\",\"sequence\":3,\"type\":\"execution\","
+      "\"data\":\"not-json\"}\n";
+  fixture f;
+  markdown_scan scan;
+  cai_cli_pouch *pouch = calloc(1U, sizeof(*pouch));
+  cai_cli_session *session = calloc(1U, sizeof(*session));
+  char directory[] = "cai-markdown-XXXXXX", path[512], record[4096];
+  FILE *file;
+  cai_execution_record warm;
+  size_t i, chunk;
+  /* Initialize the process-wide JSON engines before tracking per-export
+   * ownership. Their lifetime intentionally extends past a single export. */
+  cai_execution_record_init(&warm);
+  assert(cai_execution_record_parse(
+             "{\"kind\":\"tool.completed\",\"session_id\":\"test\","
+             "\"timestamp_ns\":1,\"offset\":0,\"final\":true,"
+             "\"line_start\":false,\"data\":\"\"}",
+             &warm, NULL) == CAI_OK);
+  cai_execution_record_cleanup(&warm);
+  assert(pouch && session && mkdtemp(directory));
+  strcpy(pouch->program_name, "cai");
+  strcpy(pouch->config_directory, directory);
+  strcpy(session->id, "test");
+  snprintf(session->workspace, sizeof(session->workspace), "%s/workspace",
+           directory);
+  assert(mkdir(session->workspace, 0700) == 0);
+  snprintf(path, sizeof(path), "%s/AGENTS.md", directory);
+  file = fopen(path, "w");
+  assert(file && fputs("GLOBAL_MARKDOWN_POLICY\n", file) >= 0 &&
+         fclose(file) == 0);
+  snprintf(path, sizeof(path), "%s/workspace/AGENTS.md", directory);
+  file = fopen(path, "w");
+  assert(file && fputs("LOCAL_MUST_NOT_LOAD\n", file) >= 0 &&
+         fclose(file) == 0);
+  for (chunk = 1U; chunk <= 23U; chunk += 11U) {
+    markdown_seed(&f, record, sizeof(record),
+                  "{\"version\":1,\"model\":\"recorded-model\","
+                  "\"request_model\":\"restored-model\","
+                  "\"reasoning_effort\":\"low\",\"goal_status\":\"paused\","
+                  "\"goal_objective\":\"goal objective\","
+                  "\"goal_token_budget\":12345,\"goal_tokens_used\":30,"
+                  "\"goal_elapsed_seconds\":-5,\"goal_active_started_at\":-1}");
+    f.chunk = chunk;
+    assert(markdown_project(&f, pouch, session, &scan) == CAI_OK);
+    assert((scan.seen & 63U) == 63U && !(scan.seen & (1U << 11U)));
+    assert(f.heads == 1U && f.calls == 6U);
+  }
+  for (i = 0U; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+    markdown_seed(&f, record, sizeof(record), invalid[i]);
+    assert(markdown_project(&f, pouch, session, &scan) != CAI_OK);
+    assert(f.received == 0U);
+  }
+  markdown_seed(&f, record, sizeof(record), "{\"version\":1}");
+  assert(markdown_project(&f, pouch, session, &scan) == CAI_OK);
+  assert(scan.seen & (1U << 9U));
+  f.records[1] = execution1;
+  f.ids[1] = "event-00000000000000000001";
+  f.records[2] = execution2;
+  f.ids[2] = "event-00000000000000000002";
+  f.records[3] = bad_execution;
+  f.ids[3] = "event-00000000000000000003";
+  f.count = 4U;
+  f.calls = f.heads = 0U;
+  assert(markdown_project(&f, pouch, session, &scan) == CAI_OK);
+  assert((scan.seen & (7U << 6U)) == (7U << 6U));
+  markdown_seed(&f, record, sizeof(record), "{\"version\":1}");
+  f.failed_read = 1;
+  assert(markdown_project(&f, pouch, session, &scan) != CAI_OK);
+  markdown_seed(&f, record, sizeof(record), "{\"version\":1}");
+  f.fail_sink = 1;
+  assert(markdown_project(&f, pouch, session, &scan) == CAI_ERR_CANCELLED);
+  for (i = 0U; i < 16U; i++) {
+    markdown_seed(&f, record, sizeof(record), "{\"version\":1}");
+    allocation_attempts = 0U;
+    allocation_fail_at = i;
+    assert(markdown_project(&f, pouch, session, &scan) != CAI_OK);
+  }
+  allocation_fail_at = SIZE_MAX;
+  {
+    char *setting = malloc(9216U), *commit = malloc(12288U);
+    assert(setting && commit);
+    memcpy(setting, "{\"version\":1,\"model\":\"", 22U);
+    memset(setting + 22U, 'x', 8192U);
+    strcpy(setting + 22U + 8192U, "\"}");
+    markdown_seed(&f, commit, 12288U, setting);
+    assert(markdown_project(&f, pouch, session, &scan) == CAI_ERR_LIMIT);
+    free(commit);
+    free(setting);
+  }
+  /* Goal and provider text are independently generated 8 MiB values. Neither
+   * can fit the allocation budget, and writes occur during source delivery. */
+  init(&f);
+  f.count = 1U;
+  f.large = f.large_markdown = 1;
+  f.capture = 0;
+  f.chunk = 4096U;
+  f.read_limit = 10U;
+  f.ids[0] = "commit-00000000000000000001-00000000000000000000";
+  assert(markdown_project(&f, pouch, session, &scan) == CAI_OK);
+  assert(f.observed_flow && f.delivered >= 2U * generated_bytes);
+  assert(scan.seen & (1U << 10U));
+  assert(f.heads == 1U && f.calls == 6U && peak_bytes < 1048576U);
+  snprintf(path, sizeof(path), "%s/workspace/AGENTS.md", directory);
+  assert(unlink(path) == 0 && rmdir(session->workspace) == 0);
+  snprintf(path, sizeof(path), "%s/AGENTS.md", directory);
+  assert(unlink(path) == 0 && rmdir(directory) == 0);
+  free(pouch);
+  free(session);
+}
 static int view_cancelled(void *context) {
   fixture *f = context;
   return f->callback_cancelled ||
@@ -598,6 +873,7 @@ static void *worker(void *unused) {
   views();
   view_failures();
   native_markdown();
+  application_markdown();
   view_cancellation();
   init(&f);
   f.count = 3U;
@@ -611,7 +887,8 @@ static void *worker(void *unused) {
   assert(project(&f) == CAI_OK);
   bounded = 0;
   assert(live_bytes == 0U && peak_bytes < 1048576U);
-  assert(f.observed_flow && f.delivered > 16000000U && f.calls == 4U);
+  assert(f.observed_flow && f.delivered >= 2U * generated_bytes &&
+         f.calls == 4U);
   /* One captured native view can feed multiple projections without retaining
    * the generated metadata/history values or reopening its collection. */
   {
@@ -637,13 +914,16 @@ static void *worker(void *unused) {
     cai_cli_journal_view_close(view);
     bounded = 0;
     assert(live_bytes == 0U && peak_bytes < 1048576U);
-    assert(f.observed_flow && f.delivered >= 5U * 8U * 1024U * 1024U);
+    assert(f.observed_flow && f.delivered >= 5U * generated_bytes);
     assert(f.heads == 1U && f.calls == 7U);
   }
   return NULL;
 }
-int main(void) {
+int main(int argc, char **argv) {
   pthread_t thread;
+  assert(argc == 1 || (argc == 2 && strcmp(argv[1], "--memory-check") == 0));
+  if (argc == 2)
+    generated_bytes = 128U * 1024U;
   assert(snprintf(final, sizeof(final), "%s%s", final_prefix, final_suffix) <
          (int)sizeof(final));
   /* Default musl worker stack, never an enlarged export stack. */

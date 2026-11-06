@@ -195,6 +195,33 @@ typedef struct cai_agent_preset_config {
 /** Initialize a zero-defaultable generic preset configuration. */
 void cai_agent_preset_config_init(cai_agent_preset_config *config);
 
+/** Prepared instruction policy, independent of clients, agents and tools.
+ * Owns bounded file/skill preparation and its effective capability contract.
+ * The selected identity, custom template and extension strings are borrowed
+ * and must remain alive and unchanged until close. Configuration/descriptor
+ * structures need not remain alive. Operations are synchronous and serialized.
+ */
+typedef struct cai_agent_instructions cai_agent_instructions;
+/** Read authorized instruction sources and skills once. Optional status is
+ * zeroed on entry and populated after successful preparation. */
+int cai_agent_preset_prepare_instructions(const cai_agent_preset *preset,
+                                          const cai_agent_preset_config *config,
+                                          struct pslog_logger *logger,
+                                          cai_agent_instructions **out,
+                                          cai_agent_instruction_status *status,
+                                          cai_error *error);
+/** Emit bounded chunks without accumulating a rendered value. NULL model uses
+ * the prepared model; an override retargets Smith's model-specific base while
+ * retaining the prepared capability/file/skill policy, as on runtime resume.
+ * Custom templates remain authoritative. No files are reread. A failed sink
+ * does not invalidate this prepared policy; a later write can retry it. */
+int cai_agent_instructions_write(cai_agent_instructions *instructions,
+                                 const char *model, cai_sink *sink,
+                                 cai_error *error);
+/** Release prepared policy. NULL is harmless; borrowed strings are not freed.
+ */
+void cai_agent_instructions_close(cai_agent_instructions *instructions);
+
 /** Prepare and write the effective developer instructions without constructing
  * a client, agent, tools or model context. Uses the same template compiler,
  * model capability policy, global/approved workspace files and skill catalog

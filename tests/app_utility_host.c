@@ -19,7 +19,7 @@
 static pid_t host_pid;
 static pthread_key_t active;
 static int parallel;
-static int jsonl_export;
+static int exporting;
 static unsigned int arrivals;
 static pthread_mutex_t arrival_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t arrival_changed = PTHREAD_COND_INITIALIZER;
@@ -96,12 +96,8 @@ int __wrap_cai_cli_pouch_open_options(cai_cli_pouch *pouch,
   return rc;
 }
 
-/* Utilities cannot run an agent or construct a frontend. Markdown export's
- * read-only restoration helper is the sole runtime-open exception;
- * neither it nor another utility may enter a runtime event loop. */
-int __real_cai_agent_runtime_open(cai_client *,
-                                  const cai_agent_runtime_config *,
-                                  cai_agent_runtime **, cai_error *);
+/* Utilities cannot construct a runtime or frontend. Every export format also
+ * operates without a provider client or restored model context. */
 int __wrap_cai_agent_runtime_open(cai_client *,
                                   const cai_agent_runtime_config *,
                                   cai_agent_runtime **, cai_error *);
@@ -115,12 +111,11 @@ int __wrap_cai_agent_runtime_pump_bounded(cai_agent_runtime *, long, size_t,
 int __wrap_cai_agent_runtime_open(cai_client *client,
                                   const cai_agent_runtime_config *config,
                                   cai_agent_runtime **out, cai_error *error) {
-  assert(!jsonl_export);
-  assert(config->session_store != NULL && config->resume_session_id != NULL &&
-         config->disable_terminal && config->disable_review_subagent &&
-         config->session_store->commit != NULL &&
-         config->session_store->append_event != NULL);
-  return __real_cai_agent_runtime_open(client, config, out, error);
+  (void)client;
+  (void)config;
+  (void)out;
+  (void)error;
+  abort();
 }
 int __real_cai_client_open(const cai_client_config *, cai_client **,
                            cai_error *);
@@ -128,7 +123,7 @@ int __wrap_cai_client_open(const cai_client_config *, cai_client **,
                            cai_error *);
 int __wrap_cai_client_open(const cai_client_config *config, cai_client **out,
                            cai_error *error) {
-  assert(!jsonl_export);
+  assert(!exporting);
   return __real_cai_client_open(config, out, error);
 }
 int __wrap_cai_agent_runtime_pump(cai_agent_runtime *runtime, long timeout,
@@ -213,12 +208,10 @@ int main(int argc, char **argv) {
     assert(setenv("UTILITY_SLOT", "host", 1) == 0);
   c.argc = argc;
   c.argv = argv;
-  for (i = 1U; i + 1U < (size_t)argc; i++)
-    if (strcmp(argv[i], "--export-out") == 0) {
-      size_t length = strlen(argv[i + 1U]);
-      jsonl_export =
-          length >= 6U && strcmp(argv[i + 1U] + length - 6U, ".jsonl") == 0;
-    }
+  for (i = 1U; i < (size_t)argc; i++)
+    if (strcmp(argv[i], "--export") == 0 ||
+        strncmp(argv[i], "--export=", 9U) == 0)
+      exporting = 1;
   cai_app_config_init(&config);
   cai_app_status_init(&status);
   assert(cai_environment_open(NULL, &before, NULL) == CAI_OK);

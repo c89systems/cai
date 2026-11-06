@@ -2,6 +2,7 @@
 #define _XOPEN_SOURCE 700
 #include "session_commands.h"
 #include "identity.h"
+#include "markdown_export.h"
 #include "messages.h"
 
 #include <errno.h>
@@ -248,130 +249,6 @@ int cai_cli_sessions_print(cai_sink *destination,
   return rc;
 }
 
-typedef struct export_store {
-  cai_cli_pouch *pouch;
-  const char *scope;
-} export_store;
-
-static int export_load(void *context, const char *scope, const char *id,
-                       cai_source **out, unsigned long long *sequence,
-                       cai_error *error) {
-  export_store *store;
-  (void)scope;
-  store = (export_store *)context;
-  return cai_cli_pouch_read_id(store->pouch, store->scope, id, out, sequence,
-                               error);
-}
-
-static int export_latest(void *context, const char *scope, char *id,
-                         size_t capacity, cai_source **out,
-                         unsigned long long *sequence, cai_error *error) {
-  (void)context;
-  (void)scope;
-  (void)id;
-  (void)capacity;
-  (void)sequence;
-  (void)error;
-  *out = NULL;
-  return CAI_OK;
-}
-
-typedef struct export_execution_visit {
-  cai_agent_session_event_fn callback;
-  void *context;
-} export_execution_visit;
-static int export_execution_event(void *context,
-                                  const cai_agent_session_event *event,
-                                  cai_error *error) {
-  export_execution_visit *visit = context;
-  return strcmp(event->type, "execution") == 0
-             ? visit->callback(visit->context, event, error)
-             : CAI_OK;
-}
-static int export_events(void *context, const char *scope, const char *id,
-                         unsigned long long after,
-                         cai_agent_session_event_fn callback, void *visitor,
-                         cai_error *error) {
-  export_store *store = context;
-  export_execution_visit visit;
-  (void)scope;
-  /* The Markdown exporter uses durable conversation history from the
-   * commit. Recovering pending journal inputs would start work and is
-   * forbidden here. */
-  visit.callback = callback;
-  visit.context = visitor;
-  return cai_cli_pouch_replay(store->pouch, store->scope, id, after, 0U, NULL,
-                              export_execution_event, &visit, error);
-}
-
-static int export_commit(void *context, const char *scope, const char *id,
-                         cai_source *source, unsigned long long sequence,
-                         cai_error *error) {
-  (void)context;
-  (void)scope;
-  (void)id;
-  (void)source;
-  (void)sequence;
-  (void)error;
-  return CAI_OK;
-}
-
-static int export_append(void *context, const char *scope, const char *id,
-                         const cai_agent_session_event *event,
-                         cai_error *error) {
-  (void)context;
-  (void)scope;
-  (void)id;
-  (void)event;
-  (void)error;
-  return CAI_OK;
-}
-
-static int
-offline_runtime(cai_cli_pouch *pouch, const char *id, const char *workspace,
-                const cai_cli_session *metadata, export_store *storage,
-                cai_agent_session_store *callbacks, cai_client **client,
-                cai_agent_runtime **runtime, cai_error *error) {
-  cai_client_config client_config;
-  cai_agent_runtime_config config;
-  struct stat status;
-  int rc;
-  cai_client_config_init(&client_config);
-  client_config.logger = pouch->logger;
-  client_config.api_key = "offline-export";
-  client_config.base_url = "http://127.0.0.1:1/v1";
-  rc = cai_client_open(&client_config, client, error);
-  if (rc != CAI_OK)
-    return rc;
-  memset(callbacks, 0, sizeof(*callbacks));
-  storage->pouch = pouch;
-  storage->scope = metadata->workspace;
-  callbacks->context = storage;
-  callbacks->load_id = export_load;
-  callbacks->load_latest = export_latest;
-  callbacks->load_events_after = export_events;
-  callbacks->commit = export_commit;
-  callbacks->append_event = export_append;
-  cai_agent_runtime_config_init(&config);
-  config.session_store = callbacks;
-  config.session_scope = pouch->program_name;
-  if (pouch->config_directory[0] == '\0' &&
-      cai_cli_xdg_path(pouch->config_directory, sizeof(pouch->config_directory),
-                       "XDG_CONFIG_HOME", ".config", pouch->program_name,
-                       error) != CAI_OK)
-    return error != NULL ? error->code : CAI_ERR_INVALID;
-  config.agent_config_directory = pouch->config_directory;
-  config.agent_identity = pouch->program_name;
-  config.workspace_directory =
-      stat(metadata->workspace, &status) == 0 && S_ISDIR(status.st_mode)
-          ? metadata->workspace
-          : workspace;
-  config.resume_session_id = id;
-  config.disable_terminal = 1;
-  config.disable_review_subagent = 1;
-  return cai_agent_runtime_open(*client, &config, runtime, error);
-}
-
 static int export_path(const cai_cli_pouch *pouch, char *path, size_t capacity,
                        const char *root, const char *id, cai_error *error) {
   const char *base;
@@ -551,10 +428,8 @@ int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
                            cai_agent_runtime *active_runtime,
                            cai_sink *destination, cai_error *error) {
   cai_cli_session metadata;
-  export_store storage;
-  cai_agent_session_store callbacks;
-  cai_client *client;
-  cai_agent_runtime *runtime;
+  cai_cli_pouch_transcript *reader = NULL;
+  cai_cli_journal_view *view = NULL;
   cai_sink *sink;
   char paths[2][PATH_MAX];
   char temporary[2][PATH_MAX];
@@ -575,14 +450,13 @@ int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
   }
   if (id[0] == '\0')
     return cai_cli_error(error, CAI_ERR_INVALID, "export session ID is empty");
-  client = NULL;
-  runtime = active_runtime;
   sink = NULL;
   file = NULL;
   memset(temporary, 0, sizeof(temporary));
   lease = NULL;
-  /* Hold one document lease across both exports so their commit and
-   * journal cannot change between the Markdown and JSONL reads. */
+  /* Pin metadata/identity and share one captured native view across outputs.
+   * Every range keeps its head precondition; a concurrent change fails the
+   * candidate instead of mixing journal revisions. */
   rc = cai_cli_pouch_begin_read(pouch, id, &use, error);
   if (rc == CAI_OK)
     rc = cai_cli_pouch_lock(pouch, id, &lease, error);
@@ -591,9 +465,11 @@ int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
   if (rc == CAI_OK)
     rc = export_targets(pouch, workspace, export_root, id, basename, paths,
                         error);
-  if (rc == CAI_OK && paths[0][0] != '\0' && active_runtime == NULL)
-    rc = offline_runtime(pouch, id, workspace, &metadata, &storage, &callbacks,
-                         &client, &runtime, error);
+  if (rc == CAI_OK)
+    rc = cai_cli_pouch_transcript_open(pouch, metadata.workspace, id, &reader,
+                                       error);
+  if (rc == CAI_OK)
+    rc = cai_cli_journal_view_open(reader->collection, NULL, &view, error);
   /* Finish every selected stream before publishing any output. */
   for (i = 0U; rc == CAI_OK && i < 2U; i++) {
     if (paths[i][0] == '\0')
@@ -603,11 +479,15 @@ int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
     if (rc == CAI_OK)
       rc = cai_sink_file(file, 0, &sink, error);
     if (rc == CAI_OK && i == 0U)
-      rc = cai_agent_runtime_export_markdown(runtime, sink, error);
-    if (rc == CAI_OK && i == 0U)
-      rc = cai_agent_runtime_export_execution_markdown(runtime, sink, error);
+      rc = active_runtime != NULL
+               ? cai_agent_runtime_export_markdown(active_runtime, sink, error)
+               : cai_cli_markdown_export(view, pouch, &metadata, workspace,
+                                         sink, error);
+    if (rc == CAI_OK && i == 0U && active_runtime != NULL)
+      rc = cai_agent_runtime_export_execution_markdown(active_runtime, sink,
+                                                       error);
     if (rc == CAI_OK && i == 1U)
-      rc = cai_cli_pouch_export(pouch, id, sink, error);
+      rc = cai_cli_journal_view_jsonl(view, sink, error);
     cai_sink_close(sink);
     sink = NULL;
     if (file != NULL) {
@@ -627,10 +507,8 @@ int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
   for (i = 0U; i < 2U; i++)
     if (temporary[i][0] != '\0')
       unlink(temporary[i]);
-  if (active_runtime == NULL && runtime != NULL)
-    cai_agent_runtime_close(runtime);
-  if (client != NULL)
-    client->close(client);
+  cai_cli_journal_view_close(view);
+  cai_cli_pouch_transcript_close(reader);
   rc = cai_cli_pouch_unlock(lease, rc, error);
   /* Preserve the CLI utility's JSONL-then-Markdown listing order. */
   for (i = 2U; rc == CAI_OK && i > 0U; i--) {
