@@ -21,8 +21,7 @@ void cai_log_client_opened(const cai_client_impl *client) {
              client->base_url != NULL ? client->base_url : "",
              (int)client->timeout_ms, client->http_2_disabled ? 0 : 1);
 }
-void cai_log_skill_warning(const cai_client_impl *client, const char *message) {
-  pslog_logger *log = cai_logger(client);
+void cai_log_skill_warning(pslog_logger *log, const char *message) {
   if (log != NULL && log->warnf != NULL)
     log->warnf(log, "Skill discovery warning", "error=%s", message);
 }

@@ -190,3 +190,25 @@ literal absence of removed data, real resumed inference inputs and publication.
 The destination test also runs against the standalone executable, including its
 startup dispatcher. Validation failures retain the parser's specific diagnostic
 instead of reporting only a generic invalid status.
+
+The runtime-free instruction boundary in item 2 is implemented as
+`cai_agent_preset_write_instructions` in `cai/smith.h`. It shares preparation
+and the template writer with ordinary agent construction; custom reviewer
+templates also use that writer. The public call writes at most 4 KiB per sink
+callback and never creates a client, agent, tools or rendered instruction
+buffer. Global/workspace files and skill metadata retain their existing
+bounded preparation limits. The ordinary agent constructor still allocates
+its required final instruction string, using a counting pass followed by the
+same writer. This does not yet remove the application's offline runtime:
+the shared handover renderer and retained-history adapter remain to be cut over.
+
+`cai_instruction_writer` runs on a default worker stack and exercises an
+8 MiB caller-owned extension while rejecting allocations above 64 KiB and
+guarding client/agent construction. It covers substitutions, capability-fragment
+filtering across substitutions, repeated tokens, sink cancellation, missing
+arguments, allocation failure and callback-backed policy/skill preparation.
+`cai_workspace_approval` compares the complete output and instruction status
+with live agents across approved and unapproved roots. `smith_model_prompts`
+compares complete instruction output across the model catalog/fallback,
+disabled patch capability and custom templates while retaining its model-switch
+and captured-policy assertions.

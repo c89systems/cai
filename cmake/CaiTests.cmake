@@ -12,6 +12,18 @@ if(CAI_BUILD_TESTS)
   add_test(NAME cai_dtg COMMAND cai_dtg_test)
   set_tests_properties(cai_dtg PROPERTIES LABELS "unit;local;offline" TIMEOUT 3)
   add_executable(cai_workspace_approval_test tests/workspace_approval_test.c)
+  add_executable(cai_instruction_writer_test tests/instruction_writer_test.c)
+  cai_link_internal_consumer(cai_instruction_writer_test)
+  cai_configure_cli_target(cai_instruction_writer_test)
+  target_compile_options(cai_instruction_writer_test PRIVATE -UNDEBUG)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_definitions(cai_instruction_writer_test PRIVATE CAI_INSTRUCTION_WRAP)
+    target_link_options(cai_instruction_writer_test PRIVATE
+      -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc
+      -Wl,--wrap=cai_client_open -Wl,--wrap=cai_client_new_agent)
+  endif()
+  add_test(NAME cai_instruction_writer COMMAND cai_instruction_writer_test)
+  set_tests_properties(cai_instruction_writer PROPERTIES LABELS "unit;local;offline" TIMEOUT 10)
   cai_link_internal_consumer(cai_workspace_approval_test)
   cai_configure_c_target(cai_workspace_approval_test)
   target_compile_options(cai_workspace_approval_test PRIVATE -UNDEBUG)
@@ -106,14 +118,19 @@ if(CAI_BUILD_TESTS)
   target_compile_definitions(cai_tests PRIVATE CAI_TESTING
     CAI_TEST_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")
   cai_link_internal_consumer(cai_tests)
-  if(CAI_PSLOG_LINK)
+  # Musl checks must run on hosts without a globally installed musl loader,
+  # just like the CLI fixtures. Do not mix a static runner with shared pslog.
+  if(CAI_TARGET_ID MATCHES "-linux-musl$" AND TARGET cai_static AND TARGET pslog::pslog_static)
+    target_link_libraries(cai_tests PRIVATE pslog::pslog_static)
+    cai_configure_cli_target(cai_tests)
+  elseif(CAI_PSLOG_LINK)
     target_link_libraries(cai_tests PRIVATE ${CAI_PSLOG_LINK})
+    cai_configure_c_target(cai_tests)
   else()
     message(FATAL_ERROR
       "The logging integration tests require libpslog. Install libpslog, set "
       "CAI_PSLOG_LIBRARY, or configure with CAI_BUILD_TESTS=OFF.")
   endif()
-  cai_configure_c_target(cai_tests)
   if(CAI_BUILD_EXAMPLES)
     add_executable(cai_smith_terminal_renderer_test
       tests/smith_terminal_renderer_test.c)

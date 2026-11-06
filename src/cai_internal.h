@@ -397,7 +397,7 @@ int cai_client_refresh_chatgpt_auth_after_http(cai_client *client,
 void cai_log_client_opened(const cai_client_impl *client);
 /** Log skill-discovery diagnostics without inserting them into model context.
  */
-void cai_log_skill_warning(const cai_client_impl *client, const char *message);
+void cai_log_skill_warning(struct pslog_logger *logger, const char *message);
 /** Explain the provider-specific server-continuity policy in runtime logs. */
 void cai_log_openrouter_server_continuity(const cai_client_impl *client);
 /** Log request metadata, not a copy of the request body. */

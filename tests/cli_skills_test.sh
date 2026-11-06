@@ -61,4 +61,9 @@ absent "$root/first" BODY_ONLY_ON_DEMAND; absent "$root/first" artifact-not-a-sk
 sed -n '2p' "$root/peer/requests.jsonl" >"$root/second"; contains "$root/second" BODY_ONLY_ON_DEMAND
 sed -n '3p' "$root/peer/requests.jsonl" >"$root/third"; contains "$root/third" SCRIPT_RESOURCE_SENTINEL
 sed -n '4p' "$root/peer/requests.jsonl" >"$root/fourth"; contains "$root/fourth" 'skill resource path is invalid'
-contains "$root/stderr" invalid-package; contains "$root/stderr" 'front matter'
+# Configuration/discovery warnings belong to the quiet owner's session log;
+# the attached batch client receives structured execution diagnostics only.
+session=$(current_session_id)
+runtime_log="$root/cache/cai/$session.log"
+contains "$runtime_log" invalid-package; contains "$runtime_log" 'front matter'
+absent "$root/stderr" 'Skill discovery warning'

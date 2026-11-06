@@ -941,6 +941,7 @@
     get_property(_cai_cli_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
     list(FILTER _cai_cli_targets INCLUDE REGEX "^cai_cli($|_)|^cai_terminal_peer$")
     add_custom_target(cai_cli_tests DEPENDS ${_cai_cli_targets})
+    add_dependencies(cai_cli_tests cai_instruction_writer_test)
     if(TARGET cai_app_server_tests)
       add_dependencies(cai_cli_tests cai_app_server_tests)
     endif()

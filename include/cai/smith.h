@@ -195,6 +195,27 @@ typedef struct cai_agent_preset_config {
 /** Initialize a zero-defaultable generic preset configuration. */
 void cai_agent_preset_config_init(cai_agent_preset_config *config);
 
+/** Prepare and write the effective developer instructions without constructing
+ * a client, agent, tools or model context. Uses the same template compiler,
+ * model capability policy, global/approved workspace files and skill catalog
+ * as cai_client_new_preset_agent. Current files are read; these are not
+ * recorded conversation instructions. No tools execute and no integrations are
+ * opened.
+ *
+ * The configuration and sink are borrowed for this synchronous call. Rendered
+ * text flows in writes of at most 4096 bytes; no complete rendered string is
+ * retained. Instruction files and skill metadata use their existing bounded
+ * preparation limits. A sink failure stops emission and propagates unchanged;
+ * the sink remains open. Optional status is zeroed on entry and populated only
+ * after successful emission. NULL logger disables preparation warnings unless
+ * a skill warning callback was explicitly configured. */
+int cai_agent_preset_write_instructions(const cai_agent_preset *preset,
+                                        const cai_agent_preset_config *config,
+                                        struct pslog_logger *logger,
+                                        cai_sink *sink,
+                                        cai_agent_instruction_status *status,
+                                        cai_error *error);
+
 /** Configuration for a Smith agent profile. */
 typedef cai_agent_preset_config cai_smith_config;
 

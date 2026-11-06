@@ -25522,6 +25522,33 @@ static void expect_runtime_prompt(test_state *state, cai_agent_runtime *runtime,
   cai_error_cleanup(&error);
 }
 
+static int instruction_projection_capture(void *context, const void *bytes,
+                                          size_t length, cai_error *error) {
+  return cai_buffer_append((cai_buffer_builder *)context, bytes, length, error);
+}
+
+static void expect_instruction_projection(test_state *state,
+                                          const cai_agent_preset *preset,
+                                          const cai_agent_preset_config *config,
+                                          const cai_agent *agent) {
+  cai_buffer_builder buffer;
+  cai_sink sink;
+  cai_error error;
+  memset(&buffer, 0, sizeof(buffer));
+  memset(&sink, 0, sizeof(sink));
+  cai_error_init(&error);
+  sink.callbacks.write = instruction_projection_capture;
+  sink.callbacks.context = &buffer;
+  expect_int(state, "smith_instruction_projection",
+             cai_agent_preset_write_instructions(preset, config, NULL, &sink,
+                                                 NULL, &error),
+             CAI_OK);
+  expect_str(state, "smith_instruction_projection_content", buffer.data,
+             CAI_AGENT_IMPL(agent)->developer_instructions);
+  cai_free_mem(NULL, buffer.data);
+  cai_error_cleanup(&error);
+}
+
 static void test_smith_model_prompts(test_state *state) {
   static const char *const models[] = {
       "gpt-5.6-sol",       "gpt-5.6-terra",     "gpt-5.6-luna",
@@ -25563,6 +25590,7 @@ static void test_smith_model_prompts(test_state *state) {
   config.developer_instructions_extension = "Host prompt sentinel.";
   config.disable_terminal = 1;
   for (i = 0U; client != NULL && i < sizeof(models) / sizeof(models[0]); i++) {
+    cai_agent_preset_from_smith(&preset);
     config.model = models[i];
     expect_int(state, models[i],
                cai_client_new_smith_agent(client, &config, &agent, &error),
@@ -25570,6 +25598,7 @@ static void test_smith_model_prompts(test_state *state) {
     if (agent == NULL)
       continue;
     impl = CAI_AGENT_IMPL(agent);
+    expect_instruction_projection(state, &preset, &config, agent);
     expect_substr(state, "smith_model_identity", impl->developer_instructions,
                   i >= 3U && i <= 7U ? "Model Agent, an agent based on GPT-6."
                                      : "Model Agent, an agent based on GPT-5.");
@@ -25639,6 +25668,7 @@ static void test_smith_model_prompts(test_state *state) {
           strstr(CAI_AGENT_IMPL(agent)->developer_instructions,
                  "Use `apply_patch` for local file edits.") != NULL)
         test_fail(state, "smith_model_no_patch", "disabled patch advertised");
+      expect_instruction_projection(state, &preset, &config, agent);
       cai_agent_destroy(agent);
       agent = NULL;
     }
@@ -25672,6 +25702,7 @@ static void test_smith_model_prompts(test_state *state) {
       expect_substr(state, "smith_model_custom_text",
                     CAI_AGENT_IMPL(agent)->developer_instructions,
                     "Custom Model Agent instructions.");
+      expect_instruction_projection(state, &preset, &config, agent);
       cai_agent_destroy(agent);
       agent = NULL;
     }

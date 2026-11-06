@@ -25,10 +25,18 @@ static void policy(approval_fixture *f, const char *directory,
   file = fopen(f->path, "w");
   assert(file != NULL && fputs(text, file) >= 0 && fclose(file) == 0);
 }
+static int instruction_capture(void *context, const void *bytes, size_t length,
+                               cai_error *error) {
+  return cai_buffer_append((cai_buffer_builder *)context, bytes, length, error);
+}
 static void agent_status(cai_client *client, const cai_smith_config *config,
                          size_t count, cai_error *error) {
   cai_agent *agent;
   cai_agent_instruction_status status;
+  cai_agent_instruction_status exported;
+  cai_agent_preset preset;
+  cai_buffer_builder buffer;
+  cai_sink sink;
   assert(cai_client_new_smith_agent(client, config, &agent, error) == CAI_OK);
   assert(cai_agent_get_instruction_status(agent, &status, error) == CAI_OK);
   assert(status.global_agents_md_loaded && status.codex_agents_md_loaded);
@@ -41,6 +49,21 @@ static void agent_status(cai_client *client, const cai_smith_config *config,
                  "ROOT_POLICY") != NULL) == (count == 2U));
   assert((strstr(CAI_AGENT_IMPL(agent)->developer_instructions,
                  "CHILD_POLICY") != NULL) == (count != 0U));
+  memset(&buffer, 0, sizeof(buffer));
+  memset(&sink, 0, sizeof(sink));
+  cai_agent_preset_from_smith(&preset);
+  sink.callbacks.write = instruction_capture;
+  sink.callbacks.context = &buffer;
+  assert(cai_agent_preset_write_instructions(&preset, config, NULL, &sink,
+                                             &exported, error) == CAI_OK);
+  assert(strcmp(buffer.data, CAI_AGENT_IMPL(agent)->developer_instructions) ==
+         0);
+  assert(exported.global_agents_md_loaded == status.global_agents_md_loaded);
+  assert(exported.codex_agents_md_loaded == status.codex_agents_md_loaded);
+  assert(exported.codex_agents_md_enabled == status.codex_agents_md_enabled);
+  assert(exported.repository_agents_md_count ==
+         status.repository_agents_md_count);
+  cai_free_mem(NULL, buffer.data);
   agent->close(agent);
 }
 int main(int argc, char **argv) {

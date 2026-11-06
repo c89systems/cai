@@ -4,6 +4,7 @@
 #include <cai/tools/terminal.h>
 #include <cai/tools/view_image.h>
 
+#include "cai_instruction_writer.h"
 #include "cai_internal.h"
 
 #include <errno.h>
@@ -18,8 +19,6 @@
 extern char *realpath(const char *path, char *resolved_path);
 
 #define CAI_SMITH_MAX_REPOSITORY_INSTRUCTIONS (128U * 1024U)
-#define CAI_AGENT_IDENTITY_TOKEN "{{agent_identity}}"
-#define CAI_AGENT_TOOLS_TOKEN "{{agent_tools}}"
 
 typedef struct cai_smith_prompt_entry {
   const char *model;
@@ -42,11 +41,10 @@ static const char *cai_smith_model_prompt(const char *model) {
   return (const char *)cai_smith_fallback_prompt;
 }
 static void cai_smith_skill_warning(void *context, const char *message) {
-  cai_log_skill_warning((const cai_client_impl *)context, message);
+  cai_log_skill_warning((pslog_logger *)context, message);
 }
 static int cai_smith_prepare_skills(const cai_skill_config *config,
-                                    const char *directory,
-                                    cai_client_impl *client,
+                                    const char *directory, pslog_logger *logger,
                                     cai_skill_catalog **catalog, char **prompt,
                                     cai_error *error) {
   cai_skill_config effective;
@@ -55,7 +53,7 @@ static int cai_smith_prepare_skills(const cai_skill_config *config,
     effective = *config;
   if (effective.warning_callback == NULL) {
     effective.warning_callback = cai_smith_skill_warning;
-    effective.warning_context = client;
+    effective.warning_context = logger;
   }
   return cai_skills_prepare(&effective, directory, catalog, prompt, error);
 }
@@ -108,161 +106,13 @@ int cai_agent_get_instruction_status(const cai_agent *agent,
   return CAI_OK;
 }
 
-static int cai_preset_render_template(
-    const cai_allocator *allocator, const char *template_text,
-    const cai_agent_preset *preset, const cai_agent_preset_config *config,
-    const char *repository_instructions, const char *skill_catalog,
-    const char *tool_contract, char **out, size_t *model_prefix_length,
-    cai_error *error) {
-  const char *identity;
-  const char *extension;
-  const char *cursor;
-  const char *identity_token;
-  const char *tools_token;
-  const char *token;
-  const char *replacement;
-  size_t identity_length;
-  size_t tool_contract_length;
-  size_t repository_length;
-  size_t skill_catalog_length;
-  size_t extension_length;
-  size_t total_length;
-  size_t part_length;
-  size_t prefix_length;
-  size_t offset;
-  char *instructions;
-
-  *out = NULL;
-  if (model_prefix_length != NULL)
-    *model_prefix_length = 0U;
-  identity = config->agent_identity != NULL ? config->agent_identity
-                                            : preset->default_identity;
-  extension = config->developer_instructions_extension;
-  if (identity == NULL || identity[0] == '\0') {
-    return cai_set_error(error, CAI_ERR_INVALID,
-                         "agent preset identity must not be empty");
-  }
-  identity_length = strlen(identity);
-  tool_contract_length = tool_contract != NULL ? strlen(tool_contract) : 0U;
-  repository_length =
-      repository_instructions != NULL ? strlen(repository_instructions) : 0U;
-  skill_catalog_length = skill_catalog != NULL ? strlen(skill_catalog) : 0U;
-  extension_length = extension != NULL ? strlen(extension) : 0U;
-  total_length = 0U;
-  cursor = template_text;
-  for (;;) {
-    identity_token = strstr(cursor, CAI_AGENT_IDENTITY_TOKEN);
-    tools_token =
-        tool_contract != NULL ? strstr(cursor, CAI_AGENT_TOOLS_TOKEN) : NULL;
-    if (identity_token == NULL && tools_token == NULL) {
-      part_length = strlen(cursor);
-      if (part_length > SIZE_MAX - total_length) {
-        return cai_set_error(error, CAI_ERR_INVALID,
-                             "agent preset instructions are too large");
-      }
-      total_length += part_length;
-      break;
-    }
-    if (tools_token == NULL ||
-        (identity_token != NULL && identity_token < tools_token)) {
-      token = identity_token;
-      replacement = identity;
-      part_length = identity_length;
-    } else {
-      token = tools_token;
-      replacement = tool_contract;
-      part_length = tool_contract_length;
-    }
-    if ((size_t)(token - cursor) > SIZE_MAX - total_length ||
-        part_length > SIZE_MAX - total_length - (size_t)(token - cursor)) {
-      return cai_set_error(error, CAI_ERR_INVALID,
-                           "agent preset instructions are too large");
-    }
-    total_length += (size_t)(token - cursor) + part_length;
-    cursor =
-        token + (replacement == identity ? sizeof(CAI_AGENT_IDENTITY_TOKEN) - 1U
-                                         : sizeof(CAI_AGENT_TOOLS_TOKEN) - 1U);
-  }
-  if (repository_length > 0U) {
-    if (total_length > SIZE_MAX - 2U - repository_length) {
-      return cai_set_error(error, CAI_ERR_INVALID,
-                           "agent preset instructions are too large");
-    }
-    total_length += 2U + repository_length;
-  }
-  if (skill_catalog_length > 0U) {
-    if (total_length > SIZE_MAX - 2U - skill_catalog_length) {
-      return cai_set_error(error, CAI_ERR_INVALID,
-                           "agent preset instructions are too large");
-    }
-    total_length += 2U + skill_catalog_length;
-  }
-  if (extension_length > 0U) {
-    if (total_length > SIZE_MAX - 2U - extension_length) {
-      return cai_set_error(error, CAI_ERR_INVALID,
-                           "agent preset instructions are too large");
-    }
-    total_length += 2U + extension_length;
-  }
-  instructions = (char *)cai_alloc(allocator, total_length + 1U);
-  if (instructions == NULL) {
-    return cai_set_error(error, CAI_ERR_NOMEM,
-                         "failed to allocate agent preset instructions");
-  }
-  cursor = template_text;
-  offset = 0U;
-  for (;;) {
-    identity_token = strstr(cursor, CAI_AGENT_IDENTITY_TOKEN);
-    tools_token =
-        tool_contract != NULL ? strstr(cursor, CAI_AGENT_TOOLS_TOKEN) : NULL;
-    if (identity_token == NULL && tools_token == NULL) {
-      part_length = strlen(cursor);
-      memcpy(instructions + offset, cursor, part_length);
-      offset += part_length;
-      break;
-    }
-    if (tools_token == NULL ||
-        (identity_token != NULL && identity_token < tools_token)) {
-      token = identity_token;
-      replacement = identity;
-      part_length = identity_length;
-    } else {
-      token = tools_token;
-      replacement = tool_contract;
-      part_length = tool_contract_length;
-    }
-    prefix_length = (size_t)(token - cursor);
-    memcpy(instructions + offset, cursor, prefix_length);
-    offset += prefix_length;
-    if (token == tools_token && model_prefix_length != NULL)
-      *model_prefix_length = offset;
-    memcpy(instructions + offset, replacement, part_length);
-    offset += part_length;
-    cursor =
-        token + (replacement == identity ? sizeof(CAI_AGENT_IDENTITY_TOKEN) - 1U
-                                         : sizeof(CAI_AGENT_TOOLS_TOKEN) - 1U);
-  }
-  if (repository_length > 0U) {
-    memcpy(instructions + offset, "\n\n", 2U);
-    offset += 2U;
-    memcpy(instructions + offset, repository_instructions, repository_length);
-    offset += repository_length;
-  }
-  if (skill_catalog_length > 0U) {
-    memcpy(instructions + offset, "\n\n", 2U);
-    offset += 2U;
-    memcpy(instructions + offset, skill_catalog, skill_catalog_length);
-    offset += skill_catalog_length;
-  }
-  if (extension_length > 0U) {
-    memcpy(instructions + offset, "\n\n", 2U);
-    offset += 2U;
-    memcpy(instructions + offset, extension, extension_length);
-    offset += extension_length;
-  }
-  instructions[offset] = '\0';
-  *out = instructions;
-  return CAI_OK;
+/** The agent owns a materialized instruction string. Count and emit through the
+ * same bounded writer used by exports, allocating that final string only here.
+ */
+static int cai_smith_instruction_buffer(void *context, const void *bytes,
+                                        size_t length, cai_error *error) {
+  cai_buffer_builder *buffer = (cai_buffer_builder *)context;
+  return cai_buffer_append(buffer, (const char *)bytes, length, error);
 }
 
 static int cai_smith_build_tool_contract(const cai_allocator *allocator,
@@ -413,21 +263,36 @@ static int cai_smith_build_tool_contract(const cai_allocator *allocator,
   return CAI_OK;
 }
 
-static int cai_smith_remove_prompt_fragment(char *prompt, size_t *prefix_length,
-                                            const char *fragment,
-                                            cai_error *error) {
-  char *match;
-  size_t fragment_length;
-
-  match = strstr(prompt, fragment);
-  (void)error;
-  fragment_length = strlen(fragment);
-  if (match == NULL || (size_t)(match - prompt) >= *prefix_length ||
-      fragment_length > *prefix_length - (size_t)(match - prompt))
+/** Select one instruction source for both counting/materialization and direct
+ * export. The only allocated intermediate is the bounded capability contract.
+ */
+static int cai_smith_instruction_template(
+    const cai_allocator *allocator, const cai_agent_preset *preset,
+    const cai_agent_preset_config *config, unsigned long capabilities,
+    const char *repository, const char *skills, cai_instruction_template *input,
+    char **contract, cai_error *error) {
+  memset(input, 0, sizeof(*input));
+  *contract = NULL;
+  input->identity = config->agent_identity != NULL ? config->agent_identity
+                                                   : preset->default_identity;
+  if (input->identity == NULL || input->identity[0] == '\0')
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "agent preset identity must not be empty");
+  input->text = preset->developer_instructions;
+  input->repository = repository;
+  input->skills = skills;
+  input->extension = config->developer_instructions_extension;
+  input->capabilities = capabilities;
+  if (input->text != NULL)
     return CAI_OK;
-  memmove(match, match + fragment_length, strlen(match + fragment_length) + 1U);
-  *prefix_length -= fragment_length;
-  return CAI_OK;
+  input->text = cai_smith_model_prompt(
+      config->model != NULL ? config->model : preset->default_model);
+  {
+    int rc =
+        cai_smith_build_tool_contract(allocator, capabilities, contract, error);
+    input->tools = *contract;
+    return rc;
+  }
 }
 
 static int cai_smith_render_instructions(
@@ -435,57 +300,49 @@ static int cai_smith_render_instructions(
     const cai_agent_preset_config *config, unsigned long tool_capabilities,
     const char *repository_instructions, const char *skill_catalog, char **out,
     size_t *prefix_length, cai_error *error) {
-  char *tool_contract;
+  cai_instruction_template input;
+  cai_buffer_builder buffer;
+  cai_sink sink;
+  char *contract;
+  size_t length;
   int rc;
 
-  if (out == NULL) {
-    return cai_set_error(error, CAI_ERR_INVALID,
-                         "Smith instruction output pointer is required");
-  }
   *out = NULL;
   *prefix_length = 0U;
-  if (preset->developer_instructions != NULL) {
-    return cai_preset_render_template(allocator, preset->developer_instructions,
-                                      preset, config, repository_instructions,
-                                      skill_catalog, NULL, out, NULL, error);
-  }
-  tool_contract = NULL;
-  rc = cai_smith_build_tool_contract(allocator, tool_capabilities,
-                                     &tool_contract, error);
+  rc = cai_smith_instruction_template(
+      allocator, preset, config, tool_capabilities, repository_instructions,
+      skill_catalog, &input, &contract, error);
+  memset(&buffer, 0, sizeof(buffer));
+  buffer.allocator = allocator;
+  if (rc == CAI_OK)
+    rc = cai_instruction_template_write(&input, NULL, &length, prefix_length,
+                                        error);
   if (rc == CAI_OK) {
-    rc = cai_preset_render_template(
-        allocator,
-        cai_smith_model_prompt(config->model != NULL ? config->model
-                                                     : preset->default_model),
-        preset, config, repository_instructions, skill_catalog, tool_contract,
-        out, prefix_length, error);
+    if (length == SIZE_MAX)
+      rc = cai_set_error(error, CAI_ERR_INVALID,
+                         "agent preset instructions are too large");
+    else {
+      buffer.data = (char *)cai_alloc(allocator, length + 1U);
+      buffer.capacity = length + 1U;
+      if (buffer.data == NULL)
+        rc = cai_set_error(error, CAI_ERR_NOMEM,
+                           "failed to allocate agent preset instructions");
+      else
+        buffer.data[0] = '\0';
+    }
   }
-  if (rc == CAI_OK &&
-      (tool_capabilities & CAI_AGENT_PRESET_TOOL_APPLY_PATCH) == 0UL) {
-    rc = cai_smith_remove_prompt_fragment(
-        *out, prefix_length,
-        "Use `apply_patch` for local file edits. Do not create or edit files "
-        "with `cat` or other shell write tricks. Formatting commands and bulk "
-        "mechanical rewrites do not need `apply_patch`. Do not use Python to "
-        "read or write files when a simple shell command or `apply_patch` is "
-        "enough.\n",
-        error);
+  if (rc == CAI_OK) {
+    memset(&sink, 0, sizeof(sink));
+    sink.callbacks.write = cai_smith_instruction_buffer;
+    sink.callbacks.context = &buffer;
+    rc = cai_instruction_template_write(&input, &sink, &length, prefix_length,
+                                        error);
   }
-  if (rc == CAI_OK &&
-      (tool_capabilities & CAI_AGENT_PRESET_TOOL_TERMINAL) == 0UL) {
-    rc = cai_smith_remove_prompt_fragment(
-        *out, prefix_length,
-        "- Exercise caution when escaping text for exec_command calls - "
-        "backticks and `$()` passed to the `cmd` argument will still execute. "
-        "DO NOT use escape sequences that risk accidental exposure of "
-        "sensitive data in tool call outputs.\n",
-        error);
-  }
-  cai_free_mem(allocator, tool_contract);
-  if (rc != CAI_OK) {
-    cai_free_mem(allocator, *out);
-    *out = NULL;
-  }
+  cai_free_mem(allocator, contract);
+  if (rc == CAI_OK)
+    *out = buffer.data;
+  else
+    cai_free_mem(allocator, buffer.data);
   return rc;
 }
 
@@ -1082,6 +939,86 @@ static int cai_smith_load_repository_instructions(
   return rc;
 }
 
+/** Prepare only instruction inputs. The caller owns all three outputs on every
+ * return path; an agent may retain the catalog, while an export releases it.
+ * Keeping this policy shared prevents offline export from broadening approval
+ * or silently omitting the live agent's capability and skill adjustments. */
+static int cai_smith_prepare_instruction_inputs(
+    const cai_allocator *allocator, pslog_logger *logger,
+    const cai_agent_preset *preset, const cai_agent_preset_config *config,
+    char **repository, char **skills, cai_skill_catalog **catalog,
+    cai_agent_instruction_status *status, unsigned long *capabilities,
+    cai_error *error) {
+  const char *model;
+  int rc;
+  *repository = NULL;
+  *skills = NULL;
+  *catalog = NULL;
+  memset(status, 0, sizeof(*status));
+  *capabilities = 0UL;
+  if (preset == NULL || preset->name == NULL || preset->name[0] == '\0' ||
+      preset->prompt_version == NULL || preset->prompt_version[0] == '\0' ||
+      preset->default_identity == NULL || preset->default_identity[0] == '\0' ||
+      preset->default_model == NULL || preset->default_model[0] == '\0' ||
+      config == NULL || config->workspace_directory == NULL ||
+      config->workspace_directory[0] == '\0')
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "agent preset and workspace directory are required");
+  model = config->model != NULL ? config->model : preset->default_model;
+  *capabilities = preset->tool_capabilities;
+  if (config->disable_terminal)
+    *capabilities &= ~CAI_AGENT_PRESET_TOOL_TERMINAL;
+  if (!cai_model_supports(model, CAI_MODEL_CAP_IMAGE_INPUT))
+    *capabilities &= ~CAI_AGENT_PRESET_TOOL_VIEW_IMAGE;
+  rc = cai_smith_load_repository_instructions(allocator, config, logger,
+                                              repository, status, error);
+  if (rc == CAI_OK && (*capabilities & CAI_AGENT_PRESET_TOOL_SKILLS) != 0UL) {
+    rc =
+        cai_smith_prepare_skills(config->skills, config->agent_config_directory,
+                                 logger, catalog, skills, error);
+    if (rc == CAI_OK && !cai_skills_catalog_has_entries(*catalog))
+      *capabilities &= ~CAI_AGENT_PRESET_TOOL_SKILLS;
+  }
+  return rc;
+}
+
+int cai_agent_preset_write_instructions(const cai_agent_preset *preset,
+                                        const cai_agent_preset_config *config,
+                                        pslog_logger *logger, cai_sink *sink,
+                                        cai_agent_instruction_status *status,
+                                        cai_error *error) {
+  cai_instruction_template input;
+  cai_agent_instruction_status prepared_status;
+  cai_skill_catalog *catalog;
+  char *repository, *skills, *contract;
+  unsigned long capabilities;
+  size_t length, prefix;
+  int rc;
+  if (status != NULL)
+    memset(status, 0, sizeof(*status));
+  if (sink == NULL || sink->callbacks.write == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "instruction output sink is required");
+  contract = NULL;
+  rc = cai_smith_prepare_instruction_inputs(
+      NULL, logger, preset, config, &repository, &skills, &catalog,
+      &prepared_status, &capabilities, error);
+  if (rc == CAI_OK)
+    rc = cai_smith_instruction_template(NULL, preset, config, capabilities,
+                                        repository, skills, &input, &contract,
+                                        error);
+  if (rc == CAI_OK)
+    rc = cai_instruction_template_write(&input, sink, &length, &prefix, error);
+  if (rc == CAI_OK && status != NULL)
+    *status = prepared_status;
+  cai_free_mem(NULL, contract);
+  cai_free_mem(NULL, repository);
+  cai_free_mem(NULL, skills);
+  if (catalog != NULL)
+    cai_skills_catalog_cleanup(catalog);
+  return rc;
+}
+
 int cai_client_new_preset_agent(cai_client *client,
                                 const cai_agent_preset *preset,
                                 const cai_agent_preset_config *config,
@@ -1107,45 +1044,20 @@ int cai_client_new_preset_agent(cai_client *client,
                          "agent output pointer is required");
   }
   *out = NULL;
-  if (client == NULL || preset == NULL || preset->name == NULL ||
-      preset->name[0] == '\0' || preset->prompt_version == NULL ||
-      preset->prompt_version[0] == '\0' || preset->default_identity == NULL ||
-      preset->default_identity[0] == '\0' || preset->default_model == NULL ||
-      preset->default_model[0] == '\0' || config == NULL ||
-      config->workspace_directory == NULL ||
-      config->workspace_directory[0] == '\0') {
-    return cai_set_error(
-        error, CAI_ERR_INVALID,
-        "agent preset, client, and workspace directory are required");
-  }
+  if (client == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID, "agent client is required");
   client_impl = CAI_CLIENT_IMPL(client);
-  if (client_impl == NULL) {
+  if (client_impl == NULL)
     return cai_set_error(error, CAI_ERR_INVALID, "client is closed");
-  }
   instructions = NULL;
-  repository_instructions = NULL;
-  skill_catalog_prompt = NULL;
-  skill_catalog = NULL;
-  model = config->model != NULL ? config->model : preset->default_model;
-  tool_capabilities = preset->tool_capabilities;
-  if (config->disable_terminal) {
-    tool_capabilities &= ~CAI_AGENT_PRESET_TOOL_TERMINAL;
-  }
-  if (!cai_model_supports(model, CAI_MODEL_CAP_IMAGE_INPUT)) {
-    tool_capabilities &= ~CAI_AGENT_PRESET_TOOL_VIEW_IMAGE;
-  }
-  rc = cai_smith_load_repository_instructions(
-      &client_impl->allocator, config, client_impl->logger,
-      &repository_instructions, &instruction_status, error);
-  if (rc == CAI_OK &&
-      (tool_capabilities & CAI_AGENT_PRESET_TOOL_SKILLS) != 0UL) {
-    rc = cai_smith_prepare_skills(config->skills,
-                                  config->agent_config_directory, client_impl,
-                                  &skill_catalog, &skill_catalog_prompt, error);
-    if (rc == CAI_OK && !cai_skills_catalog_has_entries(skill_catalog)) {
-      tool_capabilities &= ~CAI_AGENT_PRESET_TOOL_SKILLS;
-    }
-  }
+  rc = cai_smith_prepare_instruction_inputs(
+      &client_impl->allocator,
+      client_impl->logger_disabled ? NULL : client_impl->logger, preset, config,
+      &repository_instructions, &skill_catalog_prompt, &skill_catalog,
+      &instruction_status, &tool_capabilities, error);
+  model = rc == CAI_OK
+              ? (config->model != NULL ? config->model : preset->default_model)
+              : NULL;
   if (rc == CAI_OK) {
     rc = cai_smith_render_instructions(
         &client_impl->allocator, preset, config, tool_capabilities,
@@ -1395,18 +1307,23 @@ int cai_client_new_preset_review_agent(cai_client *client,
       &repository_instructions, &instruction_status, error);
   if (rc == CAI_OK && (preset->review_tool_capabilities &
                        CAI_AGENT_PRESET_TOOL_SKILLS) != 0UL) {
-    rc = cai_smith_prepare_skills(config->skills,
-                                  config->agent_config_directory, client_impl,
-                                  &skill_catalog, &skill_catalog_prompt, error);
+    rc = cai_smith_prepare_skills(
+        config->skills, config->agent_config_directory,
+        client_impl->logger_disabled ? NULL : client_impl->logger,
+        &skill_catalog, &skill_catalog_prompt, error);
   }
   if (rc != CAI_OK) {
     goto review_instructions_failed;
   }
   if (preset->review_developer_instructions != NULL) {
-    rc = cai_preset_render_template(
-        &client_impl->allocator, preset->review_developer_instructions, preset,
-        config, repository_instructions, skill_catalog_prompt, NULL,
-        &instructions, NULL, error);
+    cai_agent_preset review_template = *preset;
+    size_t prefix_length;
+    review_template.developer_instructions =
+        preset->review_developer_instructions;
+    rc = cai_smith_render_instructions(
+        &client_impl->allocator, &review_template, config,
+        preset->review_tool_capabilities, repository_instructions,
+        skill_catalog_prompt, &instructions, &prefix_length, error);
     if (rc != CAI_OK) {
       goto review_instructions_failed;
     }
