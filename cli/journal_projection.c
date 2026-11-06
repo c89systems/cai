@@ -125,10 +125,11 @@ typedef struct span {
   uint64_t position, revision, length;
 } span;
 typedef enum pass { INDEX, EVENTS, METADATA, CHECKPOINT, HISTORY } pass;
-typedef struct projection {
+typedef struct cai_cli_journal_view {
   lc_collection *collection;
   lc_collection_head_res head;
   cai_sink *sink;
+  cai_sink *history_sink;
   cai_error *error;
   lonejson *json;
   lonejson_writer writer;
@@ -154,6 +155,11 @@ typedef struct projection {
   pass pass;
   cai_cli_transcript *transcript;
   int visible;
+  int busy;
+  cai_cli_transcript_fn event_callback;
+  void *event_context;
+  int (*cancelled)(void *context);
+  void *cancel_context;
 } projection;
 static int fail(projection *p, int code, const char *message) {
   if (p->rc == CAI_OK) {
@@ -165,6 +171,12 @@ static int fail(projection *p, int code, const char *message) {
              (unsigned long long)p->position, message);
     p->rc = cai_cli_error(p->error, code, detail);
   }
+  return p->rc;
+}
+static int check_cancelled(projection *p) {
+  if (p->rc == CAI_OK && p->cancelled != NULL &&
+      p->cancelled(p->cancel_context))
+    return fail(p, CAI_ERR_CANCELLED, "journal projection cancelled");
   return p->rc;
 }
 static lonejson_status status(projection *p, lonejson_status rc,
@@ -469,6 +481,11 @@ static lonejson_status copy_string_chunk(void *context,
     if (frame_bytes(p, data, length) != CAI_OK)
       return LONEJSON_STATUS_INVALID_JSON;
     p->remaining -= length;
+    if (p->history_sink != NULL) {
+      if (p->rc == CAI_OK)
+        p->rc = cai_sink_write(p->history_sink, data, length, p->error);
+      return p->rc == CAI_OK ? LONEJSON_STATUS_OK : LONEJSON_STATUS_IO_ERROR;
+    }
     return status(p, p->writer.string_chunk(&p->writer, data, length, error),
                   error);
   }
@@ -625,6 +642,8 @@ static int write_record(lc_sink *sink, const void *bytes, size_t count,
   projection *p = sink->impl;
   const char *at = bytes;
   (void)error;
+  if (check_cancelled(p) != CAI_OK)
+    return 0;
   if (p->pass == EVENTS) {
     p->rc = cai_cli_transcript_feed(p->transcript, bytes, count, p->error);
     return p->rc == CAI_OK;
@@ -634,6 +653,8 @@ static int write_record(lc_sink *sink, const void *bytes, size_t count,
   while (count != 0U && p->rc == CAI_OK) {
     char chunk[4096];
     size_t n = count < sizeof(chunk) ? count : sizeof(chunk);
+    if (check_cancelled(p) != CAI_OK)
+      return 0;
     memcpy(chunk, at, n);
     if (lonejson_curl_write_callback(chunk, 1U, n, &p->parser) != n)
       fail(p, CAI_ERR_PROTOCOL, p->parser.error.message);
@@ -690,6 +711,8 @@ static int read_range(projection *p, pass kind, uint64_t after,
   lc_error detail;
   lc_sink sink;
   int rc;
+  if (check_cancelled(p) != CAI_OK)
+    return p->rc;
   p->pass = kind;
   p->position = after;
   lc_collection_read_opts_init(&options);
@@ -702,6 +725,8 @@ static int read_range(projection *p, pass kind, uint64_t after,
   options.through = through;
   options.on_metadata = boundary;
   options.metadata_context = p;
+  options.cancelled = p->cancelled;
+  options.cancel_context = p->cancel_context;
   sink.write = write_record;
   sink.impl = p;
   rc = p->collection->read(p->collection, &options, &sink, &result, &detail);
@@ -713,6 +738,7 @@ static int read_range(projection *p, pass kind, uint64_t after,
     fail(p, CAI_ERR_PROTOCOL, "incomplete journal projection range");
   if (p->rc == CAI_OK && kind == EVENTS)
     p->rc = cai_cli_transcript_finish(p->transcript, p->error);
+  check_cancelled(p);
   lc_collection_read_res_cleanup(&result);
   lc_error_cleanup(&detail);
   return p->rc;
@@ -721,6 +747,7 @@ static lonejson_status output(void *context, const void *bytes, size_t count,
                               lonejson_error *error) {
   projection *p = context;
   (void)error;
+  check_cancelled(p);
   if (p->rc == CAI_OK)
     p->rc = cai_sink_write(p->sink, bytes, count, p->error);
   return p->rc == CAI_OK ? LONEJSON_STATUS_OK : LONEJSON_STATUS_IO_ERROR;
@@ -733,6 +760,8 @@ static int event(void *context, const cai_cli_transcript_event *e,
   size_t i;
   lonejson_status rc = LONEJSON_STATUS_OK;
   (void)error;
+  if (check_cancelled(p) != CAI_OK)
+    return p->rc;
   if (e->kind == CAI_CLI_TRANSCRIPT_BEGIN) {
     p->visible = 1;
     for (i = 0U; i < p->metadata.hidden.count; i++)
@@ -741,6 +770,10 @@ static int event(void *context, const cai_cli_transcript_event *e,
         p->visible = 0;
     if (!p->visible)
       return CAI_OK;
+    if (p->event_callback != NULL) {
+      p->rc = p->event_callback(p->event_context, e, p->error);
+      return p->rc;
+    }
 #define W(call)                                                                \
   do {                                                                         \
     if (rc == LONEJSON_STATUS_OK)                                              \
@@ -763,6 +796,9 @@ static int event(void *context, const cai_cli_transcript_event *e,
       W(p->writer.string_begin(&p->writer, &local));
     else
       W(p->writer.null_fn(&p->writer, &local));
+  } else if (p->visible && p->event_callback != NULL) {
+    p->rc = p->event_callback(p->event_context, e, p->error);
+    return p->rc;
   } else if (p->visible && e->kind == CAI_CLI_TRANSCRIPT_DATA)
     W(p->writer.string_chunk(&p->writer, e->data, e->length, &local));
   else if (p->visible) {
@@ -780,56 +816,17 @@ static int event(void *context, const cai_cli_transcript_event *e,
   return p->rc;
 }
 
-static int seed(projection *p) {
+/** Copy final scalar/text metadata, then append its retained array indexes. */
+static int write_metadata(projection *p) {
   lonejson_error local;
   lonejson_status rc = LONEJSON_STATUS_OK;
   size_t i;
   block *blocks = p->metadata.blocks.items;
   hidden *ranges = p->metadata.hidden.items;
   owned *owners = p->metadata.owned.items;
-  W(p->writer.begin_object(&p->writer, &local));
-  KEY("record_type");
-  W(p->writer.string(&p->writer, "commit", 6U, &local));
-  KEY("commit_created_at_ns");
-  W(p->writer.u64(&p->writer, p->created, &local));
-  KEY("applied_event_sequence");
-  W(p->writer.u64(&p->writer, p->applied, &local));
-  KEY("state");
-  W(p->writer.begin_object(&p->writer, &local));
-  KEY("revision");
-  W(p->writer.u64(&p->writer, 1U, &local));
-  KEY("base_bytes");
-  W(p->writer.u64(&p->writer, 0U, &local));
-  KEY("end_bytes");
-  W(p->writer.u64(&p->writer, p->bytes, &local));
-  KEY("blocks_keep");
-  W(p->writer.u64(&p->writer, 0U, &local));
-  KEY("hidden_keep");
-  W(p->writer.u64(&p->writer, 0U, &local));
-  KEY("owned_keep");
-  W(p->writer.u64(&p->writer, 0U, &local));
-  KEY("accounting");
-  W(p->writer.begin_object(&p->writer, &local));
-  KEY("input_tokens");
-  W(p->writer.i64(&p->writer, p->accounting.input, &local));
-  KEY("cached_tokens");
-  W(p->writer.i64(&p->writer, p->accounting.cached, &local));
-  KEY("output_tokens");
-  W(p->writer.i64(&p->writer, p->accounting.output, &local));
-  KEY("reasoning_tokens");
-  W(p->writer.i64(&p->writer, p->accounting.reasoning, &local));
-  KEY("total_tokens");
-  W(p->writer.i64(&p->writer, p->accounting.total, &local));
-  KEY("usd");
-  W(p->writer.f64(&p->writer, p->accounting.usd, &local));
-  KEY("eur");
-  W(p->writer.f64(&p->writer, p->accounting.eur, &local));
-  W(p->writer.end_object(&p->writer, &local));
+  lonejson_error_init(&local);
   /* Metadata and accounting are emitted from the final edit, not an agent's
    * freshly recomputed usage, instructions or goal clock. */
-  KEY("metadata");
-  if (status(p, rc, &local) != LONEJSON_STATUS_OK)
-    return p->rc;
   p->copied = 0;
   if (read_range(p, METADATA, p->last_commit - 1U, p->last_commit) != CAI_OK)
     return p->rc;
@@ -876,20 +873,21 @@ static int seed(projection *p) {
   }
   W(p->writer.end_array(&p->writer, &local));
   W(p->writer.end_object(&p->writer, &local));
-  if (p->checkpoint != 0U) {
-    KEY("input_checkpoint");
-    if (status(p, rc, &local) != LONEJSON_STATUS_OK)
-      return p->rc;
-    p->copied = 0;
-    if (read_range(p, CHECKPOINT, p->checkpoint - 1U, p->checkpoint) != CAI_OK)
-      return p->rc;
-    if (p->copied != 1)
-      return fail(p, CAI_ERR_PROTOCOL, "missing input checkpoint");
-  }
-  KEY("history_append");
-  W(p->writer.string_begin(&p->writer, &local));
-  if (status(p, rc, &local) != LONEJSON_STATUS_OK)
-    return p->rc;
+  status(p, rc, &local);
+  return p->rc;
+}
+
+/** One forward read over selected history spans. All passes share the same
+ * head precondition; framing and retained boundary checks apply to raw and
+ * JSONL consumers alike. */
+static int write_history(projection *p) {
+  size_t i;
+  block *blocks = p->metadata.blocks.items;
+  p->next_span = 0U;
+  p->remaining = p->current_revision = 0U;
+  p->frame_length = p->frame_remaining = p->frame_count = 0U;
+  p->frame_digits = 0U;
+  p->frame_phase = p->frame_started = 0;
   if (p->count != 0U && read_range(p, HISTORY, p->spans[0].position - 1U,
                                    p->spans[p->count - 1U].position) != CAI_OK)
     return p->rc;
@@ -904,6 +902,70 @@ static int seed(projection *p) {
         blocks[i].kind < CAI_AGENT_HISTORY_TURN ||
         blocks[i].kind > CAI_AGENT_HISTORY_COMPACTION)
       return fail(p, CAI_ERR_PROTOCOL, "invalid retained history boundary");
+  return p->rc;
+}
+
+static int seed(projection *p) {
+  lonejson_error local;
+  lonejson_status rc = LONEJSON_STATUS_OK;
+  W(p->writer.begin_object(&p->writer, &local));
+  KEY("record_type");
+  W(p->writer.string(&p->writer, "commit", 6U, &local));
+  KEY("commit_created_at_ns");
+  W(p->writer.u64(&p->writer, p->created, &local));
+  KEY("applied_event_sequence");
+  W(p->writer.u64(&p->writer, p->applied, &local));
+  KEY("state");
+  W(p->writer.begin_object(&p->writer, &local));
+  KEY("revision");
+  W(p->writer.u64(&p->writer, 1U, &local));
+  KEY("base_bytes");
+  W(p->writer.u64(&p->writer, 0U, &local));
+  KEY("end_bytes");
+  W(p->writer.u64(&p->writer, p->bytes, &local));
+  KEY("blocks_keep");
+  W(p->writer.u64(&p->writer, 0U, &local));
+  KEY("hidden_keep");
+  W(p->writer.u64(&p->writer, 0U, &local));
+  KEY("owned_keep");
+  W(p->writer.u64(&p->writer, 0U, &local));
+  KEY("accounting");
+  W(p->writer.begin_object(&p->writer, &local));
+  KEY("input_tokens");
+  W(p->writer.i64(&p->writer, p->accounting.input, &local));
+  KEY("cached_tokens");
+  W(p->writer.i64(&p->writer, p->accounting.cached, &local));
+  KEY("output_tokens");
+  W(p->writer.i64(&p->writer, p->accounting.output, &local));
+  KEY("reasoning_tokens");
+  W(p->writer.i64(&p->writer, p->accounting.reasoning, &local));
+  KEY("total_tokens");
+  W(p->writer.i64(&p->writer, p->accounting.total, &local));
+  KEY("usd");
+  W(p->writer.f64(&p->writer, p->accounting.usd, &local));
+  KEY("eur");
+  W(p->writer.f64(&p->writer, p->accounting.eur, &local));
+  W(p->writer.end_object(&p->writer, &local));
+  KEY("metadata");
+  if (status(p, rc, &local) != LONEJSON_STATUS_OK ||
+      write_metadata(p) != CAI_OK)
+    return p->rc;
+  if (p->checkpoint != 0U) {
+    KEY("input_checkpoint");
+    if (status(p, rc, &local) != LONEJSON_STATUS_OK)
+      return p->rc;
+    p->copied = 0;
+    if (read_range(p, CHECKPOINT, p->checkpoint - 1U, p->checkpoint) != CAI_OK)
+      return p->rc;
+    if (p->copied != 1)
+      return fail(p, CAI_ERR_PROTOCOL, "missing input checkpoint");
+  }
+  KEY("history_append");
+  W(p->writer.string_begin(&p->writer, &local));
+  if (status(p, rc, &local) != LONEJSON_STATUS_OK)
+    return p->rc;
+  if (write_history(p) != CAI_OK)
+    return p->rc;
   W(p->writer.string_end(&p->writer, &local));
   W(p->writer.end_object(&p->writer, &local));
   W(p->writer.end_object(&p->writer, &local));
@@ -914,22 +976,32 @@ static int seed(projection *p) {
 }
 #undef W
 #undef KEY
-int cai_cli_journal_project(lc_collection *collection, cai_sink *sink,
-                            cai_error *error) {
+int cai_cli_journal_view_open(lc_collection *collection,
+                              const cai_cli_journal_options *options,
+                              cai_cli_journal_view **out, cai_error *error) {
   projection *p;
   lonejson_error local;
   lc_error detail;
   lonejson_config config = lonejson_default_config();
-  int rc;
-  if (collection == NULL || sink == NULL)
+  if (out == NULL)
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "journal collection and destination required");
+                         "journal view output required");
+  *out = NULL;
+  if (collection == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID, "journal collection required");
+  if (options != NULL && options->cancelled != NULL &&
+      options->cancelled(options->cancel_context))
+    return cai_cli_error(error, CAI_ERR_CANCELLED,
+                         "journal projection cancelled");
   p = calloc(1U, sizeof(*p));
   if (p == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "allocate journal projection");
   p->collection = collection;
-  p->sink = sink;
   p->error = error;
+  if (options != NULL) {
+    p->cancelled = options->cancelled;
+    p->cancel_context = options->cancel_context;
+  }
   config.clear_destination_by_default = 0;
   config.reject_duplicate_keys_by_default = 1;
   config.json_value_max_total_bytes = config.json_value_max_string_bytes = 0U;
@@ -992,16 +1064,18 @@ int cai_cli_journal_project(lc_collection *collection, cai_sink *sink,
           owners[i].sequence <= 0)
         fail(p, CAI_ERR_PROTOCOL, "invalid retained event ownership");
   }
-  if (p->rc == CAI_OK)
-    status(p, lonejson_writer_init_sink(p->json, &p->writer, output, p, &local),
-           &local);
-  if (p->rc == CAI_OK)
-    p->rc = cai_cli_transcript_open(event, p, &p->transcript, error);
-  if (p->rc == CAI_OK)
-    read_range(p, EVENTS, 0U, p->head.upper_position);
-  if (p->rc == CAI_OK)
-    seed(p);
-  rc = p->rc;
+  if (p->rc != CAI_OK) {
+    int rc = p->rc;
+    cai_cli_journal_view_close(p);
+    return rc;
+  }
+  *out = p;
+  return CAI_OK;
+}
+
+void cai_cli_journal_view_close(cai_cli_journal_view *p) {
+  if (p == NULL)
+    return;
   cai_cli_transcript_close(p->transcript);
   clear_record(p);
   lonejson_curl_parse_cleanup(&p->frame_parser);
@@ -1014,5 +1088,120 @@ int cai_cli_journal_project(lc_collection *collection, cai_sink *sink,
   lonejson_free(p->json);
   free(p->spans);
   free(p);
+}
+
+static int view_begin(projection *p, cai_error *error) {
+  if (p == NULL || p->busy)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "journal view is absent or already being read");
+  if (p->rc != CAI_OK)
+    return cai_cli_error(error, p->rc, "journal view failed previously");
+  p->error = error;
+  if (check_cancelled(p) != CAI_OK)
+    return p->rc;
+  p->busy = 1;
+  return CAI_OK;
+}
+static int view_finish(projection *p) {
+  cai_cli_transcript_close(p->transcript);
+  p->transcript = NULL;
+  lonejson_writer_cleanup(&p->writer);
+  clear_record(p);
+  lonejson_curl_parse_cleanup(&p->frame_parser);
+  lonejson_cleanup(&copy_map, &p->frame);
+  memset(&p->frame_parser, 0, sizeof(p->frame_parser));
+  memset(&p->frame, 0, sizeof(p->frame));
+  p->event_callback = NULL;
+  p->event_context = NULL;
+  p->history_sink = p->sink = NULL;
+  p->busy = 0;
+  return p->rc;
+}
+static int view_writer(projection *p, cai_sink *sink) {
+  lonejson_error error;
+  p->sink = sink;
+  lonejson_error_init(&error);
+  status(p, lonejson_writer_init_sink(p->json, &p->writer, output, p, &error),
+         &error);
+  return p->rc;
+}
+
+int cai_cli_journal_view_jsonl(cai_cli_journal_view *p, cai_sink *sink,
+                               cai_error *error) {
+  int rc;
+  if (sink == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "journal destination required");
+  rc = view_begin(p, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (view_writer(p, sink) == CAI_OK)
+    p->rc = cai_cli_transcript_open(event, p, &p->transcript, error);
+  if (p->rc == CAI_OK)
+    read_range(p, EVENTS, 0U, p->head.upper_position);
+  if (p->rc == CAI_OK)
+    seed(p);
+  return view_finish(p);
+}
+
+int cai_cli_journal_view_metadata(cai_cli_journal_view *p, cai_sink *sink,
+                                  cai_error *error) {
+  lonejson_error local;
+  int rc;
+  lonejson_error_init(&local);
+  if (sink == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "metadata destination required");
+  rc = view_begin(p, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (view_writer(p, sink) == CAI_OK && write_metadata(p) == CAI_OK)
+    status(p, p->writer.finish(&p->writer, &local), &local);
+  return view_finish(p);
+}
+
+int cai_cli_journal_view_history(void *context, cai_sink *sink,
+                                 cai_error *error) {
+  projection *p = context;
+  int rc;
+  if (sink == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "history destination required");
+  rc = view_begin(p, error);
+  if (rc != CAI_OK)
+    return rc;
+  p->history_sink = sink;
+  write_history(p);
+  return view_finish(p);
+}
+
+int cai_cli_journal_view_events(cai_cli_journal_view *p,
+                                cai_cli_transcript_fn callback, void *context,
+                                cai_error *error) {
+  int rc;
+  if (callback == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID, "event consumer required");
+  rc = view_begin(p, error);
+  if (rc != CAI_OK)
+    return rc;
+  p->event_callback = callback;
+  p->event_context = context;
+  p->rc = cai_cli_transcript_open(event, p, &p->transcript, error);
+  if (p->rc == CAI_OK)
+    read_range(p, EVENTS, 0U, p->head.upper_position);
+  return view_finish(p);
+}
+
+int cai_cli_journal_project(lc_collection *collection, cai_sink *sink,
+                            cai_error *error) {
+  cai_cli_journal_view *view = NULL;
+  int rc;
+  if (sink == NULL)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "journal destination required");
+  rc = cai_cli_journal_view_open(collection, NULL, &view, error);
+  if (rc == CAI_OK)
+    rc = cai_cli_journal_view_jsonl(view, sink, error);
+  cai_cli_journal_view_close(view);
   return rc;
 }

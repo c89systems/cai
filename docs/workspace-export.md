@@ -240,7 +240,27 @@ Both this check and the journal projector use the same allocation guard and run
 on default worker stacks. Existing runtime Markdown checks cover the thin live
 adapter, header fields and file publication.
 
-The application's native retained-view adapter and execution-history projection
-in item 3 are still required. Consequently `cli/session_commands.c` still opens
-its offline runtime for Markdown, and the long-export owner-dispatch requirement
-above remains incomplete. The core formatter alone does not complete that cutover.
+The application's header/instruction preparation, native-view integration and
+execution-history rendering in item 3 are still required. Consequently
+`cli/session_commands.c` still opens its offline runtime for Markdown, and the
+long-export owner-dispatch requirement above remains incomplete. The core
+formatter alone does not complete that cutover.
+
+`cai_cli_journal_view` now owns the native retained selection for one borrowed
+collection receiver and captured head. It exposes retained JSONL, final metadata,
+decoded framed history and visible event producers. The JSONL entry point uses
+this view. Successful calls can be composed without rescanning the selection or
+opening another receiver; read or consumer failure makes the view terminal.
+All range reads retain the captured head precondition. Cancellation options are
+copied at open, forwarded to the SDK, and checked before/during payload parsing
+and output, including the initial index scan. No read callback reenters storage.
+
+The journal check now composes the view's history producer with the core
+handover formatter, checks repeated JSONL/metadata/history/event operations,
+trim visibility and original timestamps, and rejects nested reads. A generated
+case streams 8 MiB metadata and history values through repeated projections
+under the existing allocation guards, with exactly one head capture and a
+constant number of reads. Cancellation stops a generated index/read after
+8 KiB rather than consuming the whole value. This private view is the adapter
+boundary; the CLI still needs header/instruction preparation and streamed
+execution-record rendering before removing its offline runtime helper.
