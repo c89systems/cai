@@ -37,6 +37,7 @@ cai_pkgconfig_prefix_from_libdir("${CMAKE_INSTALL_LIBDIR}"
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(CAI_BUILD_STATIC "Build the static cai library." ON)
+option(CAI_BUILD_BENCHMARKS "Build opt-in codec/socket/presentation measurements." OFF)
 option(CAI_BUILD_SHARED "Build the shared cai library." ON)
 option(CAI_BUILD_TESTS "Build cai unit tests." ON)
 option(CAI_BUILD_INTEGRATION_TESTS
@@ -1775,6 +1776,7 @@ if(CAI_INSTALL)
 endif()
 
 include(CaiHostFixtures)
+include(CaiBenchmarks)
 # Register after the full target graph, including optional fuzzers and helpers.
 include(CaiRuntimeTests)
 include(CaiTestEnvironment)

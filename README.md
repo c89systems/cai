@@ -15,6 +15,8 @@ points for existing event loops, HTTP servers, loggers, and dependency stacks.
 
 ## Features
 
+For opt-in codec, Unix-socket and presentation performance measurements, see [the benchmark contract and commands](docs/benchmarks.md).
+
 - OpenAI Responses API client with response creation, streaming, input-token
   counting, hosted-tool passthrough, raw JSON request controls, structured text
   formats, reasoning controls, metadata, truncation, service tier, prompt
