@@ -2,7 +2,7 @@
 
 This is the single active planning document for cai. It records the current
 first-release baseline, explicit boundaries, and future work. Stable usage and
-build documentation lives in [README.md](README.md).
+build documentation lives in [the documentation index](docs/README.md).
 
 ## Current Prerelease Baseline
 
@@ -292,12 +292,12 @@ conversation text, activity and goal metadata, without executing tools or
 embedding binary attachments. It is not a resumable session format.
 The optional file helper creates a new owner-only file without overwriting.
 
-The application implements `/export [ID]` and `--export ID`, writing resumable
+The application implements `/export [BASENAME]` and `--export ID`, writing resumable
 JSONL plus this Markdown projection under the application data directory's
 `exports/ID/`. `--import FILE` imports JSONL into a new conversation.
 Exports are explicit user/host actions, not a model tool. Desktop clipboard
-integration remains host-owned. See [the handover contract](docs/agent-smith-spec.md#115-user-initiated-transcript-export)
-and [CLI storage/export usage](README.md#cai-terminal-agent).
+integration remains host-owned. See [the handover contract](docs/workspace-export.md)
+and [conversation/export usage](docs/conversations.md#export-and-import).
 
 ## Parked: Realtime WebSocket
 

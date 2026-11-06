@@ -178,7 +178,7 @@ reopens a persisted claim and a journal cut immediately after local delivery;
 both must publish the original identity. `cai_app_workspace_server` checks the
 accepted OFFER's exact identity at the typed client's completed-turn boundary,
 including producer reconnection and approval after an edit lease is released.
-These prove correlation, not the subsequent batch adapter cutover.
+These isolate correlation; the batch adapter checks additionally cover end-to-end owner/attachment settlement.
 
 ## Combined goal and initial prompt
 
@@ -277,5 +277,4 @@ is written as it arrives on the range pass; a failing source or sink can leave
 partial output, as with other streaming APIs. There is no whole-message RAM
 buffer, response spool, temporary file, hidden full-history scan or new wire
 format. The caller owns subscription lifetime and stops it once projection is
-complete. This projection is a prerequisite of the batch cutover; it does not
-itself choose startup, owner creation, takeover or goal continuation policy.
+complete. The batch adapter uses this projection; startup, owner creation, takeover and goal continuation policy remain caller responsibilities.

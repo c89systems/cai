@@ -12,10 +12,7 @@ Utilities open only the stores and resources needed for their operation. They
 never run an agent loop or create a workspace server, Softline editor or libmdf
 renderer. JSONL export projects the saved journal directly without creating a
 client or runtime, restoring model context or consuming pending input. Active
-and offline exports use the same implementation. Markdown export still uses a
-read-only runtime with no-op write callbacks and execution-only replay. Its
-[runtime-free cutover](workspace-export.md) preserves the current handover
-contract; the recorded-only proposal remains an optional content change.
+and offline exports use the same implementation. Markdown export also reads native journal ranges through the shared handover formatter. Neither format restores a runtime or model context; see [the export contract](workspace-export.md).
 Session selection/export/deletion share the existing storage helpers
 used by application commands; there is no second persistence implementation.
 Import/export retain their existing source/sink behavior and paths. Utilities

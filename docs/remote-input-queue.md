@@ -7,8 +7,7 @@ here. Each conversation journals its own queue. The terminal-free application
 owner exposes in-process input connect/resume, owned observations and status
 wakeups. Workspace sockets now carry input requests and queue observations
 using the [wire payload contract](workspace-wire-queue.md). Command/status
-presentation and the terminal client cutover remain future work in the
-[attachable frontend architecture](frontend-architecture.md). Illustrative
+presentation and the terminal attachment use the implemented [workspace server](workspace-server.md) composition. Illustrative
 C shapes below explain responsibilities; installed headers define exact APIs.
 The typed `cai/app_client.h` socket client exposes borrowed incremental queue
 observations without opening storage or materializing a baseline. Its explicit

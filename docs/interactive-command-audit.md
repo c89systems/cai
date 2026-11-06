@@ -35,7 +35,9 @@ them. Idle commands use managed admission, retaining same-burst Enter/Alt-E
 editing before dispatch. There is no second UI queue, synthetic key submission,
 global delivery-mode workaround or queue removal/reinsertion.
 
-## Complete command inventory
+## Backend command inventory
+
+Attachment operations such as workspace selection and takeover have their own connection lifecycle; see [terminal attachment](terminal-attachment.md).
 
 | Command | Boundary | Reason |
 | --- | --- | --- |
@@ -52,10 +54,17 @@ global delivery-mode workaround or queue removal/reinsertion.
 | `/reasoning EFFORT` | Request | Effort for subsequent inference. |
 | `/tier list` | Feed | Current/pending routing and choices. |
 | `/tier`, `/tier NAME`, `/fast` | Request | Cycle, select or toggle routing within the current turn. |
+| `/foreground`, `/fg`, `/background`, `/bg` | Request | Change policy for subsequent command waits. |
+| `/yield_time_ms` | Feed | Inspect the host command-wait interval. |
+| `/yield_time_ms MS` | Request | Change subsequent waits; zero selects foreground mode. |
+| `/reasoning-summary` | Feed | Inspect the current reasoning-summary setting. |
+| `/reasoning-summary MODE` | Request | Select summary policy for subsequent requests. |
 | `/goal`, `/goal status`, `/goal help` | Feed | Inspect the goal or its controls. |
 | `/goal new TEXT`, `/goal pause`, `/goal resume`, `/goal clear` | Request | Explicit parent goal controls, never model steering text. |
 | `/theme` | Feed | Inspect themes. |
 | `/theme NAME[:NAME]` | Request | Replace the renderer after its current response, retaining tool display state. |
+| `/theme-offset`, `/subagent-theme-offset`, `/review-theme-offset` | Feed | Inspect the corresponding rendering offset. |
+| `/theme-offset N`, `/subagent-theme-offset N`, `/review-theme-offset N` | Request | Change the offset at a renderer boundary. |
 | `/output [compact\|full]` | Feed | Set the display preference for future tool calls. |
 | `/history [COUNT]` | Feed | Inspect/configure prompt recall. |
 | `/shell-context [on\|off]` | Feed | Set sharing for future shell calls. |
@@ -70,7 +79,7 @@ global delivery-mode workaround or queue removal/reinsertion.
 | `/todo layout [board\|list]` | Feed | Inspect/change local layout and display the board. |
 | `/todo use NAME`, `/todo new NAME` | Turn | Commit the runtime's selected board. |
 | `/retention` | Feed | Inspect conversation retention. |
-| `/retention DAYS\|off` | Turn | Update collection/session leases without racing runtime commits. |
+| `/retention DAYS\|off` | Turn | Change conversation collection inactivity retention without racing commits. |
 | `/trim`, `/trim list [LIMIT]`, `/trim COUNT` | Turn | History APIs require a stable runtime. |
 | `/export [BASENAME]` | Turn | Export consistent retained history. |
 | `/resume` | Feed | List conversations. |
@@ -81,7 +90,7 @@ global delivery-mode workaround or queue removal/reinsertion.
 | `/compact` | Turn | Start only when `can_compact` permits it. |
 | `/shell`, `/shellshare`, `!sh`, `!sh+` | Turn | Transfer terminal ownership; only shared forms record output. |
 | `!COMMAND` | Turn | Execute a user shell command. |
-| `/quit`, `/exit` | Feed | Shut down without waiting for an active turn to complete. |
+| `/quit`, `/exit` | Feed | Detach the frontend; owner shutdown follows its persistence/last-client policy. |
 | Unknown slash commands | Feed | Reject locally; never forward as model steering. |
 
 Horizontal whitespace separating a slash command and its arguments, and trailing

@@ -173,12 +173,7 @@ Each source reads already available event/state data; it does not wait for futur
 Liblockdc 0.28.0 also provides bounded push and staged-pull writers without whole-entry staging, for inputs that may wait externally.
 Direct pull remains appropriate for CAI's finite sources; no full-message buffer or spool is introduced.
 The configured compression must match the root manifest.
-Old CAI snapshot-backed journals remain unsupported. Existing append-only
-collection roots use liblockdc's native control-head upgrade, described in
-[the 0.25.0 upgrade notes](liblockdc-0.25.0-upgrade.md).
-The [0.28.0 SDK](liblockdc-0.28.0-upgrade.md) retains existing contiguous records and introduces chunk/index records for large push/staged-pull appends.
-Upgrade every client sharing a root before using those append forms; older libraries cannot read the new records.
-The atomic edits and recovery heads introduced in 0.26.0 retain their existing older-client restrictions.
+Old CAI snapshot-backed journals remain unsupported. Use a fresh root for those development formats. The selected liblockdc SDK retains existing contiguous entries and introduces chunk/index records for large push/staged-pull appends. Upgrade every client sharing a root before using those append forms; older SDKs cannot read the new records. Atomic edits and recovery heads also have older-client restrictions. These native store changes are independent of CAI's portable JSONL format.
 
 Writable restore acquires a native SDK collection lease before replaying model
 context or choosing event IDs. All commits/events use that owned receiver until

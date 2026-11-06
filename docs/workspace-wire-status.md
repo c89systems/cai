@@ -3,8 +3,7 @@
 The owner and typed socket client implement this projection alongside queue
 and transcript delivery. `cai_app_client_get_view` borrows the last completed
 `cai_app_view`, and `CAI_APP_CLIENT_STATUS` reports accepted replacements.
-The terminal adapter consumes this view directly; Lua socket-client bindings
-remain part of the frontend cutover. Finite binary64 preserves currency/quota
+The terminal adapter and Lua socket-client bindings consume this view directly. Finite binary64 preserves currency/quota
 values without conversion.
 
 Status is an ephemeral presentation view of the existing owner, outside model

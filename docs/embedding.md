@@ -1,5 +1,20 @@
 # Embedding the CAI application
 
+## Contents
+
+- [Packages and workspace approval](#packages-and-workspace-approval)
+- [Synchronous receiver](#synchronous-application-receiver)
+- [Terminal-free owner](#terminal-free-owner)
+- [Configuration and identity](#configuration-and-identity)
+- [Native custom tools](#native-custom-tools)
+- [Observations and controls](#observing-and-controlling-a-run)
+- [Lua 5.5](#lua-55)
+- [Messaging](#conversation-messaging)
+- [Darwin assessment](#darwin-port-assessment)
+- [Kanban and HTTP routes](#shared-kanban-and-http-routes)
+
+## Packages and workspace approval
+
 `libcai_app` contains the complete CAI terminal application: softline/libmdf,
 configuration, encrypted sessions/auth, tools, MCP, slash commands, review and
 non-interactive work. Core `libcai` remains independently usable without the
@@ -53,6 +68,8 @@ by child runtimes; the request to record a fresh approval is not. The lower-leve
 preset constructor instead uses `workspace_instructions_root`. NULL roots and
 zero-initialized runtime configuration load global instructions only.
 Lua exposes the same runtime and preset fields in their constructor tables.
+
+## Synchronous application receiver
 
 ```c
 #include <cai/app.h>
@@ -231,9 +248,8 @@ its known fields, and split large/unknown-length values into chunk records.
 `<cai/workspace.h>` derives a canonical workspace identity and private endpoint,
 owns its native listener lock, validates peer credentials and reclaims stale
 sockets after a crash. Discovery never opens conversation storage. These are
-transport primitives; the attach/autostart CLI remains pending. Foreground
-`cai -x` uses the native controller described below. The lifecycle,
-roles and persistence cutover is specified in
+transport primitives used by the implemented attach/autostart CLI. Foreground
+`cai -x` uses the native controller described below. Lifecycle, roles and persistence are described in
 [workspace-server.md](workspace-server.md).
 
 `<cai/workspace_server.h>` and `<cai/workspace_client.h>` bind those primitives
@@ -243,6 +259,8 @@ interests, and streams provisional payloads without gathering them. Requests
 retain their original authority generation. Explicit detach drains pending
 output without waiting for server shutdown; close releases immediately. The
 executable must coordinate autostart, reconnect reconciliation and shutdown.
+
+## Terminal-free owner
 
 `cai_app_start(app, context, argc, argv, error)` starts a terminal-free owner
 without blocking the host on session restoration. The optional
@@ -263,8 +281,7 @@ reported through final status/error. Native event/replay callbacks continue to
 receive the borrowed semantic stream. The typed control API accepts prompts,
 steering, goal operations, cancellation and STOP. Slash/! commands require the
 frontend presentation layer and are rejected on this terminal-free surface;
-restored frontend actions stay queued. Socket command presentation
-and the Softline client cutover are still pending.
+restored frontend actions stay queued. Socket command presentation uses the shared semantic command channel, and the Softline attachment consumes its transcript/status observations.
 
 `cai_app_start_server` starts this same owner with a canonical workspace
 listener in the effective `paths.runtime_dir`. An explicit
@@ -317,9 +334,7 @@ structured `workspace_ready` / `workspace_stopped` records. A disconnected
 frontend leaves a persistent server running. Native embedding uses
 `cai_app_start_server` and the host's own lifecycle/logger, rather than passing
 the executable-only `--headless` mode to the synchronous terminal `run`.
-The current application SDK still links Softline/libmdf; separating optional
-frontend packages is part of the remaining cutover. Core libcai remains
-independent of those dependencies.
+The combined application SDK links Softline/libmdf. The independent `libcai_app_server` and `libcai_app_client` packages do not require either frontend dependency; core libcai remains independent too.
 
 `<cai/app_client.h>` is the typed socket-side queue, transcript and status
 interface in libcai_app.
@@ -375,8 +390,7 @@ An idle controller stays open until STOP. After observing shutdown, call
 again. Join itself does not request STOP. STOP also sets a cancellation signal
 checked at journal replay boundaries. Individual dependency calls without
 cancellation callbacks remain nonpreemptible through this API, including
-configuration-file loading and initial store opening. Utility/review/batch CLI
-modes use the synchronous receiver.
+configuration-file loading and initial store opening. Utility modes use the synchronous maintenance dispatcher; review and batch invocations use the owner/socket composition.
 
 Lua `runtime:pending_input()` returns an owner-thread attachment with `state()`,
 one-based `entry(index)`, `request(table)`, `set_ready(index, boolean)`,
@@ -427,6 +441,8 @@ compression enabled by default. `[storage] disable_compression`, the matching
 environment variable and flag, or an application `settings` entry can disable
 it; the mode must match the existing root. See [session journals](journal.md)
 for recovery, portable exports and the dependency-free C/Lua core APIs.
+
+## Configuration and identity
 
 `program_name` is the application identity, default `"cai"`. Set it once before
 `open`; the receiver copies it. It must be a lowercase identifier, at most 32
@@ -540,7 +556,7 @@ the same `pouch_key_file`. The independent `cai_app_kanban_open` (Lua `applicati
 addition to its existing state/endpoint fields, so route handlers can open the
 same board as a named application.
 
-### Native custom tools
+## Native custom tools
 
 For hot loading, use the [dynamic tool catalog](plugins.md), available in
 libcai and through `cai_app_config.plugins`. File packages and optional embedded
@@ -636,7 +652,7 @@ Aliases select paired softline/libmdf themes; `riced:iosvkem` selects them
 independently. The same setting accepts `--theme` / `-t`, `CAI_THEME` (rebased
 to the host's environment prefix), and `[ui] theme` in INI. `--list-themes`
 lists both libraries' themes before configuration, authentication or storage
-startup. See the [pairing table](../README.md) for aliases. `plain:ascii`
+startup. See the [pairing table](appearance.md#themes) for aliases. `plain:ascii`
 disables Markdown ANSI styling while preserving UTF-8. `NO_COLOR` overrides
 the selection with the plain prompt and escape-free Markdown. Themes apply
 to the Markdown introduction, conversation feed and tool headings; raw banners stay verbatim
@@ -738,14 +754,7 @@ goals and explicit review/fix loops use a default-stack socket adapter instead
 of a terminal worker. They preserve trusted host follow-up controls, callback
 affinity and the original failure/cancellation/STOP outcomes. Final output is a
 streamed journal-range projection through libmdf without an intermediate spool.
-Direct review, combined goal/instruction startup, slash/shell batch instructions
-and maintenance utilities still
-require serialized process-resource use: configured environment
-and locale state are restored after their synchronous invocation, including
-failures. Maintenance has a separate dispatcher and cannot run an agent loop or
-open a workspace owner/editor; its offline export helper still restores saved
-context read-only. See [application utilities](application-utilities.md) for the
-remaining utility/browser environment boundary. Owner and batch loggers read
+Direct review, combined goal/instruction startup and slash/shell batch instructions use the owner/socket composition. Maintenance has a separate synchronous dispatcher and cannot run an agent loop or open a workspace owner/editor. Both offline export formats project native journal ranges without restoring context. Configuration, logging and browser helpers use captured environment/directory views rather than replacing host process state; see [application utilities](application-utilities.md). Owner and batch loggers read
 captured `LOG_` settings without installing an environment; relative file sinks
 use the selected workspace, and retained loggers retain that immutable view.
 One run per receiver may be
@@ -756,7 +765,7 @@ the configuration file's directory; only subprocesses enter their workdir.
 The receiver may run again after returning. Close it only while idle. Worker
 threads finish before return; they never call the Lua facade.
 
-### Observing and controlling a run
+## Observing and controlling a run
 
 `event_callback` and `replay_callback` in `cai_app_config` observe the same
 runtime and journal events as the application, alongside its normal rendering

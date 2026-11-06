@@ -977,17 +977,9 @@ if(CAI_BUILD_CLI)
     install(FILES "${CAI_LIBYAML_LICENSE}"
       DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/third_party/libyaml"
       COMPONENT cai-cli EXCLUDE_FROM_ALL)
-    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/docs/model-metadata.md"
-      "${CMAKE_CURRENT_SOURCE_DIR}/docs/chrome.md"
-      "${CMAKE_CURRENT_SOURCE_DIR}/docs/embedding.md"
-      "${CMAKE_CURRENT_SOURCE_DIR}/docs/workspace-server.md"
-      "${CMAKE_CURRENT_SOURCE_DIR}/docs/workspace-wire-queue.md"
-      "${CMAKE_CURRENT_SOURCE_DIR}/docs/plugins.md"
-      "${CMAKE_CURRENT_SOURCE_DIR}/docs/agent-messaging.md"
-      "${CMAKE_CURRENT_SOURCE_DIR}/docs/kanban.md"
-      "${CMAKE_CURRENT_SOURCE_DIR}/docs/journal.md"
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/docs/"
       DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/docs"
-      COMPONENT cai-cli EXCLUDE_FROM_ALL)
+      COMPONENT cai-cli EXCLUDE_FROM_ALL FILES_MATCHING PATTERN "*.md")
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/app.c"
       "${CMAKE_CURRENT_SOURCE_DIR}/examples/app.lua"
       DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/examples"
@@ -1714,17 +1706,9 @@ if(CAI_INSTALL)
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
     "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai")
-  install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/docs/model-metadata.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/docs/chrome.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/docs/embedding.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/docs/workspace-server.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/docs/workspace-wire-queue.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/docs/plugins.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/docs/agent-messaging.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/docs/kanban.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/docs/journal.md"
-    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/docs")
+  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/docs/"
+    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/docs"
+    FILES_MATCHING PATTERN "*.md")
   install(FILES "${CMAKE_CURRENT_BINARY_DIR}/dependencies.json"
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/cai")
   install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/prompts/goal/LICENSE"

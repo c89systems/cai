@@ -59,7 +59,7 @@ commit and verification evidence.
 - **Evidence:** focused native ownership/failure checks plus C and Lua app
   duplicate-open, public export, independent conversation, SIGKILL recovery,
   resumed inference and clean-reopen checks. See
-  [the integration notes](docs/liblockdc-0.25.0-upgrade.md) and the original
+  the integration notes (historical report preserved in Git history) and the original
   [change request](stash/liblockdc-collection-leases-cr.md).
 
 ## BUG-072: Streamed events repeatedly transact on conversation lookup metadata
@@ -453,7 +453,7 @@ commit and verification evidence.
   of those recovery operations. Cleanup now happens on successful release;
   no recovery or durability workaround has been introduced in CAI. Existing
   backlogs still need their first recovery after upgrading. See
-  [upgrade investigation](docs/liblockdc-0.24.0-upgrade.md).
+  upgrade investigation (historical report preserved in Git history).
 
 ## BUG-051: Prompt recall remains in plaintext Softline files
 
@@ -491,7 +491,7 @@ commit and verification evidence.
   static musl public-SDK probe using liblql 0.4.0 and liblockdc 0.23.0 reads
   exactly one matching record from a two-record encrypted collection on a
   default-stack pthread. See
-  [the investigation](docs/liblockdc-lql-musl-stack.md).
+  the investigation (historical report preserved in Git history).
 
 ## BUG-049: Review replay loses child output and obscures conversation text
 
@@ -854,7 +854,7 @@ commit and verification evidence.
 
 - **Status:** fixed.
 - **Cause:** the tool renderer escaped every control byte, including the ESC
-  introducing ordinary Git/ripgrep color sequences, displaying `\x1b[32m`.
+  introducing ordinary Git/ripgrep color sequences, displaying `\x1b32m`.
 - **Resolution:** incrementally filter command terminal controls, preserving
   recognized SGR colors/styles when enabled. Drop cursor operations and control
   strings. Isolate style and split UTF-8/control state per command, resetting
@@ -879,7 +879,7 @@ commit and verification evidence.
 - **Verification:** an isolated copy of the reported store reopened and listed
   sessions without errors. Both existing CAI compaction/recovery checks passed,
   including byte-for-byte exports, credentials, keys, and resumed context.
-- **Upstream report:** [compaction diagnostics](docs/liblockdc-compaction-diagnostics.md)
+- **Upstream report:** compaction diagnostics (historical report preserved in Git history)
   identifies the duplicate warning sites and the misleading `records` field.
   No liblockdc source or original user storage was modified.
 
@@ -1098,7 +1098,7 @@ commit and verification evidence.
   line is `* Edited snake.cize reproduction`, instead of `* Edited snake.c`.
   This needs no libcai, libmdf, provider, tools or concurrent physical write.
   The report and exact reproduction steps are in
-  [the upstream diagnostic](docs/softline-retained-resize-report.md).
+  the upstream diagnostic (historical report preserved in Git history).
 - **Fix (2026-10-19):** softline 0.11.0 supplies
   `sl_output_stream_reconcile()`. CAI calls it on the UI owner thread before
   writing after changed terminal dimensions, including synchronous output after
@@ -1450,7 +1450,7 @@ commit and verification evidence.
   buffer; its first stack write faults in the musl thread's guard page.
   The then-current 0.19.0 static build contained the same allocation. The prior
   index-recovery checks did not exercise this compaction path. See
-  [the upstream report](docs/liblockdc-compaction-stack-overflow.md) for the
+  the upstream report (historical report preserved in Git history) for the
   verified backtrace, instruction/register evidence and required regression
   coverage. The index warning's relationship to this interrupted compaction
   has not been established. No upstream files or user storage were modified.

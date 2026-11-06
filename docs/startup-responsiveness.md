@@ -1,4 +1,6 @@
-# Startup and streaming responsiveness
+# Historical startup and streaming measurements
+
+This report records the pre-server implementation and dependency versions below. It is comparison evidence, not the current architecture or usage guide; see [workspace servers](workspace-server.md) and [current component measurements](performance-cbor-presentation.md).
 
 Measured on 2026-10-29, Linux x86_64, eight logical CPUs. The baseline was
 the existing static musl CAI binary saved before implementation (source

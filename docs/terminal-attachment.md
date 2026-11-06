@@ -193,7 +193,7 @@ always uses `MDF_PAGER_FORMAT_TEXT`, preserving Markdown punctuation literally;
 help always uses `MDF_PAGER_FORMAT_MARKDOWN`. `--no-prefer-native-pager` restores
 external-first selection. Preferences belong to each frontend attachment.
 
-## Remaining cutover work
+## Implementation boundaries
 
 This is a working terminal/socket composition, not a claim of complete feature
 parity. Startup controls use ordered acknowledgements, and supplemental schema
@@ -219,7 +219,7 @@ configuration and semantic command services have no renderer dependency.
 Maintenance uses the separate [utility dispatcher](application-utilities.md); its logging/browser helpers use captured views without installing process state.
 Both export formats read native journal ranges without context reconstruction.
 Interactive exports use a retained worker so owner controls remain available; utility exports remain synchronous.
-See the [completion audit](workspace-verification.md) for requirement-level evidence and explicit dependency limits.
+See [troubleshooting](troubleshooting.md) for current dependency limitations.
 
 Softline 0.16's unconditional trigger stripping also needs a pre-activation
 eligibility API: typed shell words starting with `$` (when skills are loaded)

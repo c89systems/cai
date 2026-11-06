@@ -1,9 +1,6 @@
 # Workspace servers and attachable clients
 
-Implementation specification, 2026-11-04. This supersedes the transport order
-in `frontend-architecture.md`: Unix sockets and CBOR come first; an optional
-HTTP/Web UI adapter comes later. It does not claim that the cutover is already
-implemented. The existing queue/controller foundation remains the baseline.
+This reference describes the implemented workspace server and Unix-socket/CBOR attachment contract. HTTP/Web UI and a user-wide daemon remain future adapters.
 
 Current implementation: core libcai supplies incremental CBOR, bounded records,
 canonical endpoint ownership, registry/probes, attachment roles and reusable
@@ -64,7 +61,7 @@ Terminal tools share the common one-pass formatter; help and completion
 semantics are shared with the synchronous receiver.
 
 See [terminal attachment](terminal-attachment.md) for integration and verification, [workspace process handoff](workspace-process.md) for executable ownership, and [command execution](workspace-commands.md) for backend admission/delegation.
-The confirmed decisions and specification below define this iteration; the [completion audit](workspace-verification.md) records requirement-level evidence and dependency limits.
+The following sections define the ownership, lifecycle and wire contracts. Current dependency limitations are listed in [troubleshooting](troubleshooting.md).
 The owner's former terminal helpers, timers and replay renderer are removed.
 It compiles with SDK/storage dependencies only; a compiled-object check guards against editor/renderer references.
 Its tests cover backend policy/lifetime, while presentation tests use the shared frontend adapters.
@@ -589,46 +586,7 @@ Any explicit terminal bridge uses bounded data and acknowledged size/control
 messages. Do not pass the client's terminal descriptors to runtime ownership
 or run a pager on server stdout.
 
-## Implementation and proof
+## Verification
 
-1. Land and test the reusable incremental CBOR codec and framed transport.
-2. Extract application owner lifecycle and semantic frontend observations.
-   Preserve one policy path; remove UI ownership from server execution.
-3. Bind controller, roles, reconnect-safe queue identities, discovery and
-   executable launch. Add typed C/Lua client/server access.
-4. Move Softline/libmdf behind the client attachment and implement CLI
-   discovery, switching, detach/takeover/shutdown and local utility handling.
-5. Run normal Debug tests and affected focused CLI/application tests. Exercise
-   the rebuilt static x86_64 musl executable. Do not substitute the full release
-   matrix for focused proofs or enlarge worker stacks.
-
-Codec tests use published RFC vectors, every split point and byte-at-a-time
-delivery, integer/length boundaries, UTF-8 boundaries, invalid headers,
-truncation, nesting, malformed indefinite strings/maps and sink failures.
-Prove a large generated value reaches the consumer before its producer ends,
-using bounded memory and a default-size musl worker stack.
-
-Transport/controller tests cover short I/O, disconnect mid-header/body/result,
-oversized input, slow viewers, bounded backlog, takeover races and stale
-generations. Reconnect tests cover acknowledgement loss and demonstrate no
-duplicate input execution. Discovery tests cover simultaneous first launch,
-canonical aliases, unsafe paths, stale/live endpoints, permissions, path-length
-errors, names and configuration conflicts. End-to-end tests demonstrate:
-
-- A persistent server continues active work after detach, and reattach restores
-  transcript/status without reopening the runtime or duplicating inference.
-- A nonpersistent server stops after the last client disconnects, including an
-  abrupt connection loss; earlier detaches leave it running for other clients.
-  Auto-start/first-attach races and abandoned startup have bounded lifetimes.
-- One controller and an observing client receive the same ordered events;
-  unauthorized mutation fails, and explicit takeover changes authority.
-- Workspace/conversation switching preserves each queue and local draft.
-- Steers reach the proper safe boundary, including reviewer/subagent work.
-- Headless mode needs no terminal; plain startup auto-launches quietly;
-  startup failure is reported, not mistaken for a ready server.
-- Cancellation, goal pause/resume, compaction, tool errors, import/export,
-  prompt history, temporary workspace cleanup and orderly shutdown preserve
-  their observable contracts.
-
-Liblockdc's former push-streaming blocker is resolved by the [0.28.0 upgrade](liblockdc-0.28.0-upgrade.md).
-Codec/transport tests alone do not establish end-to-end storage streaming; verify the selected SDK append path and CAI's native readers together.
+Codec, transport, controller, owner and frontend tests exercise fragmented I/O, bounded memory, default worker stacks, malformed data, cancellation, slow clients, crash/reconnect and takeover races. CLI fixtures cover persistent/nonpersistent detach, workspace switching, batch settlement, goals, export and utilities without live inference. See [development](development.md) for selecting the current registered checks.
+Native journal readers and writers use the streaming SDK paths described by [session journals](journal.md). Transport tests alone do not establish storage streaming.

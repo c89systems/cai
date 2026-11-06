@@ -117,4 +117,4 @@ settles original proposals after RESOLVE. It does not own a socket pump or
 storage context. Its opaque item tokens remain stable across a verified runtime
 epoch change while new requests retain the live protocol scope. The
 `cai_input_socket` test exercises real socket/editor handoffs and the failure
-cases; final terminal/process composition is still pending.
+cases, while [terminal attachment](terminal-attachment.md) describes the implemented terminal/process composition.

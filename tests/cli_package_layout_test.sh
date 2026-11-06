@@ -21,6 +21,9 @@ for notice in LICENSE.md LICENSE.BSD-3-Clause AUTHORS README.softline.md provena
   test -f "$stage/share/doc/libcai/third_party/softline/licenses/c-ares/$notice"
 done
 source_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+while IFS= read -r -d '' doc; do
+  cmp "$doc" "$stage/share/doc/libcai/docs/${doc#"$source_root/docs/"}"
+done < <(find "$source_root/docs" -type f -name '*.md' -print0)
 curl_license="$stage/share/doc/libcai/third_party/curl/LICENSE"
 mv "$curl_license" "$curl_license.saved"
 if (

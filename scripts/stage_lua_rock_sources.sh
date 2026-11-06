@@ -56,25 +56,6 @@ stage_dir=$(normalize_stage_dir "$stage_dir")
 files=(
   LICENSE
   README.md
-  docs/model-metadata.md
-  docs/embedding.md
-  docs/workspace-server.md
-  docs/terminal-attachment.md
-  docs/lua-workspace-client.md
-  docs/lua-workspace-owner.md
-  docs/workspace-wire-queue.md
-  docs/workspace-wire-history.md
-  docs/workspace-wire-catalog.md
-  docs/workspace-wire-claims.md
-  docs/agent-messaging.md
-  docs/kanban.md
-  docs/journal.md
-  docs/liblockdc-0.25.0-upgrade.md
-  docs/liblockdc-0.26.0-upgrade.md
-  docs/liblockdc-0.27.0-upgrade.md
-  docs/liblockdc-0.28.0-upgrade.md
-  docs/patch-tool.md
-  docs/plugins.md
   examples/app.lua
   examples/app.c
   cai.rockspec.in
@@ -103,6 +84,12 @@ headers=$(cd "$repo_root" && find include/cai -type f -name '*.h' -print | sort)
 while IFS= read -r header; do
   files+=("$header")
 done <<<"$headers"
+
+documentation=$(cd "$repo_root" && find docs -type f -name '*.md' -print | sort) || die 'failed to enumerate documentation'
+[[ -n "$documentation" ]] || die 'documentation directory is empty'
+while IFS= read -r doc; do
+  files+=("$doc")
+done <<<"$documentation"
 
 rm -rf "$stage_dir"
 mkdir -p "$stage_dir"

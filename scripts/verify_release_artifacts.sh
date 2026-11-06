@@ -1154,6 +1154,9 @@ verify_binary_archive() {
   require_member "$listing" "$root/share/doc/libcai/README.md"
   require_member "$listing" "$root/share/doc/libcai/LICENSE"
   require_member "$listing" "$root/share/doc/libcai/docs/model-metadata.md"
+  require_member "$listing" "$root/share/doc/libcai/docs/README.md"
+  require_member "$listing" "$root/share/doc/libcai/docs/configuration.md"
+  require_member "$listing" "$root/share/doc/libcai/docs/c-sdk.md"
   require_no_member "$listing" "$root/include/lonejson.h"
   require_no_member "$listing" "$root/include/pslog.h"
   require_no_member_glob "$listing" "^$root/lib/lib(lonejson|pslog|curl)\\."
@@ -1178,6 +1181,8 @@ verify_source_archive() {
   require_member "$listing" "$root/CMakeLists.txt"
   require_member "$listing" "$root/README.md"
   require_member "$listing" "$root/docs/model-metadata.md"
+  require_member "$listing" "$root/docs/README.md"
+  require_member "$listing" "$root/docs/terminal.md"
   require_member "$listing" "$root/LICENSE"
   require_member "$listing" "$root/VERSION"
   require_member "$listing" "$root/RELEASE_MANIFEST"
@@ -1194,6 +1199,8 @@ verify_lua_source_archive() {
   require_member "$listing" "$root/LICENSE"
   require_member "$listing" "$root/README.md"
   require_member "$listing" "$root/docs/model-metadata.md"
+  require_member "$listing" "$root/docs/README.md"
+  require_member "$listing" "$root/docs/lua.md"
   require_member "$listing" "$root/VERSION"
   require_member "$listing" "$root/RELEASE_MANIFEST"
   require_member "$listing" "$root/cai.rockspec.in"
@@ -1287,6 +1294,8 @@ verify_cli_archive() {
   local doc
   for doc in share/man/man1/cai.1 share/doc/libcai/README.md \
       share/doc/libcai/LICENSE share/doc/libcai/docs/model-metadata.md \
+      share/doc/libcai/docs/README.md share/doc/libcai/docs/terminal.md \
+      share/doc/libcai/docs/configuration.md \
       share/doc/libcai/docs/chrome.md share/doc/libcai/docs/embedding.md \
       share/doc/libcai/examples/app.c share/doc/libcai/examples/app.lua; do
     require_file "$root_dir/$doc"

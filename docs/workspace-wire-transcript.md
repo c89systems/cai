@@ -154,13 +154,13 @@ replay/live watermark without an artificial finish. Reset abandons pending
 renderer documents and leaves the local draft alone. Pending Markdown words
 can span authenticated delta records, so a reset view needs replay from a
 document boundary; the raw transport cursor alone does not capture renderer
-state. The complete frontend's reconnect policy remains part of the cutover.
+state. The frontend applies the reconnect and document-boundary rules described in [terminal attachment](terminal-attachment.md).
 Typed execution/tool
 records use their separate presentation path; encoded JSON is never dumped by
 the raw span consumer.
 
 The terminal uses selected native replay and the shared typed tool/command formatter.
-Application integration is documented in [terminal attachment](terminal-attachment.md), with requirement-level evidence in the [completion audit](workspace-verification.md).
+Application integration is documented in [terminal attachment](terminal-attachment.md), with lifecycle details in the [workspace architecture](workspace-server.md).
 
 Verification: `cai_transcript_wire` exercises all shapes, bytewise fragmentation,
 binary data, signed offsets, caps, malformed values and incomplete completion;
