@@ -60,11 +60,11 @@ static void owner(host *h) {
   assert(pthread_equal(h->owner, pthread_self()));
   assert(getenv("CAI_CONTROLLER_PRIVATE") == NULL);
 }
-static int authorize(void *context, uint64_t attachment, uint64_t generation,
+static int authorize(void *context, const cai_input_admission *admission,
                      cai_error *error) {
   host *h = context;
   owner(h);
-  if (attachment == 42U && generation == 7U)
+  if (admission->attachment == 42U && admission->generation == 7U)
     return CAI_OK;
   if (error != NULL) {
     error->code = CAI_ERR_INVALID;
@@ -843,6 +843,7 @@ typedef struct typed_view {
   cai_app_client_state state;
   cai_input_entry entry;
   cai_input_result result;
+  int managed;
   size_t roles, snapshots, results, disconnected;
   size_t statuses;
   size_t execution_chunks;
@@ -1098,10 +1099,11 @@ static void typed_wait(typed_view *v, const size_t *counter, size_t expected) {
   }
   assert(cai_app_client_get_state(v->client, &v->state, NULL) == CAI_OK);
 }
-static void typed_open(typed_view *v, unsigned long long producer,
-                       const char *session) {
+static void typed_open_mode(typed_view *v, unsigned long long producer,
+                            const char *session, int managed) {
   cai_app_client_config config;
   memset(v, 0, sizeof(*v));
+  v->managed = managed;
   cai_app_client_config_init(&config);
   config.runtime_directory = getenv("CAI_TEST_SERVER_RUNTIME");
   config.workspace = getenv("CAI_TEST_CONTROLLER_WORK");
@@ -1115,10 +1117,16 @@ static void typed_open(typed_view *v, unsigned long long producer,
   config.prompt_history_context = v;
   assert(cai_app_client_open(&config, monotonic_ms(), &v->client, NULL) ==
          CAI_OK);
+  if (managed)
+    assert(cai_app_client_manage_delivery(v->client, NULL) == CAI_OK);
   typed_wait(v, &v->roles, 1U);
   assert(cai_app_client_bind(v->client, 1U, 0U, producer, session, NULL) ==
          CAI_OK);
   typed_wait(v, &v->snapshots, 1U);
+}
+static void typed_open(typed_view *v, unsigned long long producer,
+                       const char *session) {
+  typed_open_mode(v, producer, session, 0);
 }
 static void typed_request(typed_view *v, unsigned long long id,
                           cai_input_operation operation, const char *text,
@@ -1132,7 +1140,7 @@ static void typed_request(typed_view *v, unsigned long long id,
   r.request_id = id;
   r.operation = operation;
   r.text = text;
-  r.enabled = operation == CAI_INPUT_OFFER;
+  r.enabled = operation == CAI_INPUT_OFFER && !v->managed;
   r.item_id = v->entry.id;
   r.item_revision = v->entry.revision;
   r.edit_token = v->entry.edit_token;
@@ -1320,6 +1328,13 @@ static void typed_command(typed_view *v, unsigned long long id,
                           const char *text, int success) {
   size_t completed = v->command_completed, failed = v->command_failed;
   typed_offer(v, id, text);
+  if (v->managed) {
+    cai_input_scope scope;
+    scope.conversation = v->state.conversation;
+    scope.generation = v->state.transport.generation;
+    assert(cai_app_client_settled(v->client, &scope, v->state.last_request,
+                                  NULL) == CAI_OK);
+  }
   if (success)
     typed_wait(v, &v->command_completed, completed + 1U);
   else
@@ -1553,7 +1568,8 @@ static void server_commands(int argc, char **argv) {
   /* The callback counter includes the initial 41 entries and this capped
    * 17-entry suffix, irrespective of additional accepted command prompts. */
   assert(a->history_limit == 17U && a->history_entries == 58U);
-  typed_request(b, 1U, CAI_INPUT_OFFER, "/quit", b->state.transport.generation);
+  typed_request(b, 1U, CAI_INPUT_OFFER, "/review",
+                b->state.transport.generation);
   assert(b->result.outcome == CAI_INPUT_REJECTED);
   typed_command(a, 23U, "/t gruvbox", 1);
   assert(a->command_frontend == 1U &&
@@ -1642,6 +1658,190 @@ static void server_commands(int argc, char **argv) {
   free(a);
   free(b);
 }
+/** Exercise read-only admission through real sockets, including target edits,
+ * controller-generation changes and attempts to elevate a query into work. */
+static void server_observer(int argc, char **argv) {
+  host h;
+  typed_view *a = calloc(1U, sizeof(*a)), *b = calloc(1U, sizeof(*b));
+  typed_view *c = calloc(1U, sizeof(*c));
+  cai_input_entry own;
+  cai_app_status status;
+  unsigned int opens;
+  unsigned long long id = 0U;
+  size_t i, roles;
+  int code;
+  static const char *const queries[] = {
+      "/status",    "/help",      "/goal status",       "/history",
+      "/retention", "/reasoning", "/reasoning-summary", "/yield_time_ms",
+      "/queue",     "/yolo"};
+  static const char *const denied[] = {"ordinary model input",
+                                       "/new",
+                                       "/resume missing",
+                                       "/reasoning low",
+                                       "/goal clear",
+                                       "/tier",
+                                       "/fast",
+                                       "/mcp refresh",
+                                       "/tools reload",
+                                       "/history 2",
+                                       "/retention 0",
+                                       "/todo layout list",
+                                       "/queue on",
+                                       "/autoqueue",
+                                       "/foreground",
+                                       "/yolo on",
+                                       "/review",
+                                       "/compact",
+                                       "/export output.md",
+                                       "!printf forbidden",
+                                       "/mcp enable\nteam",
+                                       "/mcp \vdisable team"};
+  assert(a != NULL && b != NULL && c != NULL);
+  open_host(&h, "server_observer");
+  assert(cai_app_start_server(h.app, NULL, argc - 1,
+                              (const char *const *)(argv + 1), NULL,
+                              NULL) == CAI_OK);
+  wait_ready(&h);
+  opens = cai_test_storage_open_count();
+  typed_open(a, 0U, NULL);
+  typed_open_mode(b, 0U, NULL, 1);
+  assert(a->state.transport.controller == a->state.transport.attachment &&
+         b->state.transport.controller != b->state.transport.attachment);
+  assert(cai_app_client_subscribe(b->client, 1U, b->state.conversation,
+                                  b->state.session, NULL, 0U, 0U, -1LL,
+                                  NULL) == CAI_OK);
+  typed_wait(b, &b->replay_ends, 1U);
+  for (i = 0U; i < sizeof(queries) / sizeof(queries[0]); ++i)
+    typed_command(b, ++id, queries[i], 1);
+  typed_command(b, ++id, "/t gruvbox", 1);
+  assert(b->command_frontend == 1U && !strcmp(b->frontend_text, "/t gruvbox"));
+  for (i = 0U; i < sizeof(denied) / sizeof(denied[0]); ++i) {
+    typed_request(b, ++id, CAI_INPUT_OFFER, denied[i],
+                  b->state.transport.generation);
+    assert(b->result.outcome == CAI_INPUT_REJECTED);
+  }
+  for (i = CAI_INPUT_STOP; i <= CAI_INPUT_AUTO_APPROVAL; ++i) {
+    typed_request(b, ++id, (cai_input_operation)i, NULL,
+                  b->state.transport.generation);
+    assert(b->result.outcome == CAI_INPUT_REJECTED);
+  }
+  for (i = 0U; i < 2U; ++i) {
+    cai_input_request request;
+    cai_input_scope scope;
+    size_t results = b->results;
+    memset(&request, 0, sizeof(request));
+    request.request_id = ++id;
+    request.operation = CAI_INPUT_OFFER;
+    request.text = "/status";
+    request.enabled = i == 0U;
+    if (i != 0U)
+      strcpy(request.origin, "forged-message-key");
+    scope.conversation = b->state.conversation;
+    scope.generation = b->state.transport.generation;
+    if (i != 0U) {
+      /* Provenance is not a client wire field: reject it before sending. */
+      assert(cai_app_client_request(b->client, &scope, &request, NULL) ==
+             CAI_ERR_PROTOCOL);
+    } else {
+      assert(cai_app_client_request(b->client, &scope, &request, NULL) ==
+             CAI_OK);
+      typed_wait(b, &b->results, results + 1U);
+      assert(b->result.outcome == CAI_INPUT_REJECTED);
+    }
+  }
+  /* Receipt settlement holds this producer's query before delivery without
+   * creating a shared approval barrier. Observers cannot enqueue such barriers.
+   */
+  typed_request(b, ++id, CAI_INPUT_OFFER, "/status",
+                b->state.transport.generation);
+  assert(b->result.outcome == CAI_INPUT_ACCEPTED);
+  b->entry.id = b->result.item_id;
+  b->entry.revision = b->result.item_revision;
+  b->entry.edit_token = 0U;
+  typed_request(b, ++id, CAI_INPUT_BEGIN_EDIT, NULL,
+                b->state.transport.generation);
+  assert(b->result.outcome == CAI_INPUT_ACCEPTED && b->result.edit_token != 0U);
+  memset(&own, 0, sizeof(own));
+  own.id = b->result.item_id;
+  own.revision = b->result.item_revision;
+  own.edit_token = b->result.edit_token;
+  b->entry = own;
+  typed_request(b, ++id, CAI_INPUT_APPROVE, NULL,
+                b->state.transport.generation);
+  assert(b->result.outcome == CAI_INPUT_REJECTED);
+  typed_request(b, ++id, CAI_INPUT_END_EDIT, "/new",
+                b->state.transport.generation);
+  assert(b->result.outcome == CAI_INPUT_REJECTED);
+  /* Controller work remains inaccessible even if an observer guesses its ID. */
+  typed_request(a, 1U, CAI_INPUT_OFFER, "OBSERVER MUST NEVER RUN",
+                a->state.transport.generation);
+  assert(a->result.outcome == CAI_INPUT_ACCEPTED);
+  a->entry.id = a->result.item_id;
+  a->entry.revision = a->result.item_revision;
+  a->entry.edit_token = 0U;
+  typed_request(a, 2U, CAI_INPUT_BEGIN_EDIT, NULL,
+                a->state.transport.generation);
+  if (a->result.outcome != CAI_INPUT_ACCEPTED || a->result.edit_token == 0U)
+    fprintf(stderr, "controller edit: outcome=%d token=%llu reason=%s\n",
+            (int)a->result.outcome, a->result.edit_token, a->result.reason);
+  assert(a->result.outcome == CAI_INPUT_ACCEPTED && a->result.edit_token != 0U);
+  b->entry.id = a->result.item_id;
+  b->entry.revision = a->result.item_revision;
+  b->entry.edit_token = a->result.edit_token;
+  typed_request(b, ++id, CAI_INPUT_APPROVE, NULL,
+                b->state.transport.generation);
+  assert(b->result.outcome == CAI_INPUT_REJECTED &&
+         strstr(b->result.reason, "observing") != NULL);
+  typed_request(b, ++id, CAI_INPUT_WITHDRAW, NULL,
+                b->state.transport.generation);
+  assert(b->result.outcome == CAI_INPUT_REJECTED &&
+         strstr(b->result.reason, "observing") != NULL);
+  typed_request(b, ++id, CAI_INPUT_BEGIN_EDIT, NULL,
+                b->state.transport.generation);
+  assert(b->result.outcome == CAI_INPUT_REJECTED);
+  roles = b->roles;
+  typed_open(c, 0U, NULL);
+  assert(cai_app_client_takeover(c->client, 1U, c->state.transport.generation,
+                                 NULL) == CAI_OK);
+  typed_wait(b, &b->roles, roles + 1U);
+  assert(b->state.transport.controller != b->state.transport.attachment);
+  b->entry = own;
+  typed_request(b, ++id, CAI_INPUT_BEGIN_EDIT, NULL,
+                b->state.transport.generation);
+  assert(b->result.outcome == CAI_INPUT_ACCEPTED &&
+         b->result.edit_token == own.edit_token);
+  typed_request(b, ++id, CAI_INPUT_END_EDIT, "/log",
+                b->state.transport.generation);
+  assert(b->result.outcome == CAI_INPUT_ACCEPTED && b->result.edit_token == 0U);
+  b->entry.id = b->result.item_id;
+  b->entry.revision = b->result.item_revision;
+  b->entry.edit_token = 0U;
+  typed_request(b, ++id, CAI_INPUT_WITHDRAW, NULL,
+                b->state.transport.generation);
+  assert(b->result.outcome == CAI_INPUT_ACCEPTED);
+  typed_request(b, ++id, CAI_INPUT_OFFER, "/status", 0U);
+  assert(b->result.outcome == CAI_INPUT_REJECTED);
+  typed_command(b, ++id, "/status", 1);
+  cai_app_status_init(&status);
+  assert(cai_app_get_status(h.app, &status, NULL) == CAI_OK);
+  assert(!strcmp(status.session_id, b->state.session) && !status.goal.has_goal);
+  cai_app_status_cleanup(&status);
+  control(&h, CAI_APP_STOP, NULL);
+  assert(cai_app_join(h.app, &code, NULL) == CAI_OK && code == 0);
+  cai_app_client_close(a->client);
+  cai_app_client_close(b->client);
+  cai_app_client_close(c->client);
+  assert(h.starts == 0 && h.completed == 0 &&
+         cai_test_storage_open_count() == opens);
+  cai_app_close(h.app);
+  pthread_mutex_destroy(&h.lock);
+  free(a->command_text);
+  free(b->command_text);
+  free(c->command_text);
+  free(a);
+  free(b);
+  free(c);
+}
 static void workspace_server(int argc, char **argv, const char *mode) {
   cai_attachment_config lifetime;
   cai_workspace_client_config client_config;
@@ -1653,6 +1853,10 @@ static void workspace_server(int argc, char **argv, const char *mode) {
   int wire = strcmp(mode, "server_wire") == 0;
   int code, persistent = strcmp(mode, "server_persist") == 0 ||
                          strcmp(mode, "server_config_persist") == 0;
+  if (strcmp(mode, "server_observer") == 0) {
+    server_observer(argc, argv);
+    return;
+  }
   if (strcmp(mode, "server_typed") == 0) {
     typed_server(argc, argv);
     return;

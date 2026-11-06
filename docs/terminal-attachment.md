@@ -243,6 +243,12 @@ and last-detach shutdown. Its public-header-only embedding host aborts on any
 attempt to open an SDK storage client. Separate tests cover cancellation
 duplicates/authority, queue reconnect identities and one-pass output with late
 status, sink failure and metadata-cache pressure on default-stack workers.
+Observer `/status` and theme commands are covered before takeover, including a
+new attachment retaining its own original theme. The native server fixture
+checks read-only command edits across an unrelated takeover, stale generations,
+attempts to edit another producer's work or turn a query into model input, and
+refusal of approval barriers/provenance keys/global queue controls. These checks
+make no inference requests and retain the original store-client count.
 `cai_cli_workspaces` and `cai_app_terminal_workspaces` exercise the executable
 and public terminal receiver across two actual owners, with isolated drafts,
 observer takeover, invalid/relative selections, queued work continuing while

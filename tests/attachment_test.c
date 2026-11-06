@@ -231,9 +231,10 @@ static void send(client *c, cai_input_operation operation) {
   assert(cai_input_connection_request(c->connection, &c->scope, &request,
                                       NULL) == CAI_OK);
 }
-static int authorize(void *context, uint64_t id, uint64_t generation,
+static int authorize(void *context, const cai_input_admission *a,
                      cai_error *error) {
-  return cai_attachment_controller_authorize(context, id, generation, error);
+  return cai_attachment_controller_authorize(context, a->attachment,
+                                             a->generation, error);
 }
 typedef struct admission_writes {
   size_t accepted, rejected;

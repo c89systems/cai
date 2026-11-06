@@ -19,6 +19,10 @@ int cai_cli_command_is_theme(const char *line);
 int cai_cli_manual_review_call(const char *);
 /* Presentation-only actions are delivered to the originating frontend. */
 int cai_cli_command_frontend(const char *line);
+/** Read-only queries and attachment-local preferences. Independent of delivery
+ * boundary: feed-safe commands can still mutate shared state. Fail closed for
+ * unknown commands; bare /tier and /autoqueue are mutations. */
+int cai_cli_command_observer(const char *line);
 /** Select a valid paged command: 1 rendered help, 2 literal log, 0 neither.
  * Whitespace follows ordinary command normalization. No policy or execution. */
 int cai_cli_command_pager(const char *line);

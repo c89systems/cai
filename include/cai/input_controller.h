@@ -12,14 +12,28 @@ typedef struct cai_input_scope {
   unsigned long long conversation;
   uint64_t generation;
 } cai_input_scope;
+/** Trusted owner-thread admission view, borrowed for the authorization call.
+ * Attachment/producer come from the connection, never from request text.
+ * entry is the current target when found, including trusted ownership/edit
+ * metadata; do not forward it to a frontend. NULL request denotes availability
+ * metadata or a separately authorized host control, rather than a queue
+ * mutation; entry is then NULL.
+ */
+typedef struct cai_input_admission {
+  uint64_t attachment, generation;
+  unsigned long long producer;
+  const cai_input_request *request;
+  const cai_input_entry *entry;
+} cai_input_admission;
 typedef struct cai_input_controller_config {
   /** Optional owner-thread admission gate, called immediately before queue
-   * mutation. Receives the connection's fixed authenticated attachment ID and
-   * the request's original generation. Must not reenter the input controller.
+   * mutation. Receives authenticated connection identity, original generation,
+   * request and current target. Hosts can admit read-only commands without
+   * granting general queue authority. Must not reenter the input controller.
    * Return CAI_OK or an actionable rejection. SYNCHRONIZE and RESOLVE remain
    * read-only and bypass this gate. NULL is a trusted in-process controller.
    * Borrowed context must outlive the controller and all owner dispatch. */
-  int (*authorize)(void *context, uint64_t attachment, uint64_t generation,
+  int (*authorize)(void *context, const cai_input_admission *,
                    cai_error *error);
   void *authorize_context;
 } cai_input_controller_config;

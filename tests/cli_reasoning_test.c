@@ -445,7 +445,50 @@ static int test_shared_auth(void) {
   return fixture.calls == 2 ? 0 : 1;
 }
 
+static int test_observer_commands(void) {
+  static const char *const allowed[] = {
+      "/status",      "/help -p",   "/log less",    "/m",
+      "/r",           "/t plain",   "/goal",        "/goal status",
+      "/goal help",   "/tier list", "/mcp list",    "/mcp team",
+      "/mcp help",    "/todo list", "/todo see ID", "/todo layout",
+      "/output full", "/retention", "/history",     "/quit"};
+  static const char *const denied[] = {"/tier",
+                                       "/fast",
+                                       "/fg",
+                                       "/background",
+                                       "/autoqueue",
+                                       "/outputx",
+                                       "/goals",
+                                       "/troll",
+                                       "/m changed",
+                                       "/r low",
+                                       "/mcp refresh",
+                                       "/mcp enable team",
+                                       "/mcp refresh\tteam",
+                                       "/mcp enable\nteam",
+                                       "/mcp \vdisable team",
+                                       "/todo layout list",
+                                       "/queue off",
+                                       "/history 0",
+                                       "/retention off",
+                                       "/new",
+                                       "normal",
+                                       " /status",
+                                       "!sh",
+                                       "/shell",
+                                       "/export",
+                                       "/help unknown",
+                                       "/log clear"};
+  size_t i;
+  for (i = 0U; i < sizeof(allowed) / sizeof(allowed[0]); ++i)
+    if (!cai_cli_command_observer(allowed[i]))
+      return 1;
+  for (i = 0U; i < sizeof(denied) / sizeof(denied[0]); ++i)
+    if (cai_cli_command_observer(denied[i]))
+      return 1;
+  return 0;
+}
 int main(void) {
-  return test_command_queue_modes() || test_goal_handoff() ||
-         test_shared_auth() || test_event_logging();
+  return test_observer_commands() || test_command_queue_modes() ||
+         test_goal_handoff() || test_shared_auth() || test_event_logging();
 }

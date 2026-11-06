@@ -11,7 +11,8 @@ trap server_cleanup EXIT
 # Keep runtime paths short even when the binary's build-directory name is long.
 export LOG_LEVEL=warn CAI_TEST_SERVER_RUNTIME="$runtime_root" CAI_TEST_CONTROLLER_WORK="$work"
 export CAI_TEST_SERVER_RELEASE="$root/peer/release"
-for mode in server_lifetime server_abrupt server_persist server_grace server_active server_busy server_input server_wire server_fence server_typed server_config_persist server_override server_commands server_capture; do
+all_modes='server_lifetime server_abrupt server_persist server_grace server_active server_busy server_input server_wire server_fence server_typed server_config_persist server_override server_commands server_capture server_observer'
+for mode in ${1:-$all_modes}; do
   export CAI_TEST_CONTROLLER_MODE=$mode
   before=$(requests)
   plan '{"plan":["Background work finished"]}'

@@ -353,11 +353,23 @@ belongs to the conversation and continues. A disconnected editor's holds are
 released through normal queue transitions without submitting its local draft.
 
 Viewers can request status, replay, catalogs and attachment-local settings.
-They cannot submit/steer, change model/goals/conversation, edit/approve queues,
-run shell commands or shut down the server. Do not trust a client-side disabled
+They cannot submit/steer model input, change model/goals/conversation, alter
+another producer's entries, approve queued work, run shared shell commands or
+shut down the server. Do not trust a client-side disabled
 widget to enforce this. Graceful detach and abrupt socket loss use one cleanup
 path. The Softline adapter retains local editing while displaying read-only
 observations for a viewer; it must not pretend a rejected offer was queued.
+
+Read-only slash queries and display preferences use that same accepted queue,
+with per-producer receipt settlement and normal feed/request seams. Observer
+admission permits only known read-only commands and edits/cancellation of that
+producer's own read-only entries. It rejects changing an entry into a mutation,
+touching another producer's work, creating an approval barrier, supplying a
+provenance key, or changing global queue state. Bare `/tier` cycles routing and
+is privileged; `/tier list` is a query. Changing controller generations releases
+the former controller's edits while preserving an unrelated observer's query
+draft. Stale generations remain invalid even for queries. Protocol cancellation,
+shared shell recording and prompt-history writes retain controller authority.
 
 Requests have stable attachment identity, monotonic request ID, selected
 conversation epoch and control generation. Distinguish received, durably

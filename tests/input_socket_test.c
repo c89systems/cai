@@ -578,14 +578,20 @@ static void settlement_cases(fixture *f) {
   assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
                                              &ready, NULL) == CAI_OK &&
          ready);
-  /* Revoked producers do not hold work. Regaining control rearms the same
-   * bound producer, even without reconnecting or offering another item. */
+  /* Every managed producer rearms after a role change, including an observer
+   * that may still edit its own queries. It settles through the same idle
+   * handoff without reconnecting or offering another item. */
   open_frontend(f, b, 1, 0U, 0U);
   takeover(f, b);
   assert(drive(f, a, b) == CAI_OK);
   assert(cai_input_controller_producer_ready(f->controller, b->state.producer,
                                              &ready, NULL) == CAI_OK &&
          !ready);
+  assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
+                                             &ready, NULL) == CAI_OK &&
+         !ready);
+  assert(cai_cli_input_socket_idle(a->queue, a->editor, NULL) == CAI_OK);
+  assert(drive(f, a, b) == CAI_OK);
   assert(cai_input_controller_producer_ready(f->controller, a->state.producer,
                                              &ready, NULL) == CAI_OK &&
          ready);

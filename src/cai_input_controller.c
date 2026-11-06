@@ -567,6 +567,29 @@ int cai_input_connection_manage_delivery(cai_input_connection *connection,
   pthread_mutex_unlock(&connection->controller->lock);
   return CAI_OK;
 }
+/** Build trusted policy metadata only at owner dispatch, after receipt lookup.
+ * Looking up an edit target does not mutate it or expose another edit token. */
+static int authorize(cai_input_connection *connection, uint64_t generation,
+                     const cai_input_request *request, cai_error *error) {
+  cai_input_controller *controller = connection->controller;
+  cai_input_admission admission;
+  cai_input_entry entry;
+  if (controller->config.authorize == NULL)
+    return CAI_OK;
+  memset(&admission, 0, sizeof(admission));
+  admission.attachment = connection->attachment;
+  admission.generation = generation;
+  admission.producer = cai_input_queue_client_id(connection->client);
+  admission.request = request;
+  if (request != NULL && request->operation >= CAI_INPUT_BEGIN_EDIT &&
+      request->operation <= CAI_INPUT_SET_INTENT && request->item_id != 0U &&
+      controller->queue != NULL &&
+      cai_input_queue_lookup(controller->queue, request->item_id, &entry,
+                             NULL) == CAI_OK)
+    admission.entry = &entry;
+  return controller->config.authorize(controller->config.authorize_context,
+                                      &admission, error);
+}
 int cai_input_connection_settled(cai_input_connection *connection,
                                  const cai_input_scope *scope,
                                  unsigned long long after_request,
@@ -582,10 +605,7 @@ int cai_input_connection_settled(cai_input_connection *connection,
   /* This is availability metadata, not a mutation with a receipt. An old
    * role or context can legitimately arrive while its revocation is in flight.
    */
-  if (controller->config.authorize != NULL &&
-      controller->config.authorize(controller->config.authorize_context,
-                                   connection->attachment, scope->generation,
-                                   NULL) != CAI_OK)
+  if (authorize(connection, scope->generation, NULL, NULL) != CAI_OK)
     return CAI_OK;
   pthread_mutex_lock(&controller->lock);
   if (!connection->detached && !connection->binding_failed &&
@@ -615,14 +635,12 @@ int cai_input_controller_producer_ready(cai_input_controller *controller,
   pthread_mutex_unlock(&controller->lock);
   for (; connection != NULL; connection = connection->next) {
     cai_input_scope scope;
-    uint64_t attachment;
     int match, announced;
     pthread_mutex_lock(&controller->lock);
     match = !connection->detached && !connection->binding_failed &&
             connection->client != NULL && connection->managed_delivery &&
             cai_input_queue_client_id(connection->client) == producer;
     scope = connection->delivery_scope;
-    attachment = connection->attachment;
     announced = match && connection->delivery_settled &&
                 connection->head == NULL &&
                 scope.conversation == controller->conversation &&
@@ -631,10 +649,7 @@ int cai_input_controller_producer_ready(cai_input_controller *controller,
     pthread_mutex_unlock(&controller->lock);
     if (!match)
       continue;
-    if (controller->config.authorize != NULL &&
-        controller->config.authorize(controller->config.authorize_context,
-                                     attachment, scope.generation,
-                                     NULL) != CAI_OK)
+    if (authorize(connection, scope.generation, NULL, NULL) != CAI_OK)
       continue;
     *settled = announced;
     break;
@@ -709,19 +724,14 @@ int cai_input_connection_request(cai_input_connection *connection,
   return CAI_OK;
 }
 typedef struct input_admission {
-  cai_input_controller *controller;
   cai_input_connection *connection;
   input_submission *submission;
 } input_admission;
 static int authorize_submission(void *context, cai_error *error) {
   input_admission *admission = context;
-  cai_input_controller *controller = admission->controller;
-  return controller->config.authorize != NULL
-             ? controller->config.authorize(
-                   controller->config.authorize_context,
-                   admission->connection->attachment,
-                   admission->submission->scope.generation, error)
-             : CAI_OK;
+  return authorize(admission->connection,
+                   admission->submission->scope.generation,
+                   &admission->submission->value, error);
 }
 int cai_input_controller_pump(cai_input_controller *controller,
                               size_t max_requests, cai_error *error) {
@@ -822,7 +832,6 @@ int cai_input_controller_pump(cai_input_controller *controller,
                "conversation changed; request was not accepted");
       } else {
         input_admission admission;
-        admission.controller = controller;
         admission.connection = connection;
         admission.submission = submission;
         rc = cai_input_queue_admit(connection->client, &submission->value,

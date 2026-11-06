@@ -44,11 +44,11 @@ static int persist(void *context, const cai_input_record *record,
     *position = log->count;
   return CAI_OK;
 }
-static int authorize(void *context, uint64_t attachment, uint64_t generation,
+static int authorize(void *context, const cai_input_admission *a,
                      cai_error *error) {
   gate *scope = context;
   ++scope->calls;
-  if (attachment == 42U && generation == scope->generation)
+  if (a->attachment == 42U && a->generation == scope->generation)
     return CAI_OK;
   if (error != NULL) {
     error->code = CAI_ERR_INVALID;

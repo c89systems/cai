@@ -11,48 +11,49 @@ int cai_cli_manual_review_call(const char *call) {
 static const struct cli_command_definition {
   const char *name;
   cli_command_boundary bare, arguments;
+  int observer; /* 1=bare query, 2=attachment-local arguments as well. */
 } cli_command_definitions[] = {
-    {"/help", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/status", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/log", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/tools", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/mcp", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/skills", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/quit", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/exit", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/new", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/resume", CLI_COMMAND_FEED, CLI_COMMAND_TURN},
-    {"/review", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/review-and-fix", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/model", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/reasoning", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/reasoning-summary", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/tier", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
-    {"/fast", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
-    {"/foreground", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
-    {"/fg", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
-    {"/background", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
-    {"/bg", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST},
-    {"/yield_time_ms", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/goal", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/theme", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/theme-offset", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/subagent-theme-offset", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/review-theme-offset", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST},
-    {"/yolo", CLI_COMMAND_FEED, CLI_COMMAND_TURN},
-    {"/reasoning-tool", CLI_COMMAND_FEED, CLI_COMMAND_TURN},
-    {"/queue", CLI_COMMAND_FEED, CLI_COMMAND_TURN},
-    {"/todo", CLI_COMMAND_FEED, CLI_COMMAND_TURN},
-    {"/trim", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/export", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/compact", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/shell", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/shellshare", CLI_COMMAND_TURN, CLI_COMMAND_TURN},
-    {"/autoqueue", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/output", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/history", CLI_COMMAND_FEED, CLI_COMMAND_FEED},
-    {"/retention", CLI_COMMAND_FEED, CLI_COMMAND_TURN},
-    {"/shell-context", CLI_COMMAND_FEED, CLI_COMMAND_FEED}};
+    {"/help", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 1},
+    {"/status", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 1},
+    {"/log", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 1},
+    {"/tools", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 1},
+    {"/mcp", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 1},
+    {"/skills", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 1},
+    {"/quit", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 1},
+    {"/exit", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 1},
+    {"/new", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
+    {"/resume", CLI_COMMAND_FEED, CLI_COMMAND_TURN, 1},
+    {"/review", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
+    {"/review-and-fix", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
+    {"/model", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 1},
+    {"/reasoning", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 1},
+    {"/reasoning-summary", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 1},
+    {"/tier", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST, 0},
+    {"/fast", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST, 0},
+    {"/foreground", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST, 0},
+    {"/fg", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST, 0},
+    {"/background", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST, 0},
+    {"/bg", CLI_COMMAND_REQUEST, CLI_COMMAND_REQUEST, 0},
+    {"/yield_time_ms", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 1},
+    {"/goal", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 1},
+    {"/theme", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 2},
+    {"/theme-offset", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 2},
+    {"/subagent-theme-offset", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 2},
+    {"/review-theme-offset", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 2},
+    {"/yolo", CLI_COMMAND_FEED, CLI_COMMAND_TURN, 1},
+    {"/reasoning-tool", CLI_COMMAND_FEED, CLI_COMMAND_TURN, 1},
+    {"/queue", CLI_COMMAND_FEED, CLI_COMMAND_TURN, 1},
+    {"/todo", CLI_COMMAND_FEED, CLI_COMMAND_TURN, 1},
+    {"/trim", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
+    {"/export", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
+    {"/compact", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
+    {"/shell", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
+    {"/shellshare", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
+    {"/autoqueue", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 0},
+    {"/output", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 2},
+    {"/history", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 1},
+    {"/retention", CLI_COMMAND_FEED, CLI_COMMAND_TURN, 1},
+    {"/shell-context", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 1}};
 
 static int cli_word_is(const char *text, size_t length, const char *word) {
   return strlen(word) == length && strncmp(text, word, length) == 0;
@@ -108,6 +109,50 @@ int cai_cli_command_frontend(const char *line) {
          cli_word_is(name, length, "/shell") ||
          cli_word_is(name, length, "/shellshare") || strcmp(line, "!sh") == 0 ||
          strcmp(line, "!sh+") == 0;
+}
+int cai_cli_command_observer(const char *line) {
+  const char *name, *argument;
+  const unsigned char *p;
+  size_t length, size, word, i;
+  if (line == NULL || line[0] != '/')
+    return 0;
+  /* Handler tokenizers also recognize CR/LF and other ASCII whitespace.
+   * Observer admission must not reinterpret a multiline "name" as an action. */
+  for (p = (const unsigned char *)line; *p != '\0'; ++p)
+    if ((*p < 32U && *p != '\t') || *p == 127U)
+      return 0;
+  if (cai_cli_command_pager(line) != 0)
+    return 1;
+  length = strcspn(line, " \t");
+  argument = line + length;
+  argument += strspn(argument, " \t");
+  size = strlen(argument);
+  while (size > 0U && strchr(" \t", argument[size - 1U]) != NULL)
+    --size;
+  word = strcspn(argument, " \t");
+  name = cai_cli_command_name(line, &length);
+  if (cli_word_is(name, length, "/goal")) {
+    if (cli_word_is(argument, size, "status") ||
+        cli_word_is(argument, size, "help"))
+      return 1;
+  } else if (cli_word_is(name, length, "/tier"))
+    return cli_word_is(argument, size, "list"); /* Bare /tier cycles routing. */
+  else if (cli_word_is(name, length, "/mcp") && size != 0U)
+    return word == size && !cli_word_is(argument, word, "enable") &&
+           !cli_word_is(argument, word, "disable") &&
+           !cli_word_is(argument, word, "refresh");
+  else if (cli_word_is(name, length, "/todo") && size != 0U)
+    return cli_word_is(argument, size, "help") ||
+           cli_word_is(argument, size, "list") ||
+           cli_word_is(argument, size, "layout") ||
+           cli_word_is(argument, word, "see");
+  for (i = 0U;
+       i < sizeof(cli_command_definitions) / sizeof(cli_command_definitions[0]);
+       ++i)
+    if (cli_word_is(name, length, cli_command_definitions[i].name))
+      return cli_command_definitions[i].observer == 2 ||
+             (cli_command_definitions[i].observer == 1 && size == 0U);
+  return 0;
 }
 
 cli_command_boundary cai_cli_command_delivery(const char *line) {

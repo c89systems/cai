@@ -28,6 +28,10 @@ wait_for has "$root/server.log" 'Workspace server ready'
 wait_for test -s "$root/holder"
 terminal_start -s attach-fixture
 expect 'Observing workspace. /takeover acquires control. Send /help for usage.'
+send '/status\r'; expect 'Session ID'
+send '/t gruvbox\r'; expect 'Theme changed to gruvbox:gruvbox.'
+send '/theme\r'; expect 'Current: gruvbox:gruvbox'
+send '/reasoning low\r'; expect rejected
 send 'this observer input must never run\r'
 expect rejected
 [[ $(requests) == 0 ]]
@@ -57,6 +61,7 @@ kill -0 "$server_pid"
 terminal_start -s attach-fixture
 send '\033[A'; expect_prompt 'UNSUBMITTED draft survives Alt-Q'
 send '\025'
+send '/theme\r'; expect 'Current: default:default'
 terminal_close
 [[ $(requests) == 1 ]]
 plan '{"plan":["STARTUP answer"]}'

@@ -161,10 +161,17 @@ static void concurrent_selection(void) {
   cai_input_queue_close(b);
   pthread_mutex_destroy(&fixture.lock);
 }
-static int producer_authorize(void *context, uint64_t attachment,
-                              uint64_t generation, cai_error *error) {
+static int producer_authorize(void *context, const cai_input_admission *a,
+                              cai_error *error) {
   (void)error;
-  return attachment == 7U && generation == *(uint64_t *)context
+  if (a->request != NULL) {
+    assert(a->producer != 0U);
+    if (a->request->operation == CAI_INPUT_OFFER)
+      assert(a->entry == NULL);
+    if (a->entry != NULL)
+      assert(a->entry->id == a->request->item_id);
+  }
+  return a->attachment == 7U && a->generation == *(uint64_t *)context
              ? CAI_OK
              : CAI_ERR_INVALID;
 }

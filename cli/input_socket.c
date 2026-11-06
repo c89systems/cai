@@ -334,8 +334,7 @@ int cai_cli_input_socket_idle(cai_cli_input_socket *s, sl_t *editor,
   rc = cai_app_client_get_state(s->client, &state, error);
   if (rc != CAI_OK)
     return rc;
-  if (!state.ready || !state.bound ||
-      state.transport.controller != state.transport.attachment)
+  if (!state.ready || !state.bound)
     return CAI_OK;
   if (sl_queue_backend_info(editor, &info) != SL_OK)
     return unavailable(error, "inspect native editor receipts");

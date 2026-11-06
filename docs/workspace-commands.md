@@ -57,11 +57,16 @@ without Softline watches. Ordinary command errors become visible results and
 leave the owner available for later work; persistence/allocation failures keep
 their existing fatal handling.
 
-This is an incremental cutover. The legacy terminal still uses its existing
-presenter adapter. The headless document adapter emits semantic history for
-socket/native consumers. Automatic terminal attach and frontend-local theme/
-output actions are connected. Observer query routing and full delegate parity
-remain part of the overall frontend work.
+The terminal and batch adapters consume the same semantic history from the
+workspace owner. Observer queries and attachment-local theme/output commands
+use the ordinary editable queue and delivery seams. One command inventory
+defines delivery boundaries and observer eligibility: feed safety alone is
+not permission to mutate shared state. Request-aware authorization receives
+trusted attachment/producer identity and the current target. It permits edits
+only to that observer's own read-only entries. New approval barriers, global
+queue transitions, model input, unknown commands and mutation-shaped edits fail
+at owner admission. The typed status/replay/catalog channels remain available
+without submitting a command or acquiring control.
 
 `cai_agent_runtime_execution_open` supplies the reusable core writer used by
 this adapter. It copies metadata, accepts fragmented UTF-8, emits bounded chunks

@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "workspace_host.h"
 #include "catalog_wire.h"
+#include "commands.h"
 #include "identity.h"
 #include "input_wire.h"
 #include "log.h"
@@ -50,7 +51,7 @@ struct cai_cli_workspace_host {
   cai_agent_runtime *catalog_runtime;
   uint64_t catalog_revision;
   char session[129];
-  uint64_t generation;
+  uint64_t generation, controller;
   cai_app_view status;
   int (*cancel)(void *, cai_error *);
   void *cancel_context;
@@ -354,14 +355,68 @@ int cai_cli_workspace_host_status(cai_cli_workspace_host *host,
   view.revision = host->status.revision + 1U;
   return cai_cli_status_copy(&host->status, &view, error);
 }
-static int authorize(void *context, uint64_t attachment, uint64_t generation,
+/** Observer permissions apply to a current request and its trusted existing
+ * target. Editing a read-only item cannot turn it into a model submission or
+ * reach another producer's work. Global queue transitions remain privileged. */
+static int observer_request(const cai_input_admission *a) {
+  const cai_input_request *r = a->request;
+  if (r == NULL)
+    return 1; /* This producer's delivery availability, never queue mutation. */
+  if (r->origin[0] != '\0')
+    return 0;
+  if (r->operation == CAI_INPUT_OFFER)
+    return !r->enabled && cai_cli_command_observer(r->text);
+  if (a->entry == NULL || a->entry->client_id != a->producer ||
+      a->entry->origin[0] != '\0' || !cai_cli_command_observer(a->entry->text))
+    return 0;
+  switch (r->operation) {
+  case CAI_INPUT_END_EDIT:
+    return cai_cli_command_observer(r->text);
+  case CAI_INPUT_BEGIN_EDIT:
+  case CAI_INPUT_ABORT_EDIT:
+  case CAI_INPUT_WITHDRAW:
+  case CAI_INPUT_SET_INTENT:
+    return 1;
+  default:
+    return 0;
+  }
+}
+static int authorize(void *context, const cai_input_admission *a,
                      cai_error *error) {
   cai_cli_workspace_host *host = context;
+  cai_attachment_state state;
+  size_t i;
+  int rc = cai_workspace_server_get_state(host->server, &state, error);
+  if (rc != CAI_OK)
+    return rc;
+  for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i)
+    if (host->peers[i].attachment == a->attachment && !host->peers[i].detached)
+      break;
+  if (a->attachment == 0U || i == CAI_ATTACHMENT_LIMIT ||
+      state.phase != CAI_ATTACHMENT_READY || a->generation != state.generation)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "attachment is stale or stopping");
+  if (state.controller != a->attachment && !observer_request(a))
+    return cai_cli_error(
+        error, CAI_ERR_INVALID,
+        "attachment is observing; use /takeover to change shared state");
+  if (rc == CAI_OK && host->admission.authorize != NULL)
+    rc = host->admission.authorize(host->admission.authorize_context, a, error);
+  return rc;
+}
+/** Non-queue controls never acquire observer exemptions from command text. */
+static int authorize_control(cai_cli_workspace_host *host, uint64_t attachment,
+                             uint64_t generation, cai_error *error) {
+  cai_input_admission a;
   int rc = cai_workspace_server_authorize(host->server, attachment, generation,
                                           error);
-  if (rc == CAI_OK && host->admission.authorize != NULL)
-    rc = host->admission.authorize(host->admission.authorize_context,
-                                   attachment, generation, error);
+  if (rc == CAI_OK && host->admission.authorize != NULL) {
+    memset(&a, 0, sizeof(a));
+    a.attachment = attachment;
+    a.generation = generation;
+    rc =
+        host->admission.authorize(host->admission.authorize_context, &a, error);
+  }
   return rc;
 }
 /** A recording belongs to this attachment/context, never to a replacement
@@ -397,7 +452,7 @@ static int shell_request(host_peer *peer, const cai_cli_input_wire_message *m,
   uint64_t now = 0U;
   int rc;
   cai_error_init(&local);
-  rc = authorize(host, peer->attachment, m->header.generation, &local);
+  rc = authorize_control(host, peer->attachment, m->header.generation, &local);
   if (rc == CAI_OK)
     rc = host->input != NULL && peer->input != NULL && !peer->binding
              ? cai_input_controller_conversation(host->input, &epoch, &local)
@@ -501,7 +556,8 @@ static int append_prompt(host_peer *peer, const cai_cli_input_wire_message *m,
     if (rc != CAI_OK)
       cai_cli_error(&local, rc, peer->prompt_reason);
   } else {
-    rc = authorize(host, peer->attachment, m->header.generation, &local);
+    rc =
+        authorize_control(host, peer->attachment, m->header.generation, &local);
     if (rc == CAI_OK)
       rc = host->input != NULL && peer->input != NULL && !peer->binding
                ? cai_input_controller_conversation(host->input, &epoch, &local)
@@ -609,7 +665,7 @@ static int message(void *context, const cai_workspace_server_event *event,
       if (rc != CAI_OK)
         cai_cli_error(&local, rc, peer->cancel_reason);
     } else {
-      rc = authorize(host, peer->attachment, h->generation, &local);
+      rc = authorize_control(host, peer->attachment, h->generation, &local);
       if (rc == CAI_OK)
         rc =
             host->input != NULL
@@ -1132,18 +1188,19 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
       host->generation != snapshot.generation)
     for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i)
       if (host->peers[i].attachment != 0U) {
-        rc = cai_input_controller_release_edits(
-            host->input, host->peers[i].attachment, error);
-        if (rc != CAI_OK)
-          return rc;
+        if (host->peers[i].attachment == host->controller) {
+          rc = cai_input_controller_release_edits(
+              host->input, host->peers[i].attachment, error);
+          if (rc != CAI_OK)
+            return rc;
+        }
         if (host->peers[i].shell_runtime != NULL &&
             host->peers[i].shell_generation != snapshot.generation) {
           rc = shell_abandon(&host->peers[i], error);
           if (rc != CAI_OK)
             return rc;
         }
-        if (host->peers[i].input != NULL && host->peers[i].managed_delivery &&
-            host->peers[i].attachment == snapshot.controller) {
+        if (host->peers[i].input != NULL && host->peers[i].managed_delivery) {
           cai_input_scope scope;
           rc = cai_input_controller_conversation(host->input,
                                                  &scope.conversation, error);
@@ -1156,6 +1213,7 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
         }
       }
   host->generation = snapshot.generation;
+  host->controller = snapshot.controller;
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
     host_peer *peer = &host->peers[i];
     size_t pending;
