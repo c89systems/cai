@@ -120,9 +120,8 @@ required.
   behind a streaming API. Bounded chunks and bounded individual input commands
   are permitted. The explicitly accepted libmdf word-decision storage policy
   above applies to rendering, not to collecting transport messages.
-- liblockdc 0.27.0 does not provide true streaming collection push. Do not
-  implement a CAI buffering workaround for that limitation. Keep that dependency
-  boundary explicit and adopt the upstream streaming push API when available.
+- liblockdc 0.28.0 provides true streaming collection push and staged pull through bounded canonical chunks.
+  CAI's finite journal sources retain direct pull; future externally paced producers can use the SDK writer without a buffering workaround.
 
 ## Library boundaries
 
@@ -631,6 +630,5 @@ errors, names and configuration conflicts. End-to-end tests demonstrate:
   prompt history, temporary workspace cleanup and orderly shutdown preserve
   their observable contracts.
 
-A liblockdc push streaming blocker is reported as such. Codec/transport tests
-must not claim to establish end-to-end storage streaming until that public
-dependency API has been upgraded and verified.
+Liblockdc's former push-streaming blocker is resolved by the [0.28.0 upgrade](liblockdc-0.28.0-upgrade.md).
+Codec/transport tests alone do not establish end-to-end storage streaming; verify the selected SDK append path and CAI's native readers together.

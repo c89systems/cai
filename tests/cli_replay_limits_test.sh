@@ -6,22 +6,27 @@ plan '{"plan":["ORIGINAL DURABLE ANSWER"]}'
 run -Nni 'original durable prompt'; ok
 run --list-all; ok
 id=$(awk 'NR == 1 {print $1}' "$root/stdout")
+logfile="$root/cache/cai/$id.log"
 "$fixture" --oversized-replay-event "$id" "$work"
 # Oversized input and shell-result events are omitted, while the surrounding
 # conversation replays. Merely resuming must never submit the omitted input.
 count=$(requests)
 for restart in 1 2; do
+  offset=$(wc -c <"$logfile")
   terminal_start
-  expect 'Skipped oversized session event during replay'
   expect 'Before omitted terminal transcript'
   expect 'After omitted terminal transcript'
   terminal_close
+  tail -c +$((offset+1)) "$logfile" >"$root/restart.log"
+  contains "$root/restart.log" 'Skipped oversized session event during replay'
   [[ $(requests) == "$count" ]]
 done
 plan '{"plan":["RECOVERED SESSION ANSWER"]}'
+offset=$(wc -c <"$logfile")
 run -ni 'continue the recovered session'; ok
 contains "$root/stdout" 'RECOVERED SESSION ANSWER'
-contains "$root/stderr" 'Skipped oversized session event during replay'
+tail -c +$((offset+1)) "$logfile" >"$root/restart.log"
+contains "$root/restart.log" 'Skipped oversized session event during replay'
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
 contains "$root/request" 'original durable prompt'
 contains "$root/request" 'ORIGINAL DURABLE ANSWER'
@@ -30,7 +35,7 @@ absent "$root/request" ZZZZZZZZZZZZZZZZZZZZ
 # stored records even after new activity is appended. JSONL export is lossless.
 run --export "$id"; ok
 journal="$root/data/cai/exports/$id/$id.jsonl"
-jq -se 'any(.[]; .sequence == 1000001 and .type == "user_shell_completed" and (.data|length) == 131073) and any(.[]; .sequence == 1000003 and .type == "turn_submitted" and (.data|length) == 131073) and any(.[]; .sequence > 1000003 and .type == "turn_submitted" and .data == "continue the recovered session")' "$journal" >/dev/null
+jq -se 'any(.[]; .sequence == 1000001 and .type == "user_shell_completed" and (.data|length) == 131073) and any(.[]; .sequence == 1000003 and .type == "turn_submitted" and (.data|length) == 131073) and any(.[]; .sequence > 1000003 and .type == "input_presented" and .data == "continue the recovered session")' "$journal" >/dev/null
 plan '{"plan":["RECOVERED REOPEN ANSWER"]}'
 run -ni 'continue after reopening'; ok
 contains "$root/stdout" 'RECOVERED REOPEN ANSWER'

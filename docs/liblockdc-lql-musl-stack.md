@@ -45,10 +45,9 @@ static binary, including a response larger than the mapped-string ceiling.
 
 ## Resolution verified with liblql 0.4.0
 
-liblql 0.4.0 moves the large workspaces to allocator-backed storage and retains
-shared-library ABI 0. The initial verification used liblockdc 0.23.0. CAI now
-pins liblockdc 0.27.0 and liblql 0.4.1 for all six Linux SDK targets; both
-dependencies keep their bulk parser/query scratch off worker stacks.
+liblql 0.4.0 moves the large workspaces to allocator-backed storage and retains shared-library ABI 0.
+The initial verification used liblockdc 0.23.0.
+CAI now pins liblockdc 0.28.0 and liblql 0.4.1 for all six Linux SDK targets; both dependencies keep their bulk parser/query scratch off worker stacks.
 
 On 2026-10-28, a standalone static x86_64 musl program using the published
 liblockdc 0.23.0 and liblql 0.4.0 SDKs created an encrypted Pouch collection

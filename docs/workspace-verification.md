@@ -49,8 +49,7 @@ package test alone does not establish the application's lifecycle behavior.
 ## Explicit dependency and buffering boundaries
 
 - CAI uses liblockdc's direct pull-source append and bounded read callbacks.
-  The 0.27.0 collection push API's staging is not used as a streaming substitute.
-  A future push adapter still requires a genuinely streaming upstream API.
+  The [0.28.0 SDK](liblockdc-0.28.0-upgrade.md) resolves the earlier push-staging blocker; finite journal sources retain direct pull.
 - Softline 0.16 lacks a pre-activation completion veto. With prompt providers
   enabled, unmatched `$`/`@` words in shell text can lose their trigger before
   CAI receives them. Returning no candidates does not veto activation. The

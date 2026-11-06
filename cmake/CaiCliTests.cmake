@@ -628,6 +628,10 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pouch_startup_test.sh"
       "$<TARGET_FILE:cai_cli_pouch_startup_test>" "${CMAKE_CURRENT_BINARY_DIR}" --cuts)
     set_tests_properties(cai_cli_atomic_trim PROPERTIES TIMEOUT 10)
+    add_test(NAME cai_cli_chunked_journal COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pouch_startup_test.sh"
+      "$<TARGET_FILE:cai_cli_pouch_startup_test>" "${CMAKE_CURRENT_BINARY_DIR}" --chunked)
+    set_tests_properties(cai_cli_chunked_journal PROPERTIES TIMEOUT 20)
     add_test(NAME cai_cli_workspace_approval_storage COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_pouch_startup_test.sh"
       "$<TARGET_FILE:cai_cli_pouch_startup_test>" "${CMAKE_CURRENT_BINARY_DIR}" --approvals)

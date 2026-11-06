@@ -168,17 +168,17 @@ event, and identical retries do not extend the collection deadline. Conversation
 lookup metadata has no independent expiry: the collection owns the lifecycle.
 Listing removes stale lookup records and associated prompt recall once the
 backing collection is gone, while native use guards protect open conversations.
-Finite generated records use liblockdc's direct pull append. Each source reads
-already available event/state data; it does not wait for future model output.
-Push and staged pull in 0.25.0 share rolling segments but add encoded staging;
-CAI does not need that staging for these sources. No full-message buffer or
-spool is introduced. The configured compression must match the root manifest.
+Finite generated records use liblockdc's direct pull append.
+Each source reads already available event/state data; it does not wait for future model output.
+Liblockdc 0.28.0 also provides bounded push and staged-pull writers without whole-entry staging, for inputs that may wait externally.
+Direct pull remains appropriate for CAI's finite sources; no full-message buffer or spool is introduced.
+The configured compression must match the root manifest.
 Old CAI snapshot-backed journals remain unsupported. Existing append-only
 collection roots use liblockdc's native control-head upgrade, described in
-[the 0.25.0 upgrade notes](liblockdc-0.25.0-upgrade.md). The current
-[0.27.0 SDK](liblockdc-0.27.0-upgrade.md) retains the atomic edits and recovery
-heads introduced in 0.26.0 without rewriting existing 0.25.x roots; clients
-predating those operations must be upgraded before edited collections are shared.
+[the 0.25.0 upgrade notes](liblockdc-0.25.0-upgrade.md).
+The [0.28.0 SDK](liblockdc-0.28.0-upgrade.md) retains existing contiguous records and introduces chunk/index records for large push/staged-pull appends.
+Upgrade every client sharing a root before using those append forms; older libraries cannot read the new records.
+The atomic edits and recovery heads introduced in 0.26.0 retain their existing older-client restrictions.
 
 Writable restore acquires a native SDK collection lease before replaying model
 context or choosing event IDs. All commits/events use that owned receiver until

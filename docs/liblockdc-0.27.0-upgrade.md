@@ -1,5 +1,7 @@
 # liblockdc 0.27.0 integration
 
+Historical integration notes; current storage and compatibility details are in the [0.28.0 notes](liblockdc-0.28.0-upgrade.md).
+
 CAI pins the published core SDK from
 [c89systems/liblockdc](https://github.com/c89systems/liblockdc/releases/tag/v0.27.0)
 for all six Linux targets. SHA-256 pins match both the release CHECKSUMS file

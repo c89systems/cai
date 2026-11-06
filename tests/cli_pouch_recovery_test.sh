@@ -8,6 +8,7 @@ run --list-all; ok
 cp "$root/stdout" "$root/list"
 id=$(awk 'NR == 1 {print $1}' "$root/list")
 [[ -n "$id" ]]
+logfile="$root/cache/cai/$id.log"
 manifest="$root/state/cai/pouch/namespaces/cai.sessions/index/query.manifest"
 key="$root/state/cai/pouch.key"
 [[ -s "$manifest" ]]
@@ -43,10 +44,12 @@ count=$(requests)
 # preventing direct auto-resume of the intact conversation.
 rm "$manifest"
 mkdir "$manifest"
+offset=$(wc -c <"$logfile")
 terminal_start
-expect 'Session search index recovery failed'
 expect 'RESUMED AFTER INDEX RECOVERY'
 terminal_close
+tail -c +$((offset+1)) "$logfile" >"$root/restart.log"
+contains "$root/restart.log" 'Session search index recovery failed'
 rmdir "$manifest"
 printf 'interrupted derived index\n' >"$manifest"
 for mode in missing empty malformed; do
@@ -55,18 +58,21 @@ for mode in missing empty malformed; do
     empty) : >"$manifest" ;;
     malformed) printf 'interrupted derived index\n' >"$manifest" ;;
   esac
+  offset=$(wc -c <"$logfile")
   terminal_start
   expect 'RESUMED AFTER INDEX RECOVERY'
-  if [[ "$mode" != missing ]]; then
-    expect 'Search index cache unavailable'
-    expect 'recovery from stored records'
-  fi
   terminal_close
+  tail -c +$((offset+1)) "$logfile" >"$root/restart.log"
+  if [[ "$mode" != missing ]]; then
+    jq -se 'any(.[]; .lvl == "warn" and .msg == "cache.load.index.error" and .ns == "cai.sessions")' "$root/restart.log" >/dev/null
+  fi
   for restart in 1 2; do
+    offset=$(wc -c <"$logfile")
     terminal_start
     expect 'RESUMED AFTER INDEX RECOVERY'
-    absent "$term/text" 'Search index cache unavailable'
     terminal_close
+    tail -c +$((offset+1)) "$logfile" >"$root/restart.log"
+    absent "$root/restart.log" cache.load.index.error
   done
 done
 terminal_start
@@ -84,9 +90,11 @@ printf 'interrupted workspace index\n' >"$manifest"
 terminal_start
 expect 'RESUMED AFTER INDEX RECOVERY'
 terminal_close
+offset=$(wc -c <"$logfile")
 terminal_start
 expect 'RESUMED AFTER INDEX RECOVERY'
-absent "$term/text" 'Search index cache unavailable'
 terminal_close
+tail -c +$((offset+1)) "$logfile" >"$root/restart.log"
+absent "$root/restart.log" cache.load.index.error
 [[ $(requests) == "$count" ]]
 cmp "$key" "$root/original-key"

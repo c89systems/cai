@@ -254,7 +254,7 @@ static void oversized_events(cai_cli_pouch *pouch, const char *scope,
   data[config.max_dynamic_string_bytes + 1U] = '\0';
   event.type = "assistant_text_delta";
   event.sequence = 1000000U;
-  event.data = "Before omitted terminal transcript";
+  event.data = "Before omitted terminal transcript\n\n";
   assert(append_event(pouch, scope, id, &event, error) == CAI_OK);
   event.sequence++;
   event.type = "user_shell_completed";
@@ -262,7 +262,7 @@ static void oversized_events(cai_cli_pouch *pouch, const char *scope,
   assert(append_event(pouch, scope, id, &event, error) == CAI_OK);
   event.sequence++;
   event.type = "assistant_text_delta";
-  event.data = "After omitted terminal transcript";
+  event.data = "After omitted terminal transcript\n\n";
   assert(append_event(pouch, scope, id, &event, error) == CAI_OK);
   event.sequence++;
   event.type = "turn_submitted";
@@ -522,6 +522,7 @@ static void collection_regressions(cai_cli_pouch *pouch, cai_error *error) {
 #include "pouch_replay_read_test.inc"
 #include "pouch_trim_test.inc"
 
+#include "pouch_chunked_test.inc"
 #include "pouch_collection_lease_test.inc"
 
 int main(int argc, char **argv) {
@@ -565,6 +566,7 @@ int main(int argc, char **argv) {
   }
   assert(argc == 2 || (argc == 3 && (strcmp(argv[2], "--leases") == 0 ||
                                      strcmp(argv[2], "--cuts") == 0 ||
+                                     strcmp(argv[2], "--chunked") == 0 ||
                                      strcmp(argv[2], "--approvals") == 0)));
   assert(snprintf(directory, sizeof(directory), "%s/pouch-startup-XXXXXX",
                   argv[1]) > 0);
@@ -580,8 +582,9 @@ int main(int argc, char **argv) {
     pthread_t worker;
     /* Real musl defaults: no fixture or production stack enlargement. */
     assert(pthread_create(&worker, NULL,
-                          strcmp(argv[2], "--cuts") == 0
-                              ? pouch_cut_worker
+                          strcmp(argv[2], "--cuts") == 0 ? pouch_cut_worker
+                          : strcmp(argv[2], "--chunked") == 0
+                              ? pouch_chunked_worker
                               : pouch_approval_worker,
                           NULL) == 0);
     assert(pthread_join(worker, NULL) == 0);
