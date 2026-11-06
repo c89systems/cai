@@ -200,7 +200,8 @@
     target_compile_options(cai_cli_tool_result_test PRIVATE -UNDEBUG)
     add_test(NAME cai_cli_tool_result COMMAND cai_cli_tool_result_test)
     add_executable(cai_cli_messages_test tests/cli_messages_test.c
-      cli/identity.c cli/pouch.c cli/replay.c cli/pouch_stream.c cli/error.c cli/session_commands.c cli/log.c cli/log_environment.c cli/message_names.c)
+      cli/identity.c cli/pouch.c cli/replay.c cli/pouch_stream.c cli/error.c cli/session_commands.c cli/log.c cli/log_environment.c cli/message_names.c
+      cli/journal_projection.c cli/transcript.c)
     target_link_libraries(cai_cli_messages_test PRIVATE cai_static
       softline::softline_static lockdc::static)
     cai_configure_cli_target(cai_cli_messages_test)
@@ -267,11 +268,14 @@
     add_test(NAME cai_cli_export_paths COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_export_paths_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")
+    add_test(NAME cai_cli_export_paths_executable COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_export_paths_test.sh"
+      "$<TARGET_FILE:cai_cli>")
     add_test(NAME cai_cli_utility_boundary COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_utility_boundary_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_app_utility_host>")
     set_tests_properties(cai_cli_utility_boundary PROPERTIES TIMEOUT 20)
-    set_tests_properties(cai_cli_export_paths PROPERTIES TIMEOUT 15)
+    set_tests_properties(cai_cli_export_paths cai_cli_export_paths_executable PROPERTIES TIMEOUT 15)
     set(_cai_journal_lua_args)
     if(CAI_BUILD_LUA_RUNNER AND CAI_BUILD_LUA)
       list(APPEND _cai_journal_lua_args "$<TARGET_FILE:cai_lua_runner>" "${CMAKE_CURRENT_BINARY_DIR}/lua")
@@ -575,7 +579,8 @@
     add_test(NAME cai_cli_quota_refresh COMMAND cai_cli_quota_refresh_test)
     set_tests_properties(cai_cli_quota_refresh PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_pouch_startup_test tests/cli_pouch_startup_test.c
-      cli/identity.c cli/replay.c cli/pouch_stream.c cli/error.c cli/log.c cli/log_environment.c)
+      cli/identity.c cli/replay.c cli/pouch_stream.c cli/error.c cli/log.c cli/log_environment.c
+      cli/journal_projection.c cli/transcript.c)
     target_link_libraries(cai_cli_pouch_startup_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_pouch_startup_test)
     target_compile_options(cai_cli_pouch_startup_test PRIVATE -UNDEBUG)
@@ -608,7 +613,8 @@
         "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_cli_pouch_startup_test>")
     set_tests_properties(cai_cli_replay_limits PROPERTIES TIMEOUT 30)
     add_executable(cai_cli_pouch_compaction_test tests/cli_pouch_compaction_test.c
-      cli/identity.c cli/replay.c cli/pouch_stream.c cli/error.c cli/log.c cli/log_environment.c)
+      cli/identity.c cli/replay.c cli/pouch_stream.c cli/error.c cli/log.c cli/log_environment.c
+      cli/journal_projection.c cli/transcript.c)
     target_link_libraries(cai_cli_pouch_compaction_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_pouch_compaction_test)
     target_compile_options(cai_cli_pouch_compaction_test PRIVATE -UNDEBUG)
@@ -738,7 +744,8 @@
         "$<TARGET_FILE:cai_cli_mock_fixture>")
     set_tests_properties(cai_cli_terminal_handoff PROPERTIES TIMEOUT 45)
     add_executable(cai_cli_prompt_history_test tests/cli_prompt_history_test.c
-      cli/identity.c cli/replay.c cli/pouch_stream.c cli/error.c cli/log.c cli/log_environment.c)
+      cli/identity.c cli/replay.c cli/pouch_stream.c cli/error.c cli/log.c cli/log_environment.c
+      cli/journal_projection.c cli/transcript.c)
     target_link_libraries(cai_cli_prompt_history_test PRIVATE cai_static lockdc::static)
     cai_configure_cli_target(cai_cli_prompt_history_test)
     cai_cli_use_storage_fixture(cai_cli_prompt_history_test)

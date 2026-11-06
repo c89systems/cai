@@ -226,9 +226,9 @@ int cai_cli_pouch_unlock(lc_lease *lease, int result, cai_error *error);
  */
 const cai_todo_store_callbacks *cai_cli_pouch_todo_callbacks(void);
 /* Stream visible observation events and one retained-context initialization
- * commit. Trimmed content is excluded; no inference or tool execution. */
-int cai_cli_pouch_export(cai_cli_pouch *pouch, const char *id,
-                         cai_agent_runtime *runtime, cai_sink *sink,
+ * commit from the stored journal, without a runtime or materialized context.
+ * Trimmed content is excluded; no inference or tool execution. */
+int cai_cli_pouch_export(cai_cli_pouch *pouch, const char *id, cai_sink *sink,
                          cai_error *error);
 int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
                          const char *workspace, char *id, size_t capacity,

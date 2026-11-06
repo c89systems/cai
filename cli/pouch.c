@@ -2952,15 +2952,6 @@ int cai_cli_pouch_unlock(lc_lease *lease, int result, cai_error *error) {
   return release(lease, result, error);
 }
 
-/* Inspect identity fields to group visible positions, streaming the data field
- * into a discard sink. Then copy raw JSONL spans without decoding or buffering
- * their bodies. Trimmed entries never enter an export. */
-static const lonejson_field export_identity_fields[] = {
-    LONEJSON_FIELD_STRING_FIXED_REQ(cli_record, record_type, "record_type",
-                                    LONEJSON_OVERFLOW_FAIL),
-    LONEJSON_FIELD_U64_REQ(cli_record, sequence, "sequence"),
-    LONEJSON_FIELD_JSON_VALUE(cli_record, state, "data")};
-LONEJSON_MAP_DEFINE(export_identity_map, cli_record, export_identity_fields);
 #include "pouch_export.inc"
 
 static int validate_commit(cai_cli_pouch *pouch, const char *id,

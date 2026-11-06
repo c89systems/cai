@@ -9,6 +9,7 @@ add_library(cai_app_server_objects OBJECT cli/server.c cli/identity.c cli/app_co
   cli/runtime_options.c cli/mcp.c cli/skills.c cli/status.c cli/shell.c cli/shell_text.c
   cli/startup.c cli/goal_input.c cli/command_help.c cli/review_report.c cli/pouch.c
   cli/pouch_stream.c cli/pouch_transcript.c cli/transcript.c cli/transcript_feed.c
+  cli/journal_projection.c
   cli/quota_refresh.c cli/session_commands.c cli/workspace_claims.c cli/log.c
   cli/log_environment.c cli/documents.c cli/messages.c cli/message_names.c
   cli/todo.c cli/stores.c cli/temp.c cli/replay.c)
@@ -139,6 +140,17 @@ if(CAI_BUILD_TESTS)
     set_tests_properties(cai_app_server_exports PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   endif()
   add_custom_target(cai_app_server_tests)
+  if(TARGET cai_app_server_static)
+    add_executable(cai_journal_projection_test tests/journal_projection_test.c)
+    target_link_libraries(cai_journal_projection_test PRIVATE cai_app_server_static)
+    target_link_options(cai_journal_projection_test PRIVATE -Wl,--wrap=malloc
+      -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free)
+    cai_configure_cli_target(cai_journal_projection_test)
+    target_compile_options(cai_journal_projection_test PRIVATE -UNDEBUG)
+    add_test(NAME cai_journal_projection COMMAND cai_journal_projection_test)
+    set_tests_properties(cai_journal_projection PROPERTIES LABELS "unit;local;offline" TIMEOUT 30)
+    add_dependencies(cai_app_server_tests cai_journal_projection_test)
+  endif()
   if(TARGET cai_app_client_static AND TARGET cai_app_server_static)
     add_executable(cai_app_server_sdk_test tests/app_server_sdk_test.c tests/cli_storage_fixture.c)
     target_link_libraries(cai_app_server_sdk_test PRIVATE cai_app_server_static cai_app_client_static)

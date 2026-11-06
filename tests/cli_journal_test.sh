@@ -18,6 +18,7 @@ for n in 1 2 3; do
   contains "$root/request" 'FIRST JOURNAL PROMPT'
   contains "$root/request" 'FIRST-CONTEXT-λ'
 done
+collections_before=$(find "$root/state/cai/pouch/namespaces/cai.sessions/collections/names" -type f | wc -l)
 run --export "$id"; ok
 exported=$(head -1 "$root/stdout")
 cp "$exported" "$root/native.jsonl"
@@ -27,7 +28,8 @@ fi
 jq -se 'any(.[]; .record_type=="commit") and all(.[];
   .record_type=="event" or (.record_type=="commit" and
     .state.metadata.version==1 and (.state|has("history")|not)))' "$exported" >/dev/null
-[[ $(find "$root/state/cai/pouch/namespaces/cai.sessions/collections/names" -type f | wc -l) == 1 ]]
+# Export creates neither another journal nor another prompt-history collection.
+[[ $(find "$root/state/cai/pouch/namespaces/cai.sessions/collections/names" -type f | wc -l) == "$collections_before" ]]
 # A real encrypted second root, with compression explicitly disabled, imports
 # and resumes the exact same conversation. Only the storage mode differs.
 run --disable-compression --state-dir "$root/uncompressed" --import "$exported"; ok
@@ -44,10 +46,9 @@ for mode in none zlib; do
   flags=(); [[ "$mode" != none ]] || flags=(--disable-compression)
   run "${flags[@]}" --export "$id"; ok
   grep -qx "compression=$mode" "$root/state/cai/pouch/manifest"
-  # Portable export stamps its generated initialization commit at export time.
-  jq -se --slurpfile expected "$root/native.jsonl" \
-    'map(del(.commit_created_at_ns)) == ($expected | map(del(.commit_created_at_ns)))' \
-    "$(head -1 "$root/stdout")" >/dev/null
+  # Storage projection preserves original times and state exactly; even a
+  # compression conversion must produce the same portable bytes.
+  cmp "$root/native.jsonl" "$(head -1 "$root/stdout")"
 done
 # Environment and INI surfaces select the same setting; an explicit CLI flag
 # overrides configuration. Changing an existing root converts its retained

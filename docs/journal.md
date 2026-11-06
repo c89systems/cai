@@ -219,7 +219,13 @@ must participate in this protocol; remote state retains server lease semantics.
 Portable JSONL export excludes trimmed entries. It streams the visible
 observation events and then one initialization commit for the retained
 context. This deliberate export-only initialization is separate from live
-incremental persistence. Import assigns a new conversation ID in the selected
+incremental persistence. The application builds it directly from a stable
+collection head: one index pass folds metadata and retained byte references;
+visible events and selected provider text then flow through incremental JSON
+readers/writers. No agent runtime, complete context buffer or context spool is
+created. Reads are linear passes, not a full scan for each item. Recorded usage,
+goal clocks, original event times and the latest input checkpoint are retained.
+Import assigns a new conversation ID in the selected
 workspace, validates the journal, and publishes it only after successful
 restoration. Imported conversations are ordered by import time for selection;
 their original event/commit timestamps remain available in the records.

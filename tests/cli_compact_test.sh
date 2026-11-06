@@ -148,3 +148,23 @@ prompt 'CONTINUE_AFTER_CANCEL' AfterCancelledCompaction
 tail -1 "$root/peer/requests.jsonl" >"$root/continued"
 absent "$root/continued" CANCELLED_SUMMARY
 terminal_close
+
+# Portable storage-only export must resume the retained compacted context,
+# including the opaque Responses item or Chat summary, without resurrecting
+# discarded provider context or the cancelled summary.
+run --export "$id" --export-out compacted.jsonl; ok
+run --import "$work/compacted.jsonl"; ok
+imported=$(stdout_text)
+set_plan '["AfterCompactedImport"]'
+terminal_start --resume "$imported"
+prompt 'CONTINUE_AFTER_COMPACTED_IMPORT' AfterCompactedImport
+tail -1 "$root/peer/requests.jsonl" >"$root/continued"
+if [[ "$chat" == false ]]; then
+  contains "$root/continued" MANUAL_OPAQUE_CONTEXT
+else
+  contains "$root/continued" MANUAL_CHAT_SUMMARY
+fi
+contains "$root/continued" CONTINUE_AFTER_CANCEL
+absent "$root/continued" BeforeCompactAnswer
+absent "$root/continued" CANCELLED_SUMMARY
+terminal_close

@@ -215,6 +215,8 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
     rc = -1;
   if (rc <= 0) {
     *exit_code = rc == 0 ? 0 : 2;
+    if (rc < 0 && (error == NULL || error->code == CAI_OK))
+      cai_cli_error(error, CAI_ERR_INVALID, options.diagnostic);
     cai_config_close(configuration);
     return rc == 0 ? CAI_OK : CAI_ERR_INVALID;
   }

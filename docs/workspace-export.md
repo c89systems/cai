@@ -1,22 +1,22 @@
 # Storage-only conversation export
 
-Design for the remaining workspace-server cutover, 2026-11-06. This is not
-implemented. The Markdown content decision below is awaiting confirmation.
+Workspace-server export cutover, 2026-11-06. The JSONL projection is implemented;
+the Markdown content decision below is awaiting confirmation.
 
 ## Current boundary
 
-`cli/session_commands.c` opens an `offline-export` client and an agent runtime
-when exporting a closed conversation. No inference is requested, but runtime
-construction still restores the retained provider context, prepares application
+For Markdown, `cli/session_commands.c` opens an `offline-export` client and an
+agent runtime when exporting a closed conversation. No inference is requested,
+but runtime construction still restores the retained provider context, prepares application
 instructions and reconstructs session state. The context uses the ordinary
 history backing store. Streaming its subsequent serialization does not make
 that reconstruction a storage-only export.
 
-`cli/pouch_export.inc` also scans observation identities, retains selected
-native ranges, copies those ranges, and asks the runtime to generate a final
-initialization commit. This couples portable JSONL to a restored model session.
-An active `/export` already has a runtime, but should use the same storage
-projection as `--export`; it must not need a separate export implementation.
+`cli/pouch_export.inc` opens one collection receiver and calls the private
+`journal_projection` module. JSONL-only export constructs no client or runtime.
+It indexes edits, streams visible observations, and generates one retained
+initialization directly from native ranges. Active `/export` uses the same
+projection as offline `--export`, without serializing its live runtime.
 
 The existing core runtime handover/export APIs remain useful for callers that
 explicitly own a live runtime. Removing the application's dependency on them
@@ -110,8 +110,8 @@ their documented thread affinity.
 
 ## Required proof
 
-- Strengthen `cai_cli_utility_boundary` to reject every runtime/client/agent
-  construction during export, removing its existing restoration exception.
+- `cai_cli_utility_boundary` rejects client and runtime construction during
+  JSONL-only export. Its Markdown exception remains until that cutover.
 - Compare retained state and JSONL import/resume against the existing core
   exporter across ordinary turns, steering, tool results, reasoning, goals,
   compaction, trim, queued input and input-checkpoint recovery boundaries.
@@ -127,3 +127,18 @@ their documented thread affinity.
   executable on default worker stacks. Run normal Debug and affected focused
   tests, formatting and whitespace checks; rebuild musl and commit. The full
   live/release matrix remains outside this goal's verification scope.
+
+`cai_journal_projection` covers native edit prefixes, folded metadata, original
+usage/goal values, checkpoint carry-forward and actual queue restoration,
+one-byte UTF-8/escape splits, revision/range/identity/framing failures,
+incomplete reads, changed heads, cancellation and sink failures. A generated
+fixture interleaves 8 MiB context, event and metadata strings while rejecting
+individual allocations above 64 KiB and aggregate tracked live allocations above
+1 MiB. It asserts payload delivery before the
+producer finishes and a constant number of native read passes. Tests run on a
+default worker stack; metadata indexes remain proportional to entry counts.
+CLI journal/import, trim and destination tests cover both provider protocols,
+literal absence of removed data, real resumed inference inputs and publication.
+The destination test also runs against the standalone executable, including its
+startup dispatcher. Validation failures retain the parser's specific diagnostic
+instead of reporting only a generic invalid status.

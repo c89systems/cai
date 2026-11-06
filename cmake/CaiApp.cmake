@@ -135,6 +135,7 @@ if(CAI_BUILD_TESTS)
   target_link_libraries(cai_app_utility_host PRIVATE cai_app_static)
   target_link_options(cai_app_utility_host PRIVATE
     -Wl,--wrap=cai_agent_runtime_open -Wl,--wrap=cai_workspace_server_open
+    -Wl,--wrap=cai_client_open
     -Wl,--wrap=cai_agent_runtime_pump -Wl,--wrap=cai_agent_runtime_pump_bounded
     -Wl,--wrap=sl_create_with_config -Wl,--wrap=mdf_create
     -Wl,--wrap=setenv -Wl,--wrap=unsetenv -Wl,--wrap=clearenv

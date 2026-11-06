@@ -588,12 +588,12 @@ int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
     rc = cai_cli_pouch_lock(pouch, id, &lease, error);
   if (rc == CAI_OK)
     rc = cai_cli_pouch_session(pouch, id, &metadata, error);
-  if (rc == CAI_OK && active_runtime == NULL)
-    rc = offline_runtime(pouch, id, workspace, &metadata, &storage, &callbacks,
-                         &client, &runtime, error);
   if (rc == CAI_OK)
     rc = export_targets(pouch, workspace, export_root, id, basename, paths,
                         error);
+  if (rc == CAI_OK && paths[0][0] != '\0' && active_runtime == NULL)
+    rc = offline_runtime(pouch, id, workspace, &metadata, &storage, &callbacks,
+                         &client, &runtime, error);
   /* Finish every selected stream before publishing any output. */
   for (i = 0U; rc == CAI_OK && i < 2U; i++) {
     if (paths[i][0] == '\0')
@@ -607,7 +607,7 @@ int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
     if (rc == CAI_OK && i == 0U)
       rc = cai_agent_runtime_export_execution_markdown(runtime, sink, error);
     if (rc == CAI_OK && i == 1U)
-      rc = cai_cli_pouch_export(pouch, id, runtime, sink, error);
+      rc = cai_cli_pouch_export(pouch, id, sink, error);
     cai_sink_close(sink);
     sink = NULL;
     if (file != NULL) {

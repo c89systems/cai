@@ -10,11 +10,11 @@ utility flag cannot select a different mode.
 
 Utilities open only the stores and resources needed for their operation. They
 never run an agent loop or create a workspace server, Softline editor or libmdf
-renderer. Offline export still uses the shared helper's read-only runtime to
-restore saved context, with no-op write callbacks and execution-only replay;
-it cannot consume pending model input. Removing that reconstruction in favor
-of a [storage-only export projection](workspace-export.md) remains part of the
-separation work. Its Markdown content contract needs the product decision
+renderer. JSONL export projects the saved journal directly without creating a
+client or runtime, restoring model context or consuming pending input. Active
+and offline exports use the same implementation. Markdown export still uses a
+read-only runtime with no-op write callbacks and execution-only replay. Its
+[storage-only content contract](workspace-export.md) needs the product decision
 recorded in that design before implementation.
 Session selection/export/deletion share the existing storage helpers
 used by application commands; there is no second persistence implementation.
@@ -51,7 +51,8 @@ in libpslog; it no longer blocks utility isolation.
 
 `cai_cli_utility_boundary` seeds a conversation using a real local-provider
 runtime, then runs maintenance through an embedding host that permits only
-that offline restoration profile and aborts if a runtime loop, workspace-server,
+that Markdown restoration profile and rejects even client/runtime construction
+for JSONL-only export. It aborts if a runtime loop, workspace-server,
 editor or renderer is started. It checks
 listing, independent import, export projections, deletion, skill replacement,
 standalone messaging, Chrome registration, failures, Unicode rows and no extra
