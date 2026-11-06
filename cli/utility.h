@@ -7,9 +7,8 @@
  * context restoration. Callbacks remain on this calling thread; STOP
  * uses the ordinary application control channel. Returns the CLI exit code.
  *
- * Process-owned logging/browser helpers run under the app's process-resource
- * wrapper so configured environment settings retain their established
- * semantics. This is a utility boundary,
- * not a second agent owner. */
+ * Configuration and helpers consume immutable environment/cwd views. No
+ * process-resource wrapper, environment installation, process-global locale/
+ * signal changes or implicit server lifetime is involved. */
 int cai_cli_utility_run(int, char **, const cai_app_config *, cai_app_bridge *);
 #endif

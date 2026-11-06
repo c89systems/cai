@@ -27,7 +27,7 @@ run --export "$id"; ok
 [[ -s "$root/data/smith/exports/$id/$id.md" && -s "$root/data/smith/exports/$id/$id.jsonl" ]]
 terminal_start --resume "$id"
 send '/queue on\r'; expect 'smith.work'
-send '/status\r'; expect 'smith global AGENTS.md'
+send '/status\r'; expect_table 1 'smith global AGENTS.md'
 terminal_close
 [[ -d "$root/cache/smith/clipboard" && ! -e "$root/state/smith/history" ]]
 find "$root/cache/smith" -name '*.log' | grep -q .

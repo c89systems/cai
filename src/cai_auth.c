@@ -1,5 +1,7 @@
+#define _XOPEN_SOURCE 700
 #include "cai_internal.h"
 #include "cai_process_child.h"
+#include "cai_process_environment.h"
 
 #include <cai/auth.h>
 
@@ -1754,6 +1756,21 @@ int cai_chatgpt_login_browser_command(char *out, size_t out_size,
   return CAI_OK;
 }
 
+/** Prepared before fork: children perform only descriptor/signal setup and
+ * exec. In particular no allocator, environment installation or PATH search
+ * runs in the multithreaded host's forked address space. */
+typedef struct cai_browser_process {
+  char **environment;
+  char *arguments[3];
+  char executable[4096], directory[4096];
+} cai_browser_process;
+static void cai_browser_process_free(cai_browser_process *process) {
+  cai_process_environment_free(process->environment);
+  cai_free_mem(NULL, process->arguments[0]);
+  cai_free_mem(NULL, process->arguments[1]);
+  cai_free_mem(NULL, process);
+}
+
 int cai_chatgpt_login_open_browser_with_config(
     const cai_chatgpt_login_browser_config *config, const char *authorize_url,
     cai_error *error) {
@@ -1762,9 +1779,13 @@ int cai_chatgpt_login_open_browser_with_config(
   ssize_t ignored_write;
   int child_errno;
   int child_status;
-  int pipe_fds[2];
+  int pipe_fds[2] = {-1, -1};
   pid_t pid;
   pid_t opener_pid;
+  cai_browser_process *process;
+  const char *cwd = config != NULL ? config->directory : NULL;
+  size_t i, j;
+  int rc, workdir = -1;
 
   if (authorize_url == NULL || authorize_url[0] == '\0') {
     return cai_set_error(error, CAI_ERR_INVALID,
@@ -1774,27 +1795,73 @@ int cai_chatgpt_login_open_browser_with_config(
   if (command == NULL || command[0] == '\0') {
     command = cai_chatgpt_login_default_browser_command();
   }
-  if (pipe(pipe_fds) != 0) {
-    return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to create browser opener pipe",
-                                strerror(errno));
+  if (cwd != NULL && cwd[0] != '/')
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "browser directory must be absolute");
+  process = cai_alloc(NULL, sizeof(*process));
+  if (process == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate browser command");
+  memset(process, 0, sizeof(*process));
+  if (realpath(cwd != NULL ? cwd : ".", process->directory) == NULL) {
+    rc = cai_set_error(error, CAI_ERR_INVALID,
+                       "browser directory is unavailable");
+    goto cleanup;
   }
-  if (fcntl(pipe_fds[1], F_SETFD, FD_CLOEXEC) != 0) {
+  rc = cai_process_environment_new(config != NULL ? config->environment : NULL,
+                                   1, NULL, &process->environment, error);
+  if (rc != CAI_OK)
+    goto cleanup;
+  for (i = 0U; process->environment[i] != NULL; ++i)
+    if (strncmp(process->environment[i], "LD_PRELOAD=", 11U) == 0) {
+      cai_free_mem(NULL, process->environment[i]);
+      for (j = i;; ++j) {
+        process->environment[j] = process->environment[j + 1U];
+        if (process->environment[j] == NULL)
+          break;
+      }
+      break;
+    }
+  process->arguments[0] = cai_strdup(NULL, command);
+  process->arguments[1] = cai_strdup(NULL, authorize_url);
+  if (process->arguments[0] == NULL || process->arguments[1] == NULL) {
+    rc = cai_set_error(error, CAI_ERR_NOMEM, "copy browser arguments");
+    goto cleanup;
+  }
+  rc = cai_process_program(command, process->environment, process->directory,
+                           process->executable, error);
+  if (rc != CAI_OK) {
+    rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
+                              "failed to execute browser opener", command);
+    goto cleanup;
+  }
+  workdir = open(process->directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (workdir < 0) {
+    rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
+                              "failed to open browser directory",
+                              strerror(errno));
+    goto cleanup;
+  }
+  if (pipe(pipe_fds) != 0) {
+    rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
+                              "failed to create browser opener pipe",
+                              strerror(errno));
+    goto cleanup;
+  }
+  if (fcntl(pipe_fds[0], F_SETFD, FD_CLOEXEC) != 0 ||
+      fcntl(pipe_fds[1], F_SETFD, FD_CLOEXEC) != 0) {
     child_errno = errno;
-    close(pipe_fds[0]);
-    close(pipe_fds[1]);
-    return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to configure browser opener pipe",
-                                strerror(child_errno));
+    rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
+                              "failed to configure browser opener pipe",
+                              strerror(child_errno));
+    goto cleanup;
   }
   pid = fork();
   if (pid < 0) {
     child_errno = errno;
-    close(pipe_fds[0]);
-    close(pipe_fds[1]);
-    return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to launch browser opener",
-                                strerror(child_errno));
+    rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
+                              "failed to launch browser opener",
+                              strerror(child_errno));
+    goto cleanup;
   }
   if (pid == 0) {
     close(pipe_fds[0]);
@@ -1809,36 +1876,46 @@ int cai_chatgpt_login_open_browser_with_config(
       close(pipe_fds[1]);
       _exit(0);
     }
-    if (cai_process_child_signals() != 0) {
+    if (fchdir(workdir) != 0 || cai_process_child_signals() != 0) {
       child_errno = errno;
       ignored_write = write(pipe_fds[1], &child_errno, sizeof(child_errno));
       (void)ignored_write;
       _exit(127);
     }
-    unsetenv("LD_PRELOAD");
-    execlp(command, command, authorize_url, (char *)NULL);
+    close(workdir);
+    execve(process->executable, process->arguments, process->environment);
     child_errno = errno;
     ignored_write = write(pipe_fds[1], &child_errno, sizeof(child_errno));
     (void)ignored_write;
     _exit(127);
   }
   close(pipe_fds[1]);
+  pipe_fds[1] = -1;
   child_errno = 0;
-  count = read(pipe_fds[0], &child_errno, sizeof(child_errno));
-  close(pipe_fds[0]);
+  do {
+    count = read(pipe_fds[0], &child_errno, sizeof(child_errno));
+  } while (count < 0 && errno == EINTR);
   while (waitpid(pid, &child_status, 0) < 0 && errno == EINTR) {
   }
   if (count > 0) {
-    return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to execute browser opener",
-                                strerror(child_errno));
+    rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
+                              "failed to execute browser opener",
+                              strerror(child_errno));
   }
   if (count < 0) {
-    return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to observe browser opener launch",
-                                strerror(errno));
+    rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
+                              "failed to observe browser opener launch",
+                              strerror(errno));
   }
-  return CAI_OK;
+cleanup:
+  if (workdir >= 0)
+    close(workdir);
+  if (pipe_fds[0] >= 0)
+    close(pipe_fds[0]);
+  if (pipe_fds[1] >= 0)
+    close(pipe_fds[1]);
+  cai_browser_process_free(process);
+  return rc;
 }
 
 int cai_chatgpt_login_open_browser(const char *authorize_url,

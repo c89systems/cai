@@ -160,6 +160,13 @@ typedef struct cai_chatgpt_login_browser_config {
    * no shell is used.
    */
   const char *command;
+  /** Immutable child environment, borrowed for this call. NULL captures the
+   * host environment once. LD_PRELOAD is removed from the child only. PATH
+   * resolution uses this view, including relative/empty components. */
+  cai_environment *environment;
+  /** Absolute child cwd. NULL captures the caller's cwd once. The host cwd,
+   * environment and signal dispositions are never changed. */
+  const char *directory;
 } cai_chatgpt_login_browser_config;
 
 /** Interactive ChatGPT OAuth login flow with receiver callback methods. */

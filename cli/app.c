@@ -1,5 +1,5 @@
 /** @file Combined app facade: compose the shared owner with a socket frontend,
- * and retain process-scoped maintenance utilities outside owner lifetime. */
+ * and run independent maintenance utilities outside owner lifetime. */
 #define _GNU_SOURCE
 #include "identity.h"
 #include "log.h"
@@ -7,107 +7,16 @@
 #include "run_frontend.h"
 #include "server_internal.h"
 #include "utility.h"
-#include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
-#include <locale.h>
-#include <pthread.h>
-#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
-#include <termios.h>
-#include <unistd.h>
-
-extern char **environ;
-static pthread_mutex_t application_lock = PTHREAD_MUTEX_INITIALIZER;
-static const int signals[] = {SIGINT,  SIGTERM, SIGHUP,  SIGQUIT, SIGWINCH,
-                              SIGTSTP, SIGCONT, SIGPIPE, SIGTTOU, SIGTTIN};
 typedef struct app_impl {
   cai_app shell;
   cai_app_server *owner;
 } app_impl;
-typedef struct process_state {
-  char **environment;
-  size_t count;
-  char *locale;
-  int flags[3];
-  struct sigaction actions[sizeof(signals) / sizeof(signals[0])];
-  sigset_t mask;
-  struct termios terminal;
-  int has_terminal;
-} process_state;
-
-static void process_free(process_state *saved) {
-  size_t i;
-  for (i = 0U; i < saved->count; i++)
-    free(saved->environment[i]);
-  free(saved->environment);
-  free(saved->locale);
-}
-static int process_save(process_state *saved, cai_error *error) {
-  size_t i;
-  memset(saved, 0, sizeof(*saved));
-  while (environ != NULL && environ[saved->count] != NULL)
-    saved->count++;
-  saved->environment = calloc(saved->count + 1U, sizeof(char *));
-  if (saved->environment == NULL) {
-    saved->count = 0U;
-    return cai_cli_error(error, CAI_ERR_NOMEM, "snapshot host environment");
-  }
-  for (i = 0U; i < saved->count; i++) {
-    saved->environment[i] = strdup(environ[i]);
-    if (saved->environment[i] == NULL)
-      return cai_cli_error(error, CAI_ERR_NOMEM, "snapshot host environment");
-  }
-  saved->locale = strdup(setlocale(LC_CTYPE, NULL));
-  if (saved->locale == NULL)
-    return cai_cli_error(error, CAI_ERR_NOMEM, "snapshot host locale");
-  if (pthread_sigmask(SIG_SETMASK, NULL, &saved->mask) != 0)
-    return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                         "snapshot host process state");
-  for (i = 0U; i < sizeof(signals) / sizeof(signals[0]); i++)
-    if (sigaction(signals[i], NULL, &saved->actions[i]) != 0)
-      return cai_cli_error(error, CAI_ERR_TRANSPORT, "snapshot host signals");
-  for (i = 0U; i < 3U; i++)
-    saved->flags[i] = fcntl((int)i, F_GETFL);
-  saved->has_terminal = tcgetattr(STDIN_FILENO, &saved->terminal) == 0;
-  return CAI_OK;
-}
-static int process_restore(process_state *saved, cai_error *error) {
-  size_t i;
-  int failed = 0;
-  if (clearenv() != 0)
-    failed = 1;
-  for (i = 0U; i < saved->count; i++) {
-    char *equal = strchr(saved->environment[i], '=');
-    if (equal != NULL) {
-      *equal = '\0';
-      if (setenv(saved->environment[i], equal + 1, 1) != 0)
-        failed = 1;
-      *equal = '=';
-    }
-  }
-  if (setlocale(LC_CTYPE, saved->locale) == NULL)
-    failed = 1;
-  for (i = 0U; i < sizeof(signals) / sizeof(signals[0]); i++)
-    if (sigaction(signals[i], &saved->actions[i], NULL) != 0)
-      failed = 1;
-  if (pthread_sigmask(SIG_SETMASK, &saved->mask, NULL) != 0)
-    failed = 1;
-  if (saved->has_terminal &&
-      tcsetattr(STDIN_FILENO, TCSANOW, &saved->terminal) != 0)
-    failed = 1;
-  for (i = 0U; i < 3U; i++)
-    if (saved->flags[i] >= 0 && fcntl((int)i, F_SETFL, saved->flags[i]) != 0)
-      failed = 1;
-  return failed ? cai_cli_error(error, CAI_ERR_TRANSPORT,
-                                "could not restore host process state")
-                : CAI_OK;
-}
 int cai_app_run(cai_app *self, int argc, const char *const *argv,
                 int *exit_code, cai_error *error) {
   cai_app_server *app;
-  process_state saved;
   char **arguments;
   int i, rc, handled = 0;
   if (self == NULL || exit_code == NULL || argc < 0 || argc == INT_MAX ||
@@ -138,21 +47,9 @@ int cai_app_run(cai_app *self, int argc, const char *const *argv,
   } else {
     rc = cai_cli_run_frontend(&app->config, app->bridge, argc + 1, arguments,
                               NULL, &handled, exit_code, error);
-    if (rc == CAI_OK && !handled) {
-      if (pthread_mutex_trylock(&application_lock) != 0)
-        rc = cai_cli_error(error, CAI_ERR_INVALID,
-                           "a utility application is already running");
-      else {
-        rc = process_save(&saved, error);
-        if (rc == CAI_OK) {
-          *exit_code = cai_cli_utility_run(argc + 1, arguments, &app->config,
-                                           app->bridge);
-          rc = process_restore(&saved, error);
-        }
-        process_free(&saved);
-        pthread_mutex_unlock(&application_lock);
-      }
-    }
+    if (rc == CAI_OK && !handled)
+      *exit_code =
+          cai_cli_utility_run(argc + 1, arguments, &app->config, app->bridge);
   }
   if (arguments != NULL) {
     for (i = 0; i <= argc; i++)

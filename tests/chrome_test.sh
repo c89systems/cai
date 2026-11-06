@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 mode=$1; shift
+# Exercise both Chrome and workspace sockets under a short owned build root.
+cli_fixture_parent=$(dirname "$(dirname "$(realpath "$1")")")
 source "$(dirname "$0")/cli_test_common.sh"
 export LOG_LEVEL=warn LOG_MODE=json XDG_RUNTIME_DIR="$root/run"
 unset CHROME_CONFIG_HOME CODEX_HOME

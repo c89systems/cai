@@ -1,6 +1,51 @@
+#define _XOPEN_SOURCE 700
 #include "cai_process_environment.h"
 #include "cai_internal.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+int cai_process_program(const char *name, char *const *environment,
+                        const char *workspace, char path[4096],
+                        cai_error *error) {
+  const char *paths = "/usr/local/bin:/usr/bin:/bin", *end;
+  char candidate[4096];
+  size_t i, length;
+  int n;
+  if (strchr(name, '/') != NULL) {
+    n = name[0] == '/'
+            ? snprintf(candidate, sizeof(candidate), "%s", name)
+            : snprintf(candidate, sizeof(candidate), "%s/%s", workspace, name);
+    if (n >= 0 && (size_t)n < sizeof(candidate) &&
+        realpath(candidate, path) != NULL && access(path, X_OK) == 0)
+      return CAI_OK;
+  } else {
+    for (i = 0U; environment[i] != NULL; i++)
+      if (strncmp(environment[i], "PATH=", 5U) == 0)
+        paths = environment[i] + 5U;
+    do {
+      end = strchr(paths, ':');
+      length = end != NULL ? (size_t)(end - paths) : strlen(paths);
+      if (length < sizeof(candidate)) {
+        if (length == 0U)
+          n = snprintf(candidate, sizeof(candidate), "%s/%s", workspace, name);
+        else if (paths[0] == '/')
+          n = snprintf(candidate, sizeof(candidate), "%.*s/%s", (int)length,
+                       paths, name);
+        else
+          n = snprintf(candidate, sizeof(candidate), "%s/%.*s/%s", workspace,
+                       (int)length, paths, name);
+        if (n >= 0 && (size_t)n < sizeof(candidate) &&
+            realpath(candidate, path) != NULL && access(path, X_OK) == 0)
+          return CAI_OK;
+      }
+      paths = end != NULL ? end + 1U : NULL;
+    } while (paths != NULL);
+  }
+  return cai_set_error_detail(error, CAI_ERR_INVALID,
+                              "child executable is unavailable", name);
+}
 
 void cai_process_environment_free(char **environment) {
   size_t i;

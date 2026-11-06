@@ -188,9 +188,12 @@ including empty ones, win unless `config_env_has_precedence=true`.
 The explicit `apply_environment` utility still changes process-global state;
 use the immutable view for independently running controllers. The current
 application configuration resolver does not install `[env]`: it uses the
-effective view for option aliases, path expansion and XDG derivation. The legacy
-synchronous direct-review/command/utility receiver explicitly installs it within
-its temporary process ownership; that lifecycle extraction remains pending.
+effective view for option aliases, path expansion and XDG derivation. Synchronous
+reviews, commands and maintenance utilities also use captured views. Utility
+logging and Chrome registration do not install environment overrides, and OAuth
+browser children receive explicit environment/cwd settings. No process-state
+save/restore wrapper remains. Utility streams still use their documented host
+channels; independently configured instances must coordinate shared destinations.
 Interactive run and ordinary prompt/goal batch run, including temporary
 workspaces, use the captured controller/adapter views. MCP
 discovery and later refreshes retain a separate effective environment snapshot,

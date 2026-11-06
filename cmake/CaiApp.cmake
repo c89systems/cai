@@ -136,7 +136,11 @@ if(CAI_BUILD_TESTS)
   target_link_options(cai_app_utility_host PRIVATE
     -Wl,--wrap=cai_agent_runtime_open -Wl,--wrap=cai_workspace_server_open
     -Wl,--wrap=cai_agent_runtime_pump -Wl,--wrap=cai_agent_runtime_pump_bounded
-    -Wl,--wrap=sl_create_with_config -Wl,--wrap=mdf_create)
+    -Wl,--wrap=sl_create_with_config -Wl,--wrap=mdf_create
+    -Wl,--wrap=setenv -Wl,--wrap=unsetenv -Wl,--wrap=clearenv
+    -Wl,--wrap=setlocale -Wl,--wrap=sigaction
+    -Wl,--wrap=chdir -Wl,--wrap=fchdir
+    -Wl,--wrap=cai_cli_pouch_open_options)
   target_compile_options(cai_app_utility_host PRIVATE -UNDEBUG)
   cai_configure_cli_target(cai_app_utility_host)
   add_executable(cai_input_socket_test tests/input_socket_test.c)

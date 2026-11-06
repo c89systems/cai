@@ -215,8 +215,9 @@ combined application includes the terminal facade/adapters and depends on the
 independent [workspace owner SDK](application-server.md). Owner lifecycle,
 configuration and semantic command services have no renderer dependency.
 Maintenance uses the separate [utility dispatcher](application-utilities.md);
-its remaining process-global logging/browser environment boundary is explicit.
-These remain part of the active goal.
+its logging/browser helpers now use captured views without installing process
+state. Offline export's read-only context reconstruction remains part of the
+active goal.
 
 Softline 0.16's unconditional trigger stripping also needs a pre-activation
 eligibility API: typed shell words starting with `$` (when skills are loaded)

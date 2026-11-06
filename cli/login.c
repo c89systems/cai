@@ -200,7 +200,8 @@ static void write_http_response(int fd,
 }
 
 int cai_cli_login(const cai_blob_store *storage, pslog_logger *logger,
-                  int stop_fd, cai_cli_login_stop_fn stop, void *context) {
+                  int stop_fd, cai_cli_login_stop_fn stop, void *context,
+                  cai_environment *environment, const char *directory) {
   char redirect_uri[256];
   int port = 0;
   int server_fd;
@@ -219,6 +220,7 @@ int cai_cli_login(const cai_blob_store *storage, pslog_logger *logger,
   cai_chatgpt_login_request login_request;
   cai_chatgpt_login_response login_response;
   cai_chatgpt_login *login = NULL;
+  cai_chatgpt_login_browser_config browser;
   cai_error error;
   pslog_field field;
 
@@ -256,7 +258,11 @@ int cai_cli_login(const cai_blob_store *storage, pslog_logger *logger,
   }
   field = pslog_str("url", authorize_url);
   logger->info(logger, "Open this URL to authenticate", &field, 1U);
-  if (cai_chatgpt_login_open_browser(authorize_url, &error) != CAI_OK) {
+  cai_chatgpt_login_browser_config_init(&browser);
+  browser.environment = environment;
+  browser.directory = directory;
+  if (cai_chatgpt_login_open_browser_with_config(&browser, authorize_url,
+                                                 &error) != CAI_OK) {
     field = pslog_str("detail", error.message);
     logger->warn(logger, "browser did not open; use the URL above", &field, 1U);
     cai_error_cleanup(&error);

@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <locale.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -140,6 +141,15 @@ static void row_field(char *out, size_t capacity, const char *text, int width) {
     memcpy(out + used, "...", 4U);
 }
 
+/** UTF-8 presentation must not depend on, or change, the embedding process's
+ * locale. Install this view only around character sizing, never host sinks. */
+static locale_t row_locale(void) {
+  locale_t locale = newlocale(LC_CTYPE_MASK, "C.UTF-8", (locale_t)0);
+  if (locale == (locale_t)0)
+    locale = newlocale(LC_CTYPE_MASK, "en_US.UTF-8", (locale_t)0);
+  return locale;
+}
+
 static int row_cells(const char *text) {
   mbstate_t state;
   wchar_t code;
@@ -167,12 +177,20 @@ void cai_cli_history_row(char *out, size_t capacity,
                          const cai_agent_history_entry *entry, int width) {
   char line[1200];
   size_t length;
+  locale_t locale, previous = (locale_t)0;
   snprintf(line, sizeof(line), "%lu. %s%s", (unsigned long)entry->remove_count,
            entry->kind == CAI_AGENT_HISTORY_SHELL ? "Shell: " : "",
            entry->summary);
   if (capacity < 2U)
     return;
+  locale = row_locale();
+  if (locale != (locale_t)0)
+    previous = uselocale(locale);
   row_field(out, capacity - 1U, line, width > 0 ? width : 1);
+  if (locale != (locale_t)0) {
+    (void)uselocale(previous);
+    freelocale(locale);
+  }
   length = strlen(out);
   out[length++] = '\n';
   out[length] = '\0';
@@ -190,12 +208,17 @@ int cai_cli_sessions_print(cai_sink *destination,
   int dir_width;
   int prompt_width;
   int prefix_width;
+  int rc = CAI_OK;
+  locale_t locale, previous = (locale_t)0;
   if (width <= 0)
     width = 80;
   if (count == 0U &&
       cai_sink_write(destination, "No conversations.\n", 18U, error) != CAI_OK)
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "write session list");
+  locale = row_locale();
   for (i = 0U; i < count; i++) {
+    if (locale != (locale_t)0)
+      previous = uselocale(locale);
     number[0] = '\0';
     if (numbered)
       snprintf(number, sizeof(number), "%lu  ", (unsigned long)(i + 1U));
@@ -211,12 +234,18 @@ int cai_cli_sessions_print(cai_sink *destination,
     snprintf(line, sizeof(line), "%s%s  %s  %s", number, sessions[i].id,
              directory, prompt);
     row_field(clipped, sizeof(clipped), line, width);
+    if (locale != (locale_t)0)
+      (void)uselocale(previous);
     if (cai_sink_write(destination, clipped, strlen(clipped), error) !=
             CAI_OK ||
-        cai_sink_write(destination, "\n", 1U, error) != CAI_OK)
-      return cai_cli_error(error, CAI_ERR_TRANSPORT, "write session list");
+        cai_sink_write(destination, "\n", 1U, error) != CAI_OK) {
+      rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "write session list");
+      break;
+    }
   }
-  return CAI_OK;
+  if (locale != (locale_t)0)
+    freelocale(locale);
+  return rc;
 }
 
 typedef struct export_store {

@@ -41,49 +41,6 @@ static double process_time(void) {
     return -1.0;
   return (double)value.tv_sec + (double)value.tv_nsec / 1e9;
 }
-static int process_program(const char *name, char **environment,
-                           const char *workspace, char path[4096],
-                           cai_error *error) {
-  const char *paths = "/usr/local/bin:/usr/bin:/bin", *end;
-  char candidate[4096];
-  size_t i, length;
-  if (strchr(name, '/') != NULL) {
-    if (name[0] == '/') {
-      if (snprintf(candidate, sizeof(candidate), "%s", name) >=
-          (int)sizeof(candidate))
-        return cai_set_error(error, CAI_ERR_INVALID,
-                             "plugin executable path too long");
-    } else if (snprintf(candidate, sizeof(candidate), "%s/%s", workspace,
-                        name) >= (int)sizeof(candidate))
-      return cai_set_error(error, CAI_ERR_INVALID,
-                           "plugin executable path too long");
-    if (realpath(candidate, path) != NULL && access(path, X_OK) == 0)
-      return CAI_OK;
-  } else {
-    for (i = 0U; environment[i] != NULL; i++)
-      if (strncmp(environment[i], "PATH=", 5U) == 0)
-        paths = environment[i] + 5U;
-    do {
-      end = strchr(paths, ':');
-      length = end != NULL ? (size_t)(end - paths) : strlen(paths);
-      if (length < 3000U) {
-        if (length == 0U)
-          snprintf(candidate, sizeof(candidate), "%s/%s", workspace, name);
-        else if (paths[0] == '/')
-          snprintf(candidate, sizeof(candidate), "%.*s/%s", (int)length, paths,
-                   name);
-        else
-          snprintf(candidate, sizeof(candidate), "%s/%.*s/%s", workspace,
-                   (int)length, paths, name);
-        if (realpath(candidate, path) != NULL && access(path, X_OK) == 0)
-          return CAI_OK;
-      }
-      paths = end != NULL ? end + 1U : NULL;
-    } while (paths != NULL);
-  }
-  return cai_set_error_detail(error, CAI_ERR_INVALID,
-                              "plugin executable is unavailable", name);
-}
 static void process_stop(pid_t pid) {
   if (kill(-pid, SIGKILL) != 0 && errno == ESRCH)
     (void)kill(pid, SIGKILL);
@@ -123,8 +80,8 @@ static int process_run(void *context, cai_source *arguments, cai_sink *output,
   rc = cai_process_environment_new(call->environment, call->yolo, NULL,
                                    &environment, error);
   if (rc == CAI_OK)
-    rc = process_program(process->argv[0], environment, buffers->workspace,
-                         buffers->executable, error);
+    rc = cai_process_program(process->argv[0], environment, buffers->workspace,
+                             buffers->executable, error);
   if (rc != CAI_OK)
     goto cleanup;
   workdir = open(buffers->workspace, O_RDONLY | O_DIRECTORY | O_CLOEXEC);

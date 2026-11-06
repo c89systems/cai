@@ -6,7 +6,9 @@ trap 'printf "CLI assertion failed at %s:%s: %s\n" "${BASH_SOURCE[0]}" "$LINENO"
 cli=$(realpath "$1")
 shift
 support=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
-root=$(mktemp -d "$(dirname "$cli")/cli-check.XXXXXX")
+# Socket-path tests can select a shorter owned build parent independently of
+# the target directory's spelling; other fixtures keep their existing root.
+root=$(mktemp -d "${cli_fixture_parent:-$(dirname "$cli")}/cli-check.XXXXXX")
 work="$root/work"
 mkdir -p "$work"
 peer_pid= terminal_pid=

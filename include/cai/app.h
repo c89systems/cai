@@ -27,14 +27,15 @@ typedef struct cai_app cai_app;
  * creating a runtime or invoking this instance's runtime/tool callbacks; use
  * the typed client APIs for remote runtime/status observations. Host STOP
  * detaches that client without stopping its remote server.
- * Maintenance utilities retain a separate process-resource wrapper for
- * configured logging/environment behavior and must be serialized with other
- * process-resource users. Repeated runs are supported; one run per instance may
+ * Maintenance utilities use captured environment/cwd views without changing
+ * host process state. Different instances may run independently; their explicit
+ * stdout/input channels and shared destinations retain normal host ownership
+ * and conflict rules. Repeated runs are supported; one run per instance may
  * be active. start selects an independent terminal-free owner. Borrowed loggers
  * can receive calls from native workers and must be thread-safe. */
 struct cai_app {
   /** argv contains only CAI options (exclude the program name). Empty is valid.
-   * Returns CAI status for invocation/restoration errors. On CAI_OK, exit_code
+   * Returns CAI status for invocation/lifecycle errors. On CAI_OK, exit_code
    * receives the application's CLI status: 0 success, 1 work/runtime failure,
    * 2 invalid options/configuration. CLI diagnostics use the configured logger.
    * Arguments are borrowed only during run. This method never calls exit. */

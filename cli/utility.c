@@ -13,7 +13,6 @@
 #include <cai/chrome.h>
 #include <libmdf/mdf.h>
 #include <limits.h>
-#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +25,7 @@ typedef struct utility_run {
   cai_cli_options options;
   cai_config *configuration;
   cai_environment *environment;
+  cai_config_context startup;
   cai_cli_log *log;
   cai_cli_pouch pouch, messaging;
   cai_cli_session *sessions;
@@ -35,6 +35,55 @@ typedef struct utility_run {
   char workspace[PATH_MAX], paths[3][PATH_MAX];
   const char *operation;
 } utility_run;
+
+/** Native messaging reserves stdout for frames, including on configuration
+ * failure. Mask only this logger's output override, never the host's env. */
+static int utility_log(utility_run *u, const cai_app_config *application,
+                       int raw) {
+  cai_environment *environment =
+      u->environment != NULL ? u->environment : u->startup.environment;
+  cai_environment *masked = NULL;
+  cai_environment_change change;
+  int rc = CAI_OK;
+  if (raw) {
+    change.name = "LOG_OUTPUT";
+    change.value = NULL;
+    rc = cai_environment_derive(environment, &change, 1U, &masked, &u->error);
+    environment = masked;
+  }
+  if (rc == CAI_OK)
+    rc = cai_cli_log_new_at(&u->log, PSLOG_LEVEL_WARN, 0, application->logger,
+                            environment, u->workspace, &u->error);
+  cai_environment_close(masked);
+  return rc;
+}
+
+/** Resolve the core Chrome helper's default path from the invocation view.
+ * Supplying it explicitly keeps registration independent of process env. */
+static int chrome_manifest_path(utility_run *u) {
+  const char *root = cai_environment_get(u->environment, "CHROME_CONFIG_HOME");
+  const char *suffix = "/google-chrome/NativeMessagingHosts/"
+                       "com.openai.codexextension.json";
+  int n;
+  if (u->options.chrome_manifest != NULL)
+    return CAI_OK;
+  if (root == NULL || root[0] == '\0')
+    root = cai_environment_get(u->environment, "XDG_CONFIG_HOME");
+  if (root == NULL || root[0] == '\0') {
+    root = cai_environment_get(u->environment, "HOME");
+    suffix = "/.config/google-chrome/NativeMessagingHosts/"
+             "com.openai.codexextension.json";
+  }
+  if (root == NULL || root[0] != '/')
+    return cai_cli_error(&u->error, CAI_ERR_INVALID,
+                         "Chrome manifest requires an absolute config home");
+  n = snprintf(u->paths[2], sizeof(u->paths[2]), "%s%s", root, suffix);
+  if (n < 0 || (size_t)n >= sizeof(u->paths[2]))
+    return cai_cli_error(&u->error, CAI_ERR_INVALID,
+                         "Chrome manifest path is too long");
+  u->options.chrome_manifest = u->paths[2];
+  return CAI_OK;
+}
 
 static int native_host(int argc, char **argv) {
   return argc > 1 && (strncmp(argv[1], "chrome-extension://", 19U) == 0 ||
@@ -50,6 +99,9 @@ static int dispatch(utility_run *u) {
     return cai_cli_install_skill(&u->options, u->log->logger);
   if (u->options.chrome_setup || u->options.chrome_remove) {
     u->operation = "Chrome registration";
+    rc = chrome_manifest_path(u);
+    if (rc != CAI_OK)
+      return rc;
     return cai_chrome_native_host_setup_at(
         u->options.program_name, u->options.chrome_manifest,
         u->options.chrome_remove,
@@ -70,7 +122,8 @@ static int dispatch(utility_run *u) {
   if (u->options.login) {
     u->operation = "login";
     return cai_cli_login(&u->pouch.credentials, u->log->logger, u->bridge->fd,
-                         cai_app_bridge_cleanup_stop, u->bridge);
+                         cai_app_bridge_cleanup_stop, u->bridge, u->environment,
+                         u->workspace);
   }
   if (u->options.message != NULL) {
     u->operation = "send message";
@@ -152,26 +205,27 @@ int cai_cli_utility_run(int argc, char **argv,
   u->bridge = bridge;
   u->operation = "utility";
   cai_error_init(&u->error);
+  if (getcwd(u->workspace, sizeof(u->workspace)) == NULL) {
+    cai_cli_error(&u->error, CAI_ERR_TRANSPORT,
+                  "capture utility working directory");
+    goto done;
+  }
+  u->startup.directory = u->workspace;
+  if (cai_environment_open(NULL, &u->startup.environment, &u->error) != CAI_OK)
+    goto done;
   if (raw) {
     int explicit_mode = strcmp(argv[1], "--chrome-native-host") == 0;
-    /* Chrome owns stdout. This process-scoped override is restored by run's
-     * wrapper; it must not become a library controller's logging policy. */
-    (void)unsetenv("LOG_OUTPUT");
-    rc = cai_cli_log_new(&u->log, PSLOG_LEVEL_WARN, 0, application->logger,
-                         &u->error);
     u->operation = "Chrome native host";
-    if (rc != CAI_OK)
-      goto done;
     if (argc != (explicit_mode ? 3 : 2)) {
       cai_cli_error(&u->error, CAI_ERR_INVALID,
                     "Invalid Chrome native host arguments");
       goto done;
     }
-    parsed = cai_cli_configure(1, argv, &u->options, &u->configuration,
-                               application, &u->error);
+    parsed = cai_cli_configure_at(1, argv, &u->options, &u->configuration,
+                                  application, &u->startup, &u->error);
   } else
-    parsed = cai_cli_configure(argc, argv, &u->options, &u->configuration,
-                               application, &u->error);
+    parsed = cai_cli_configure_at(argc, argv, &u->options, &u->configuration,
+                                  application, &u->startup, &u->error);
   if (parsed <= 0) {
     result = parsed == 0 ? 0 : 2;
     if (parsed == 0 && u->options.list_themes) {
@@ -198,15 +252,16 @@ int cai_cli_utility_run(int argc, char **argv,
     result = 2;
     goto done;
   }
-  rc = u->configuration->apply_environment(u->configuration, &u->error);
-  if (rc == CAI_OK)
-    rc = cai_config_environment(u->configuration, &u->environment, &u->error);
+  rc = cai_config_environment(u->configuration, &u->environment, &u->error);
   u->options.environment = u->environment;
   if (rc != CAI_OK)
     goto done;
-  if (u->log == NULL &&
-      cai_cli_log_new(&u->log, PSLOG_LEVEL_WARN, 0, application->logger,
-                      &u->error) != CAI_OK)
+  if (!raw && realpath(u->options.directory, u->workspace) == NULL) {
+    cai_cli_error(&u->error, CAI_ERR_INVALID, "cannot resolve workspace");
+    result = 2;
+    goto done;
+  }
+  if (utility_log(u, application, raw) != CAI_OK)
     goto done;
   if (raw) {
     const char *directory =
@@ -219,12 +274,6 @@ int cai_cli_utility_run(int argc, char **argv,
   } else {
     const char **paths[3];
     size_t i;
-    (void)setlocale(LC_CTYPE, "");
-    if (realpath(u->options.directory, u->workspace) == NULL) {
-      cai_cli_error(&u->error, CAI_ERR_INVALID, "cannot resolve workspace");
-      result = 2;
-      goto done;
-    }
     paths[0] = &u->options.import_file;
     paths[1] = &u->options.install_skill;
     paths[2] = &u->options.chrome_manifest;
@@ -242,9 +291,8 @@ int cai_cli_utility_run(int argc, char **argv,
 done:
   (void)cai_app_bridge_cleanup_stop(bridge);
   if (u->error.code != CAI_OK) {
-    if (u->log == NULL)
-      (void)cai_cli_log_new(&u->log, PSLOG_LEVEL_WARN, 0, application->logger,
-                            &u->error);
+    if (u->log == NULL && u->startup.environment != NULL)
+      (void)utility_log(u, application, raw);
     if (u->log != NULL)
       cai_cli_log_error(u->log->logger, u->operation, &u->error);
     else
@@ -257,6 +305,7 @@ done:
   free(u->sessions);
   cai_config_close(u->configuration);
   cai_environment_close(u->environment);
+  cai_environment_close(u->startup.environment);
   cai_error_cleanup(&u->error);
   if (cai_cli_log_release(u->log) != 0)
     result = 1;

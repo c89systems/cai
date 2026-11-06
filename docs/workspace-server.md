@@ -37,11 +37,12 @@ uses that same socket producer with bounded line input and live presentation;
 EOF drains admitted work, and no complete input stream or response is staged.
 Native `run --server` discovers and attaches without a local runtime or store;
 host STOP detaches its client. The old combined readline/runtime loop is removed.
-Maintenance now
-has its own [utility dispatcher](application-utilities.md), retaining the serialized
-environment wrapper for its remaining process-owned helpers. Owner and batch
-logging now resolve `LOG_` settings from captured views through public libpslog
-configuration/output APIs; relative file sinks use the selected workspace.
+Maintenance has its own [utility dispatcher](application-utilities.md), using
+captured configuration views without a process-state wrapper. Owner, batch and
+utility logging resolve `LOG_` settings through public libpslog configuration/
+output APIs; relative file sinks use the selected workspace. Browser children
+receive an explicit environment/cwd, and Chrome registration resolves defaults
+before calling core helpers.
 Native library controller startup never forks or installs signal handlers.
 
 Independent typed channels carry [queue observations](workspace-wire-queue.md),

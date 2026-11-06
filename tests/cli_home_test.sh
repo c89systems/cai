@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# --home includes runtime paths; keep those private paths below sockaddr_un's
+# limit even for long cross-target build-directory names.
+cli_fixture_parent=$(dirname "$(dirname "$(realpath "$1")")")
 source "$(dirname "$0")/cli_test_common.sh"
 mode=${1:-cli}
 base=("$cli" -C "$work")
