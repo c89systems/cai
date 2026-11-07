@@ -102,3 +102,17 @@ terminal_close
 wait_for test ! -e "$publication"
 exec {first_input}>&-
 exec {second_input}>&-
+
+# Quiet-owner startup failures are rendered once in the terminal. They must
+# still fail the executable, without duplicating the error as raw JSON.
+export CAI_TEST_REQUIRE_APPROVAL=1
+base=("$cli" -p custom --endpoint "$endpoint" -m gpt-5.6-luna --no-terminal --no-image-generation --no-mcp -C "$root/other" --runtime-dir "$runtime_root")
+terminal_launch
+wait_for test -f "$term/status"
+wait "$terminal_pid" || true
+terminal_pid=
+contains "$term/feed" 'Workspace is not approved.'
+[[ $(grep -c 'Workspace is not approved.' "$term/feed") == 1 ]]
+[[ ! -s "$term/stderr" ]]
+[[ $(cat "$term/status") != 0 ]]
+[[ $(requests) == 2 ]]

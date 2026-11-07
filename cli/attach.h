@@ -20,6 +20,6 @@ void cai_cli_attach_boot_close(cai_cli_attach_boot *);
  * reusable terminal
  * frontend never starts an owner or opens storage. Explicit local shell/pager
  * actions may start a foreground program through Softline's PTY adapter. */
-int cai_cli_attach_run(const cai_app_config *, int, char **, int *,
+int cai_cli_attach_run(const cai_app_config *, int, char **, int *, int *,
                        cai_error *);
 #endif

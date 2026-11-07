@@ -199,7 +199,8 @@ cai_cli_attach_boot_adapter(cai_cli_attach_boot *s) {
 }
 
 int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
-                       int *exit_code, cai_error *error) {
+                       int *exit_code, int *diagnostic_presented,
+                       cai_error *error) {
   cai_config *configuration = NULL;
   cai_environment *environment = NULL;
   cai_cli_options options;
@@ -208,6 +209,7 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
   cai_cli_attach_boot *startup = NULL;
   int rc;
   *exit_code = 1;
+  *diagnostic_presented = 0;
   rc = cai_cli_configure(argc, argv, &options, &configuration, application,
                          error);
   if (rc > 0 && cai_cli_theme_validate(&options, error) != CAI_OK)
@@ -221,6 +223,7 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
   }
   rc = cai_config_environment(configuration, &environment, error);
   options.environment = environment;
+  options.diagnostic_presented = diagnostic_presented;
   if (rc == CAI_OK && options.temporary) {
     cai_app_bridge *bridge = NULL;
     cai_cli_prepared resolved;

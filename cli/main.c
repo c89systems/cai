@@ -20,6 +20,7 @@ int main(int argc, char **argv) {
   cai_error error;
   cai_cli_options options;
   int code = 1;
+  int diagnostic_presented = 0;
   int rc;
   cai_app_config_init(&config);
   config.banner =
@@ -65,19 +66,19 @@ int main(int argc, char **argv) {
   } else if (rc > 0 && options.headless)
     rc = cai_cli_headless_run(&config, argc - 1,
                               (const char *const *)(argv + 1), &code, &error);
-  else if (rc > 0 &&
-           (cai_cli_batch_mode(&options) ||
-            (isatty(STDIN_FILENO) && isatty(STDOUT_FILENO) &&
-             !options.non_interactive && !options.review &&
-             !options.temporary && !cai_cli_options_utility(&options))))
-    rc = cai_cli_attach_run(&config, argc, argv, &code, &error);
+  else if (rc > 0 && (cai_cli_batch_mode(&options) ||
+                      (isatty(STDIN_FILENO) && isatty(STDOUT_FILENO) &&
+                       !options.non_interactive && !options.review &&
+                       !cai_cli_options_utility(&options))))
+    rc = cai_cli_attach_run(&config, argc, argv, &code, &diagnostic_presented,
+                            &error);
   else {
     rc = cai_app_open(&config, &app, &error);
     if (rc == CAI_OK)
       rc = app->run(app, argc - 1, (const char *const *)(argv + 1), &code,
                     &error);
   }
-  if (rc != CAI_OK) {
+  if (rc != CAI_OK && !diagnostic_presented) {
     cai_cli_log *log = NULL;
     if (cai_cli_log_new(&log, PSLOG_LEVEL_WARN, 0, NULL, NULL) == CAI_OK) {
       log->logger->error(log->logger,

@@ -2755,12 +2755,16 @@ int cai_cli_frontend_run(const cai_app_config *application,
         : sl_last_error(f->ui->sl) != NULL ? sl_last_error(f->ui->sl)
                                            : "terminal attachment failed");
     /* Keep unexpected transport failures visible in the rendered feed before
-     * releasing the editor. The caller still receives/logs the original error.
+     * releasing the editor. Return the original error while acknowledging a
+     * successful presentation so the executable does not print it again.
      * An unusable output sink cannot be repaired by another diagnostic write.
      */
-    if (!f->ui->sink_failed)
-      (void)notice(f, f->error.message != NULL ? f->error.message
-                                               : "terminal attachment failed");
+    if (!f->ui->sink_failed && group.active == f && !group.terminal_active &&
+        notice(f, f->error.message != NULL
+                      ? f->error.message
+                      : "terminal attachment failed") == 0 &&
+        options->diagnostic_presented != NULL)
+      *options->diagnostic_presented = 1;
   }
 done:
   *exit_code = rc == CAI_OK ? 0 : 1;

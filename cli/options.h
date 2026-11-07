@@ -30,6 +30,8 @@ typedef enum cai_cli_control_option {
 typedef struct cai_cli_options {
   /* Borrow the application-owned effective configuration environment. */
   struct cai_environment *environment;
+  /** Executable-owned receipt for a successfully rendered terminal failure. */
+  int *diagnostic_presented;
   const char *program_name;
   const char *invocation_name;
   char environment_prefix[65];
