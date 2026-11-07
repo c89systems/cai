@@ -67,6 +67,23 @@ static int value_option_instructions(void) {
   return 0;
 }
 
+static int background_options(void) {
+  char raw[][24] = {"cai", "--no-background", "--background", "--foreground",
+                    "--no-foreground"};
+  char *args[5];
+  cai_cli_options options;
+  int count;
+  for (count = 0; count < 5; count++)
+    args[count] = raw[count];
+  for (count = 2; count <= 5; count++) {
+    if (cai_cli_read_options(count, args, NULL, &options) != 1 ||
+        options.foreground != (count % 2 == 0) ||
+        !(options.control_explicit & CAI_CLI_CONTROL_YIELD))
+      return 1;
+  }
+  return 0;
+}
+
 static int config_option_precedence(void) {
   cai_cli_options defaults, options;
   static char program[] = "cai", disable[] = "--no-config", list[] = "--list";
@@ -820,9 +837,9 @@ int main(void) {
     return 1;
   return headless_options() || attachment_options() ||
          value_option_instructions() || config_option_precedence() ||
-         replay_options() || resume_alias_options() || delete_options() ||
-         short_argument_options() || grouped_value_options() ||
-         help_columns() || shell_options() || listing_options() ||
-         storage_options() || tool_options() || capture_options() ||
-         messaging_options();
+         background_options() || replay_options() || resume_alias_options() ||
+         delete_options() || short_argument_options() ||
+         grouped_value_options() || help_columns() || shell_options() ||
+         listing_options() || storage_options() || tool_options() ||
+         capture_options() || messaging_options();
 }

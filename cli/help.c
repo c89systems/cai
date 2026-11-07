@@ -263,7 +263,7 @@ static const cai_app_option options[] = {
     {"--foreground", '\0', CAI_APP_FLAG, NULL,
      "Wait for command completion or cancellation", 0, 1},
     {"--background", '\0', CAI_APP_FLAG, NULL,
-     "Enable command yielding (default)", 0, 0},
+     "Enable command yielding (default; --no-background blocks)", 0, 1},
     {"--yield-time-ms", '\0', CAI_APP_INTEGER, "MS",
      "Command yield interval, 0 blocks (default 10000)", 0, 0},
     {"--yolo", '\0', CAI_APP_FLAG, NULL,

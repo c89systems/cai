@@ -502,10 +502,12 @@ static int cli_read_options(int argc, char *const *argv,
         options->review_theme_offset = offset;
       continue;
     }
-    if (strcmp(flag, "--background") == 0) {
-      if (options->foreground)
+    if (strcmp(flag, "--background") == 0 ||
+        strcmp(flag, "--no-background") == 0) {
+      int foreground = strcmp(flag, "--no-background") == 0;
+      if (!foreground && options->foreground)
         options->yield_time_ms = CAI_TERMINAL_DEFAULT_YIELD_TIME_MS;
-      options->foreground = 0;
+      options->foreground = foreground;
       options->control_explicit |= CAI_CLI_CONTROL_YIELD;
       continue;
     }
