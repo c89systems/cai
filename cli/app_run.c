@@ -174,6 +174,7 @@ static int cli_export_pump(cli_state *, cai_error *);
 static int cli_sync_queue(cli_state *state, int at_boundary, cai_error *error);
 static int cli_review_pump(void *);
 static int cli_sync_status(cli_state *state, cai_error *error);
+static int cli_select_startup(void *, const char *, cai_error *);
 static int cli_settings_notice(cli_state *state, cai_error *error);
 static int cli_review_event(void *context, const cai_agent_runtime_event *event,
                             cai_error *error);
@@ -1532,6 +1533,9 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     cai_cli_workspace_host_cancel(state->workspace_host, cli_remote_cancel,
                                   state);
   if (rc == CAI_OK)
+    cai_cli_workspace_host_selection(state->workspace_host, cli_select_startup,
+                                     state);
+  if (rc == CAI_OK)
     rc = cai_cli_workspace_host_ready(state->workspace_host, error);
   if (rc == CAI_OK) {
     cai_app_bridge_bind_input(state->bridge, state->input_admin != NULL
@@ -1885,7 +1889,10 @@ static int cli_switch_session(cli_state *state, const char *id, int new_session,
   rc = cai_agent_runtime_state(state->runtime, &run_state, error);
   if (rc != CAI_OK)
     return rc;
-  if (state->shell.pid > 0 || run_state == CAI_AGENT_SAMPLING ||
+  if (state->shell.pid > 0 || state->awaiting_turn ||
+      state->review_runtime != NULL ||
+      cai_cli_export_job_active(state->export_job) ||
+      run_state == CAI_AGENT_SAMPLING ||
       run_state == CAI_AGENT_DISPATCHING_TOOL) {
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "Wait for the current turn to finish.");
@@ -1920,6 +1927,45 @@ static int cli_switch_session(cli_state *state, const char *id, int new_session,
   return CAI_OK;
 }
 
+/** Validate a destination before releasing the current context. Exact IDs
+ * resolve syntactically first; their existence/workspace still need checking.
+ * Keep the multi-KiB metadata off the owner's default worker stack. */
+static int cli_session_destination(cli_state *state, const char *selector,
+                                   char id[CAI_AGENT_SESSION_ID_MAX],
+                                   cai_error *error) {
+  cai_cli_session *destination;
+  int rc = cai_cli_session_select(&state->pouch, state->workspace, selector, id,
+                                  error);
+  if (rc != CAI_OK ||
+      strcmp(id, cai_agent_runtime_session_id(state->runtime)) == 0)
+    return rc;
+  destination = malloc(sizeof(*destination));
+  if (destination == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "validate conversation selection");
+  rc = cai_cli_pouch_session(&state->pouch, id, destination, error);
+  if (rc == CAI_OK && strcmp(destination->workspace, state->workspace) != 0)
+    rc = cai_cli_error(error, CAI_ERR_INVALID,
+                       "session belongs to another directory");
+  free(destination);
+  return rc;
+}
+/** Resolve selectors before closing the current runtime. Startup selection is
+ * connection setup, so selecting the current conversation emits no command
+ * receipt or transcript text and does not reopen its store/context. */
+static int cli_select_startup(void *context, const char *selector,
+                              cai_error *error) {
+  cli_state *state = context;
+  char id[CAI_AGENT_SESSION_ID_MAX];
+  int rc;
+  if (selector == NULL)
+    return cli_switch_session(state, NULL, 1, error);
+  rc = cli_session_destination(state, selector, id, error);
+  if (rc == CAI_OK &&
+      strcmp(id, cai_agent_runtime_session_id(state->runtime)) != 0)
+    rc = cli_switch_session(state, id, 0, error);
+  return rc;
+}
 static int cli_reasoning_tool_command(cli_state *state, const char *arg,
                                       cai_error *error) {
   cai_reasoning_tool_config config;
@@ -3606,16 +3652,9 @@ static int cli_handle_command(cli_state *state, const char *line,
   }
   if (strncmp(line, "/resume ", 8U) == 0) {
     char selected[129];
-    cai_cli_session destination;
     arg = line + 8U;
     arg += strspn(arg, " \t");
-    rc = cai_cli_session_select(&state->pouch, state->workspace, arg, selected,
-                                error);
-    if (rc == CAI_OK)
-      rc = cai_cli_pouch_session(&state->pouch, selected, &destination, error);
-    if (rc == CAI_OK && strcmp(destination.workspace, state->workspace) != 0)
-      rc = cai_cli_error(error, CAI_ERR_INVALID,
-                         "session belongs to another directory");
+    rc = cli_session_destination(state, arg, selected, error);
     return rc == CAI_OK ? cli_switch_session(state, selected, 0, error) : rc;
   }
   if (line[0] == '/')

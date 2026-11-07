@@ -2,6 +2,9 @@
 
 Start `cai` in a project directory.
 It resumes the newest conversation there; `cai -N` starts another.
+`cai -R ID` or `cai -R NUMBER` selects that conversation before replay, including when attaching to an existing workspace server.
+Startup selection does not submit a `/resume` command or replay a different conversation first.
+Ctrl-D on an empty draft follows the same goodbye and detach path as `/quit` and Alt-Q; with a nonempty draft it retains the editor's forward-delete behavior.
 First-time workspaces require `cai -y` to save approval for that directory and its descendants.
 `-k` bypasses approval for this invocation only.
 Use `cai --login` for ChatGPT authentication if no usable imported or stored credentials exist.

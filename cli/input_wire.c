@@ -22,7 +22,7 @@ struct cai_cli_input_wire_decoder {
 static const char *format(cai_protocol_kind kind) {
   switch (kind) {
   case CAI_PROTOCOL_SYNCHRONIZE:
-    return "usb";
+    return "usbb";
   case CAI_PROTOCOL_INPUT_SETTLED:
     return "u";
   case CAI_PROTOCOL_USER_SHELL:
@@ -113,6 +113,7 @@ static int pack(const cai_cli_input_wire_message *m, field *f,
     f[0].number = m->producer;
     f[1].text = m->session;
     f[2].number = m->managed_delivery;
+    f[3].number = m->select_session;
     break;
   case CAI_PROTOCOL_INPUT_SETTLED:
     f[0].number = m->delivery_after;
@@ -212,6 +213,10 @@ static int unpack(cai_cli_input_wire_decoder *d, cai_error *error) {
     m->producer = f[0].number;
     m->session = f[1].text;
     m->managed_delivery = (int)f[2].number;
+    m->select_session = (int)f[3].number;
+    if (m->select_session &&
+        (m->producer != 0U || m->header.conversation != 0U))
+      return invalid(error);
     break;
   case CAI_PROTOCOL_INPUT_SETTLED:
     m->delivery_after = f[0].number;

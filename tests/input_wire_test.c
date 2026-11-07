@@ -177,7 +177,8 @@ static void roundtrips(void) {
     got = f->complete;
     assert(got->header.kind == message.header.kind);
     if (kinds[i] == CAI_PROTOCOL_SYNCHRONIZE)
-      assert(got->managed_delivery == 1 && got->producer == 19U);
+      assert(got->managed_delivery == 1 && got->producer == 19U &&
+             !got->select_session);
     if (kinds[i] == CAI_PROTOCOL_INPUT_SETTLED)
       assert(got->delivery_after == ~(unsigned long long)0);
     if (kinds[i] == CAI_PROTOCOL_REQUEST)
@@ -204,6 +205,23 @@ static void roundtrips(void) {
     if (kinds[i] == CAI_PROTOCOL_RESULT)
       assert(got->observation.result.code == CAI_ERR_CANCELLED &&
              strcmp(got->observation.result.reason, "detailed rejection") == 0);
+    close_fixture(f);
+  }
+  for (i = 0U; i < 4U; ++i) {
+    memset(&message, 0, sizeof(message));
+    message.header.kind = CAI_PROTOCOL_SYNCHRONIZE;
+    message.header.request = 1U;
+    message.select_session = 1;
+    message.session = i == 0U ? NULL : "2";
+    message.producer = i == 2U ? 7U : 0U;
+    message.header.conversation = i == 3U ? 9U : 0U;
+    open_fixture(f);
+    if (i < 2U) {
+      assert(send(f, &message) == CAI_OK && f->complete->select_session);
+      if (i == 1U)
+        assert(strcmp(f->complete->session, "2") == 0);
+    } else
+      assert(send(f, &message) == CAI_ERR_PROTOCOL && f->complete == NULL);
     close_fixture(f);
   }
   memset(&message, 0, sizeof(message));

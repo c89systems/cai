@@ -716,6 +716,10 @@
     cai_configure_cli_target(cai_cli_resume_selection_test)
     target_compile_options(cai_cli_resume_selection_test PRIVATE -UNDEBUG)
     add_test(NAME cai_cli_resume_selection COMMAND cai_cli_resume_selection_test)
+    add_test(NAME cai_cli_startup_resume COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_startup_resume_test.sh"
+      "$<TARGET_FILE:cai_cli>")
+    set_tests_properties(cai_cli_startup_resume PROPERTIES TIMEOUT 45)
     add_test(NAME cai_cli_providers
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_providers_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>" "${CMAKE_CURRENT_BINARY_DIR}")

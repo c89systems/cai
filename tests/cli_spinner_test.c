@@ -52,6 +52,7 @@ int main(void) {
   frontend_view *view = calloc(1U, sizeof(*view));
   frontend_view *other = calloc(1U, sizeof(*other));
   unsigned int calls;
+  sl_key_action_t action;
   int turn, tick;
   assert(f != NULL && group != NULL && view != NULL && other != NULL);
   f->group = group;
@@ -138,7 +139,15 @@ int main(void) {
   assert(status(f) == 0);
   assert(busy_calls == calls && spinner_calls == calls);
 
-  assert(goodbye(f) == CAI_OK && !busy_value && !spinner_value &&
+  assert(sl_set_buffer(f->ui->sl, "draft") == SL_OK);
+  assert(eof_key(f->ui->sl, SL_KEY_CTRL_D, f, &action) == SL_OK &&
+         action == SL_KEY_ACTION_PASS && !f->quit &&
+         strcmp(sl_buffer(f->ui->sl), "draft") == 0);
+  assert(busy_calls == calls && spinner_calls == calls);
+  assert(sl_set_buffer(f->ui->sl, "") == SL_OK);
+  assert(eof_key(f->ui->sl, SL_KEY_CTRL_D, f, &action) == SL_OK &&
+         action == SL_KEY_ACTION_SUSPEND && f->quit);
+  assert(!busy_value && !spinner_value &&
          strcmp(status_message, "Goodbye.") == 0);
   ++calls;
   assert(busy_calls == calls && spinner_calls == calls);

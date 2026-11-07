@@ -47,6 +47,7 @@ typedef struct batch {
   uint64_t binding, subscription, generation, old_conversation;
   unsigned long long request, item;
   int awaiting_bind, subscribed, replaying, entry_open;
+  int startup_select;
   int pending, command, receipt, command_done, command_code, handoff;
   int work_failed, has_result, projecting, detaching;
   int goal_command, goal_start, goal_follow, settled;
@@ -91,7 +92,12 @@ static int observe(void *context, const cai_app_client_event *e,
                    cai_error *error) {
   batch *b = context;
   if (e->type == CAI_APP_CLIENT_BIND_REJECTED)
-    return cai_cli_error(error, CAI_ERR_INVALID, "batch producer was rejected");
+    return cai_cli_error(error,
+                         e->input->result.code != CAI_OK ? e->input->result.code
+                                                         : CAI_ERR_INVALID,
+                         e->input->result.reason[0] != '\0'
+                             ? e->input->result.reason
+                             : "batch producer was rejected");
   if (e->type == CAI_APP_CLIENT_INPUT && e->input != NULL) {
     if (e->input->type == CAI_INPUT_OBSERVATION_DISCONNECTED &&
         !e->state->bound) {
@@ -680,8 +686,7 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
     cai_input_request request = {0};
     char *text = NULL;
     int control = 0;
-    rc = cai_cli_startup_next(&b->startup, o, b->state.session, &text, &control,
-                              error);
+    rc = cai_cli_startup_next(&b->startup, o, &text, &control, error);
     if (rc == CAI_OK && text == NULL && b->lines != NULL && !b->input_eof) {
       rc = cai_cli_line_input_next(b->lines, b->input_ready, &text,
                                    &b->input_eof, error);
@@ -792,7 +797,9 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
       target.execution_context = b;
       b->startup.stage = ready == CAI_CLI_FRONTEND_STARTED
                              ? CAI_CLI_STARTUP_REVIEW_AND_FIX
-                             : CAI_CLI_STARTUP_SELECT;
+                             : CAI_CLI_STARTUP_MODEL;
+      b->startup_select = ready != CAI_CLI_FRONTEND_STARTED &&
+                          (options->resume_id != NULL || options->new_session);
       rc = cai_app_client_open(&target, now, &b->client, error);
       if (rc == CAI_OK)
         rc = cai_app_client_manage_delivery(b->client, error);
@@ -833,7 +840,13 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
             view->available &&
             (!b->handoff || view->conversation != b->old_conversation)) {
           rc =
-              cai_app_client_bind(b->client, ++b->binding, 0U, 0U, NULL, error);
+              b->startup_select
+                  ? cai_app_client_select(
+                        b->client, ++b->binding,
+                        options->new_session ? NULL : options->resume_id, error)
+                  : cai_app_client_bind(b->client, ++b->binding, 0U, 0U, NULL,
+                                        error);
+          b->startup_select = 0;
           b->awaiting_bind = 1;
         }
         if (rc == CAI_OK && b->state.ready && !b->subscribed) {

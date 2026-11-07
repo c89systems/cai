@@ -3,11 +3,10 @@
 #include "options.h"
 #include <cai/cai.h>
 
-/** Ordered invocation intents, compiled into ordinary backend commands. No
+/** Ordered invocation inputs after conversation selection and binding. No
  * transport, editor, runtime or configuration ownership belongs here. */
 typedef enum cai_cli_startup_stage {
-  CAI_CLI_STARTUP_SELECT = 0,
-  CAI_CLI_STARTUP_MODEL,
+  CAI_CLI_STARTUP_MODEL = 0,
   CAI_CLI_STARTUP_EFFORT,
   CAI_CLI_STARTUP_SUMMARY,
   CAI_CLI_STARTUP_TIER,
@@ -37,6 +36,5 @@ typedef struct cai_cli_startup {
  * control distinguishes generated commands from the user's instructions.
  * Call again only after the backend admits/applies the preceding input. */
 int cai_cli_startup_next(cai_cli_startup *, const cai_cli_options *,
-                         const char *session, char **text, int *control,
-                         cai_error *);
+                         char **text, int *control, cai_error *);
 #endif

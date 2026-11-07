@@ -879,9 +879,10 @@ int cai_app_client_unsubscribe(cai_app_client *c, cai_error *error) {
   m.header.generation = c->state.transport.generation;
   return send_transcript(c, &m, error);
 }
-int cai_app_client_bind(cai_app_client *client, uint64_t request,
-                        unsigned long long epoch, unsigned long long producer,
-                        const char *session, cai_error *error) {
+static int bind_client(cai_app_client *client, uint64_t request,
+                       unsigned long long epoch, unsigned long long producer,
+                       const char *session, int select_session,
+                       cai_error *error) {
   cai_cli_input_wire_message m;
   int rc = valid(client, error);
   size_t length = session != NULL ? strnlen(session, 129U) : 0U;
@@ -905,17 +906,31 @@ int cai_app_client_bind(cai_app_client *client, uint64_t request,
   m.producer = producer;
   m.session = session;
   m.managed_delivery = client->managed_delivery;
+  m.select_session = select_session;
   rc = send(client, &m, error);
   if (rc == CAI_OK) {
     client->binding_request = request;
     client->wanted_epoch = epoch;
     client->wanted_producer = producer;
+    if (select_session)
+      length = 0U;
     if (length != 0U)
       memcpy(client->wanted_session, session, length);
     client->wanted_session[length] = '\0';
     client->state.binding = 1;
   }
   return rc;
+}
+int cai_app_client_bind(cai_app_client *client, uint64_t request,
+                        unsigned long long epoch, unsigned long long producer,
+                        const char *session, cai_error *error) {
+  return bind_client(client, request, epoch, producer, session, 0, error);
+}
+int cai_app_client_select(cai_app_client *client, uint64_t request,
+                          const char *selector, cai_error *error) {
+  if (selector != NULL && selector[0] == '\0')
+    return cai_cli_error(error, CAI_ERR_INVALID, "empty conversation selector");
+  return bind_client(client, request, 0U, 0U, selector, 1, error);
 }
 int cai_app_client_manage_delivery(cai_app_client *client, cai_error *error) {
   int rc = valid(client, error);

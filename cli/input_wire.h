@@ -19,6 +19,7 @@ typedef struct cai_cli_input_wire_message {
   const char *session;
   unsigned long long delivery_after;
   int managed_delivery;
+  int select_session;
   cai_app_shell_request shell;
   cai_cli_input_result_kind category;
 } cai_cli_input_wire_message;

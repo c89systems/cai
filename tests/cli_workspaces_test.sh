@@ -34,6 +34,11 @@ if [[ ${3:-native} == embed ]]; then
   base=("$terminal_host" "$runtime_root" "$work" "${base[@]:1}")
   attach_args=(--terminal)
 fi
+# A startup selector belongs only to the initial workspace. It must never be
+# reapplied when /workspace attaches to an observing connection elsewhere.
+initial_session=$(jq -r 'select(.event=="workspace_ready") | .session_id' "$root/a.log")
+[[ -n "$initial_session" ]]
+attach_args+=(--resume "$initial_session")
 terminal_start "${attach_args[@]}"
 prompt 'hello in the first workspace' 'FIRST workspace answer'
 send '/help\r'; expect 'Workspace connections'; expect 'Queue and approval keys'; expect Alt-Enter
@@ -49,7 +54,7 @@ send '/workspace workspace-a\rDRAFT_B'; expect_prompt DRAFT_A
 send '\025'
 prompt 'continue the first workspace' 'FIRST continued answer'
 send '/workspace workspace-b\r'; expect_prompt DRAFT_B
-send '\025/workspace ../work\r'; expect 'Conversation attached'
+send '\025/workspace ../work\r'; expect 'Conversation resumed'
 send '/workspace workspace-a\r'; expect 'Already viewing this workspace'
 plan '{"plan":[{"pause":true,"pause_text":"OLD workspace still working. ","text":"OLD workspace done."},"QUEUED A answer"]}'
 send 'work in the first workspace while I am away\r'; expect 'OLD workspace still working.'

@@ -30,6 +30,8 @@ typedef struct frontend {
   size_t results;
   size_t control_results;
   int control_code;
+  size_t binding_rejections;
+  int binding_code;
   int paused;
   uint64_t takeover_request;
   cai_input_result result;
@@ -41,11 +43,16 @@ typedef struct fixture {
   char *runtime, *workspace;
   unsigned long long clock;
   size_t cancellations;
+  size_t selections;
 } fixture;
 static int observed(void *context, const cai_app_client_event *event,
                     cai_error *error) {
   frontend *f = context;
   f->state = *event->state;
+  if (event->type == CAI_APP_CLIENT_BIND_REJECTED) {
+    ++f->binding_rejections;
+    f->binding_code = event->input->result.code;
+  }
   if (event->type == CAI_APP_CLIENT_CONTROL_RESULT) {
     ++f->control_results;
     f->control_code = event->input->result.code;
@@ -654,6 +661,56 @@ static void settlement_cases(fixture *f) {
   free(a);
   free(b);
 }
+static int select_conversation(void *context, const char *selector,
+                               cai_error *error) {
+  fixture *f = context;
+  (void)error;
+  ++f->selections;
+  return selector == NULL || strcmp(selector, "1") == 0 ? CAI_OK
+                                                        : CAI_ERR_INVALID;
+}
+/** Selection is setup, not an input offer. A failed/observer selection must
+ * not bind a producer, fall back to the current conversation, or enqueue text.
+ */
+static void selection_cases(fixture *f) {
+  frontend *a = calloc(1U, sizeof(*a)), *b = calloc(1U, sizeof(*b));
+  assert(a != NULL && b != NULL);
+  a->descriptors[0] = a->descriptors[1] = -1;
+  b->descriptors[0] = b->descriptors[1] = -1;
+  cai_cli_workspace_host_selection(f->host, select_conversation, f);
+  connect(f, a);
+  assert(drive(f, a, NULL) == CAI_OK);
+  assert(cai_app_client_select(a->client, 1U, "", NULL) == CAI_ERR_INVALID);
+  assert(cai_app_client_select(a->client, 1U, "missing", NULL) == CAI_OK);
+  assert(drive(f, a, NULL) == CAI_OK);
+  assert(f->selections == 1U && a->binding_rejections == 1U &&
+         a->binding_code == CAI_ERR_INVALID && !a->state.bound);
+  assert(cai_app_client_select(a->client, 2U, "1", NULL) == CAI_OK);
+  assert(drive(f, a, NULL) == CAI_OK && a->state.ready);
+  assert(f->selections == 2U && strcmp(a->state.session, "session") == 0 &&
+         a->state.last_request == 0U && count(f) == 0U);
+  assert(cai_app_client_select(a->client, 3U, NULL, NULL) == CAI_ERR_INVALID);
+  connect(f, b);
+  assert(drive(f, a, b) == CAI_OK);
+  assert(cai_app_client_select(b->client, 1U, NULL, NULL) == CAI_OK);
+  assert(drive(f, a, b) == CAI_OK);
+  assert(b->binding_rejections == 1U && !b->state.bound &&
+         f->selections == 2U && count(f) == 0U);
+  close_frontend(a);
+  close_frontend(b);
+  server(f);
+  memset(a, 0, sizeof(*a));
+  a->descriptors[0] = a->descriptors[1] = -1;
+  connect(f, a);
+  assert(drive(f, a, NULL) == CAI_OK);
+  assert(cai_app_client_select(a->client, 1U, NULL, NULL) == CAI_OK);
+  assert(drive(f, a, NULL) == CAI_OK && a->state.ready && f->selections == 3U &&
+         count(f) == 0U);
+  close_frontend(a);
+  cai_cli_workspace_host_selection(f->host, NULL, NULL);
+  free(b);
+  free(a);
+}
 static void *run(void *unused) {
   fixture *f = calloc(1U, sizeof(*f));
   cai_attachment_config lifetime;
@@ -682,6 +739,7 @@ static void *run(void *unused) {
                                       NULL) == CAI_OK);
   assert(cai_cli_workspace_host_ready(f->host, NULL) == CAI_OK);
   reject_instance(f);
+  selection_cases(f);
   cancellation_cases(f);
   cases(f);
   pause_cases(f);

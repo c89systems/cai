@@ -23,13 +23,13 @@ static void free_args(char **args, size_t count) {
 }
 
 static void expect(cai_cli_startup *cursor, const cai_cli_options *options,
-                   const char *session, const char *expected, int generated) {
+                   const char *expected, int generated) {
   cai_error error;
   char *text;
   int control;
   cai_error_init(&error);
-  assert(cai_cli_startup_next(cursor, options, session, &text, &control,
-                              &error) == CAI_OK);
+  assert(cai_cli_startup_next(cursor, options, &text, &control, &error) ==
+         CAI_OK);
   assert((expected == NULL && text == NULL) ||
          (expected != NULL && text != NULL && strcmp(text, expected) == 0));
   assert(control == generated);
@@ -354,36 +354,35 @@ int main(void) {
   copy_args(mappings, mapping_input, 5U);
   assert(cai_cli_parse_options((int)(sizeof(args) / sizeof(args[0])), args,
                                &options) == 1);
-  expect(&cursor, &options, "current", "/resume other", 1);
-  expect(&cursor, &options, "other", "/model selected", 1);
-  expect(&cursor, &options, "other", "/reasoning low", 1);
-  expect(&cursor, &options, "other", "/reasoning-summary concise", 1);
-  expect(&cursor, &options, "other", "/tier flex", 1);
-  expect(&cursor, &options, "other", "/yield_time_ms 17", 1);
-  expect(&cursor, &options, "other", "/yolo on", 1);
-  expect(&cursor, &options, "other", "/reasoning-tool on", 1);
-  expect(&cursor, &options, "other", "/shell-context on", 1);
-  expect(&cursor, &options, "other", "/history 3", 1);
-  expect(&cursor, &options, "other", "/retention 0", 1);
-  expect(&cursor, &options, "other", "/autoqueue on", 1);
-  expect(&cursor, &options, "other", "--yolo", 0);
-  expect(&cursor, &options, "other", "actual prompt", 0);
-  expect(&cursor, &options, "other", NULL, 0);
-  expect(&cursor, &options, "other", NULL, 0);
+  expect(&cursor, &options, "/model selected", 1);
+  expect(&cursor, &options, "/reasoning low", 1);
+  expect(&cursor, &options, "/reasoning-summary concise", 1);
+  expect(&cursor, &options, "/tier flex", 1);
+  expect(&cursor, &options, "/yield_time_ms 17", 1);
+  expect(&cursor, &options, "/yolo on", 1);
+  expect(&cursor, &options, "/reasoning-tool on", 1);
+  expect(&cursor, &options, "/shell-context on", 1);
+  expect(&cursor, &options, "/history 3", 1);
+  expect(&cursor, &options, "/retention 0", 1);
+  expect(&cursor, &options, "/autoqueue on", 1);
+  expect(&cursor, &options, "--yolo", 0);
+  expect(&cursor, &options, "actual prompt", 0);
+  expect(&cursor, &options, NULL, 0);
+  expect(&cursor, &options, NULL, 0);
 
   assert(cai_cli_parse_options((int)(sizeof(disabled) / sizeof(disabled[0])),
                                disabled, &options) == 1);
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", "/reasoning-summary none", 1);
-  expect(&cursor, &options, "current", "/tier default", 1);
-  expect(&cursor, &options, "current", "/yield_time_ms 0", 1);
-  expect(&cursor, &options, "current", "/yolo off", 1);
-  expect(&cursor, &options, "current", "/reasoning-tool off", 1);
-  expect(&cursor, &options, "current", "/shell-context off", 1);
-  expect(&cursor, &options, "current", "/history 0", 1);
-  expect(&cursor, &options, "current", "/retention 30", 1);
-  expect(&cursor, &options, "current", "/autoqueue off", 1);
-  expect(&cursor, &options, "current", NULL, 0);
+  expect(&cursor, &options, "/reasoning-summary none", 1);
+  expect(&cursor, &options, "/tier default", 1);
+  expect(&cursor, &options, "/yield_time_ms 0", 1);
+  expect(&cursor, &options, "/yolo off", 1);
+  expect(&cursor, &options, "/reasoning-tool off", 1);
+  expect(&cursor, &options, "/shell-context off", 1);
+  expect(&cursor, &options, "/history 0", 1);
+  expect(&cursor, &options, "/retention 30", 1);
+  expect(&cursor, &options, "/autoqueue off", 1);
+  expect(&cursor, &options, NULL, 0);
 
   /* Inherited configuration is not an instruction to reset an existing owner.
    * Only actual value-consuming argv branches may set the explicit mask. */
@@ -395,16 +394,16 @@ int main(void) {
   defaults.reasoning_tool = 1;
   assert(cai_cli_read_options(1, args, &defaults, &options) == 1);
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", NULL, 0);
+  expect(&cursor, &options, NULL, 0);
   assert(cai_cli_read_options(3, background, &defaults, &options) == 1);
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", "/yield_time_ms 10000", 1);
+  expect(&cursor, &options, "/yield_time_ms 10000", 1);
 
   assert(cai_cli_parse_options(5, mappings, &options) == 1);
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", "/reasoning-tool normal low", 1);
-  expect(&cursor, &options, "current", "/reasoning-tool high xhigh", 1);
-  expect(&cursor, &options, "current", NULL, 0);
+  expect(&cursor, &options, "/reasoning-tool normal low", 1);
+  expect(&cursor, &options, "/reasoning-tool high xhigh", 1);
+  expect(&cursor, &options, NULL, 0);
   {
     const char *board_input[] = {"cai",     "--todo",        "--board",
                                  "a board", "--todo-layout", "list"};
@@ -412,35 +411,35 @@ int main(void) {
     copy_args(board_args, board_input, 6U);
     assert(cai_cli_parse_options(6, board_args, &options) == 1);
     memset(&cursor, 0, sizeof(cursor));
-    expect(&cursor, &options, "current", "/todo layout list", 1);
-    expect(&cursor, &options, "current", "/todo new a board", 1);
-    expect(&cursor, &options, "current", NULL, 0);
+    expect(&cursor, &options, "/todo layout list", 1);
+    expect(&cursor, &options, "/todo new a board", 1);
+    expect(&cursor, &options, NULL, 0);
     /* Defaults do not describe an existing owner's tool policy. An explicit
      * disabled policy, however, retains --board's existing ignored behavior. */
     options.todo = 0;
     options.owner_explicit[CAI_CLI_OWNER_todo] = 0U;
     memset(&cursor, 0, sizeof(cursor));
-    expect(&cursor, &options, "current", "/todo layout list", 1);
-    expect(&cursor, &options, "current", "/todo new a board", 1);
-    expect(&cursor, &options, "current", NULL, 0);
+    expect(&cursor, &options, "/todo layout list", 1);
+    expect(&cursor, &options, "/todo new a board", 1);
+    expect(&cursor, &options, NULL, 0);
     options.owner_explicit[CAI_CLI_OWNER_todo] = 1U;
     memset(&cursor, 0, sizeof(cursor));
-    expect(&cursor, &options, "current", "/todo layout list", 1);
-    expect(&cursor, &options, "current", NULL, 0);
+    expect(&cursor, &options, "/todo layout list", 1);
+    expect(&cursor, &options, NULL, 0);
     free_args(board_args, 6U);
   }
   assert(cai_cli_read_options(2, no_foreground, &defaults, &options) == 1);
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", "/yield_time_ms 10000", 1);
+  expect(&cursor, &options, "/yield_time_ms 10000", 1);
 
   cai_cli_options_init(&options);
   options.resume_id = "current";
   options.goal = "finish it";
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", "/goal new finish it", 1);
+  expect(&cursor, &options, "/goal new finish it", 1);
   options.new_session = 1;
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", "/new", 1);
+  expect(&cursor, &options, "/goal new finish it", 1);
   {
     cai_cli_goal_input decoded;
     const char *combined[] = {
@@ -452,16 +451,16 @@ int main(void) {
     assert(cai_cli_parse_options((int)count, combined_args, &options) == 1);
     memset(&cursor, 0, sizeof(cursor));
     cai_error_init(&error);
-    assert(cai_cli_startup_next(&cursor, &options, "current", &text, &control,
-                                &error) == CAI_OK);
+    assert(cai_cli_startup_next(&cursor, &options, &text, &control, &error) ==
+           CAI_OK);
     assert(control && strncmp(text, "/goal start ", 12U) == 0);
     assert(cai_cli_goal_input_parse(text + 12U, &decoded, &error) == CAI_OK);
     assert(strcmp(decoded.objective, combined[2]) == 0 &&
            strcmp(decoded.prompt, combined[4]) == 0);
     cai_cli_goal_input_close(&decoded);
     free(text);
-    expect(&cursor, &options, "current", "later", 0);
-    expect(&cursor, &options, "current", NULL, 0);
+    expect(&cursor, &options, "later", 0);
+    expect(&cursor, &options, NULL, 0);
     free_args(combined_args, count);
     {
       static const char *invalid[] = {
@@ -488,36 +487,36 @@ int main(void) {
   cai_cli_options_init(&options);
   options.review_and_fix = 1;
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", "/review-and-fix", 1);
-  expect(&cursor, &options, "current", NULL, 0);
+  expect(&cursor, &options, "/review-and-fix", 1);
+  expect(&cursor, &options, NULL, 0);
   options.review_uncommitted = 1;
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", "/review-and-fix uncommitted", 1);
+  expect(&cursor, &options, "/review-and-fix uncommitted", 1);
   options.review_uncommitted = 0;
   options.base = "HEAD";
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", "/review-and-fix base HEAD", 1);
+  expect(&cursor, &options, "/review-and-fix base HEAD", 1);
   options.review_and_fix = 0;
   options.base = NULL;
   options.review = 1;
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", "/review", 1);
-  expect(&cursor, &options, "current", NULL, 0);
+  expect(&cursor, &options, "/review", 1);
+  expect(&cursor, &options, NULL, 0);
   options.base = "HEAD";
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", "/review base HEAD", 1);
+  expect(&cursor, &options, "/review base HEAD", 1);
   options.base = NULL;
   options.review_uncommitted = 1;
   memset(&cursor, 0, sizeof(cursor));
-  expect(&cursor, &options, "current", "/review uncommitted", 1);
+  expect(&cursor, &options, "/review uncommitted", 1);
   {
     const char *review_input[] = {"cai", "--review", "-i", "Inspect only this"};
     char *review_args[4];
     copy_args(review_args, review_input, 4U);
     assert(cai_cli_parse_options(4, review_args, &options) == 1);
     memset(&cursor, 0, sizeof(cursor));
-    expect(&cursor, &options, "current", "/review custom Inspect only this", 1);
-    expect(&cursor, &options, "current", NULL, 0);
+    expect(&cursor, &options, "/review custom Inspect only this", 1);
+    expect(&cursor, &options, NULL, 0);
     free_args(review_args, 4U);
   }
   cai_cli_options_init(&options);
@@ -531,8 +530,8 @@ int main(void) {
   options.goal = large;
   cai_error_init(&error);
   memset(&cursor, 0, sizeof(cursor));
-  assert(cai_cli_startup_next(&cursor, &options, "current", &text, &control,
-                              &error) == CAI_ERR_LIMIT);
+  assert(cai_cli_startup_next(&cursor, &options, &text, &control, &error) ==
+         CAI_ERR_LIMIT);
   assert(text == NULL);
   cai_error_cleanup(&error);
   free(large);

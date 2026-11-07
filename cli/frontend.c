@@ -123,6 +123,7 @@ typedef struct frontend {
   cai_cli_startup startup;
   int startup_command;
   int startup_control, startup_feeding;
+  int startup_select;
   struct {
     uint64_t request, producer;
     char session[129];
@@ -502,6 +503,14 @@ static int observed(void *context, const cai_app_client_event *event,
                     cai_error *error) {
   frontend *f = context;
   f->state = *event->state;
+  if (event->type == CAI_APP_CLIENT_BIND_REJECTED)
+    return cai_cli_error(error,
+                         event->input->result.code != CAI_OK
+                             ? event->input->result.code
+                             : CAI_ERR_INVALID,
+                         event->input->result.reason[0] != '\0'
+                             ? event->input->result.reason
+                             : "conversation binding rejected");
   if (event->type == CAI_APP_CLIENT_SHELL_RESULT &&
       event->request == f->capture_request && f->capture_waiting) {
     cai_app_shell_result result;
@@ -1261,8 +1270,8 @@ static int startup_input(frontend *f) {
       f->state.transport.controller != f->state.transport.attachment ||
       f->startup.stage >= CAI_CLI_STARTUP_DONE)
     return 0;
-  rc = cai_cli_startup_next(&f->startup, f->options, f->state.session, &text,
-                            &control, &f->error);
+  rc =
+      cai_cli_startup_next(&f->startup, f->options, &text, &control, &f->error);
   if (rc != CAI_OK || text == NULL)
     return rc;
   memset(&request, 0, sizeof(request));
@@ -1377,7 +1386,9 @@ static int service(frontend *f) {
                              "select verified completion directory");
       f->startup.stage = ready == CAI_CLI_FRONTEND_STARTED
                              ? CAI_CLI_STARTUP_REVIEW_AND_FIX
-                             : CAI_CLI_STARTUP_SELECT;
+                             : CAI_CLI_STARTUP_MODEL;
+      if (ready == CAI_CLI_FRONTEND_STARTED)
+        f->startup_select = 0;
       if (connect_target(f) != CAI_OK)
         return -1;
     }
@@ -1417,13 +1428,19 @@ static int service(frontend *f) {
     }
     if (f->state.transport.phase == CAI_WORKSPACE_CONNECTED && !f->bound &&
         !f->awaiting_bind) {
-      rc = cai_app_client_bind(
-          f->client, ++f->bind_request, 0U, f->current->producer,
-          f->current->session[0] != '\0' ? f->current->session : NULL,
-          &f->error);
+      if (f->startup_select)
+        rc = cai_app_client_select(
+            f->client, ++f->bind_request,
+            f->options->new_session ? NULL : f->options->resume_id, &f->error);
+      else
+        rc = cai_app_client_bind(
+            f->client, ++f->bind_request, 0U, f->current->producer,
+            f->current->session[0] != '\0' ? f->current->session : NULL,
+            &f->error);
       if (rc != CAI_OK)
         return -1;
       f->awaiting_bind = 1;
+      f->startup_select = 0;
     }
     if (f->bound && !f->subscribed && f->handoff_notice[0] == '\0') {
       rc = cai_app_client_subscribe(
@@ -1503,6 +1520,17 @@ static int quit_key(sl_t *sl, sl_key_t key, void *context,
   f->quit = 1;
   *action = SL_KEY_ACTION_SUSPEND;
   return SL_OK;
+}
+/** Keep native forward-delete while editing; an empty Ctrl-D follows the
+ * same local goodbye/detach path as Alt-Q before Softline leaves its surface.
+ */
+static int eof_key(sl_t *sl, sl_key_t key, void *context,
+                   sl_key_action_t *action) {
+  if (sl_buffer(sl)[0] != '\0') {
+    *action = SL_KEY_ACTION_PASS;
+    return SL_OK;
+  }
+  return quit_key(sl, key, context, action);
 }
 static int cancel_key(sl_t *sl, sl_key_t key, void *context,
                       sl_key_action_t *action) {
@@ -1697,6 +1725,7 @@ static int select_view(frontend *f, const char *session) {
         sl_watch_add(f->ui->sl, f->timer, SL_WATCH_READ, event_ready, f,
                      &f->timer_watch) != SL_OK ||
         sl_bind_key(f->ui->sl, SL_KEY_ALT_BASE + 'q', quit_key, f) != SL_OK ||
+        sl_bind_key(f->ui->sl, SL_KEY_CTRL_D, eof_key, f) != SL_OK ||
         sl_bind_key(f->ui->sl, SL_KEY_ALT_BASE + 's', shell_key, f) != SL_OK ||
         sl_bind_key(f->ui->sl, SL_KEY_ESCAPE, cancel_key, f) != SL_OK ||
         sl_bind_key(f->ui->sl, SL_KEY_ENTER, enter_key, f) != SL_OK ||
@@ -1768,10 +1797,10 @@ static frontend *frontend_open(frontend_group *group,
     f->target.expected_instance = f->instance;
   }
   f->boot = boot;
-  /* Discovery decides whether a new owner already received the original argv.
-   * An existing owner (including the winner of a launch race) gets explicit
-   * intents exactly once through admissions after its replay completes. */
-  f->startup.stage = CAI_CLI_STARTUP_SELECT;
+  /* Select the conversation before binding/replay. Only subsequent explicit
+   * invocation inputs use admissions after that selected replay completes. */
+  f->startup.stage = CAI_CLI_STARTUP_MODEL;
+  f->startup_select = options->resume_id != NULL || options->new_session;
   f->theme_offsets[0] = options->theme_offset;
   f->theme_offsets[1] = options->subagent_theme_offset;
   f->theme_offsets[2] = options->review_theme_offset;
@@ -1980,9 +2009,11 @@ static int workspace_progress(frontend *f) {
               target.handshake_timeout_ms = 10000U;
             p = frontend_open(g, f->application, f->options, &target, NULL,
                               &local);
-            if (p != NULL)
+            if (p != NULL) {
               p->startup.stage = CAI_CLI_STARTUP_DONE;
-            else
+              p->startup_select = 0;
+              p->greeting_resumed = 0;
+            } else
               rc = local.code != CAI_OK ? local.code : CAI_ERR_TRANSPORT;
           }
           g->candidate = p;
@@ -2693,6 +2724,10 @@ int cai_cli_frontend_run(const cai_app_config *application,
                               : "Cancellation unavailable");
           cai_error_cleanup(&f->error);
         }
+      } else if (input_status == SL_READLINE_EOF) {
+        if (goodbye(f) != 0)
+          f->failed = 1;
+        f->quit = 1;
       } else
         f->quit = 1;
     }

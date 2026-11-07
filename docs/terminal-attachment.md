@@ -77,6 +77,10 @@ actions to the attaching frontend. The frontend skips already-applied settings
 and conversation selection; goals and instructions receive ordinary queue
 identities. An existing owner's explicit setting changes also use the queue.
 Explicit headless startup keeps owner-side automation.
+Attaching with `-R`/`--resume` or `-N`/`--new` selects through `cai_app_client_select` before producer binding and transcript subscription.
+The owner resolves session IDs and listing numbers at this setup boundary; no `/resume` or `/new` input is manufactured.
+An invalid selector leaves the current runtime open and returns a binding rejection before replay.
+An observer cannot change the shared conversation, and active work prevents selecting a different conversation.
 The shared invocation compiler translates explicit model, effort,
 summary, service-tier, execution-yield, YOLO, reasoning-tool, shell-context,
 effort-tool mappings, prompt-history, retention, automatic-queue, Kanban

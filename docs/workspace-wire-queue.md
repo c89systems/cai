@@ -14,7 +14,7 @@ lengths from those fields, with no preliminary serialization.
 
 | Envelope kind | Payload |
 | --- | --- |
-| SYNCHRONIZE | `[producer, session, managed_delivery]` |
+| SYNCHRONIZE | `[producer, session, managed_delivery, select_session]` |
 | INPUT_SETTLED | `[after_request]` |
 | REQUEST | `[operation, item, item_revision, queue_revision, edit_token, intent, enabled, target_request, text]` |
 | QUEUE_BEGIN | `[producer, last_request, revision, count, stopped, auto_approval, uncertain, session]` |
@@ -35,13 +35,21 @@ follow `cai_input_operation` through RESOLVE; the trusted internal
 FORGET_ORIGIN operation is unavailable on the wire. Intent and outcome values
 use their native enums. Frontends cannot provide provenance origins.
 
-SYNCHRONIZE binds an attachment to a logical queue producer. Producer zero
+SYNCHRONIZE with `select_session = false` binds an attachment to a logical queue producer. Producer zero
 explicitly opens a new producer in the active conversation. A nonzero producer
 must provide the exact persistent session identity. A nonzero conversation
 epoch must also match; after verifying a changed server instance a client may
 use zero to resolve that session's new epoch. Failure must never silently
 reserve a replacement producer. Binding is read-only with respect to accepted
 inputs. A validated greeting alone neither binds nor submits anything.
+
+With `select_session = true`, producer and conversation must both be zero, and the attachment must be unbound and controlling the workspace at the supplied authority generation.
+The session field is a session ID or a workspace listing number; an empty session requests a new conversation.
+The owner resolves and selects it outside the socket decoder callback, then binds a new producer and returns the ordinary queue baseline.
+Failure returns BIND_REJECTED without subscribing to or replaying any conversation, and an invalid selector does not close the current runtime.
+Selecting the already active conversation is a silent no-op before binding, even if work is active; selecting another conversation rejects active work.
+This is startup control, with no generated slash command, queue offer, prompt-history entry or command transcript record.
+The binding payload has changed; restart existing workspace owners when installing this build so clients and owners use the same schema.
 
 Managed producers start with delivery gated. Each handed-off queue request
 closes the gate again. INPUT_SETTLED has zero request/sequence/stream metadata,

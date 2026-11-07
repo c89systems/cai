@@ -24,6 +24,12 @@ int cai_cli_workspace_host_ready(cai_cli_workspace_host *, cai_error *);
  * checked immediately before invocation, never in a later trusted mailbox. */
 void cai_cli_workspace_host_cancel(cai_cli_workspace_host *,
                                    int (*)(void *, cai_error *), void *);
+/** Select before producer binding, outside the socket decoder callback.
+ * NULL selector means a new conversation. Borrow callback/context to close. */
+void cai_cli_workspace_host_selection(cai_cli_workspace_host *,
+                                      int (*)(void *, const char *,
+                                              cai_error *),
+                                      void *);
 void cai_cli_workspace_host_prompt_limit(cai_cli_workspace_host *,
                                          unsigned int);
 /** Borrow immutable runtime catalog metadata through context unbind. Publishes

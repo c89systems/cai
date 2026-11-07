@@ -6,8 +6,7 @@
 #include <string.h>
 
 int cai_cli_startup_next(cai_cli_startup *cursor, const cai_cli_options *o,
-                         const char *session, char **text, int *control,
-                         cai_error *error) {
+                         char **text, int *control, cai_error *error) {
   const char *prefix = NULL, *value = NULL;
   char number[32];
   size_t a, b;
@@ -15,15 +14,6 @@ int cai_cli_startup_next(cai_cli_startup *cursor, const cai_cli_options *o,
   *control = 0;
   while (value == NULL && cursor->stage < CAI_CLI_STARTUP_DONE) {
     switch (cursor->stage++) {
-    case CAI_CLI_STARTUP_SELECT:
-      if (o->new_session) {
-        prefix = "/new";
-        value = "";
-      } else if (o->resume_id != NULL && strcmp(o->resume_id, session) != 0) {
-        prefix = "/resume ";
-        value = o->resume_id;
-      }
-      break;
     case CAI_CLI_STARTUP_MODEL:
       if (o->model_explicit) {
         prefix = "/model ";

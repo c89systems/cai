@@ -33,6 +33,10 @@ typedef struct host_peer {
   uint64_t cancel_request, cancel_generation, cancel_conversation;
   int cancel_code;
   char cancel_reason[192];
+  int selecting;
+  uint64_t selection_request, selection_generation;
+  int selection_managed;
+  char selection[129];
   cai_agent_runtime *shell_runtime;
   uint64_t shell_id, shell_sequence, shell_high, shell_generation,
       shell_conversation, shell_started;
@@ -55,6 +59,8 @@ struct cai_cli_workspace_host {
   cai_app_view status;
   int (*cancel)(void *, cai_error *);
   void *cancel_context;
+  int (*select)(void *, const char *, cai_error *);
+  void *select_context;
   host_peer peers[CAI_ATTACHMENT_LIMIT];
 };
 static int output_begin(void *context, const cai_protocol_header *header,
@@ -602,6 +608,64 @@ static int append_prompt(host_peer *peer, const cai_cli_input_wire_message *m,
   cai_error_cleanup(&local);
   return send_message(peer, &result, error);
 }
+/** Complete an explicit startup selection after the transport pump returns.
+ * Runtime replacement may close readers and producers; it must never reenter
+ * the socket decoder that borrowed the original request. */
+static int select_peer(host_peer *peer, cai_error *error) {
+  cai_cli_workspace_host *host = peer->host;
+  cai_cli_input_wire_message reply;
+  cai_error local;
+  unsigned long long epoch = 0U;
+  int rc;
+  peer->selecting = 0;
+  cai_error_init(&local);
+  rc = authorize_control(host, peer->attachment, peer->selection_generation,
+                         &local);
+  if (rc == CAI_OK && peer->input != NULL)
+    rc = cai_cli_error(&local, CAI_ERR_INVALID,
+                       "conversation selection requires an unbound producer");
+  if (rc == CAI_OK)
+    rc = host->select != NULL
+             ? host->select(host->select_context,
+                            peer->selection[0] != '\0' ? peer->selection : NULL,
+                            &local)
+             : cai_cli_error(&local, CAI_ERR_INVALID,
+                             "conversation selection unavailable");
+  if (rc == CAI_OK)
+    rc = cai_input_controller_conversation(host->input, &epoch, &local);
+  if (rc == CAI_OK)
+    rc = cai_input_controller_connect(host->input, peer->attachment,
+                                      &peer->input, &local);
+  if (rc == CAI_OK && peer->selection_managed) {
+    cai_input_scope scope;
+    scope.conversation = epoch;
+    scope.generation = peer->selection_generation;
+    rc = cai_input_connection_manage_delivery(peer->input, &scope, &local);
+  }
+  if (rc == CAI_OK) {
+    peer->managed_delivery = peer->selection_managed;
+    peer->binding_request = peer->selection_request;
+    peer->binding = 1;
+  } else {
+    if (peer->input != NULL) {
+      cai_input_connection_close(peer->input);
+      peer->input = NULL;
+    }
+    memset(&reply, 0, sizeof(reply));
+    reply.header.kind = CAI_PROTOCOL_RESULT;
+    reply.header.request = peer->selection_request;
+    reply.category = CAI_CLI_INPUT_BIND_REJECTED;
+    reply.observation.result.outcome = CAI_INPUT_REJECTED;
+    reply.observation.result.code = rc;
+    snprintf(reply.observation.result.reason,
+             sizeof(reply.observation.result.reason), "%s",
+             local.message != NULL ? local.message
+                                   : "conversation selection failed");
+    rc = send_message(peer, &reply, error);
+  }
+  cai_error_cleanup(&local);
+  return rc;
+}
 static int message(void *context, const cai_workspace_server_event *event,
                    cai_error *error) {
   cai_cli_workspace_host *host = context;
@@ -714,6 +778,21 @@ static int message(void *context, const cai_workspace_server_event *event,
   if (m->header.kind == CAI_PROTOCOL_SYNCHRONIZE) {
     unsigned long long epoch = 0U;
     cai_error binding;
+    if (peer->selecting)
+      return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                           "conversation selection is already pending");
+    if (m->select_session) {
+      if (peer->input != NULL)
+        return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                             "duplicate conversation selection");
+      peer->selecting = 1;
+      peer->selection_request = m->header.request;
+      peer->selection_generation = m->header.generation;
+      peer->selection_managed = m->managed_delivery;
+      snprintf(peer->selection, sizeof(peer->selection), "%s",
+               m->session != NULL ? m->session : "");
+      return CAI_OK;
+    }
     cai_error_init(&binding);
     rc = host->input != NULL
              ? cai_input_controller_conversation(host->input, &epoch, &binding)
@@ -992,6 +1071,15 @@ int cai_cli_workspace_host_open(
     *out = host;
   return rc;
 }
+void cai_cli_workspace_host_selection(cai_cli_workspace_host *host,
+                                      int (*select)(void *, const char *,
+                                                    cai_error *),
+                                      void *context) {
+  if (host != NULL) {
+    host->select = select;
+    host->select_context = context;
+  }
+}
 void cai_cli_workspace_host_cancel(cai_cli_workspace_host *host,
                                    int (*cancel)(void *, cai_error *),
                                    void *context) {
@@ -1230,6 +1318,13 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
       continue;
     }
     cai_error_init(&local);
+    if (peer->selecting) {
+      rc = select_peer(peer, &local);
+      if (rc != CAI_OK) {
+        cai_error_cleanup(&local);
+        return rc;
+      }
+    }
     rc = cai_workspace_server_pending(host->server, peer->attachment, &pending,
                                       &local);
     if (rc == CAI_OK && pending <= 65536U &&
