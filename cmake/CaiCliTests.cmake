@@ -159,7 +159,7 @@
     add_executable(cai_cli_handoff_host tests/app_terminal_host.c tests/terminal_handoff_guard.c)
     target_link_libraries(cai_cli_handoff_host PRIVATE cai_app_static)
     target_link_options(cai_cli_handoff_host PRIVATE -Wl,--wrap=lc_client_open
-      -Wl,--wrap=sl_terminal_handoff -Wl,--wrap=mdf_pager_file -Wl,--wrap=mdf_pager_source -Wl,--wrap=sl_queue_backend_update
+      -Wl,--wrap=sl_terminal_handoff -Wl,--wrap=mdf_pager_file -Wl,--wrap=mdf_pager_seekable_source -Wl,--wrap=sl_queue_backend_update
       -Wl,--wrap=sl_history_add -Wl,--wrap=sl_set_status_message)
     target_compile_options(cai_cli_handoff_host PRIVATE -UNDEBUG)
     cai_configure_cli_target(cai_cli_handoff_host)

@@ -2345,7 +2345,7 @@ static char *pager_path(frontend *f) {
   free(result);
   return NULL;
 }
-/** The finite-file fallback is libmdf's buffered viewer. Its cooperative hook
+/** The fallback reads on demand through libmdf's bounded pager cache. Its hook
  * services owner connections without invoking Softline or another renderer. */
 typedef struct pager_service {
   frontend *frontend;
@@ -2363,13 +2363,25 @@ static int pager_cancel(void *context) {
                           &p->frontend->error) != CAI_OK ||
          p->frontend->handoff_failed || p->frontend->quit;
 }
+/** Help is generated from static paragraphs and a bounded invocation example.
+ * Reposition that producer directly instead of buffering a forward-only source.
+ */
+static int help_pager_seek(void *context, const mdf_source_offset *offset) {
+  size_t position;
+  if (offset == NULL || offset->high != 0UL)
+    return -1;
+  position = (size_t)offset->low;
+  if ((unsigned long)position != offset->low)
+    return -1;
+  return cai_cli_help_reader_seek(context, position);
+}
 static int native_pager(frontend *f, const char *log, int help) {
   pager_service service;
   mdf_pager_control control;
   mdf_options options;
   mdf_status status;
   cai_cli_help_reader *reader = NULL;
-  mdf_source source;
+  mdf_seekable_source source;
   int rc = CAI_OK;
   memset(&service, 0, sizeof(service));
   service.frontend = f;
@@ -2400,10 +2412,12 @@ static int native_pager(frontend *f, const char *log, int help) {
     options.ansi_mode = MDF_ANSI_OFF;
   source.userdata = reader;
   source.read = cai_cli_help_reader_read;
-  status = help
-               ? mdf_pager_source("Help.md", &source, &options,
-                                  MDF_PAGER_FORMAT_MARKDOWN, &control)
-               : mdf_pager_file(log, &options, MDF_PAGER_FORMAT_TEXT, &control);
+  source.seek = help_pager_seek;
+  status =
+      help
+          ? mdf_pager_seekable_source("Help.md", &source, &options,
+                                      MDF_PAGER_FORMAT_MARKDOWN, &control, NULL)
+          : mdf_pager_file(log, &options, MDF_PAGER_FORMAT_TEXT, &control);
   cai_cli_help_reader_close(reader);
   close(service.epoll);
   if (sl_output_stream_begin(f->ui->sl) != SL_OK)

@@ -40,8 +40,8 @@ before fork; the child uses only async-signal-safe operations before exec. One
 default-stack waiter observes that exact child with `WNOWAIT`, keeping its PID
 owned until terminal restoration, join and reap. It neither installs a SIGCHLD
 handler nor changes the host cwd/environment. The host must leave these children
-waitable and must not reap them. When `less` is unavailable, libmdf's buffered
-log pager temporarily owns and restores terminal/signal state instead.
+waitable and must not reap them.
+When `less` is unavailable, libmdf's on-demand log pager uses a bounded rendered-content cache and temporarily owns and restores terminal/signal state instead.
 
 The bootstrap channel uses the existing incremental CBOR/framing/protocol
 implementation, not a second serializer or a JSON value. STATUS records have

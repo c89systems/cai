@@ -291,6 +291,8 @@ static int test_literal_tokens(void) {
       "invalid \xff**stars** \xc3[_path_]",
       "control \033[2J **stars**",
       "first\nsecond\n\nlast",
+      "foo_bar_baz a\xc2\xa0"
+      "b",
       ""};
   static const char *expected[] = {
       "**stars** _path_ `tick` [name](url) <tag> {value} a+b-1.! \\path &amp;",
@@ -298,6 +300,8 @@ static int test_literal_tokens(void) {
       "invalid ?**stars** ?[_path_]",
       "control [2J **stars**",
       "first\nsecond\n\nlast",
+      "foo_bar_baz a\xc2\xa0"
+      "b",
       ""};
   struct literal_fixture {
     event_log_capture capture;
@@ -370,6 +374,63 @@ static int test_literal_tokens(void) {
   return rc;
 }
 
+static int test_markdown_identifiers(void) {
+  static const char input[] = "foo_bar_baz *foo_bar_baz* a b_c_d b *a b_c_d b* "
+                              "foo___bar___baz *foo___bar___baz*\n";
+  static const char text[] = "foo_bar_baz foo_bar_baz a b_c_d b a b_c_d b "
+                             "foo___bar___baz foo___bar___baz\n";
+  event_log_capture *capture = calloc(1U, sizeof(*capture));
+  mdf_options options;
+  mdf_sink sink;
+  mdf *renderer = NULL;
+  char actual[512], expected[512];
+  size_t span, at;
+  int failed = 1;
+  if (capture == NULL)
+    return 1;
+  mdf_options_init(&options);
+  options.width = 240;
+  options.boring = 1;
+  options.ansi_mode = MDF_ANSI_OFF;
+  if (mdf_create(MDF_FORMAT_ANSI, &options, &renderer) != MDF_OK)
+    goto done;
+  sink.userdata = capture;
+  sink.write = literal_capture_write;
+  if (renderer->set_sink(renderer, &sink) != MDF_OK)
+    goto done;
+  without_spaces(expected, text);
+  for (span = 1U; span <= sizeof(input); ++span) {
+    memset(capture, 0, sizeof(*capture));
+    if (span > 1U && renderer->begin_document(renderer) != MDF_OK)
+      goto done;
+    for (at = 0U; at < sizeof(input) - 1U;) {
+      size_t length = sizeof(input) - 1U - at;
+      if (length > span)
+        length = span;
+      if (renderer->feed(renderer, input + at, length) != MDF_OK)
+        goto done;
+      at += length;
+    }
+    if (renderer->finish_document(renderer) != MDF_OK ||
+        capture->length >= sizeof(actual))
+      goto done;
+    without_spaces(actual, capture->bytes);
+    if (strcmp(actual, expected) != 0) {
+      fprintf(stderr, "fragment size %lu: expected %s, got %s\n",
+              (unsigned long)span, expected, actual);
+      goto done;
+    }
+  }
+  failed = 0;
+done:
+  if (failed)
+    fprintf(stderr,
+            "Markdown intraword underscores changed during rendering\n");
+  if (renderer != NULL)
+    renderer->destroy(renderer);
+  free(capture);
+  return failed;
+}
 static int test_literal_fragments(void) {
   static const char input[] =
       "prefix **stars** _path_ `tick` [name](url) &amp; \\x café λ🚀\n"
@@ -791,8 +852,9 @@ static void *verify(void *context) {
     }
   *result = test_streaming_tables() || test_reasoning_sections() ||
             test_reasoning_quotes() || test_literal_tokens() ||
-            test_literal_fragments() || test_reasoning_replay() ||
-            test_deferred_command_spacing() || test_timestamps();
+            test_markdown_identifiers() || test_literal_fragments() ||
+            test_reasoning_replay() || test_deferred_command_spacing() ||
+            test_timestamps();
   return NULL;
 }
 

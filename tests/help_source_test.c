@@ -51,9 +51,30 @@ int main(void) {
       assert(used == c->length && memcmp(c->actual, c->expected, used) == 0);
       assert(cai_cli_help_reader_read(source, c->actual, 1U, &error) == 0U &&
              !error);
+      {
+        size_t position;
+        /* Every byte offset, including paragraph boundaries and EOF, must
+         * yield the same bounded suffix as the inline document. */
+        for (position = 0U; position <= c->length; ++position) {
+          size_t wanted = c->length - position;
+          if (wanted > 7U)
+            wanted = 7U;
+          assert(cai_cli_help_reader_seek(source, position) == 0);
+          n = cai_cli_help_reader_read(source, c->actual, 7U, &error);
+          assert(!error && n == wanted &&
+                 memcmp(c->actual, c->expected + position, n) == 0);
+        }
+        assert(cai_cli_help_reader_seek(source, 3U) == 0);
+        assert(cai_cli_help_reader_seek(source, c->length + 1U) == -1);
+        assert(cai_cli_help_reader_seek(source, (size_t)-1) == -1);
+        assert(cai_cli_help_reader_read(source, c->actual, 7U, &error) == 7U &&
+               !error && memcmp(c->actual, c->expected + 3U, 7U) == 0);
+        assert(cai_cli_help_reader_seek(source, 0U) == 0);
+      }
       cai_cli_help_reader_close(source);
     }
   }
+  assert(cai_cli_help_reader_seek(NULL, 0U) == -1);
   c->calls = 0U;
   c->fail = 1;
   assert(cai_cli_command_help(NULL, 0, write_help, c) == CAI_ERR_TRANSPORT);

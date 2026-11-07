@@ -274,6 +274,22 @@ size_t cai_cli_help_reader_read(void *context, char *out, size_t capacity,
   }
   return used;
 }
+int cai_cli_help_reader_seek(cai_cli_help_reader *reader, size_t position) {
+  const char *text;
+  size_t index;
+  if (reader == NULL)
+    return -1;
+  for (index = 0U; (text = help_paragraph(reader, index)) != NULL; ++index) {
+    size_t length = strlen(text);
+    if (position <= length) {
+      reader->index = index;
+      reader->offset = position;
+      return 0;
+    }
+    position -= length;
+  }
+  return -1;
+}
 void cai_cli_help_reader_close(cai_cli_help_reader *reader) { free(reader); }
 int cai_cli_command_help(const char *invocation, int attached,
                          int (*write)(void *, const char *, size_t),

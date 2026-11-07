@@ -80,7 +80,7 @@ synchronous receiver facility and are rejected by asynchronous start.
 
 Submitted prompts belong to the libmdf feed. Complete native inputs and
 arbitrarily fragmented socket spans use the same terminal-safety adapter into
-libmdf 0.22.0's `write_literal` method inside its blockquote context. The adapter
+libmdf's `write_literal` method inside its blockquote context. The adapter
 repairs invalid UTF-8 and filters terminal controls, retaining only a bounded
 chunk and an incomplete character. It does not escape Markdown. User prompts
 remain literal; thinking uses the normal Markdown feed.

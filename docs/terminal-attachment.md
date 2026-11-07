@@ -151,17 +151,15 @@ next complete journal entry, while the workspace owner continues working.
 PTY. The program runs in the selected workspace with the resolved configuration
 environment, without changing its embedding host's cwd or environment.
 
-`/log -p` and `/log less` invoke an available `less` directly with the authenticated
-session log path. Without `less`, libmdf's finite-file buffered text pager is used;
-this local viewer is not a streaming transport. Its cooperative cancellation
-hook keeps owner connections progressing and exits if the active owner fails.
-No terminal callback reenters Softline queue/history/status APIs. After return,
-the original producer synchronizes receipts and resumes from its displayed
-journal position. Takeover or conversation changes during handoff retain their
-normal authority and context rules. A focused real-terminal fixture holds the
-native help pager open until a paused provider finishes, then verifies that
-the unseen response appears exactly once after the pager closes. Unshared
-shell bytes never enter model context.
+`/log -p` and `/log less` invoke an available `less` directly with the authenticated session log path.
+Without `less`, libmdf reads the log on demand with a bounded rendered-content cache (1 MiB by default).
+Seekable input lets it recover evicted pages without retaining the entire log.
+Its cooperative cancellation hook keeps owner connections progressing and exits if the active owner fails.
+No terminal callback reenters Softline queue/history/status APIs.
+After return, the original producer synchronizes receipts and resumes from its displayed journal position.
+Takeover or conversation changes during handoff retain their normal authority and context rules.
+A focused real-terminal fixture holds the native help pager open until a paused provider finishes, then verifies that the unseen response appears exactly once after the pager closes.
+Unshared shell bytes never enter model context.
 `/shellshare` and `!sh+` explicitly opt into bounded-tail capture through the
 [shell recording channel](workspace-wire-shell.md). They run the same local
 PTY, with at most one 4 KiB chunk awaiting owner acknowledgement. Unshared
@@ -186,9 +184,9 @@ streaming input and do not force document completion.
 
 `/help -p` and `/help less` always use libmdf in Markdown mode, including when
 `less` is installed. The same finite help source drives inline and paged help;
-CAI retains paragraph cursors and a bounded startup-example buffer. Libmdf's
-pager explicitly buffers its finite source before displaying it. Help is not
-sent through a temporary file, model request or journal-sized accumulator.
+CAI retains paragraph cursors and a bounded startup-example buffer.
+The help source is seekable: libmdf can revisit any byte offset without first collecting the document.
+Paged help uses the same bounded rendered-content cache as logs, without a temporary file or model request.
 
 `[ui] prefer_native_pager` defaults to false. Setting it through configuration,
 the application-prefixed `PREFER_NATIVE_PAGER` environment variable, or

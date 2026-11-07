@@ -9,6 +9,9 @@ typedef struct cai_cli_help_reader cai_cli_help_reader;
 int cai_cli_help_reader_open(const char *invocation, int attached,
                              cai_cli_help_reader **, cai_error *);
 size_t cai_cli_help_reader_read(void *, char *, size_t, int *);
+/** Position in the generated document without collecting its bytes. Accepts
+ * EOF; out-of-range positions fail without changing the current cursor. */
+int cai_cli_help_reader_seek(cai_cli_help_reader *, size_t);
 void cai_cli_help_reader_close(cai_cli_help_reader *);
 /** Common incremental help document for terminal and synchronous receivers.
  * attached adds connection operations owned by a socket terminal. Static

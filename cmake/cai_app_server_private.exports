@@ -50,6 +50,7 @@ cai_cli_help_count
 cai_cli_help_reader_close
 cai_cli_help_reader_open
 cai_cli_help_reader_read
+cai_cli_help_reader_seek
 cai_cli_help_write
 cai_cli_history_row
 cai_cli_input_wire_decode

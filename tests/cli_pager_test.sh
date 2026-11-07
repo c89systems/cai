@@ -28,11 +28,23 @@ native_opened() { tail -c +$((pager_offset+1)) "$term/raw" | grep -F '[?1049h' >
 native_log() {
   local log
   for log in "$root/cache/cai/"*.log; do
+    if [[ ${1:-0} == 1 ]]; then
+      # This is larger than the default rendered cache and the legacy source
+      # limit. G/search/g must recover evicted content from the named file.
+      awk 'BEGIN { print "LOG_CACHE_FIRST"; for (i=0; i<90000; ++i) printf "cache row %06d: plain **text** remains literal\n", i; print "LOG_CACHE_LAST"; }' >>"$log"
+      [[ $(wc -c <"$log") -gt 1048576 ]]
+    fi
     printf '\n**LOG_LITERAL_SENTINEL**\n' >>"$log"
   done
   pager_offset=$(wc -c <"$term/raw")
   send '/log -p\r'; wait_for native_opened
   send G; expect '**LOG_LITERAL_SENTINEL**'
+  if [[ ${1:-0} == 1 ]]; then
+    # On-demand search may leave the total unknown until the scan is exhausted.
+    send 'g/LOG_CACHE_FIRST\r'; expect ' 1/'
+    send G; expect '**LOG_LITERAL_SENTINEL**'
+    send q # Leave search mode; the next q exits the pager.
+  fi
   send q; expect 'Pager closed.'
   tail -c +$((pager_offset+1)) "$term/raw" >"$root/view"
   absent "$root/view" EXTERNAL_LESS_SELECTED
@@ -53,6 +65,11 @@ for command in '/help -p' '/help less' '/help   less  '; do
   absent "$root/help-view" '# Help'
   send q; expect 'Pager closed.'
 done
+# Ctrl-C restores the native input surface; the owner remains usable.
+pager_offset=$(wc -c <"$term/raw")
+send '/help -p\r'; wait_for native_opened
+send '\003'; expect 'Pager closed.'
+send '/status\r'; expect 'Session ID'
 # The owner must finish while libmdf owns the alternate screen. Returning from
 # the pager replays the unseen suffix once, without waiting for another prompt.
 plan '{"plan":[{"pause":true,"pause_text":"PAGER IN FLIGHT ","text":"PAGER BACKGROUND FINISHED"}]}'
@@ -90,7 +107,7 @@ pager_close
 unset CAI_PREFER_NATIVE_PAGER
 rm "$root/programs/less"
 terminal_start -N
-native_log
+native_log 1
 pager_close
 cmp "$root/pager.ini" "$root/pager-original.ini"
 [[ $(requests) == 1 ]]

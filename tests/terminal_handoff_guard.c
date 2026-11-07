@@ -15,12 +15,16 @@ mdf_status __real_mdf_pager_file(const char *, const mdf_options *,
                                  mdf_pager_format, const mdf_pager_control *);
 mdf_status __wrap_mdf_pager_file(const char *, const mdf_options *,
                                  mdf_pager_format, const mdf_pager_control *);
-mdf_status __real_mdf_pager_source(const char *, mdf_source *,
-                                   const mdf_options *, mdf_pager_format,
-                                   const mdf_pager_control *);
-mdf_status __wrap_mdf_pager_source(const char *, mdf_source *,
-                                   const mdf_options *, mdf_pager_format,
-                                   const mdf_pager_control *);
+mdf_status __real_mdf_pager_seekable_source(const char *, mdf_seekable_source *,
+                                            const mdf_options *,
+                                            mdf_pager_format,
+                                            const mdf_pager_control *,
+                                            const mdf_pager_options *);
+mdf_status __wrap_mdf_pager_seekable_source(const char *, mdf_seekable_source *,
+                                            const mdf_options *,
+                                            mdf_pager_format,
+                                            const mdf_pager_control *,
+                                            const mdf_pager_options *);
 int __real_sl_terminal_handoff(sl_t *, sl_terminal_callback_t, void *);
 int __wrap_sl_terminal_handoff(sl_t *, sl_terminal_callback_t, void *);
 int __real_sl_queue_backend_update(sl_t *, const sl_queue_change_t *);
@@ -91,13 +95,15 @@ mdf_status __wrap_mdf_pager_file(const char *path, const mdf_options *options,
   }
   return rc;
 }
-mdf_status __wrap_mdf_pager_source(const char *name, mdf_source *source,
-                                   const mdf_options *options,
-                                   mdf_pager_format format,
-                                   const mdf_pager_control *control) {
+mdf_status __wrap_mdf_pager_seekable_source(
+    const char *name, mdf_seekable_source *source, const mdf_options *options,
+    mdf_pager_format format, const mdf_pager_control *control,
+    const mdf_pager_options *pager_options) {
   mdf_status rc;
   guard_begin();
-  rc = __real_mdf_pager_source(name, source, options, format, control);
+  assert(source->seek != NULL);
+  rc = __real_mdf_pager_seekable_source(name, source, options, format, control,
+                                        pager_options);
   guard_end();
   return rc;
 }
