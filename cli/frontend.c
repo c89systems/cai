@@ -54,6 +54,7 @@ typedef struct frontend_view {
   unsigned long long producer, epoch;
   sl_watch_id_t socket_watch, boot_watch, timer_watch, wake_watch;
   int socket_fd, boot_fd;
+  int activity_known, activity_busy;
   int history_loaded;
   unsigned int history_limit;
   recall_pending *recall_first, *recall_last;
@@ -280,11 +281,24 @@ static int notice(frontend *f, const char *message) {
     return 0;
   return cai_cli_presenter_notice(f->ui, message);
 }
+/** Project operation transitions once per editor. Both Softline setters reset
+ * its animation clock, so feed/status refreshes must leave them untouched.
+ * Retained conversation editors keep their own applied state when switched. */
+static int activity(frontend *f, int busy) {
+  frontend_view *v = f->current;
+  if (!v->activity_known || v->activity_busy != busy) {
+    if (sl_set_status_busy(v->ui.sl, busy) != SL_OK ||
+        sl_set_status_spinner(v->ui.sl, busy) != SL_OK)
+      return -1;
+    v->activity_known = 1;
+    v->activity_busy = busy;
+  }
+  return 0;
+}
 /** Finish only this terminal's presentation. Update the native sticky row
  * while its editor is active; no farewell is appended to the transcript. */
 static int goodbye(frontend *f) {
-  return sl_set_status_spinner(f->ui->sl, 0) == SL_OK &&
-                 sl_set_status_busy(f->ui->sl, 0) == SL_OK &&
+  return activity(f, 0) == 0 &&
                  sl_set_status_message(f->ui->sl, "Goodbye.") == SL_OK
              ? 0
              : -1;
@@ -478,8 +492,7 @@ static int status(frontend *f) {
     snprintf(message, sizeof(message), "Ready. /help for usage.");
   if (message[0] == '\0')
     snprintf(message, sizeof(message), "Ready. Send /help for usage.");
-  return sl_set_status_busy(f->ui->sl, busy) == SL_OK &&
-                 sl_set_status_spinner(f->ui->sl, busy) == SL_OK &&
+  return activity(f, busy) == 0 &&
                  sl_set_status_message(f->ui->sl, message) == SL_OK
              ? 0
              : -1;

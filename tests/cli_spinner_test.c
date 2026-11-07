@@ -1,5 +1,6 @@
 /* Exercise the actual socket frontend's status projection, without a runtime,
- * store or terminal process. Softline owns idempotent animation setters. */
+ * store or terminal process. Repeated status refreshes must not restart the
+ * Softline animation or resynchronize its queue's busy state. */
 #define _GNU_SOURCE
 #include <assert.h>
 #include <cai/app_client.h>
@@ -10,6 +11,7 @@
 
 static cai_app_view fixture_view;
 static int busy_value, spinner_value;
+static unsigned int busy_calls, spinner_calls;
 static char status_message[1024];
 static int fixture_get_view(cai_app_client *client, const cai_app_view **out,
                             cai_error *error) {
@@ -19,10 +21,12 @@ static int fixture_get_view(cai_app_client *client, const cai_app_view **out,
   return CAI_OK;
 }
 static int fixture_busy(sl_t *sl, int value) {
+  ++busy_calls;
   busy_value = value;
   return sl_set_status_busy(sl, value);
 }
 static int fixture_spinner(sl_t *sl, int value) {
+  ++spinner_calls;
   spinner_value = value;
   return sl_set_status_spinner(sl, value);
 }
@@ -36,12 +40,20 @@ static int fixture_message(sl_t *sl, const char *value) {
 #define sl_set_status_message fixture_message
 #include "../cli/frontend.c"
 
+static void expect_status(frontend *f, int busy, unsigned int calls) {
+  assert(status(f) == 0);
+  assert(busy_value == busy && spinner_value == busy);
+  assert(busy_calls == calls && spinner_calls == calls);
+}
+
 int main(void) {
   frontend *f = calloc(1U, sizeof(*f));
   frontend_group *group = calloc(1U, sizeof(*group));
   frontend_view *view = calloc(1U, sizeof(*view));
+  frontend_view *other = calloc(1U, sizeof(*other));
+  unsigned int calls;
   int turn, tick;
-  assert(f != NULL && group != NULL && view != NULL);
+  assert(f != NULL && group != NULL && view != NULL && other != NULL);
   f->group = group;
   f->current = view;
   f->ui = &view->ui;
@@ -53,7 +65,7 @@ int main(void) {
   fixture_view.available = 1;
   fixture_view.effective.model = "gpt-6-luna";
   fixture_view.effective.reasoning_effort = "medium";
-  assert(status(f) == 0 && !busy_value && !spinner_value);
+  expect_status(f, 0, 1U);
   for (turn = 0; turn < 3; ++turn) {
     fixture_view.metrics.turn_active = 1;
     for (tick = 0; tick < 30; ++tick) {
@@ -62,28 +74,79 @@ int main(void) {
                                    : tick % 3 == 1 ? CAI_AGENT_SAMPLING
                                                    : CAI_AGENT_IDLE;
       assert(status(f) == 0 && busy_value && spinner_value);
+      assert(busy_calls == 2U + (unsigned int)turn * 2U);
+      assert(spinner_calls == busy_calls);
     }
     fixture_view.metrics.turn_active = 0;
     fixture_view.metrics.has_last_turn = 1;
     fixture_view.metrics.last_turn_duration_ms = 29000U;
-    for (tick = 0; tick < 3; ++tick)
+    for (tick = 0; tick < 3; ++tick) {
       assert(status(f) == 0 && !busy_value && !spinner_value);
+      assert(busy_calls == 3U + (unsigned int)turn * 2U);
+      assert(spinner_calls == busy_calls);
+    }
   }
   /* A foreground reviewer remains busy even when the parent is idle. */
-  f->review_open = 1;
-  assert(status(f) == 0 && busy_value && spinner_value);
-  f->review_open = 0;
-  assert(status(f) == 0 && !busy_value && !spinner_value);
+  calls = busy_calls;
   fixture_view.metrics.turn_active = 1;
-  f->compacting = 1;
-  assert(status(f) == 0 &&
-         strstr(status_message, "Compacting context") != NULL);
+  expect_status(f, 1, ++calls);
+  f->review_open = 1;
   fixture_view.metrics.turn_active = 0;
-  assert(status(f) == 0 &&
-         strstr(status_message, "Compacting context") == NULL);
+  for (tick = 0; tick < 30; ++tick)
+    expect_status(f, 1, calls);
+  f->review_open = 0;
+  expect_status(f, 0, ++calls);
+  fixture_view.metrics.turn_active = 1;
+  expect_status(f, 1, ++calls);
+  f->compacting = 1;
+  for (tick = 0; tick < 30; ++tick) {
+    expect_status(f, 1, calls);
+    assert(strstr(status_message, "Compacting context") != NULL);
+  }
+  /* Compaction ending within a turn must not interrupt its spinner. */
+  f->compacting = 0;
+  expect_status(f, 1, calls);
+  assert(strstr(status_message, "Compacting context") == NULL);
+  fixture_view.metrics.turn_active = 0;
+  expect_status(f, 0, ++calls);
+
+  /* Both cancelled and failed operations stop once, and can restart. */
+  for (turn = 0; turn < 2; ++turn) {
+    fixture_view.metrics.turn_active = 1;
+    expect_status(f, 1, ++calls);
+    fixture_view.runtime_state =
+        turn == 0 ? CAI_AGENT_CANCELLED : CAI_AGENT_FAILED;
+    fixture_view.metrics.turn_active = 0;
+    for (tick = 0; tick < 3; ++tick)
+      expect_status(f, 0, calls + 1U);
+    ++calls;
+  }
+
+  /* Each retained editor owns its animation; switching back must not reset
+   * an already busy editor, even after displaying an idle conversation. */
+  fixture_view.metrics.turn_active = 1;
+  expect_status(f, 1, ++calls);
+  other->ui.sl = sl_create();
+  assert(other->ui.sl != NULL);
+  f->current = other;
+  f->ui = &other->ui;
+  fixture_view.metrics.turn_active = 0;
+  expect_status(f, 0, ++calls);
+  f->current = view;
+  f->ui = &view->ui;
+  fixture_view.metrics.turn_active = 1;
+  assert(status(f) == 0);
+  assert(busy_calls == calls && spinner_calls == calls);
+
   assert(goodbye(f) == CAI_OK && !busy_value && !spinner_value &&
          strcmp(status_message, "Goodbye.") == 0);
+  ++calls;
+  assert(busy_calls == calls && spinner_calls == calls);
+  assert(goodbye(f) == CAI_OK);
+  assert(busy_calls == calls && spinner_calls == calls);
+  sl_destroy(other->ui.sl);
   sl_destroy(f->ui->sl);
+  free(other);
   free(view);
   free(group);
   free(f);
