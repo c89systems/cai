@@ -134,7 +134,7 @@ int cai_instruction_template_write(const cai_instruction_template *input,
                           : terminal_fragment;
   terminal.length = sizeof(terminal_fragment) - 1U;
   last_tools = NULL;
-  if (input->tools != NULL)
+  if (input->tools != NULL && !input->literal)
     for (cursor = input->text; (token = strstr(cursor, TOOLS_TOKEN)) != NULL;
          cursor = token + sizeof(TOOLS_TOKEN) - 1U)
       last_tools = token;
@@ -142,8 +142,10 @@ int cai_instruction_template_write(const cai_instruction_template *input,
   cursor = input->text;
   rc = CAI_OK;
   while (rc == CAI_OK) {
-    identity = strstr(cursor, IDENTITY_TOKEN);
-    tools = input->tools != NULL ? strstr(cursor, TOOLS_TOKEN) : NULL;
+    identity = !input->literal ? strstr(cursor, IDENTITY_TOKEN) : NULL;
+    tools = input->tools != NULL && !input->literal
+                ? strstr(cursor, TOOLS_TOKEN)
+                : NULL;
     token = tools == NULL || (identity != NULL && identity < tools) ? identity
                                                                     : tools;
     rc = instruction_filter_write(&writer, filter, cursor,
@@ -157,6 +159,14 @@ int cai_instruction_template_write(const cai_instruction_template *input,
         break;
       filter = NULL;
       *prefix_length = writer.length;
+      if (input->extension != NULL && input->extension[0] != '\0') {
+        rc = instruction_emit(&writer, input->extension,
+                              strlen(input->extension));
+        if (rc == CAI_OK)
+          rc = instruction_emit(&writer, "\n\n", 2U);
+        if (rc != CAI_OK)
+          break;
+      }
     }
     replacement = token == identity ? input->identity : input->tools;
     token_length = token == identity ? sizeof(IDENTITY_TOKEN) - 1U
@@ -167,9 +177,22 @@ int cai_instruction_template_write(const cai_instruction_template *input,
   }
   if (rc == CAI_OK)
     rc = instruction_filter_finish(&writer, filter);
-  suffixes[0] = input->repository;
-  suffixes[1] = input->skills;
-  suffixes[2] = input->extension;
+  suffixes[0] = last_tools == NULL ? input->extension : NULL;
+  suffixes[1] = input->repository;
+  suffixes[2] = input->skills;
+  if (rc == CAI_OK && last_tools == NULL && input->tools != NULL) {
+    if (suffixes[0] != NULL && suffixes[0][0] != '\0') {
+      rc = instruction_emit(&writer, "\n\n", 2U);
+      if (rc == CAI_OK)
+        rc = instruction_emit(&writer, suffixes[0], strlen(suffixes[0]));
+      suffixes[0] = NULL;
+    }
+    if (rc == CAI_OK && input->tools[0] != '\0') {
+      rc = instruction_emit(&writer, "\n\n", 2U);
+      if (rc == CAI_OK)
+        rc = instruction_emit(&writer, input->tools, strlen(input->tools));
+    }
+  }
   for (i = 0U; rc == CAI_OK && i < 3U; i++) {
     if (suffixes[i] == NULL || suffixes[i][0] == '\0')
       continue;

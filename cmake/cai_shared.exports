@@ -7,6 +7,7 @@ cai_agent_execution_close
 cai_agent_execution_finish
 cai_agent_execution_write
 cai_agent_get_instruction_status
+cai_agent_identity_valid
 cai_agent_goal_request_init
 cai_agent_handover_close
 cai_agent_handover_config
@@ -23,6 +24,7 @@ cai_agent_preset_config_init
 cai_agent_preset_from_smith
 cai_agent_preset_prepare_instructions
 cai_agent_preset_write_instructions
+cai_agent_preset_write_base_instructions
 cai_agent_register_chrome_tool
 cai_agent_register_custom_spooled_tool
 cai_agent_register_custom_tool

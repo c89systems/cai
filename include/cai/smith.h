@@ -24,6 +24,13 @@ extern "C" {
 /** Version of the developer-instruction asset rendered by this preset. */
 #define CAI_SMITH_PROMPT_VERSION "smith-7"
 
+/** Nonzero for a readable agent identity: ASCII alphanumerics, spaces and
+ * ._-(), with at least one alphanumeric and single spaces between words
+ * (no leading/trailing spaces). Case is preserved. This is separate
+ * from application/storage identity and never makes the name a filesystem path.
+ */
+int cai_agent_identity_valid(const char *identity);
+
 /** Instruction files actually appended to this agent's current developer
  * context at construction. Files are read again on every runtime open,
  * including resume; these values are not restored from session storage.
@@ -104,6 +111,10 @@ typedef struct cai_agent_preset {
    * Smith's built-in review rubric when supports_review is non-zero.
    */
   const char *review_developer_instructions;
+  /** Treat the corresponding non-NULL base as literal text and append the
+   * automatic capability contract. Zero preserves descriptor templates. */
+  int developer_instructions_literal;
+  int review_developer_instructions_literal;
   /** Bitwise OR of CAI_AGENT_PRESET_TOOL_* capabilities for ordinary runs. */
   unsigned long tool_capabilities;
   /**
@@ -172,6 +183,9 @@ typedef struct cai_agent_preset_config {
   const char *service_tier;
   /** Optional host-owned extension appended after the rendered template. */
   const char *developer_instructions_extension;
+  /** Literal replacement for this agent's base instructions. Capability,
+   * repository and skill additions remain enabled. Borrowed until return. */
+  const char *developer_instructions_override;
   /** In-memory bytes retained by each file reader before spill. */
   size_t file_content_memory_limit;
   /** Maximum bytes returned by read_file; zero selects its normal default. */
@@ -290,11 +304,19 @@ int cai_client_new_smith_review_agent(cai_client *client,
                                       const cai_smith_config *config,
                                       cai_agent **out, cai_error *error);
 
-/**
- * Construct an isolated reviewer from a preset that supports review. client
- * remains borrowed and must outlive the returned agent; preset/config are
- * consumed during the call.
+/** Write the resolved base developer instructions without loading repository
+ * files, skills, tools, MCP or a client. Configured model, identity, literal
+ * override and extension are honored; review selects the reviewer rubric.
+ * Sink writes are bounded to 4096 bytes. Reasoning is accepted through config
+ * for the same resolution contract as construction (currently effort-neutral).
  */
+int cai_agent_preset_write_base_instructions(
+    const cai_agent_preset *preset, const cai_agent_preset_config *config,
+    int review, cai_sink *sink, cai_error *error);
+
+/** Construct an isolated reviewer from a preset that supports review. client
+ * remains borrowed and must outlive the returned agent; preset/config are
+ * consumed during the call. */
 int cai_client_new_preset_review_agent(cai_client *client,
                                        const cai_agent_preset *preset,
                                        const cai_agent_preset_config *config,

@@ -96,6 +96,16 @@ void cai_agent_preset_from_smith(cai_agent_preset *preset) {
 
 const char *cai_smith_prompt_version(void) { return CAI_SMITH_PROMPT_VERSION; }
 
+int cai_agent_identity_valid(const char *identity) {
+  static const char alnum[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  return identity != NULL && strpbrk(identity, alnum) != NULL &&
+         strspn(identity, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                          "0123456789 ._-()") == strlen(identity) &&
+         identity[0] != ' ' && identity[strlen(identity) - 1U] != ' ' &&
+         strstr(identity, "  ") == NULL;
+}
+
 int cai_agent_get_instruction_status(const cai_agent *agent,
                                      cai_agent_instruction_status *out,
                                      cai_error *error) {
@@ -121,8 +131,7 @@ static int cai_smith_build_tool_contract(const cai_allocator *allocator,
   static const char *const environment_heading =
       "# CAI agent-mode capability adjustments\n\n";
   static const char *const environment_communication =
-      "The preceding model-specific Codex instructions are the default "
-      "contract. "
+      "The preceding base developer instructions define the agent's contract. "
       "This section supersedes them only where CAI exposes a different "
       "capability or host interface. CAI has no commentary/final channels: "
       "use ordinary assistant messages and tool calls. Before a relevant tool "
@@ -275,18 +284,24 @@ static int cai_smith_instruction_template(
   *contract = NULL;
   input->identity = config->agent_identity != NULL ? config->agent_identity
                                                    : preset->default_identity;
-  if (input->identity == NULL || input->identity[0] == '\0')
+  if (!cai_agent_identity_valid(input->identity))
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "agent preset identity must not be empty");
-  input->text = preset->developer_instructions;
+                         "agent identity requires ASCII alphanumerics, ._-(), "
+                         "and single spaces between words");
+  input->literal = config->developer_instructions_override != NULL ||
+                   preset->developer_instructions_literal;
+  input->text = config->developer_instructions_override != NULL
+                    ? config->developer_instructions_override
+                    : preset->developer_instructions;
   input->repository = repository;
   input->skills = skills;
   input->extension = config->developer_instructions_extension;
   input->capabilities = capabilities;
-  if (input->text != NULL)
+  if (input->text != NULL && !input->literal)
     return CAI_OK;
-  input->text = cai_smith_model_prompt(
-      config->model != NULL ? config->model : preset->default_model);
+  if (input->text == NULL)
+    input->text = cai_smith_model_prompt(
+        config->model != NULL ? config->model : preset->default_model);
   {
     int rc =
         cai_smith_build_tool_contract(allocator, capabilities, contract, error);
@@ -1023,7 +1038,8 @@ int cai_agent_preset_prepare_instructions(const cai_agent_preset *preset,
     cai_agent_instructions_close(prepared);
     return rc;
   }
-  prepared->model_specific = preset->developer_instructions == NULL;
+  prepared->model_specific = preset->developer_instructions == NULL &&
+                             config->developer_instructions_override == NULL;
   if (status != NULL)
     *status = prepared_status;
   *out = prepared;
@@ -1243,6 +1259,112 @@ int cai_client_new_smith_agent(cai_client *client,
   return cai_client_new_preset_agent(client, &preset, config, out, error);
 }
 
+static const char *const review_suffix_parts[] = {
+    ", a code reviewer running in CAI agent mode. You are acting as a "
+    "reviewer for a proposed code change made by another engineer.\n\n",
+    "Specific guidance from later developer, user, or applicable repository "
+    "instructions overrides these general review guidelines.\n\n",
+    "Flag a bug only when it meaningfully impacts accuracy, performance, "
+    "security, or maintainability; is discrete and actionable; fits the "
+    "repository's existing rigor; was introduced by the reviewed change; "
+    "would likely be fixed by the author; does not rely on unstated "
+    "assumptions; is proven to affect another part of the code rather than ",
+    "merely suspected; and is clearly not an intentional change.\n\n",
+    "Every finding body must explain why it is a bug, state the conditions "
+    "needed for it to arise, communicate proportionate severity, stay within "
+    "one concise paragraph, avoid code excerpts longer than three lines, and "
+    "use a matter-of-fact, useful tone. Do not add flattery or ",
+    "non-actionable comments.\n\n",
+    "Return every qualifying finding that the author would fix if aware of "
+    "it; prefer no findings over speculative ones. Ignore trivial style "
+    "unless it obscures meaning or violates documented standards. Use one "
+    "finding per distinct issue and deduplicate by changed location and "
+    "defect/remedy.\n\n",
+    "Use suggestion blocks only for concrete minimal replacement code; keep "
+    "their exact leading whitespace and do not change outer indentation "
+    "unless that is the fix.\n\n",
+    "Inspect applicable root and scoped project instructions for changed "
+    "files. More-specific guidance wins. For a rule-supported finding, ",
+    "verify ",
+    "the smallest supporting instruction-file line range and include one "
+    "compact local-file or Markdown reference in the body. Do not invent "
+    "findings solely because an instruction file exists.\n\n",
+    "Choose the shortest code location that makes the issue clear, normally "
+    "no more than 5-10 lines, and ensure it overlaps the reviewed diff. Use "
+    "[P0] only for universal release blockers, [P1] for next-cycle urgent "
+    "issues, [P2] for normal issues, and [P3] for low-priority issues.\n\n",
+    "Your final response MUST be exactly one JSON object with this shape: "
+    "{\"findings\":[{\"title\":\"[P1] imperative title under 80 chars\","
+    "\"body\":\"one-paragraph impact and cause\","
+    "\"confidence_score\":0.0,\"priority\":1,"
+    "\"code_location\":{\"absolute_file_path\":\"/absolute/path\","
+    "\"line_range\":{\"start\":1,\"end\":1}}}],",
+    "\"overall_correctness\":\"patch is correct\"|"
+    "\"patch is incorrect\",\"overall_explanation\":\"brief reason\","
+    "\"overall_confidence_score\":0.0}. The code_location field is ",
+    "required for every finding and must overlap the reviewed diff. Set "
+    "priority to 0-3 or omit it when undetermined. Correct means existing "
+    "code and tests will not break and the patch is free of bugs or other "
+    "blocking issues; ignore non-blocking style, formatting, typo, and ",
+    "documentation nits. Return an empty findings array when there are no "
+    "qualifying findings. Do not wrap the JSON in Markdown or include extra ",
+    "prose. Do not generate a PR fix.\n"};
+
+int cai_agent_preset_write_base_instructions(
+    const cai_agent_preset *preset, const cai_agent_preset_config *config,
+    int review, cai_sink *sink, cai_error *error) {
+  cai_instruction_template input;
+  size_t length, prefix, i;
+  int rc;
+  if (preset == NULL || config == NULL || sink == NULL ||
+      sink->callbacks.write == NULL || (review && !preset->supports_review))
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "base instructions require a preset, config and sink");
+  memset(&input, 0, sizeof(input));
+  input.identity = config->agent_identity != NULL ? config->agent_identity
+                                                  : preset->default_identity;
+  if (!cai_agent_identity_valid(input.identity))
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "agent identity requires ASCII alphanumerics, ._-(), "
+                         "and single spaces between words");
+  input.literal = config->developer_instructions_override != NULL ||
+                  (review ? preset->review_developer_instructions_literal
+                          : preset->developer_instructions_literal);
+  input.text = config->developer_instructions_override != NULL
+                   ? config->developer_instructions_override
+                   : (review ? preset->review_developer_instructions
+                             : preset->developer_instructions);
+  input.capabilities = ~0UL;
+  input.tools = "";
+  input.extension = config->developer_instructions_extension;
+  if (input.text == NULL && !review)
+    input.text = cai_smith_model_prompt(
+        config->model != NULL ? config->model : preset->default_model);
+  if (input.text != NULL)
+    return cai_instruction_template_write(&input, sink, &length, &prefix,
+                                          error);
+  input.text = "You are {{agent_identity}}";
+  input.extension = NULL;
+  rc = cai_instruction_template_write(&input, sink, &length, &prefix, error);
+  for (i = 0U; rc == CAI_OK &&
+               i < sizeof(review_suffix_parts) / sizeof(review_suffix_parts[0]);
+       i++)
+    rc = cai_sink_write(sink, review_suffix_parts[i],
+                        strlen(review_suffix_parts[i]), error);
+  if (rc == CAI_OK && config->developer_instructions_extension != NULL &&
+      config->developer_instructions_extension[0] != '\0') {
+    rc = cai_sink_write(sink, "\n\n", 2U, error);
+    if (rc == CAI_OK) {
+      input.text = config->developer_instructions_extension;
+      input.literal = 1;
+      input.tools = NULL;
+      rc =
+          cai_instruction_template_write(&input, sink, &length, &prefix, error);
+    }
+  }
+  return rc;
+}
+
 int cai_client_new_preset_review_agent(cai_client *client,
                                        const cai_agent_preset *preset,
                                        const cai_agent_preset_config *config,
@@ -1259,56 +1381,6 @@ int cai_client_new_preset_review_agent(cai_client *client,
   char *review_schema;
   char *skill_catalog_prompt;
   cai_skill_catalog *skill_catalog;
-  static const char *const review_suffix_parts[] = {
-      ", a code reviewer running in CAI agent mode. You are acting as a "
-      "reviewer for a proposed code change made by another engineer.\n\n",
-      "Specific guidance from later developer, user, or applicable repository "
-      "instructions overrides these general review guidelines.\n\n",
-      "Flag a bug only when it meaningfully impacts accuracy, performance, "
-      "security, or maintainability; is discrete and actionable; fits the "
-      "repository's existing rigor; was introduced by the reviewed change; "
-      "would likely be fixed by the author; does not rely on unstated "
-      "assumptions; is proven to affect another part of the code rather than ",
-      "merely suspected; and is clearly not an intentional change.\n\n",
-      "Every finding body must explain why it is a bug, state the conditions "
-      "needed for it to arise, communicate proportionate severity, stay within "
-      "one concise paragraph, avoid code excerpts longer than three lines, and "
-      "use a matter-of-fact, useful tone. Do not add flattery or ",
-      "non-actionable comments.\n\n",
-      "Return every qualifying finding that the author would fix if aware of "
-      "it; prefer no findings over speculative ones. Ignore trivial style "
-      "unless it obscures meaning or violates documented standards. Use one "
-      "finding per distinct issue and deduplicate by changed location and "
-      "defect/remedy.\n\n",
-      "Use suggestion blocks only for concrete minimal replacement code; keep "
-      "their exact leading whitespace and do not change outer indentation "
-      "unless that is the fix.\n\n",
-      "Inspect applicable root and scoped project instructions for changed "
-      "files. More-specific guidance wins. For a rule-supported finding, ",
-      "verify ",
-      "the smallest supporting instruction-file line range and include one "
-      "compact local-file or Markdown reference in the body. Do not invent "
-      "findings solely because an instruction file exists.\n\n",
-      "Choose the shortest code location that makes the issue clear, normally "
-      "no more than 5-10 lines, and ensure it overlaps the reviewed diff. Use "
-      "[P0] only for universal release blockers, [P1] for next-cycle urgent "
-      "issues, [P2] for normal issues, and [P3] for low-priority issues.\n\n",
-      "Your final response MUST be exactly one JSON object with this shape: "
-      "{\"findings\":[{\"title\":\"[P1] imperative title under 80 chars\","
-      "\"body\":\"one-paragraph impact and cause\","
-      "\"confidence_score\":0.0,\"priority\":1,"
-      "\"code_location\":{\"absolute_file_path\":\"/absolute/path\","
-      "\"line_range\":{\"start\":1,\"end\":1}}}],",
-      "\"overall_correctness\":\"patch is correct\"|"
-      "\"patch is incorrect\",\"overall_explanation\":\"brief reason\","
-      "\"overall_confidence_score\":0.0}. The code_location field is ",
-      "required for every finding and must overlap the reviewed diff. Set "
-      "priority to 0-3 or omit it when undetermined. Correct means existing "
-      "code and tests will not break and the patch is free of bugs or other "
-      "blocking issues; ignore non-blocking style, formatting, typo, and ",
-      "documentation nits. Return an empty findings array when there are no "
-      "qualifying findings. Do not wrap the JSON in Markdown or include extra ",
-      "prose. Do not generate a PR fix.\n"};
   char *instructions;
   size_t length;
   size_t offset;
@@ -1356,7 +1428,7 @@ int cai_client_new_preset_review_agent(cai_client *client,
   identity = config->agent_identity != NULL ? config->agent_identity
                                             : preset->default_identity;
   extension = config->developer_instructions_extension;
-  if (identity[0] == '\0') {
+  if (!cai_agent_identity_valid(identity)) {
     return cai_set_error(error, CAI_ERR_INVALID,
                          "review agent identity is invalid");
   }
@@ -1373,11 +1445,14 @@ int cai_client_new_preset_review_agent(cai_client *client,
   if (rc != CAI_OK) {
     goto review_instructions_failed;
   }
-  if (preset->review_developer_instructions != NULL) {
+  if (preset->review_developer_instructions != NULL ||
+      config->developer_instructions_override != NULL) {
     cai_agent_preset review_template = *preset;
     size_t prefix_length;
     review_template.developer_instructions =
         preset->review_developer_instructions;
+    review_template.developer_instructions_literal =
+        preset->review_developer_instructions_literal;
     rc = cai_smith_render_instructions(
         &client_impl->allocator, &review_template, config,
         preset->review_tool_capabilities, repository_instructions,
@@ -1451,6 +1526,11 @@ int cai_client_new_preset_review_agent(cai_client *client,
     memcpy(instructions + offset, review_suffix_parts[i], part_length);
     offset += part_length;
   }
+  if (extension_length > 0U) {
+    memcpy(instructions + offset, "\n\n", 2U);
+    memcpy(instructions + offset + 2U, extension, extension_length);
+    offset += 2U + extension_length;
+  }
   if (repository_length > 0U) {
     memcpy(instructions + offset, "\n\n", 2U);
     offset += 2U;
@@ -1462,11 +1542,6 @@ int cai_client_new_preset_review_agent(cai_client *client,
     offset += 2U;
     memcpy(instructions + offset, skill_catalog_prompt, skill_catalog_length);
     offset += skill_catalog_length;
-  }
-  if (extension_length > 0U) {
-    memcpy(instructions + offset, "\n\n", 2U);
-    memcpy(instructions + offset + 2U, extension, extension_length);
-    offset += 2U + extension_length;
   }
   instructions[length] = '\0';
 review_instructions_ready:

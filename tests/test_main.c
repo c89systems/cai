@@ -25781,8 +25781,7 @@ static void test_smith_profile(test_state *state) {
       "This is a FREEFORM tool, so do not wrap the patch in JSON.",
       "Make workspace edits only with apply_patch.",
       "# Personality",
-      "The preceding model-specific Codex instructions are the default "
-      "contract.",
+      "The preceding base developer instructions define the agent's contract.",
       "Create a goal only when explicitly requested."};
   static const char *forbidden[] = {"\"name\":\"shell_command\"", "As Codex,"};
   static const char *none_required[] = {
@@ -26223,10 +26222,10 @@ static void test_smith_profile(test_state *state) {
       host_extension = strstr(CAI_AGENT_IMPL(agent)->developer_instructions,
                               "Review host extension.");
       if (repository_policy == NULL || host_extension == NULL ||
-          repository_policy >= host_extension) {
+          host_extension >= repository_policy) {
         test_fail(state, "smith_review_repository_instructions_order",
-                  "review instructions did not place repository policy before "
-                  "the host extension");
+                  "review instructions did not place the host extension before "
+                  "automatically loaded repository policy");
       }
       cai_agent_destroy(agent);
       agent = NULL;
@@ -27107,17 +27106,19 @@ static void test_agent_runtime_subagent(test_state *state) {
       "subagent_final\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2,"
       "\"total_tokens\":5}}}\n\n";
   static const char *parent_required[] = {
-      "delegate this task", "\"name\":\"run_worker\"", "`run_worker`"};
+      "delegate this task", "\"name\":\"run_worker\"", "`run_worker`",
+      "INITIAL PARENT ONLY"};
   static const char *parent_forbidden[] = {"\"name\":\"run_subagent\"",
                                            "\"name\":\"chrome\"",
                                            "\"type\":\"web_search\""};
   static const char *child_required[] = {"Prepared JSON worker task.",
                                          "You are Worker"};
   static const char *child_forbidden[] = {
-      "\"name\":\"read_file\"",   "\"name\":\"list_files\"",
-      "\"name\":\"apply_patch\"", "\"name\":\"view_image\"",
-      "\"name\":\"create_goal\"", "\"name\":\"read_skill\"",
-      "\"name\":\"chrome\"",      "\"type\":\"web_search\""};
+      "INITIAL PARENT ONLY",     "\"name\":\"read_file\"",
+      "\"name\":\"list_files\"", "\"name\":\"apply_patch\"",
+      "\"name\":\"view_image\"", "\"name\":\"create_goal\"",
+      "\"name\":\"read_skill\"", "\"name\":\"chrome\"",
+      "\"type\":\"web_search\""};
   static const char *final_required[] = {
       "\"call_id\":\"call_subagent\"",
       "The subagent completed without a text handover.", "<subagent_handoff"};
@@ -27212,6 +27213,7 @@ static void test_agent_runtime_subagent(test_state *state) {
   config.disable_default_session_store = 1;
   config.session_store = &store;
   config.session_scope = "subagent-handoff-commit-retry";
+  config.developer_instructions_override = "INITIAL PARENT ONLY";
   config.disable_read_file = config.disable_list_files = 1;
   config.disable_apply_patch = config.disable_view_image = 1;
   config.disable_goals = config.disable_skills = 1;

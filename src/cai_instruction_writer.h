@@ -15,6 +15,7 @@ typedef struct cai_instruction_template {
   const char *skills;
   const char *extension;
   unsigned long capabilities;
+  int literal;
 } cai_instruction_template;
 
 /** Expand into bounded sink writes, or count bytes when sink is NULL. The

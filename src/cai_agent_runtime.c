@@ -704,6 +704,7 @@ struct cai_agent_runtime {
   char *preset_developer_instructions;
   char *preset_review_developer_instructions;
   unsigned long preset_tool_capabilities;
+  int preset_instructions_literal, preset_review_instructions_literal;
   unsigned long preset_review_tool_capabilities;
   int preset_supports_review;
   cai_terminal_tool_config smith_terminal_config;
@@ -2110,6 +2111,10 @@ static int cai_runtime_copy_subagent_preset(const cai_agent_preset *src,
   dst->preset.developer_instructions = dst->preset_developer_instructions;
   dst->preset.review_developer_instructions =
       dst->preset_review_developer_instructions;
+  dst->preset.developer_instructions_literal =
+      src->developer_instructions_literal;
+  dst->preset.review_developer_instructions_literal =
+      src->review_developer_instructions_literal;
   dst->preset.tool_capabilities =
       src->tool_capabilities & ~CAI_AGENT_PRESET_TOOL_SUBAGENTS;
   dst->preset.review_tool_capabilities = src->review_tool_capabilities;
@@ -2320,6 +2325,9 @@ static int cai_runtime_capture_preset_profile(
   int rc;
 
   rc = cai_runtime_copy_string(preset->name, &runtime->preset_name, error);
+  runtime->preset_instructions_literal = preset->developer_instructions_literal;
+  runtime->preset_review_instructions_literal =
+      preset->review_developer_instructions_literal;
   if (rc == CAI_OK) {
     rc = cai_runtime_copy_string(preset->prompt_version,
                                  &runtime->preset_prompt_version, error);
@@ -7550,6 +7558,8 @@ int cai_agent_runtime_open(cai_client *client,
   smith.service_tier = config->service_tier;
   smith.developer_instructions_extension =
       config->developer_instructions_extension;
+  smith.developer_instructions_override =
+      config->developer_instructions_override;
   memset(&terminal_config, 0, sizeof(terminal_config));
   if (config->terminal_tool_config != NULL) {
     terminal_config = *config->terminal_tool_config;
@@ -9956,6 +9966,9 @@ int cai_agent_runtime_start_review(cai_agent_runtime *parent,
   preset.developer_instructions = parent->preset_developer_instructions;
   preset.review_developer_instructions =
       parent->preset_review_developer_instructions;
+  preset.developer_instructions_literal = parent->preset_instructions_literal;
+  preset.review_developer_instructions_literal =
+      parent->preset_review_instructions_literal;
   preset.tool_capabilities = parent->preset_tool_capabilities;
   preset.review_tool_capabilities = parent->preset_review_tool_capabilities;
   preset.supports_review = parent->preset_supports_review;
@@ -9973,6 +9986,8 @@ int cai_agent_runtime_start_review(cai_agent_runtime *parent,
   config.workspace_approval_directory =
       parent->smith_workspace_approval_directory;
   config.agent_identity = parent->smith_identity;
+  config.developer_instructions_override =
+      request->developer_instructions_override;
   config.model = parent->smith_review_model != NULL ? parent->smith_review_model
                                                     : parent->smith_model;
   config.reasoning_effort = parent->smith_review_reasoning_effort != NULL
@@ -10577,6 +10592,10 @@ static int cai_runtime_open_tool_subagent(
         parent->preset_developer_instructions;
     review_preset.review_developer_instructions =
         parent->preset_review_developer_instructions;
+    review_preset.developer_instructions_literal =
+        parent->preset_instructions_literal;
+    review_preset.review_developer_instructions_literal =
+        parent->preset_review_instructions_literal;
     review_preset.tool_capabilities = parent->preset_tool_capabilities;
     review_preset.review_tool_capabilities =
         parent->preset_review_tool_capabilities;

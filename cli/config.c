@@ -33,6 +33,18 @@ typedef struct cli_field {
 #define B(s, k, m, d)                                                          \
   {s, k, offsetof(cai_cli_options, m), CAI_CONFIG_BOOL, 0U, NULL, d}
 static const cli_field fields[] = {
+    S("agent", "developer_instructions_file", developer_instructions_file,
+      CAI_CONFIG_PATH,
+      "Literal base instructions file for ordinary agents; empty uses model "
+      "defaults. Maximum 1 MiB."),
+    S("review", "developer_instructions_file", reviewer_instructions_file,
+      CAI_CONFIG_PATH,
+      "Literal base instructions file for reviewers; empty uses the built-in "
+      "review rubric. Maximum 1 MiB."),
+    S("agent", "initial_developer_instructions_file",
+      developer_instructions_override_file, CAI_CONFIG_PATH,
+      "Initial parent-only literal override, selected by -z; not inherited by "
+      "children or session switches."),
     B("server", "persist", server_persist,
       "Keep a workspace owner after its last client leaves. Default false; "
       "--headless selects true unless explicitly overridden."),
@@ -314,11 +326,19 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
   const char **children[7];
   const char *host_children[7];
   const char *parents[7];
-  const char **inputs[5];
-  static const char *const input_sections[] = {"paths", "store.default",
-                                               "chrome", "plugins", "plugins"};
-  static const char *const input_keys[] = {"auth_json", "client_pem", "socket",
-                                           "directory", "workspace_directory"};
+  const char **inputs[8];
+  static const char *const input_sections[] = {
+      "paths",   "store.default", "chrome", "plugins",
+      "plugins", "agent",         "review", "agent"};
+  static const char *const input_keys[] = {
+      "auth_json",
+      "client_pem",
+      "socket",
+      "directory",
+      "workspace_directory",
+      "developer_instructions_file",
+      "developer_instructions_file",
+      "initial_developer_instructions_file"};
   static const char *const keys[] = {
       "clipboard_dir", "log_dir",    "pouch_key_file", "export_dir",
       "agents_md",     "skills_dir", "model_metadata"};
@@ -461,7 +481,10 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
   inputs[2] = &o->chrome_socket;
   inputs[3] = &o->tools_dir;
   inputs[4] = &o->workspace_tools_dir;
-  for (i = 0U; !document && i < 5U; i++) {
+  inputs[5] = &o->developer_instructions_file;
+  inputs[6] = &o->reviewer_instructions_file;
+  inputs[7] = &o->developer_instructions_override_file;
+  for (i = 0U; !document && i < 8U; i++) {
     if (*inputs[i] == NULL)
       continue;
     rc = default_string(cfg, o->directory, input_sections[i], input_keys[i],
@@ -771,6 +794,8 @@ static int tool_environment(cai_config *cfg, const char *prefix,
         {"SKILLS_DIR", "paths", "skills_dir"},
         {"MODEL_METADATA", "paths", "model_metadata"},
         {"AUTH_JSON", "paths", "auth_json"},
+        {"DEVELOPER_INSTRUCTIONS_FILE", "agent", "developer_instructions_file"},
+        {"REVIEWER_INSTRUCTIONS_FILE", "review", "developer_instructions_file"},
         {"LOCKD", "store.default", "endpoint"},
         {"SESSIONS_STORE", "storage", "sessions_store"},
         {"AUTH_STORE", "storage", "auth_store"},

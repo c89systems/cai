@@ -477,8 +477,8 @@ static int help_columns(void) {
     if (strncmp(line, "  ", 2U) != 0)
       continue;
     rows++;
-    if (strlen(line) <= 40U || line[38] != ' ' || line[39] == ' ' ||
-        line[39] == '\n') {
+    if (strlen(line) <= 44U || line[42] != ' ' || line[43] == ' ' ||
+        line[43] == '\n') {
       fprintf(stderr, "misaligned help row: %s", line);
       failed = 1;
     }
@@ -594,7 +594,7 @@ int main(void) {
                             "/tmp/config",
                             "--identity",
                             "Smith",
-                            "--developer-instructions",
+                            "--add-developer-instructions",
                             "Be precise",
                             "--codex-agents-md",
                             "--no-terminal",

@@ -107,6 +107,9 @@ static int cai_cli_short_value_option(const char *flag) {
   case 'D':
   case 'c':
   case 's':
+  case 'd':
+  case 'z':
+  case 'I':
     return flag[length - 1U];
   default:
     return 0;
@@ -720,8 +723,14 @@ static int cli_read_options(int argc, char *const *argv,
     else if (strcmp(flag, "--identity") == 0)
       field = &options->identity;
     else if (strcmp(flag, "-I") == 0 ||
-             strcmp(flag, "--developer-instructions") == 0)
+             strcmp(flag, "--add-developer-instructions") == 0)
       field = &options->developer_instructions;
+    else if (strcmp(flag, "-z") == 0 ||
+             strcmp(flag, "--developer-instructions") == 0)
+      field = &options->developer_instructions_override_file;
+    else if (strcmp(flag, "-d") == 0 ||
+             strcmp(flag, "--dump-developer-instructions") == 0)
+      field = &options->dump_developer_instructions;
     if (field == NULL) {
       cai_cli_option_error(options, "unknown option: %s\n", flag);
       return -1;
@@ -793,12 +802,20 @@ int cai_cli_options_utility(const cai_cli_options *o) {
          o->list_all || o->resume_list || o->delete_list ||
          o->delete_id != NULL || o->export_id != NULL ||
          o->import_file != NULL || o->install_skill != NULL ||
-         o->message != NULL;
+         o->message != NULL || o->dump_developer_instructions != NULL;
 }
 
 int cai_cli_validate_options(cai_cli_options *options) {
   static const char *const providers[] = {"chatgpt", "openai", "openrouter",
                                           "berget",  "custom", NULL};
+  if (options->identity != NULL &&
+      !cai_agent_identity_valid(options->identity)) {
+    cai_cli_option_error(
+        options,
+        "--identity permits ASCII letters, digits and ._-(), with single "
+        "spaces between words and at least one letter or digit");
+    return -1;
+  }
   if (options->server != NULL &&
       (options->headless || options->temporary || options->list ||
        options->list_all || options->resume_list || options->delete_list ||
@@ -809,6 +826,13 @@ int cai_cli_validate_options(cai_cli_options *options) {
     cai_cli_option_error(options,
                          "--server selects a workspace attachment; "
                          "it cannot be combined with server or utility modes");
+    return -1;
+  }
+  if (options->dump_developer_instructions != NULL &&
+      (options->headless || options->server != NULL || options->temporary)) {
+    cai_cli_option_error(options,
+                         "--dump-developer-instructions cannot be combined "
+                         "with --headless, --server or --temp");
     return -1;
   }
   if (options->headless &&

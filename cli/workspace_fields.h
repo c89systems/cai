@@ -45,6 +45,9 @@
   X("revgeo", "base_url", revgeo_url, 's') \
   X("agent", "identity", identity, 's') \
   X("agent", "developer_instructions", developer_instructions, 's') \
+  X("agent", "developer_instructions_file", developer_instructions_file, 's') \
+  X("review", "developer_instructions_file", reviewer_instructions_file, 's') \
+  X("agent", "initial_developer_instructions_file", developer_instructions_override_file, 's') \
   X("server", "workspace_name", workspace_name, 's') \
   X("review", "model", review_model, 's') \
   X("review", "reasoning_effort", review_reasoning_effort, 's') \

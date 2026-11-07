@@ -228,6 +228,16 @@ static void check_template(cai_instruction_template *input,
 
 static void template_cases(void) {
   cai_instruction_template input;
+  assert(cai_agent_identity_valid("My Agent (Rev).2_-"));
+  assert(!cai_agent_identity_valid(NULL));
+  assert(!cai_agent_identity_valid(""));
+  assert(!cai_agent_identity_valid(" ._-()"));
+  assert(!cai_agent_identity_valid("Two  Words"));
+  assert(!cai_agent_identity_valid(" Leading"));
+  assert(!cai_agent_identity_valid("Trailing "));
+  assert(!cai_agent_identity_valid("Agent\nInjected"));
+  assert(!cai_agent_identity_valid("Agent\033[0m"));
+  assert(!cai_agent_identity_valid("../Agent"));
   memset(&input, 0, sizeof(input));
   input.text = "A{{agent_identity}}B{{agent_tools}}C{{agent_identity}}";
   input.identity = "ID";
@@ -235,9 +245,9 @@ static void template_cases(void) {
   input.repository = "repo";
   input.skills = "skill";
   input.extension = "extension";
-  check_template(&input, "AIDBTOOLSCID\n\nrepo\n\nskill\n\nextension", 4U);
+  check_template(&input, "AIDBextension\n\nTOOLSCID\n\nrepo\n\nskill", 4U);
   input.tools = NULL;
-  check_template(&input, "AIDB{{agent_tools}}CID\n\nrepo\n\nskill\n\nextension",
+  check_template(&input, "AIDB{{agent_tools}}CID\n\nextension\n\nrepo\n\nskill",
                  0U);
   input.repository = input.skills = input.extension = NULL;
   input.text = "{{agent_identity}}{{agent_identity}}{{agent_tools}}";
@@ -268,7 +278,7 @@ static void template_cases(void) {
     check_template(&input, expected, strlen(expected) - 5U);
     input.text = "Use {{agent_identity}}{{agent_tools}}";
     input.extension = expected;
-    snprintf(text, sizeof(text), "TOOLS\n\n%s", expected);
+    snprintf(text, sizeof(text), "%s\n\nTOOLS", expected);
     check_template(&input, text, 0U);
     input.extension = NULL;
   }
@@ -320,6 +330,24 @@ static void *run(void *context) {
   assert(cai_agent_preset_write_instructions(&preset, &config, NULL, &sink,
                                              &status, &error) == CAI_OK);
   assert(strcmp(out.small, "BASE") == 0);
+  assert(cai_agent_preset_write_base_instructions(&preset, &config, 0, &sink,
+                                                  &error) == CAI_OK);
+  assert(strcmp(out.small, "BASEBASE") == 0);
+  memset(&out, 0, sizeof(out));
+  config.developer_instructions_override =
+      "literal {{agent_identity}} {{agent_tools}}";
+  config.developer_instructions_extension = "ADDED";
+  assert(cai_agent_preset_write_base_instructions(&preset, &config, 1, &sink,
+                                                  &error) == CAI_OK);
+  assert(strcmp(out.small,
+                "literal {{agent_identity}} {{agent_tools}}\n\nADDED") == 0);
+  memset(&out, 0, sizeof(out));
+  out.fail_at = 1U;
+  assert(cai_agent_preset_write_base_instructions(&preset, &config, 0, &sink,
+                                                  &error) == CAI_ERR_CANCELLED);
+  cai_error_cleanup(&error);
+  config.developer_instructions_override = NULL;
+  config.developer_instructions_extension = NULL;
   assert(!status.global_agents_md_loaded && !status.repository_agents_md_count);
   preparation_cases(&preset, &config, &sink, &out, &store);
   large = malloc(large_length + 1U);
@@ -332,6 +360,11 @@ static void *run(void *context) {
   bounded = 1;
   assert(cai_agent_preset_write_instructions(&preset, &config, NULL, &sink,
                                              NULL, &error) == CAI_OK);
+  assert(out.length == large_length + 6U && out.calls > 2048U);
+  memset(&out, 0, sizeof(out));
+  out.large = 1;
+  assert(cai_agent_preset_write_base_instructions(&preset, &config, 0, &sink,
+                                                  &error) == CAI_OK);
   assert(out.length == large_length + 6U && out.calls > 2048U);
   assert(cai_agent_preset_prepare_instructions(
              &preset, &config, NULL, &prepared, &status, &error) == CAI_OK);

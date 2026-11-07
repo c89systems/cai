@@ -14,6 +14,7 @@
 #include "documents.h"
 #include "export_job.h"
 #include "identity.h"
+#include "instructions.h"
 #include "log.h"
 #include "mcp.h"
 #include "messages.h"
@@ -75,6 +76,7 @@ typedef struct cli_state {
   int borrowed_configuration, borrowed_temporary;
   int review_block;
   char *normal_reasoning_override, *high_reasoning_override;
+  char *initial_review_instructions;
   cai_config *configuration;
   cai_environment *environment;
   cai_agent_session_store store;
@@ -1331,6 +1333,7 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
   cai_agent_runtime_config config;
   cai_agent_preset preset;
   cai_skill_config skills;
+  cai_cli_instruction_files instruction_files;
   cai_terminal_tool_config terminal;
   char selected_id[CAI_AGENT_SESSION_ID_MAX];
   int rc;
@@ -1438,7 +1441,24 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
   config.mcp_client_count =
       state->options.review ? 0U : state->mcp.client_count;
   cai_cli_pouch_begin_use(&state->pouch);
-  rc = cai_agent_runtime_open(state->client, &config, &state->runtime, error);
+  rc = cai_cli_instruction_files_open(&state->options, &instruction_files,
+                                      error);
+  preset.developer_instructions = instruction_files.agent;
+  preset.review_developer_instructions = instruction_files.reviewer;
+  preset.developer_instructions_literal = instruction_files.agent != NULL;
+  preset.review_developer_instructions_literal =
+      instruction_files.reviewer != NULL;
+  config.developer_instructions_override = instruction_files.initial;
+  if (rc == CAI_OK && state->normal_options.review &&
+      instruction_files.initial != NULL) {
+    state->initial_review_instructions = instruction_files.initial;
+    instruction_files.initial = NULL;
+    config.developer_instructions_override = NULL;
+    state->options.developer_instructions_override_file = NULL;
+  }
+  if (rc == CAI_OK)
+    rc = cai_agent_runtime_open(state->client, &config, &state->runtime, error);
+  cai_cli_instruction_files_close(&instruction_files);
   if (rc == CAI_OK)
     rc = cai_cli_documents_bind(&state->documents, state->runtime, error);
   if (rc == CAI_OK && !state->options.review) {
@@ -1908,6 +1928,10 @@ static int cli_switch_session(cli_state *state, const char *id, int new_session,
   state->awaiting_turn = 0;
   state->automation_done = 1;
   state->automation_failed = 0;
+  /* -z selects only the startup parent, never a subsequently selected agent. */
+  state->options.developer_instructions_override_file = NULL;
+  free(state->initial_review_instructions);
+  state->initial_review_instructions = NULL;
   rc = cli_open_runtime(state, id, new_session, error);
   if (rc != CAI_OK)
     return rc;
@@ -3079,8 +3103,13 @@ static int cli_review_command(cli_state *state, const char *arguments,
              state->documents.call);
     request.parent_call_id = state->review_call;
   }
+  request.developer_instructions_override = state->initial_review_instructions;
   rc = cai_agent_runtime_start_review(state->runtime, &request,
                                       &state->review_runtime, error);
+  if (state->review_runtime != NULL) {
+    free(state->initial_review_instructions);
+    state->initial_review_instructions = NULL;
+  }
   if (state->review_runtime == NULL) {
     int finished;
     state->review_call[0] = '\0';
@@ -4055,6 +4084,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     if (!lifetime_explicit)
       selected.persist = state->options.server_persist;
     identity.server_persist = selected.persist;
+    identity.review = state->normal_options.review;
     rc = cai_cli_workspace_claims_build(&identity, state->configuration, 0,
                                         &claims, &error);
     if (rc == CAI_OK)
@@ -4454,6 +4484,7 @@ cleanup:
   free(state->sessions);
   free(state->normal_reasoning_override);
   free(state->high_reasoning_override);
+  free(state->initial_review_instructions);
   free(metadata_json);
   if (!state->borrowed_configuration)
     cai_config_close(state->configuration);

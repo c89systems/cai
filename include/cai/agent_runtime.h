@@ -361,6 +361,10 @@ typedef struct cai_agent_review_request {
    * before the child can run, and present on its durable parent attribution.
    * NULL uses the ordinary manual-review identity. Ignored by submit_review. */
   const char *parent_call_id;
+  /** Optional literal base override for this newly started reviewer only.
+   * Borrowed during start_review, never stored as the parent's child default.
+   */
+  const char *developer_instructions_override;
 } cai_agent_review_request;
 
 /** Initialize a zero-defaultable review request. */
@@ -689,6 +693,10 @@ typedef struct cai_agent_runtime_config {
   int disable_subagent_steering;
   /** Optional host developer-instruction extension. */
   const char *developer_instructions_extension;
+  /** Replace the initially constructed agent's base instructions with literal
+   * UTF-8 text. Automatic capability/discovery instructions still follow.
+   * Copied at open; never inherited by review or other subagents. */
+  const char *developer_instructions_override;
   /**
    * Host-owned local MCP clients whose discovered tools CAI registers. Every
    * client must remain open and valid until the runtime closes. CAI snapshots

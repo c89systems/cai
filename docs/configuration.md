@@ -23,6 +23,7 @@ Path defaults may reflect the current XDG roots, HOME or explicit `--config-dir`
 Configuration precedence is explicit command line, environment, INI, then built-in defaults.
 Saved model/reasoning settings are restored on resume unless explicitly overridden.
 Use the generated template for the complete current setting descriptions; this guide does not duplicate that catalog.
+Base prompt files, offline dumps and parent-only overrides are described in [developer instructions](runtime.md#base-developer-instructions).
 
 ```sh
 cai --dump-config

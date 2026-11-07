@@ -341,6 +341,11 @@ int cai_cli_workspace_claims_build(const cai_cli_options *options,
          add(hash, value);
     if (ok && value != NULL && i == CAI_CLI_OWNER_api_key_env)
       ok = add(hash, cai_config_getenv(cfg, value));
+    /* The same -z file targets a different initial runtime with --review.
+     * Never silently reuse an owner's override for the other role. */
+    if (ok && value != NULL &&
+        i == CAI_CLI_OWNER_developer_instructions_override_file)
+      ok = add(hash, options->review ? "review" : "agent");
     /* A selector alone is insufficient: identically named stores can refer to
      * different endpoints or keys in independently selected configurations. */
     if (ok && value != NULL &&

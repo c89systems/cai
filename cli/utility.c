@@ -3,6 +3,7 @@
 #include "utility.h"
 #include "config.h"
 #include "identity.h"
+#include "instructions.h"
 #include "log.h"
 #include "login.h"
 #include "messages.h"
@@ -239,6 +240,12 @@ int cai_cli_utility_run(int argc, char **argv,
     }
     if (parsed < 0 && u->error.code == CAI_OK)
       cai_cli_error(&u->error, CAI_ERR_INVALID, u->options.diagnostic);
+    goto done;
+  }
+  if (u->options.dump_developer_instructions != NULL) {
+    u->operation = "dump developer instructions";
+    rc = cai_cli_dump_instructions(&u->options, &u->error);
+    result = rc == CAI_OK ? 0 : 1;
     goto done;
   }
   if (cai_cli_theme_validate(&u->options, &u->error) != CAI_OK) {

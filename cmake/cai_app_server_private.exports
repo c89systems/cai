@@ -59,6 +59,7 @@ cai_cli_input_wire_decoder_open
 cai_cli_input_wire_write
 cai_cli_install_skill
 cai_cli_instruction_at
+cai_cli_dump_instructions
 cai_cli_log_error
 cai_cli_log_file_at
 cai_cli_log_message

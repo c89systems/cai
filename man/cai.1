@@ -631,9 +631,34 @@ copy/validation failure preserves the previous package.
 .TP
 .BI \-\-identity " TEXT"
 Set the visible agent identity.
+Preserves case. Accepts ASCII letters, digits, ._-(), and single spaces between
+words; at least one letter or digit is required. No leading/trailing spaces.
 .TP
-.BR \-I , " " \-\-developer-instructions " " TEXT
-Append developer instructions.
+.BR \-I , " " \-\-add-developer-instructions " " TEXT
+Add developer instructions before automatic capability and discovery additions.
+.TP
+.BR \-z , " " \-\-developer-instructions " " FILE
+Replace the initial agent's base developer instructions with literal file
+contents. With --review, replaces the initially started reviewer. Does not
+propagate to subagents or subsequent conversation selections. Automatic tools,
+skills and discovery additions remain enabled. Files must be regular, NUL-free
+text of at most 1 MiB. Relative CLI paths use the selected original workspace.
+Reusable defaults are [agent] developer_instructions_file and [review]
+developer_instructions_file, with CAI_DEVELOPER_INSTRUCTIONS_FILE and
+CAI_REVIEWER_INSTRUCTIONS_FILE environment overrides. INI paths are config-relative.
+.TP
+.BR \-d , " " \-\-dump-developer-instructions " " DIR
+Resolve provider/model/reasoning and dump both base prompts, including configured
+overrides, -z and -I, without auth, storage or automatic discovery. Creates DIR
+recursively. Writes identity_developer_instructions.md and
+identity_reviewer_instructions.md; the filename identity is lowercase, spaces
+become underscores, and punctuation except underscores is removed. Existing
+outputs are refused. The prompt identity itself retains its original case.
+.TP
+.B \-\-no-background
+Block command execution until completion or cancellation, like --foreground.
+--background and --no-foreground enable yielding again. The default command
+yield interval is 10000 milliseconds.
 .TP
 .B \-\-codex-agents-md
 Load

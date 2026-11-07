@@ -57,9 +57,60 @@ Smith loads cai's global `AGENTS.md` from `${XDG_CONFIG_HOME:-$HOME/.config}/cai
 `--codex-agents-md` additionally loads `${CODEX_HOME:-$HOME/.codex}/AGENTS.md` after the cai global file and before authorized repository ancestor `AGENTS.md` files.
 Workspace files are disabled by default in core libcai: a host must supply `cai_agent_preset_config.workspace_instructions_root`, or use runtime `workspace_approval_directory` / `insecure`.
 `libcai_app` supplies the approved root after its startup gate.
-`-I TEXT` or `--developer-instructions TEXT` appends developer instructions.
+`-I TEXT` or `--add-developer-instructions TEXT` adds developer instructions before automatic tool, skill and discovery additions.
 Loaded AGENTS.md sources are explicitly framed as the current user's instructions and working context, including any stated role or preferences.
 Their complete contents and loading order are preserved on resume and model changes.
+
+## Base developer instructions
+
+`--identity TEXT` supplies the readable name used by the built-in agent and reviewer prompts.
+The application defaults it to its program name (`cai`); the lower-level Smith constructors default to `Cai Smith`.
+Case is preserved.
+Names accept ASCII letters, digits, `._-()`, and single spaces between words, with at least one letter or digit and no leading or trailing space.
+This name does not select storage roots, conversation IDs or message queues.
+
+Dump both resolved base prompts without opening authentication, storage, a workspace server or an agent:
+
+```sh
+cai -p chatgpt -m gpt-6.1-sol -r high -d ./new_agent
+```
+
+`-d DIR` / `--dump-developer-instructions DIR` creates missing parent directories and writes `cai_developer_instructions.md` and `cai_reviewer_instructions.md`.
+The filename prefix comes from the identity: ASCII letters are lowercased, spaces become underscores, and characters other than letters, digits and underscores are removed.
+For example, `--identity 'My Agent (Rev)'` produces `my_agent_rev_developer_instructions.md`.
+Existing files are refused rather than overwritten; a failed pair is removed without changing existing files.
+Provider, model and reasoning selection follows normal CLI/environment/config/default precedence; the dump does not restore a saved conversation's settings.
+Current base templates are reasoning-neutral.
+Configured prompt files, `-z` and `-I` are reflected, but automatic capability contracts, AGENTS.md, skills, MCP and subagent discovery are excluded.
+
+`-z FILE` / `--developer-instructions FILE` replaces the initial agent's base developer instructions with literal file contents.
+It applies to the reviewer when starting with `--review`, and does not propagate to child agents or subsequent conversation selections.
+Changing the current model retains the override.
+`-I` remains an addition, including when `-z` is selected; automatic capability and discovery instructions still follow.
+The long spelling for `-I` is now `--add-developer-instructions`.
+
+Configure reusable defaults separately for ordinary agents and reviewers:
+
+```ini
+[agent]
+developer_instructions_file = ./agent.md
+developer_instructions = Additional developer guidance
+
+[review]
+developer_instructions_file = ./reviewer.md
+```
+
+`CAI_DEVELOPER_INSTRUCTIONS_FILE` and `CAI_REVIEWER_INSTRUCTIONS_FILE` override those defaults.
+The section-qualified spellings `CAI_AGENT_DEVELOPER_INSTRUCTIONS_FILE` and `CAI_REVIEW_DEVELOPER_INSTRUCTIONS_FILE` also work.
+INI filenames resolve against the configuration directory; `-z` resolves against the selected original workspace, including with `--temp`.
+Explicit files must be regular, NUL-free text of at most 1 MiB; an empty file selects an empty base.
+`[agent] initial_developer_instructions_file` (or `CAI_AGENT_INITIAL_DEVELOPER_INSTRUCTIONS_FILE`) supplies the same initial-parent-only setting as `-z`.
+Running owners retain their startup instruction policy; incompatible explicit startup overrides are rejected rather than silently ignored.
+`--review -z FILE` requires a new workspace owner; when a server is already running, stop it and retry so the initial reviewer override cannot be silently lost or reused for later reviews.
+
+Embedders can supply literal preset defaults using `cai_agent_preset.developer_instructions_literal` and `review_developer_instructions_literal` alongside their respective instruction strings.
+`cai_agent_runtime_config.developer_instructions_override` replaces only the initial runtime's base; `cai_agent_review_request.developer_instructions_override` targets one explicitly started reviewer.
+`cai_agent_preset_write_base_instructions` writes the same base resolution to a sink without client construction or filesystem discovery, using writes of at most 4096 bytes.
 
 ## Goals and settings
 

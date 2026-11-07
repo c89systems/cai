@@ -250,8 +250,12 @@ static const cai_app_option options[] = {
      0},
     {"--identity", '\0', CAI_APP_STRING, "TEXT", "Visible agent identity", 0,
      0},
-    {"--developer-instructions", 'I', CAI_APP_STRING, "TEXT",
+    {"--add-developer-instructions", 'I', CAI_APP_STRING, "TEXT",
      "Append developer instructions", 0, 0},
+    {"--developer-instructions", 'z', CAI_APP_STRING, "FILE",
+     "Replace the initial agent's base instructions (not inherited)", 0, 0},
+    {"--dump-developer-instructions", 'd', CAI_APP_STRING, "DIR",
+     "Dump resolved base agent/reviewer instructions without connecting", 0, 0},
     {"--install-skill", '\0', CAI_APP_STRING, "DIR",
      "Install a SKILL.md package and exit", 0, 0},
     {"--codex-agents-md", '\0', CAI_APP_FLAG, NULL,
@@ -327,9 +331,9 @@ int cai_cli_help_write(const char *name, const char *program,
       snprintf(description, sizeof(description),
                "Custom API key variable (default %sAPI_KEY)",
                environment_prefix);
-      snprintf(row, sizeof(row), "  %-36s %s\n", flags, description);
+      snprintf(row, sizeof(row), "  %-40s %s\n", flags, description);
     } else
-      snprintf(row, sizeof(row), "  %-36s %s\n", flags, o->description);
+      snprintf(row, sizeof(row), "  %-40s %s\n", flags, o->description);
     rc = text(sink, row, error);
   }
   return rc;

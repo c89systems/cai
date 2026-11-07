@@ -788,6 +788,15 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
       }
     } else
       ready = CAI_CLI_FRONTEND_EXISTING;
+    if (ready == CAI_CLI_FRONTEND_EXISTING && b->client == NULL &&
+        options->review &&
+        options->developer_instructions_override_file != NULL) {
+      rc = cai_cli_error(error, CAI_ERR_INVALID,
+                         "--review with --developer-instructions requires a "
+                         "new workspace owner; stop the existing server and "
+                         "retry (startup overrides are not hot-loaded)");
+      break;
+    }
     if (ready && b->client == NULL) {
       target.event = observe;
       target.context = b;

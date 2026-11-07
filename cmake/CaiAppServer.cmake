@@ -6,7 +6,7 @@ find_package(lockdc CONFIG REQUIRED COMPONENTS static)
 add_library(cai_app_owner_objects OBJECT cli/app_run.c)
 add_library(cai_app_server_objects OBJECT cli/server.c cli/identity.c cli/app_control.c
   cli/workspace_host.c cli/commands.c cli/options.c cli/help.c cli/config.c
-  cli/runtime_options.c cli/mcp.c cli/skills.c cli/status.c cli/shell.c cli/shell_text.c
+  cli/runtime_options.c cli/instructions.c cli/mcp.c cli/skills.c cli/status.c cli/shell.c cli/shell_text.c
   cli/startup.c cli/goal_input.c cli/command_help.c cli/review_report.c cli/pouch.c
   cli/pouch_stream.c cli/pouch_transcript.c cli/transcript.c cli/transcript_feed.c
   cli/journal_projection.c

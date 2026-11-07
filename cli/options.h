@@ -55,6 +55,7 @@ typedef struct cai_cli_options {
   const char *status_fields;
   int dump_config;
   const char *dump_config_file;
+  const char *dump_developer_instructions;
   const char *provider;
   const char *config_file;
   int config_explicit;
@@ -120,6 +121,9 @@ typedef struct cai_cli_options {
   int utc;
   const char *identity;
   const char *developer_instructions;
+  const char *developer_instructions_file;
+  const char *reviewer_instructions_file;
+  const char *developer_instructions_override_file;
   const char *goal;
   const char *base;
   const char *out;

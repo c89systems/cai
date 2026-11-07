@@ -145,6 +145,12 @@
     set_tests_properties(cai_cli_attach_boot PROPERTIES TIMEOUT 30
       LABELS "cli;local;offline"
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+    add_test(NAME cai_cli_developer_instructions COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_developer_instructions_test.sh"
+      "$<TARGET_FILE:cai_cli>")
+    set_tests_properties(cai_cli_developer_instructions PROPERTIES TIMEOUT 45
+      LABELS "cli;local;offline"
+      ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
     add_executable(cai_cli_progress_owner tests/cli_catalog_client_fixture.c tests/export_gate_fixture.c
       cli/main.c cli/process.c cli/bootstrap.c cli/spawn.c cli/attach.c cli/executable_path.c)
     target_link_libraries(cai_cli_progress_owner PRIVATE cai_app_static)
