@@ -14,6 +14,7 @@ cai_app_client_prompt_history
 cai_app_client_pump
 cai_app_client_request
 cai_app_client_save_prompt
+cai_app_client_select
 cai_app_client_settled
 cai_app_client_shell
 cai_app_client_shutdown

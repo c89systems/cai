@@ -12,6 +12,7 @@ int main(void) {
   assert(config.event == NULL && config.workspace == NULL);
   assert(cai_app_client_open(NULL, 0U, &client, NULL) == CAI_ERR_INVALID);
   assert(client == NULL);
+  assert(cai_app_client_select(client, 1U, "1", NULL) == CAI_ERR_INVALID);
   memset(&view, 0, sizeof(view));
   view.outcome = CAI_APP_NOT_RUN;
   cai_app_view_elapsed(&view, 0U, &turn, &goal);
