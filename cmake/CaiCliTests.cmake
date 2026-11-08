@@ -327,6 +327,11 @@
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_responsiveness_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>" "${_final_protocol}")
       set_tests_properties(cai_cli_responsiveness_${_final_protocol} PROPERTIES TIMEOUT 10)
+      add_test(NAME cai_cli_completion_append_failure_${_final_protocol} COMMAND bash
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_responsiveness_test.sh"
+        "$<TARGET_FILE:cai_cli_mock_fixture>" "${_final_protocol}" final_failure)
+      set_tests_properties(cai_cli_completion_append_failure_${_final_protocol}
+        PROPERTIES TIMEOUT 10)
       add_test(NAME cai_cli_capacity_${_final_protocol} COMMAND bash
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_capacity_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>" "${_final_protocol}")

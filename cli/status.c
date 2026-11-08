@@ -2,6 +2,7 @@
 #define _XOPEN_SOURCE 700
 
 #include "status.h"
+#include <cai/dtg.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -707,7 +708,8 @@ int cai_cli_status_markdown(char *out, size_t capacity,
 
 int cai_cli_turn_status_message(char *out, size_t capacity,
                                 const char *reasoning_summary,
-                                const cai_agent_runtime_metrics *metrics) {
+                                const cai_agent_runtime_metrics *metrics,
+                                int utc, time_t reference) {
   unsigned long long seconds;
   unsigned long long minutes;
   unsigned long long hours;
@@ -753,6 +755,14 @@ int cai_cli_turn_status_message(char *out, size_t capacity,
     summary[write_at] = '\0';
     written = snprintf(out, capacity, "%s (%s)",
                        summary[0] != '\0' ? summary : "Working", duration);
+  } else if (metrics->last_turn_finished_unix_seconds > 0LL) {
+    char stamp[CAI_DTG_CAPACITY];
+    time_t finished = (time_t)metrics->last_turn_finished_unix_seconds;
+    if ((long long)finished != metrics->last_turn_finished_unix_seconds ||
+        cai_dtg_format_time(finished, reference, utc, stamp, sizeof(stamp)) !=
+            CAI_DTG_OK)
+      return -1;
+    written = snprintf(out, capacity, "%s Worked for %s", stamp, duration);
   } else {
     written = snprintf(out, capacity, "Worked for %s", duration);
   }

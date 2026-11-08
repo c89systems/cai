@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# No inference: prove the status selection and live policy indicator in the UI.
+# No inference: prove status selection, live policy and branch refresh.
 source "$(dirname "$0")/cli_test_common.sh"
 scope=${1:-cli}
 base=("$cli")
@@ -38,6 +38,15 @@ send '/goal\r'; expect 'No goal.'
 contains "$term/message" 'feature/status-branch'
 send '/status\r'; expect 'Metric'
 wait_for has "$term/message" 'ctx -- : ~/work : feature/updated : cost ?$'
+absent "$term/message" 'feature/status-branch'
+# A second forced lookup inside the debounce window also clears stale labels
+# when HEAD becomes detached; unrelated commands still do not rescan it.
+printf '0123456789012345678901234567890123456789\n' >"$work/.git/HEAD"
+send '/goal\r'; expect 'No goal.'
+contains "$term/message" 'feature/updated'
+send '/status\r'; expect 'Metric'
+wait_for has "$term/message" 'ctx -- : ~/work : cost ?$'
+absent "$term/message" 'feature/updated'
 [[ $(requests) == 0 ]]
 terminal_close
 if [[ "$scope" == host ]]; then

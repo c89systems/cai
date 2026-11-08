@@ -137,6 +137,7 @@ cai_cli_status_init
 cai_cli_status_log_markdown
 cai_cli_status_markdown
 cai_cli_status_maybe_refresh_branch
+cai_cli_status_refresh_branch
 cai_cli_status_take
 cai_cli_store_options
 cai_cli_temp_close

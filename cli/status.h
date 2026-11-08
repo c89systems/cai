@@ -4,6 +4,7 @@
 #include "options.h"
 #include <cai/agent_runtime.h>
 #include <cai/quota.h>
+#include <time.h>
 
 #define CAI_CLI_STATUS_FIELD_COUNT 9
 typedef struct cai_cli_status_fields {
@@ -73,9 +74,12 @@ int cai_cli_status_ids_markdown(const cai_agent_runtime_ids *ids,
 int cai_cli_status_log_markdown(const char *path, int table,
                                 int (*write)(void *, const char *, size_t),
                                 void *context);
-/** Format the active summary or most recent turn duration for softline. */
+/** Format the active summary or the recorded completion DTG and duration.
+ * reference selects the short/full DTG form without replacing the recorded
+ * finish time. utc selects UTC; zero uses local time. */
 int cai_cli_turn_status_message(char *out, size_t capacity,
                                 const char *reasoning_summary,
-                                const cai_agent_runtime_metrics *metrics);
+                                const cai_agent_runtime_metrics *metrics,
+                                int utc, time_t reference);
 
 #endif

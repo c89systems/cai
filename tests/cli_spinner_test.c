@@ -66,7 +66,32 @@ int main(void) {
   fixture_view.available = 1;
   fixture_view.effective.model = "gpt-6-luna";
   fixture_view.effective.reasoning_effort = "medium";
+  cai_cli_status_init(&f->status, "/workspace", NULL);
   expect_status(f, 0, 1U);
+  /* Exercise the real frontend's provider selection, not just the status
+   * formatter: an empty subscription object must not hide API spending. */
+  fixture_view.provider = "openai";
+  fixture_view.metrics.session_usage.estimated_spend_usd = 1.25;
+  expect_status(f, 0, 1U);
+  assert(strcmp(f->status.usage, "cost ~$1.2500") == 0);
+  fixture_view.metrics.session_usage.estimated_spend_usd = 0.0;
+  expect_status(f, 0, 1U);
+  assert(strcmp(f->status.usage, "cost ?$") == 0);
+  fixture_view.provider = "berget";
+  fixture_view.metrics.session_usage.estimated_spend_eur = 1.25;
+  expect_status(f, 0, 1U);
+  assert(strcmp(f->status.usage, "cost ~€1.2500") == 0);
+  fixture_view.metrics.session_usage.estimated_spend_eur = 0.0;
+  expect_status(f, 0, 1U);
+  assert(strcmp(f->status.usage, "cost ?€") == 0);
+  fixture_view.provider = "chatgpt";
+  fixture_view.quota.has_weekly = 1;
+  fixture_view.quota.weekly_remaining_percent = 88.0;
+  fixture_view.quota.has_credit_balance = 1;
+  fixture_view.quota.credit_balance = 20.0;
+  expect_status(f, 0, 1U);
+  assert(strcmp(f->status.usage, "w 88%") == 0 &&
+         strcmp(f->status.credits, "crd 20") == 0);
   for (turn = 0; turn < 3; ++turn) {
     fixture_view.metrics.turn_active = 1;
     for (tick = 0; tick < 30; ++tick) {
@@ -81,6 +106,17 @@ int main(void) {
     fixture_view.metrics.turn_active = 0;
     fixture_view.metrics.has_last_turn = 1;
     fixture_view.metrics.last_turn_duration_ms = 29000U;
+    /* The worker has finished timing, but the final append has not settled.
+     * State changes and repeated observations cannot stop/restart animation
+     * or expose the previous/computed completion message prematurely. */
+    for (tick = 0; tick < 10; ++tick) {
+      fixture_view.runtime_state =
+          tick % 2 ? CAI_AGENT_SAMPLING : CAI_AGENT_DISPATCHING_TOOL;
+      expect_status(f, 1, 2U + (unsigned int)turn * 2U);
+      assert(strstr(status_message, "Finishing turn") != NULL &&
+             strstr(status_message, "Worked for") == NULL);
+    }
+    fixture_view.runtime_state = CAI_AGENT_COMPLETED;
     for (tick = 0; tick < 3; ++tick) {
       assert(status(f) == 0 && !busy_value && !spinner_value);
       assert(busy_calls == 3U + (unsigned int)turn * 2U);
@@ -93,8 +129,10 @@ int main(void) {
   expect_status(f, 1, ++calls);
   f->review_open = 1;
   fixture_view.metrics.turn_active = 0;
-  for (tick = 0; tick < 30; ++tick)
+  for (tick = 0; tick < 30; ++tick) {
     expect_status(f, 1, calls);
+    assert(strstr(status_message, "Worked for") == NULL);
+  }
   f->review_open = 0;
   expect_status(f, 0, ++calls);
   fixture_view.metrics.turn_active = 1;

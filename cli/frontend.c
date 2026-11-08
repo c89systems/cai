@@ -423,30 +423,39 @@ static int status(frontend *f) {
   long long goal_seconds;
   char message[1024];
   const char *title = NULL;
-  int busy = 0;
+  int busy = 0, finishing = 0, active;
   memset(&goal, 0, sizeof(goal));
   memset(&metrics, 0, sizeof(metrics));
   if (f->client != NULL &&
       cai_app_client_get_view(f->client, &view, NULL) == CAI_OK &&
       view != NULL && view->available) {
     metrics = view->metrics;
-    busy = metrics.turn_active || f->review_open;
+    /* The worker stops its timer before appending the final journal record.
+     * Runtime state stays active until that append and its terminal receipt
+     * finish; timer completion alone cannot settle this presentation. */
+    active = view->runtime_state == CAI_AGENT_SAMPLING ||
+             view->runtime_state == CAI_AGENT_DISPATCHING_TOOL;
+    busy = active || metrics.turn_active || f->review_open;
+    finishing = active && !metrics.turn_active;
     cai_app_view_elapsed(view, clock_ms(), &elapsed, &goal_seconds);
     metrics.turn_elapsed_ms = elapsed;
     goal.has_goal = view->goal.has_goal;
     goal.status = view->goal.status;
     goal.elapsed_seconds = goal_seconds;
-    cai_cli_status_build(&f->status, view->effective.model,
-                         view->effective.reasoning_effort,
-                         view->effective.service_tier,
-                         metrics.context_window_tokens > 0
-                             ? 100.0 * (double)metrics.context_used_tokens /
-                                   (double)metrics.context_window_tokens
-                             : 0.0,
-                         metrics.has_context_usage, &view->quota,
-                         metrics.session_usage.estimated_spend_usd,
-                         metrics.session_usage.estimated_spend_eur,
-                         view->provider, &goal, view->yolo);
+    cai_cli_status_build(
+        &f->status, view->effective.model, view->effective.reasoning_effort,
+        view->effective.service_tier,
+        metrics.context_window_tokens > 0
+            ? 100.0 * (double)metrics.context_used_tokens /
+                  (double)metrics.context_window_tokens
+            : 0.0,
+        metrics.has_context_usage,
+        view->provider != NULL && strcmp(view->provider, "chatgpt") == 0
+            ? &view->quota
+            : NULL,
+        metrics.session_usage.estimated_spend_usd,
+        metrics.session_usage.estimated_spend_eur, view->provider, &goal,
+        view->yolo);
     if (cai_cli_status_apply(f->ui->sl, &f->status) != 0)
       return -1;
   }
@@ -490,8 +499,12 @@ static int status(frontend *f) {
   else if (f->state.transport.controller != f->state.transport.attachment)
     snprintf(message, sizeof(message),
              "Observing workspace. /takeover acquires control.");
+  else if (finishing)
+    snprintf(message, sizeof(message), "Finishing turn...");
+  else if (f->review_open && !metrics.turn_active)
+    snprintf(message, sizeof(message), "Review in progress...");
   else if (cai_cli_turn_status_message(message, sizeof(message), title,
-                                       &metrics) != 0)
+                                       &metrics, f->ui->utc, time(NULL)) != 0)
     snprintf(message, sizeof(message), "Ready. /help for usage.");
   if (message[0] == '\0')
     snprintf(message, sizeof(message), "Ready. Send /help for usage.");
@@ -914,6 +927,11 @@ static int execution_body(void *context, const cai_app_execution_event *event,
     f->command_length += length;
     f->command[f->command_length] = '\0';
     if (r->final) {
+      /* Refresh only when the owner applies an explicit status command, not
+       * when queued or replayed. Automatic observations remain debounced. */
+      if (!event->replay && !event->subagent &&
+          strcmp(f->command, "/status") == 0)
+        cai_cli_status_refresh_branch(&f->status, f->target.workspace);
       if (strncmp(f->command, "/history", 8U) == 0 &&
           (f->command[8] == ' ' || f->command[8] == '\t') &&
           r->call_id != NULL && strlen(r->call_id) < sizeof(f->history_command))

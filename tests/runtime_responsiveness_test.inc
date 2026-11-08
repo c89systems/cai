@@ -4,16 +4,20 @@ typedef struct responsive_store {
   pthread_mutex_t lock;
   pthread_cond_t ready;
   int entered, released, fail, gate_end, senders_started;
+  int failed_records, completed_records;
 } responsive_store;
 
 static int responsive_append(void *context, const char *scope, const char *id,
                              const cai_agent_session_event *event,
                              cai_error *error) {
   responsive_store *store = context;
-  int fail = 0;
+  int fail = 0, rc;
   const char *type =
       store->gate_end ? "assistant_text_end" : "assistant_text_delta";
-  if (strcmp(event->type, type) == 0) {
+  if ((store->gate_end != 2 && strcmp(event->type, type) == 0) ||
+      (store->gate_end == 2 && strcmp(event->type, "execution") == 0 &&
+       event->data != NULL &&
+       strstr(event->data, "\"kind\":\"turn.completed\"") != NULL)) {
     pthread_mutex_lock(&store->lock);
     if (!store->entered) {
       store->entered = 1;
@@ -26,13 +30,21 @@ static int responsive_append(void *context, const char *scope, const char *id,
   }
   if (fail)
     return cai_set_error(error, CAI_ERR_TRANSPORT, "gated append failed");
-  return test_runtime_session_store_append_event(&store->saved, scope, id,
-                                                 event, error);
+  rc = test_runtime_session_store_append_event(&store->saved, scope, id, event,
+                                               error);
+  if (rc == CAI_OK && strcmp(event->type, "execution") == 0 &&
+      event->data != NULL) {
+    if (strstr(event->data, "\"kind\":\"turn.failed\"") != NULL)
+      store->failed_records++;
+    if (strstr(event->data, "\"kind\":\"turn.completed\"") != NULL)
+      store->completed_records++;
+  }
+  return rc;
 }
 
 typedef struct responsive_events {
   size_t count, texts, text_bytes, largest;
-  int failed, completed, cancelled;
+  int failed, completed, cancelled, completion_error;
   unsigned long long sequence;
   unsigned long long text_hash;
 } responsive_events;
@@ -57,6 +69,9 @@ static int responsive_event(void *context, const cai_agent_runtime_event *event,
       seen->text_hash = seen->text_hash * 33U + (unsigned char)event->data[i];
   }
   seen->failed |= event->type == CAI_AGENT_EVENT_RUN_FAILED;
+  if (event->type == CAI_AGENT_EVENT_RUN_FAILED && event->data != NULL &&
+      strstr(event->data, "gated append failed") != NULL)
+    seen->completion_error = 1;
   seen->completed += event->type == CAI_AGENT_EVENT_RUN_COMPLETED;
   seen->cancelled |= event->type == CAI_AGENT_EVENT_RUN_CANCELLED;
   return CAI_OK;
@@ -129,7 +144,7 @@ static void test_agent_runtime_responsiveness(test_state *state) {
   large_script.body = large;
   for (i = 0; i < 3; i++)
     concurrent_script[i] = script[0];
-  for (mode = 0; mode < 6; mode++) {
+  for (mode = 0; mode < 9; mode++) {
     if (http_mock_client_open_script(state, "responsive",
                                      mode == 5   ? concurrent_script
                                      : mode == 4 ? &large_script
@@ -149,8 +164,8 @@ static void test_agent_runtime_responsiveness(test_state *state) {
     memset(&preset, 0, sizeof(preset));
     (void)pthread_mutex_init(&store->lock, NULL);
     (void)pthread_cond_init(&store->ready, NULL);
-    store->fail = mode == 1;
-    store->gate_end = mode == 3 || mode == 4;
+    store->fail = mode == 1 || mode >= 7;
+    store->gate_end = mode >= 6 ? 2 : mode == 3 || mode == 4;
     preset.name = "responsive";
     preset.prompt_version = "fixture";
     preset.default_model = "gpt-5-nano";
@@ -166,7 +181,7 @@ static void test_agent_runtime_responsiveness(test_state *state) {
     config.workspace_directory = "/tmp";
     config.session_store = &callbacks;
     config.record_transcript = 1;
-    config.event_callback = responsive_event;
+    config.event_callback = mode == 8 ? NULL : responsive_event;
     config.event_context = &seen;
     cai_error_init(&error);
     runtime = NULL;
@@ -206,11 +221,18 @@ static void test_agent_runtime_responsiveness(test_state *state) {
       expect_int(state, "responsive_metrics_during_append",
                  cai_agent_runtime_get_metrics(runtime, &metrics, &error),
                  CAI_OK);
+      if (mode >= 6) {
+        expect_int(state, "responsive_timer_stops_before_final_append",
+                   metrics.turn_active, 0L);
+        expect_int(state, "responsive_final_append_not_settled", run_state,
+                   CAI_AGENT_SAMPLING);
+      }
       before = seen.count;
       expect_int(state, "responsive_bounded_pump",
                  cai_agent_runtime_pump_bounded(runtime, 0L, 1U, &error),
                  CAI_OK);
-      expect_int(state, "responsive_one_callback", seen.count - before, 1L);
+      expect_int(state, "responsive_one_callback", seen.count - before,
+                 mode == 8 ? 0L : 1L);
       if (mode < 3 || mode == 5)
         expect_int(state, "responsive_no_text_before_ack", seen.texts, 0L);
       if (mode == 3 || mode == 4) {
@@ -244,12 +266,32 @@ static void test_agent_runtime_responsiveness(test_state *state) {
                    CAI_OK);
         expect_int(state, "responsive_budget_preserved",
                    seen.count - before <= 1U, 1L);
+        if (mode >= 6) {
+          expect_int(state, "responsive_poll_only_state",
+                     cai_agent_runtime_state(runtime, &run_state, &error),
+                     CAI_OK);
+          if (run_state != CAI_AGENT_SAMPLING &&
+              (mode == 8 || seen.count == before))
+            break;
+        }
       }
       expect_int(state, "responsive_outcome",
-                 mode == 1   ? seen.failed
-                 : mode == 2 ? seen.cancelled
-                             : seen.completed,
+                 mode == 8                ? run_state == CAI_AGENT_FAILED
+                 : mode == 1 || mode == 7 ? seen.failed
+                 : mode == 2              ? seen.cancelled
+                                          : seen.completed,
                  mode == 5 ? 3L : 1L);
+      if (mode >= 7) {
+        expect_int(state, "responsive_failed_completion_never_succeeds",
+                   seen.completed, 0L);
+        if (mode == 7)
+          expect_int(state, "responsive_completion_error_reported",
+                     seen.completion_error, 1L);
+        expect_int(state, "responsive_completion_failure_is_durable",
+                   store->failed_records > 0, 1L);
+        expect_int(state, "responsive_no_durable_success_after_failure",
+                   store->completed_records, 0L);
+      }
       if (mode == 0 || mode == 3)
         expect_int(state, "responsive_all_text_delivered", seen.texts, 3L);
       if (mode == 4) {

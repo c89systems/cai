@@ -40,4 +40,7 @@ terminal_close
 terminal_start -N --no-utc
 send '/status\r'; expect 'Status'
 grep -Eq '^\$ [0-9]{6} /status$' "$term/feed"
+plan '{"plan":["LOCAL TIMESTAMP ANSWER"]}'
+prompt 'local completion timestamp' 'LOCAL TIMESTAMP ANSWER'
+grep -Eq '^! [0-9]{6} Worked for ' "$term/message"
 terminal_close

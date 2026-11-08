@@ -270,6 +270,7 @@ int main(int argc, char **argv) {
   char markdown[2048];
   char turn_message[640];
   struct tm finished_local;
+  time_t reference = 0;
   sl_t *sl;
   int failures;
   if (argc == 3 && strcmp(argv[1], "--branch") == 0) {
@@ -558,31 +559,31 @@ int main(int argc, char **argv) {
   memset(&metrics, 0, sizeof(metrics));
   failures +=
       check(cai_cli_turn_status_message(turn_message, sizeof(turn_message), "",
-                                        &metrics) == 0 &&
+                                        &metrics, 0, reference) == 0 &&
                 turn_message[0] == '\0',
             "idle turn has no message");
   metrics.turn_active = 1;
   metrics.turn_elapsed_ms = 812000ULL;
-  failures +=
-      check(cai_cli_turn_status_message(turn_message, sizeof(turn_message),
-                                        "Checking files", &metrics) == 0 &&
-                strcmp(turn_message, "Checking files (13m 32s)") == 0,
-            "active minutes seconds");
-  failures += check(
-      cai_cli_turn_status_message(turn_message, sizeof(turn_message),
-                                  " \nChecking\n files  ", &metrics) == 0 &&
-          strcmp(turn_message, "Checking files (13m 32s)") == 0,
-      "reasoning summary remains a single status line");
+  failures += check(cai_cli_turn_status_message(
+                        turn_message, sizeof(turn_message), "Checking files",
+                        &metrics, 0, reference) == 0 &&
+                        strcmp(turn_message, "Checking files (13m 32s)") == 0,
+                    "active minutes seconds");
+  failures += check(cai_cli_turn_status_message(
+                        turn_message, sizeof(turn_message),
+                        " \nChecking\n files  ", &metrics, 0, reference) == 0 &&
+                        strcmp(turn_message, "Checking files (13m 32s)") == 0,
+                    "reasoning summary remains a single status line");
   metrics.turn_elapsed_ms = 3720000ULL;
-  failures +=
-      check(cai_cli_turn_status_message(turn_message, sizeof(turn_message),
-                                        "Checking files", &metrics) == 0 &&
-                strcmp(turn_message, "Checking files (1h 2m)") == 0,
-            "active hours minutes");
+  failures += check(cai_cli_turn_status_message(
+                        turn_message, sizeof(turn_message), "Checking files",
+                        &metrics, 0, reference) == 0 &&
+                        strcmp(turn_message, "Checking files (1h 2m)") == 0,
+                    "active hours minutes");
   metrics.turn_elapsed_ms = 93780000ULL;
   failures +=
       check(cai_cli_turn_status_message(turn_message, sizeof(turn_message), "",
-                                        &metrics) == 0 &&
+                                        &metrics, 0, reference) == 0 &&
                 strcmp(turn_message, "Working (1d 2h 3m)") == 0,
             "active days and no fabricated reasoning");
   failures += check(setenv("TZ", "UTC", 1) == 0, "set test timezone");
@@ -597,17 +598,45 @@ int main(int argc, char **argv) {
   metrics.has_last_turn = 1;
   metrics.last_turn_duration_ms = 812000ULL;
   metrics.last_turn_finished_unix_seconds = (long long)mktime(&finished_local);
-  failures +=
-      check(cai_cli_turn_status_message(turn_message, sizeof(turn_message),
-                                        "ignored", &metrics) == 0 &&
-                strcmp(turn_message, "Worked for 13m 32s") == 0,
-            "completed local DTG");
+  reference = (time_t)metrics.last_turn_finished_unix_seconds + 86400;
+  failures += check(cai_cli_turn_status_message(turn_message,
+                                                sizeof(turn_message), "ignored",
+                                                &metrics, 0, reference) == 0 &&
+                        strcmp(turn_message, "252243 Worked for 13m 32s") == 0,
+                    "completed DTG uses recorded time, not current time");
   failures += check(setenv("TZ", "UTC-2", 1) == 0, "shift test timezone");
   tzset();
+  failures += check(cai_cli_turn_status_message(turn_message,
+                                                sizeof(turn_message), "ignored",
+                                                &metrics, 0, reference) == 0 &&
+                        strcmp(turn_message, "260043 Worked for 13m 32s") == 0,
+                    "completed DTG uses local timezone and date rollover");
   failures +=
       check(cai_cli_turn_status_message(turn_message, sizeof(turn_message),
-                                        "ignored", &metrics) == 0 &&
+                                        NULL, &metrics, 1, reference) == 0 &&
+                strcmp(turn_message, "252243Z Worked for 13m 32s") == 0,
+            "UTC completion ignores the local timezone");
+  reference += 32 * 86400;
+  failures +=
+      check(cai_cli_turn_status_message(turn_message, sizeof(turn_message),
+                                        NULL, &metrics, 0, reference) == 0 &&
+                strcmp(turn_message, "260043BSEP26 Worked for 13m 32s") == 0,
+            "older-month completion retains the recorded month and local zone");
+  reference =
+      (time_t)metrics.last_turn_finished_unix_seconds + (time_t)370 * 86400;
+  failures +=
+      check(cai_cli_turn_status_message(turn_message, sizeof(turn_message),
+                                        NULL, &metrics, 1, reference) == 0 &&
+                strcmp(turn_message, "252243ZSEP26 Worked for 13m 32s") == 0,
+            "older-year completion uses a full UTC DTG");
+  failures += check(cai_cli_turn_status_message(turn_message, 8U, NULL,
+                                                &metrics, 1, reference) != 0,
+                    "completion timestamp does not overflow a small buffer");
+  metrics.last_turn_finished_unix_seconds = 0;
+  failures +=
+      check(cai_cli_turn_status_message(turn_message, sizeof(turn_message),
+                                        NULL, &metrics, 1, reference) == 0 &&
                 strcmp(turn_message, "Worked for 13m 32s") == 0,
-            "completed DTG uses local timezone and date rollover");
+            "missing finish time never invents a completion DTG");
   return failures > 0 ? 1 : 0;
 }

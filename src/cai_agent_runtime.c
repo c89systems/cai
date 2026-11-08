@@ -1626,7 +1626,7 @@ static int cai_runtime_enqueue_failure_locked(cai_agent_runtime *runtime,
 
   rc = cai_runtime_execution_error_locked(runtime, "turn.failed", NULL, NULL,
                                           failure, event_error);
-  if (rc != CAI_OK)
+  if (rc != CAI_OK || runtime->event_callback == NULL)
     return rc;
   memset(&description, 0, sizeof(description));
   cai_error_init(&format_error);
@@ -6585,53 +6585,62 @@ static void *cai_runtime_worker(void *context) {
       pthread_mutex_lock(&runtime->lock);
     }
     cai_runtime_turn_finish_locked(runtime);
-    if (runtime->event_callback == NULL) {
-      cai_error observed;
-      cai_error_init(&observed);
-      if (rc == CAI_OK)
-        (void)cai_runtime_execution_lifecycle_locked(
-            runtime, CAI_AGENT_EVENT_RUN_COMPLETED, NULL, &observed);
-      else if (rc == CAI_ERR_CANCELLED)
-        (void)cai_runtime_execution_lifecycle_locked(
-            runtime, CAI_AGENT_EVENT_RUN_CANCELLED, NULL, &observed);
-      else
-        (void)cai_runtime_execution_error_locked(runtime, "turn.failed", NULL,
-                                                 NULL, &error, &observed);
-      cai_error_cleanup(&observed);
-    }
     if (runtime->turn_cancel_requested && rc == CAI_ERR_CANCELLED) {
       final_state = CAI_AGENT_CANCELLED;
-      if (runtime->event_callback != NULL &&
-          cai_runtime_enqueue_locked(runtime, CAI_AGENT_EVENT_RUN_CANCELLED,
+      if (cai_runtime_enqueue_locked(runtime, CAI_AGENT_EVENT_RUN_CANCELLED,
                                      NULL, 0U, NULL, NULL, final_state,
-                                     &error) == CAI_OK) {
+                                     &error) == CAI_OK &&
+          runtime->event_callback != NULL) {
         runtime->terminal_event_pending = 1;
       }
     } else if (rc == CAI_OK ||
                (rc == CAI_ERR_LIMIT &&
                 cai_runtime_goal_budget_limited(runtime)) ||
                (rc == CAI_ERR_CANCELLED && cai_runtime_goal_paused(runtime))) {
+      cai_runtime_event_node *terminal = NULL;
+      int published;
       final_state = CAI_AGENT_COMPLETED;
       if (runtime->review_mode && runtime->review_report_length > 0U) {
         (void)cai_runtime_enqueue_locked(
             runtime, CAI_AGENT_EVENT_REVIEW_REPORT, runtime->review_report,
             runtime->review_report_length, NULL, NULL, final_state, &error);
       }
-      if (runtime->event_callback != NULL &&
-          cai_runtime_enqueue_locked(runtime, CAI_AGENT_EVENT_RUN_COMPLETED,
-                                     NULL, 0U, NULL, NULL, final_state,
-                                     &error) == CAI_OK) {
-        runtime->terminal_event_pending = 1;
+      /* Reserve the receipt before persistence, so allocation failure cannot
+       * turn an already durable success into a second terminal outcome. A
+       * polling runtime reserves no receipt, but uses the same durable path. */
+      published = cai_runtime_reserve_event_locked(
+          runtime, 0, CAI_AGENT_EVENT_RUN_COMPLETED, NULL, 0U, NULL, NULL,
+          final_state, &terminal, &error);
+      if (published == CAI_OK)
+        published = cai_runtime_execution_lifecycle_locked(
+            runtime, CAI_AGENT_EVENT_RUN_COMPLETED, NULL, &error);
+      if (published == CAI_OK) {
+        cai_runtime_append_reserved_event_node_locked(runtime, terminal);
+        runtime->terminal_event_pending = runtime->event_callback != NULL;
+      } else {
+        cai_error observed;
+        cai_runtime_cancel_event_reservation_locked(runtime, terminal);
+        final_state = CAI_AGENT_FAILED;
+        cai_error_init(&observed);
+        if (cai_runtime_enqueue_failure_locked(
+                runtime, &error, "failed to record turn completion",
+                final_state, &observed) == CAI_OK &&
+            runtime->event_callback != NULL)
+          runtime->terminal_event_pending = 1;
+        cai_error_cleanup(&observed);
       }
     } else {
+      cai_error observed;
       final_state =
           rc == CAI_ERR_CANCELLED ? CAI_AGENT_CANCELLED : CAI_AGENT_FAILED;
-      if (runtime->event_callback != NULL &&
-          cai_runtime_enqueue_failure_locked(runtime, &error,
+      cai_error_init(&observed);
+      if (cai_runtime_enqueue_failure_locked(runtime, &error,
                                              "agent run failed", final_state,
-                                             &error) == CAI_OK) {
+                                             &observed) == CAI_OK &&
+          runtime->event_callback != NULL) {
         runtime->terminal_event_pending = 1;
       }
+      cai_error_cleanup(&observed);
     }
     /* Journal forwarding may release the child lock to respect parent/child
      * lock order. Publish quiescence only after final records and observations
