@@ -1,14 +1,14 @@
 include("${CMAKE_CURRENT_LIST_DIR}/CaiAcquisition.cmake")
 if(NAME STREQUAL "lonejson")
-  set(filename "lonejson-0.46.0-1.src.rock")
-  set(digest "b4b70f6cdd90a602e5d16b2ba96d2c5522e69efb23701bbc1e93d2e57793d470")
+  set(filename "lonejson-0.47.0-1.src.rock")
+  set(digest "7468a6dab3b8c3e8e9faeeca60214c54f7ad338cfda1bebcd3e71852e981c46d")
 elseif(NAME STREQUAL "pslog")
   set(filename "lua-pslog-0.13.0-1.src.rock")
   set(digest "c2f84ec8f30e7ef403e50fea575cd3248c9ff4bb7ddb831af427087479b1a2b0")
 else()
   message(FATAL_ERROR "Unknown Lua prerequisite")
 endif()
-# Pins are from each provider's published v0.46.0 / v0.13.0 CHECKSUMS asset.
+# Pins are from each provider's published v0.47.0 / v0.13.0 CHECKSUMS asset.
 if(NOT DEFINED URL OR NOT DEFINED OUTPUT OR NOT DEFINED CPKT_DEPENDENCY_CACHE)
   message(FATAL_ERROR "Lua prerequisite URL, cache and output are required")
 endif()

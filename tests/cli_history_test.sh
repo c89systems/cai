@@ -63,7 +63,8 @@ send '\033[A'; expect_prompt '> /goal'
 send '\033[A'; expect_prompt '> /goal'
 send '\025'; terminal_close
 prompt_history_dump "$limited" "$root/.local/state/cai" >"$root/prompts"
-[[ $(wc -l <"$root/prompts") == 3 ]]
+# /quit detaches locally; only the two accepted commands reach owner history.
+jq -se '[.[] | .prompt] == ["/goal", "/status"]' "$root/prompts" >/dev/null
 [[ $("$history_reader" limit "$root/.local/state/cai" "$limited") == 2 ]]
 # Zero disables both recording and recall, including local commands.
 terminal_start -N --prompt-history-limit 0

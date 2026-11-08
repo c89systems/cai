@@ -167,6 +167,8 @@ if(NOT auto_link_targets_result EQUAL 0)
 endif()
 
 set(abi_dir "${CAI_BINARY_DIR}/host-dependency-mode-wrong-lonejson-abi")
+# Exercise the immediately preceding ABI, rather than an unrelated old one.
+math(EXPR rejected_lonejson_abi "${CAI_LONEJSON_ABI_VERSION} - 1")
 set(fake_abi_prefix "${abi_dir}/fake-host")
 file(REMOVE_RECURSE "${abi_dir}")
 file(MAKE_DIRECTORY "${fake_abi_prefix}/include" "${fake_abi_prefix}/lib")
@@ -175,10 +177,10 @@ file(WRITE "${fake_abi_prefix}/wrong_abi.c" "void cai_fake_lonejson(void) {}\n")
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
   set(fake_abi_library "${fake_abi_prefix}/lib/liblonejson.dylib")
   set(fake_abi_link_flag
-      "-Wl,-install_name,@rpath/liblonejson.15.dylib")
+      "-Wl,-install_name,@rpath/liblonejson.${rejected_lonejson_abi}.dylib")
 else()
   set(fake_abi_library "${fake_abi_prefix}/lib/liblonejson.so")
-  set(fake_abi_link_flag "-Wl,-soname,liblonejson.so.15")
+  set(fake_abi_link_flag "-Wl,-soname,liblonejson.so.${rejected_lonejson_abi}")
 endif()
 execute_process(
   COMMAND "${CAI_C_COMPILER}" -shared
@@ -264,10 +266,10 @@ file(WRITE "${auto_abi_prefix}/fake_pslog.c" "void cai_fake_pslog(void) {}\n")
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
   set(auto_abi_lonejson_library "${auto_abi_prefix}/lib/liblonejson.dylib")
   set(auto_abi_lonejson_link_flag
-      "-Wl,-install_name,@rpath/liblonejson.15.dylib")
+      "-Wl,-install_name,@rpath/liblonejson.${rejected_lonejson_abi}.dylib")
 else()
   set(auto_abi_lonejson_library "${auto_abi_prefix}/lib/liblonejson.so")
-  set(auto_abi_lonejson_link_flag "-Wl,-soname,liblonejson.so.15")
+  set(auto_abi_lonejson_link_flag "-Wl,-soname,liblonejson.so.${rejected_lonejson_abi}")
 endif()
 execute_process(
   COMMAND "${CAI_C_COMPILER}" -shared
