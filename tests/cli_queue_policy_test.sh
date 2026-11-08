@@ -57,6 +57,9 @@ absent "$term/message" STOPPED_ORDINARY_PROMPT
 send '/resume 2\r'; expect 'Conversation resumed.'; expect 'Q 1. STOPPED_ORDINARY_PROMPT'
 absent "$term/feed" '> STOPPED_ORDINARY_PROMPT'
 send "/export $root/pending.jsonl\r"; expect "$root/pending.jsonl"
+# The command echo acknowledges submission, not asynchronous export completion.
+# The final file appears only after its complete contents have been renamed.
+wait_for test -s "$root/pending.jsonl"
 terminal_close
 [[ $(requests) == $((before+2)) ]]
 terminal_start --resume "$original"

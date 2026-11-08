@@ -3,6 +3,10 @@ source "$(dirname "$0")/cli_test_common.sh"
 peer_start
 attach_options=()
 mkdir -p "$root/skills/completion-skill" "$work/folder space" "$work/.git"
+mkdir -p "$work/cycle-a" "$work/cycle-c"
+printf 'child\n' >"$work/cycle-a/child.txt"
+printf 'child\n' >"$work/cycle-c/child.txt"
+printf 'sibling\n' >"$work/cycle-b.txt"
 printf '%s\n' '---' 'name: completion-skill' 'description: Completion fixture.' '---' 'Skill instructions.' >"$root/skills/completion-skill/SKILL.md"
 printf 'file\n' >"$work/report-unique.txt"
 printf 'child\n' >"$work/folder space/deep-file.txt"
@@ -56,11 +60,45 @@ last_input() {
 plan '{"plan":["FILE COMPLETED"]}'
 prompt 'inspect @report-\t' 'FILE COMPLETED'
 [[ $(last_input) == 'inspect report-unique.txt' ]]
-# Spaces remain part of a matching path. Tab resolves only the selected
-# directory's children, and the native editor removes the leading @.
+# Spaces remain part of a matching path. Commit previews the directory's
+# children, and the native editor removes the leading @ on submission.
 plan '{"plan":["DIRECTORY COMPLETED"]}'
-prompt 'inspect @fold\t\t' 'DIRECTORY COMPLETED'
+prompt 'inspect @fold\t\033[C\t' 'DIRECTORY COMPLETED'
 [[ $(last_input) == 'inspect folder space/deep-file.txt' ]]
+# Repeated Tab stays within the sibling list, including a unique directory.
+# Neither a directory match nor a cycle wrap may silently enter its children.
+cycle_prompt() { sed -n 's/^> //p' "$term/prompt"; }
+cycle_sibling() {
+  case $(cycle_prompt) in
+    'inspect @cycle-a/'|'inspect @cycle-b.txt'|'inspect @cycle-c/') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+cycle_next() { cycle_sibling && [[ $(cycle_prompt) != "$cycle_previous" ]]; }
+send 'inspect @cycle-\t'; wait_for cycle_sibling
+cycle_first=$(cycle_prompt)
+cycle_previous=$cycle_first
+cycle_siblings=("$cycle_first")
+for ((candidate=0; candidate<3; ++candidate)); do
+  send '\t'; wait_for cycle_next
+  cycle_previous=$(cycle_prompt)
+  if ((candidate<2)); then cycle_siblings+=("$cycle_previous"); fi
+done
+[[ "$cycle_previous" == "$cycle_first" ]]
+[[ $(printf '%s\n' "${cycle_siblings[@]}" | sort -u | wc -l) == 3 ]]
+plan '{"plan":["SIBLINGS CYCLED"]}'
+send '\r'; expect 'SIBLINGS CYCLED'; expect 'Worked for'
+[[ $(last_input) == "${cycle_first/@/}" ]]
+send 'inspect @fold\t\t'; expect_prompt 'inspect @folder space/'
+send '\025'
+# Both native commit keys accept/commit directories and preserve completed
+# leaves across no-op forward keys. Enter never submits a child ghost.
+plan '{"plan":["CTRL-F COMMITTED"]}'
+prompt 'inspect @fold\t\006\t\006\006' 'CTRL-F COMMITTED'
+[[ $(last_input) == 'inspect folder space/deep-file.txt' ]]
+plan '{"plan":["CHILD GHOST NOT SUBMITTED"]}'
+prompt 'inspect @fold\033[C' 'CHILD GHOST NOT SUBMITTED'
+[[ $(last_input) == 'inspect folder space/' ]]
 plan '{"plan":["SKILL COMPLETED"]}'
 prompt 'Use $comple\t' 'SKILL COMPLETED'
 [[ $(last_input) == 'Use completion-skill' ]]

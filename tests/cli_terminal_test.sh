@@ -17,7 +17,7 @@ probes=$(grep -ao $'\033\[6n' "$term/raw" | wc -l || true)
 began=$SECONDS
 send '/help\r'; expect 'startup options'
 [[ $((SECONDS-began)) -lt 2 ]]
-for marker in 'Help' 'Slash commands' 'Queue and approval keys' '/resume NUMBER' '/export [BASENAME]' Ctrl-V; do contains "$term/text" "$marker"; done
+for marker in 'Help' 'Slash commands' 'Queue and approval keys' '/resume NUMBER' '/export [BASENAME]' Ctrl-V 'Right/Ctrl-F' 'cycle siblings'; do contains "$term/text" "$marker"; done
 absent "$term/text" '| --- |'
 [[ $(requests) == 0 ]]
 send 'inspect this \026'
@@ -45,6 +45,17 @@ send '\r'; expect_turn "$offset" 'DRAFT SENT DONE'
 tail -1 "$root/peer/requests.jsonl" >"$root/draft-request"
 contains "$root/draft-request" preserved-draft
 terminal_close
+# A configured destination belongs to the frontend too, not just the owner.
+terminal_start --clipboard-dir "$root/custom-clipboard"
+send 'custom draft \026'
+custom_clipboard() { compgen -G "$root/custom-clipboard/*.png" >/dev/null; }
+wait_for custom_clipboard
+custom=$(find "$root/custom-clipboard" -type f -name '*.png' -print -quit)
+expect "$custom"
+cmp "$custom" "$root/expected.png"
+[[ $(stat -c %a "$custom") == 600 && $(stat -c %a "$root/custom-clipboard") == 700 ]]
+send '\025'
+terminal_close
 saved_cache=$XDG_CACHE_HOME
 unset XDG_CACHE_HOME
 printf '\377\330\377\340\000\020JFIF\000fixture\377\331' >"$root/expected.jpeg"
@@ -66,9 +77,12 @@ expect 'FINAL paragraph.'; [[ $(requests) == "$count" ]]
 send '/new\r'; expect 'New session'; expect 'ID:'; expect 'Workspace:'; expect '$ /new'
 absent "$term/feed" '--- session ---'
 plan '{"plan":["__transport_failure__"]}'
-send 'trigger a transport failure\r'; expect 'HTTP transport failed'
-expect 'method: POST'; expect 'path: responses'
+send 'trigger a transport failure\r'; expect 'Request failed'
+expect 'streaming HTTP request failed'; expect 'Server returned nothing'
 absent "$term/text" cai.http.transport_error
+logs
+jq -se 'any(.[]; .msg=="cai.http.transport_error" and .method=="POST" and .path=="responses")' "$root/logs.jsonl" >/dev/null
+send '/status\r'; expect_table 1 'Session ID'
 terminal_close
 # Fragmented links and table escapes must be rendered, not passed through.
 width=24

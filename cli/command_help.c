@@ -119,11 +119,14 @@ static const char *const help[] = {
     "## Completions\n\n"
     "| Prefix/key | Action |\n| --- | --- |\n"
     "| `/` | Complete slash commands and aliases at draft start. |\n"
-    "| `@` | Complete workspace file paths; Tab into a directory for its "
-    "children. Hidden files except .git are included. |\n"
+    "| `@` | Complete workspace file paths. Right/Ctrl-F commits a directory "
+    "and previews its children. Hidden files except .git are included. |\n"
     "| `$` | Complete names from the loaded skills catalog. |\n",
-    "| Tab | Accept a suggestion or cycle matches before ordinary queue "
-    "key handling. Enter submits actual text, never the ghost. |\n"
+    "| Tab | Accept a suggestion or cycle siblings without descending into "
+    "directories, before ordinary queue key handling. |\n"
+    "| Right / Ctrl-F | Commit a completion at its endpoint; preview its "
+    "continuation if available. Otherwise move forward normally. Enter "
+    "submits actual text, never the ghost. |\n"
     "| Prefix removal | Softline removes @ and $ when completion ends or "
     "the draft is submitted; command slashes remain. |\n\n",
     "## Queue and approval keys\n\n"

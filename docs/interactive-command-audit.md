@@ -1,6 +1,6 @@
 # Interactive command policies
 
-CAI uses Softline 0.16.0's native backend queue editor with core-owned per-
+CAI uses Softline 0.17.0's native backend queue editor with core-owned per-
 conversation authority. Native keys submit copied requests; acknowledgements
 and ordered observations update its mirror. The complete inventory is
 `cli_command_definitions` in `cli/commands.c`; argument-specific query forms are

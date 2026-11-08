@@ -21,7 +21,8 @@ plan "$(jq -n --argjson chat "$chat" '{chat:$chat,plan:[
 ]}')"
 send 'Start streaming\r'; expect FirstStreamBegin
 send 'STEER_BEFORE_EDIT\033\rQueueFence'; expect_prompt QueueFence
-contains "$term/text" 'S 1. STEER_BEFORE_EDIT'
+# The local draft can repaint before the backend acknowledges the steer.
+expect 'S 1. STEER_BEFORE_EDIT'
 logs
 jq -se 'all(.[]; .event != "steering_queued")' "$root/logs.jsonl" >/dev/null
 absent "$term/feed" STEER_BEFORE_EDIT

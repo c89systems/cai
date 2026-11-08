@@ -59,11 +59,13 @@ See [command policies](interactive-command-audit.md) for the complete boundary i
 | Ctrl-Y | Yank from the editor's kill ring. |
 | Ctrl-V | Paste an X11 clipboard image as a private file path. |
 | Tab | Accept/cycle completion; slash commands, `@` paths and `$` skill names. |
+| Right / Ctrl-F | Commit a completion and preview its continuation; otherwise move forward normally. |
 
 An unsubmitted draft remains local.
 Editing an accepted entry holds it in the backend; cancelling an edit does not duplicate or execute it.
 Escape stops automatic delivery of the existing backlog; an explicit new `/goal resume` does not release unrelated stopped entries.
 `@` and `$` completion remove the trigger before submission; slash command prefixes remain.
+Tab cycles files and directories in the current list without entering a directory. Right or Ctrl-F commits the selected directory and previews its children; Tab accepts that preview. Repeated forward keys at the end of a completed file keep its name intact.
 Enter sends actual draft text, not an unaccepted suggestion.
 See [completion limitations](troubleshooting.md#completion-triggers).
 For all movement, selection, undo, history and queue shortcuts, use `/help` in the running frontend.

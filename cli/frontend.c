@@ -1660,6 +1660,32 @@ static void park_view(frontend *f) {
   v->boot_fd = f->boot_fd;
 }
 
+/** Clipboard capture belongs to this frontend, using its configured cache
+ * rather than the attached owner's paths or Softline's unrelated defaults. */
+static int configure_clipboard(frontend *f) {
+  const char *directory = f->options->clipboard_dir;
+  char *path;
+  size_t length;
+  int rc;
+  if (directory == NULL || directory[0] == '\0')
+    return CAI_OK;
+  length = strlen(directory);
+  if (length > (size_t)-1 - 3U)
+    return cai_cli_error(&f->error, CAI_ERR_LIMIT,
+                         "clipboard directory is too long");
+  path = malloc(length + 3U);
+  if (path == NULL)
+    return cai_cli_error(&f->error, CAI_ERR_NOMEM,
+                         "allocate clipboard path template");
+  memcpy(path, directory, length);
+  memcpy(path + length, "/*", 3U);
+  rc = sl_set_image_paste_path_template(f->ui->sl, path);
+  free(path);
+  return rc == SL_OK ? CAI_OK
+                     : cai_cli_error(&f->error, CAI_ERR_INVALID,
+                                     "configure frontend clipboard path");
+}
+
 static int select_view(frontend *f, const char *session) {
   frontend_view *v;
   sl_config_t config;
@@ -1730,7 +1756,7 @@ static int select_view(frontend *f, const char *session) {
     cai_cli_input_adapter_configure(cai_cli_input_socket_adapter(f->queue),
                                     &config);
     f->ui->sl = sl_create_with_config(&config);
-    if (f->ui->sl == NULL ||
+    if (f->ui->sl == NULL || configure_clipboard(f) != CAI_OK ||
         cai_cli_input_adapter_bind(cai_cli_input_socket_adapter(f->queue),
                                    f->ui->sl, &f->error) != CAI_OK ||
         sl_set_statusline(f->ui->sl, 1, 0) != SL_OK ||

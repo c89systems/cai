@@ -46,7 +46,7 @@ Stopped backlog entries remain stopped unless explicitly promoted or submitted t
 
 ## Completion triggers
 
-Softline 0.16 has no pre-activation completion veto.
+Softline 0.17 has no pre-activation completion veto.
 With completion providers enabled, an unmatched `@` or `$` shell word can lose its trigger before CAI receives it; returning no candidates cannot prevent activation.
 This remains an upstream limitation, not a repaired CAI feature.
 Shell handoff avoids interpreting an external shell's input as prompt completion.
