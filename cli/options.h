@@ -47,6 +47,7 @@ typedef struct cai_cli_options {
   const char *state_dir, *cache_dir, *data_dir;
   const char *clipboard_dir, *log_dir, *pouch_key_file;
   int help, version, headless;
+  int no_banner;
   int server_persist;
   int list_themes;
   int prefer_native_pager;

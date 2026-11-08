@@ -248,20 +248,35 @@ static int status_git_line(const char *path, char *out, size_t capacity) {
   return used != 0U && strpbrk(out, "\r\n") == NULL;
 }
 
-static void status_git_head(cai_cli_status *status, const char *directory) {
-  static const char prefix[] = "ref: refs/heads/";
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct status_git_head_scratch {
   char path[PATH_MAX], line[PATH_MAX];
+} status_git_head_scratch;
+static void status_git_head_with_scratch(cai_cli_status *status,
+                                         const char *directory,
+                                         status_git_head_scratch *scratch) {
+  static const char prefix[] = "ref: refs/heads/";
+
   const unsigned char *p;
-  if (!status_git_path(path, directory, "HEAD") ||
-      !status_git_line(path, line, sizeof(line)) ||
-      strncmp(line, prefix, sizeof(prefix) - 1U) != 0 ||
-      line[sizeof(prefix) - 1U] == '\0')
+  if (!status_git_path(scratch->path, directory, "HEAD") ||
+      !status_git_line(scratch->path, scratch->line, sizeof(scratch->line)) ||
+      strncmp(scratch->line, prefix, sizeof(prefix) - 1U) != 0 ||
+      scratch->line[sizeof(prefix) - 1U] == '\0')
     return;
-  for (p = (const unsigned char *)line + sizeof(prefix) - 1U; *p; p++)
+  for (p = (const unsigned char *)scratch->line + sizeof(prefix) - 1U; *p; p++)
     if (*p <= 32U || *p == 127U || strchr("~^:?*[\\", *p) != NULL)
       return;
   status_copy(status->branch, sizeof(status->branch),
-              line + sizeof(prefix) - 1U, 1);
+              scratch->line + sizeof(prefix) - 1U, 1);
+}
+
+static void status_git_head(cai_cli_status *status, const char *directory) {
+  status_git_head_scratch *scratch =
+      (status_git_head_scratch *)calloc(1U, sizeof(*scratch));
+  if (scratch == NULL)
+    return;
+  status_git_head_with_scratch(status, directory, scratch);
+  free(scratch);
 }
 
 static int status_git_ceiling(const char *directory) {
@@ -277,62 +292,80 @@ static int status_git_ceiling(const char *directory) {
   return 0;
 }
 
-static void status_git_discover(cai_cli_status *status, const char *workspace) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct status_git_discover_scratch {
   char directory[PATH_MAX], marker[PATH_MAX], line[PATH_MAX];
+} status_git_discover_scratch;
+static void
+status_git_discover_with_scratch(cai_cli_status *status, const char *workspace,
+                                 status_git_discover_scratch *scratch) {
+
   char *parent;
   const char *explicit_directory = getenv("GIT_DIR");
   struct stat info;
   status->branch[0] = '\0';
-  if (workspace == NULL || realpath(workspace, directory) == NULL)
+  if (workspace == NULL || realpath(workspace, scratch->directory) == NULL)
     return;
   if (explicit_directory != NULL && explicit_directory[0] != '\0') {
     if (explicit_directory[0] == '/')
       status_git_head(status, explicit_directory);
-    else if (status_git_path(marker, directory, explicit_directory))
-      status_git_head(status, marker);
+    else if (status_git_path(scratch->marker, scratch->directory,
+                             explicit_directory))
+      status_git_head(status, scratch->marker);
     return;
   }
   for (;;) {
-    if (!status_git_path(marker, directory, ".git"))
+    if (!status_git_path(scratch->marker, scratch->directory, ".git"))
       return;
-    if (lstat(marker, &info) == 0) {
-      if (stat(marker, &info) != 0)
+    if (lstat(scratch->marker, &info) == 0) {
+      if (stat(scratch->marker, &info) != 0)
         return;
       if (S_ISDIR(info.st_mode))
-        status_git_head(status, marker);
+        status_git_head(status, scratch->marker);
       else if (S_ISREG(info.st_mode) &&
-               status_git_line(marker, line, sizeof(line)) &&
-               strncmp(line, "gitdir: ", 8U) == 0) {
-        if (line[8] == '/')
-          status_git_head(status, line + 8U);
-        else if (line[8] != '\0' &&
-                 status_git_path(marker, directory, line + 8U))
-          status_git_head(status, marker);
+               status_git_line(scratch->marker, scratch->line,
+                               sizeof(scratch->line)) &&
+               strncmp(scratch->line, "gitdir: ", 8U) == 0) {
+        if (scratch->line[8] == '/')
+          status_git_head(status, scratch->line + 8U);
+        else if (scratch->line[8] != '\0' &&
+                 status_git_path(scratch->marker, scratch->directory,
+                                 scratch->line + 8U))
+          status_git_head(status, scratch->marker);
       }
       return;
     }
     if (errno != ENOENT && errno != ENOTDIR)
       return;
     /* Bare repositories have HEAD, objects and refs directly in this folder. */
-    if (status_git_path(marker, directory, "objects") &&
-        stat(marker, &info) == 0 && S_ISDIR(info.st_mode) &&
-        status_git_path(marker, directory, "refs") &&
-        stat(marker, &info) == 0 && S_ISDIR(info.st_mode) &&
-        status_git_path(marker, directory, "HEAD") &&
-        stat(marker, &info) == 0 && S_ISREG(info.st_mode)) {
-      status_git_head(status, directory);
+    if (status_git_path(scratch->marker, scratch->directory, "objects") &&
+        stat(scratch->marker, &info) == 0 && S_ISDIR(info.st_mode) &&
+        status_git_path(scratch->marker, scratch->directory, "refs") &&
+        stat(scratch->marker, &info) == 0 && S_ISDIR(info.st_mode) &&
+        status_git_path(scratch->marker, scratch->directory, "HEAD") &&
+        stat(scratch->marker, &info) == 0 && S_ISREG(info.st_mode)) {
+      status_git_head(status, scratch->directory);
       return;
     }
-    if (strcmp(directory, "/") == 0)
+    if (strcmp(scratch->directory, "/") == 0)
       return;
-    parent = strrchr(directory, '/');
-    if (parent == directory)
-      directory[1] = '\0';
+    parent = strrchr(scratch->directory, '/');
+    if (parent == scratch->directory)
+      scratch->directory[1] = '\0';
     else
       *parent = '\0';
-    if (status_git_ceiling(directory))
+    if (status_git_ceiling(scratch->directory))
       return;
   }
+}
+
+static void status_git_discover(cai_cli_status *status, const char *workspace) {
+  status_git_discover_scratch *scratch =
+      (status_git_discover_scratch *)calloc(1U, sizeof(*scratch));
+  if (scratch == NULL)
+    return;
+  status_git_discover_with_scratch(status, workspace, scratch);
+  free(scratch);
 }
 
 int cai_cli_status_refresh_branch_at(cai_cli_status *status,

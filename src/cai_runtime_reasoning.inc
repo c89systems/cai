@@ -53,12 +53,15 @@ static int cai_runtime_reasoning_supported(cai_agent_runtime *runtime,
   return supported;
 }
 
-static int
-cai_runtime_reasoning_receipt_locked(cai_agent_runtime *runtime, int mode,
-                                     const char *requested, const char *before,
-                                     const char *after, const char *reason,
-                                     const char *call, cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_runtime_reasoning_receipt_locked_scratch {
   cai_runtime_execution_stream receipt;
+} cai_runtime_reasoning_receipt_locked_scratch;
+static int cai_runtime_reasoning_receipt_locked_with_scratch(
+    cai_agent_runtime *runtime, int mode, const char *requested,
+    const char *before, const char *after, const char *reason, const char *call,
+    cai_error *error, cai_runtime_reasoning_receipt_locked_scratch *scratch) {
+
   char text[512];
   int length, rc = CAI_OK;
   const char *from = before != NULL ? before : "provider default";
@@ -78,16 +81,36 @@ cai_runtime_reasoning_receipt_locked(cai_agent_runtime *runtime, int mode,
     return cai_set_error(error, CAI_ERR_LIMIT,
                          "reasoning receipt exceeds limit");
   if (runtime->record_transcript) {
-    cai_runtime_execution_init(&receipt, runtime, "reasoning.receipt",
+    cai_runtime_execution_init(&scratch->receipt, runtime, "reasoning.receipt",
                                "set_reasoning", call, NULL);
-    memcpy(receipt.bytes, text, (size_t)length);
-    receipt.length = (size_t)length;
-    rc = cai_runtime_execution_emit_locked(&receipt, receipt.length, 1, error);
+    memcpy(scratch->receipt.bytes, text, (size_t)length);
+    scratch->receipt.length = (size_t)length;
+    rc = cai_runtime_execution_emit_locked(&scratch->receipt,
+                                           scratch->receipt.length, 1, error);
   }
   if (rc == CAI_OK)
     rc = cai_runtime_enqueue_locked(
         runtime, CAI_AGENT_EVENT_REASONING_TOOL_RESULT, text, (size_t)length,
         "set_reasoning", call, runtime->state, error);
+  return rc;
+}
+
+static int
+cai_runtime_reasoning_receipt_locked(cai_agent_runtime *runtime, int mode,
+                                     const char *requested, const char *before,
+                                     const char *after, const char *reason,
+                                     const char *call, cai_error *error) {
+  cai_runtime_reasoning_receipt_locked_scratch *scratch =
+      (cai_runtime_reasoning_receipt_locked_scratch *)cai_alloc(
+          NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(
+        error, CAI_ERR_NOMEM,
+        "allocate cai_runtime_reasoning_receipt_locked scratch");
+  rc = cai_runtime_reasoning_receipt_locked_with_scratch(
+      runtime, mode, requested, before, after, reason, call, error, scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 

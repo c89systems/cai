@@ -108,11 +108,16 @@ static int instruction_filter_finish(instruction_writer *writer,
   return rc == CAI_OK ? instruction_filter_finish(writer, filter->next) : rc;
 }
 
-int cai_instruction_template_write(const cai_instruction_template *input,
-                                   cai_sink *sink, size_t *length,
-                                   size_t *prefix_length, cai_error *error) {
-  instruction_writer writer;
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_instruction_template_write_scratch {
   instruction_filter patch, terminal, *filter;
+} cai_instruction_template_write_scratch;
+static int cai_instruction_template_write_with_scratch(
+    const cai_instruction_template *input, cai_sink *sink, size_t *length,
+    size_t *prefix_length, cai_error *error,
+    cai_instruction_template_write_scratch *scratch) {
+  instruction_writer writer;
+
   const char *cursor, *identity, *tools, *token, *last_tools, *replacement;
   const char *suffixes[3];
   size_t i, token_length;
@@ -122,23 +127,25 @@ int cai_instruction_template_write(const cai_instruction_template *input,
   writer.sink = sink;
   writer.length = 0U;
   writer.error = error;
-  memset(&patch, 0, sizeof(patch));
-  memset(&terminal, 0, sizeof(terminal));
-  patch.next = &terminal;
-  patch.fragment = (input->capabilities & CAI_AGENT_PRESET_TOOL_APPLY_PATCH)
-                       ? NULL
-                       : patch_fragment;
-  patch.length = sizeof(patch_fragment) - 1U;
-  terminal.fragment = (input->capabilities & CAI_AGENT_PRESET_TOOL_TERMINAL)
-                          ? NULL
-                          : terminal_fragment;
-  terminal.length = sizeof(terminal_fragment) - 1U;
+  memset(&scratch->patch, 0, sizeof(scratch->patch));
+  memset(&scratch->terminal, 0, sizeof(scratch->terminal));
+  scratch->patch.next = &scratch->terminal;
+  scratch->patch.fragment =
+      (input->capabilities & CAI_AGENT_PRESET_TOOL_APPLY_PATCH)
+          ? NULL
+          : patch_fragment;
+  scratch->patch.length = sizeof(patch_fragment) - 1U;
+  scratch->terminal.fragment =
+      (input->capabilities & CAI_AGENT_PRESET_TOOL_TERMINAL)
+          ? NULL
+          : terminal_fragment;
+  scratch->terminal.length = sizeof(terminal_fragment) - 1U;
   last_tools = NULL;
   if (input->tools != NULL && !input->literal)
     for (cursor = input->text; (token = strstr(cursor, TOOLS_TOKEN)) != NULL;
          cursor = token + sizeof(TOOLS_TOKEN) - 1U)
       last_tools = token;
-  filter = last_tools != NULL ? &patch : NULL;
+  scratch->filter = last_tools != NULL ? &scratch->patch : NULL;
   cursor = input->text;
   rc = CAI_OK;
   while (rc == CAI_OK) {
@@ -148,16 +155,16 @@ int cai_instruction_template_write(const cai_instruction_template *input,
                 : NULL;
     token = tools == NULL || (identity != NULL && identity < tools) ? identity
                                                                     : tools;
-    rc = instruction_filter_write(&writer, filter, cursor,
+    rc = instruction_filter_write(&writer, scratch->filter, cursor,
                                   token != NULL ? (size_t)(token - cursor)
                                                 : strlen(cursor));
     if (rc != CAI_OK || token == NULL)
       break;
     if (token == last_tools) {
-      rc = instruction_filter_finish(&writer, filter);
+      rc = instruction_filter_finish(&writer, scratch->filter);
       if (rc != CAI_OK)
         break;
-      filter = NULL;
+      scratch->filter = NULL;
       *prefix_length = writer.length;
       if (input->extension != NULL && input->extension[0] != '\0') {
         rc = instruction_emit(&writer, input->extension,
@@ -171,12 +178,12 @@ int cai_instruction_template_write(const cai_instruction_template *input,
     replacement = token == identity ? input->identity : input->tools;
     token_length = token == identity ? sizeof(IDENTITY_TOKEN) - 1U
                                      : sizeof(TOOLS_TOKEN) - 1U;
-    rc = instruction_filter_write(&writer, filter, replacement,
+    rc = instruction_filter_write(&writer, scratch->filter, replacement,
                                   strlen(replacement));
     cursor = token + token_length;
   }
   if (rc == CAI_OK)
-    rc = instruction_filter_finish(&writer, filter);
+    rc = instruction_filter_finish(&writer, scratch->filter);
   suffixes[0] = last_tools == NULL ? input->extension : NULL;
   suffixes[1] = input->repository;
   suffixes[2] = input->skills;
@@ -201,5 +208,21 @@ int cai_instruction_template_write(const cai_instruction_template *input,
       rc = instruction_emit(&writer, suffixes[i], strlen(suffixes[i]));
   }
   *length = writer.length;
+  return rc;
+}
+
+int cai_instruction_template_write(const cai_instruction_template *input,
+                                   cai_sink *sink, size_t *length,
+                                   size_t *prefix_length, cai_error *error) {
+  cai_instruction_template_write_scratch *scratch =
+      (cai_instruction_template_write_scratch *)cai_alloc(NULL,
+                                                          sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate instruction filter state");
+  rc = cai_instruction_template_write_with_scratch(
+      input, sink, length, prefix_length, error, scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }

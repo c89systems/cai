@@ -9,6 +9,8 @@ static const cai_app_option options[] = {
     {"--persist", '\0', CAI_APP_FLAG, NULL,
      "Keep a workspace server after its last client leaves (headless default)",
      0, 1},
+    {"--banner", '\0', CAI_APP_FLAG, NULL,
+     "Show the initial interactive welcome and banner (default on)", 0, 1},
     {"--utc", '\0', CAI_APP_FLAG, NULL,
      "Show DTG timestamps in UTC instead of local time", 0, 1},
     {"--prefer-native-pager", '\0', CAI_APP_FLAG, NULL,

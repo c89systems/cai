@@ -618,6 +618,20 @@ function(cai_configure_c_target target)
       -Wcast-qual
       -Wwrite-strings
       -Wdeclaration-after-statement)
+    # Production frames leave headroom for dependencies on musl's default
+    # 128 KiB worker stack. Test fixtures have their own data allocations.
+    get_target_property(_cai_sources ${target} SOURCES)
+    foreach(_cai_source IN LISTS _cai_sources)
+      if(_cai_source MATCHES "^(src|cli|lua)/.*\\.c$" OR
+         _cai_source MATCHES "^${CMAKE_CURRENT_SOURCE_DIR}/(src|cli|lua)/.*\\.c$")
+        get_source_file_property(_cai_stack_checked ${_cai_source} CAI_STACK_CHECKED)
+        if(NOT _cai_stack_checked)
+          set_property(SOURCE ${_cai_source} APPEND PROPERTY COMPILE_OPTIONS
+            -Wframe-larger-than=8192 -Wvla -Walloca)
+          set_source_files_properties(${_cai_source} PROPERTIES CAI_STACK_CHECKED TRUE)
+        endif()
+      endif()
+    endforeach()
   endif()
   if(CAI_ENABLE_COVERAGE AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(${target} PRIVATE --coverage -O0)

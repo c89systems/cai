@@ -21,7 +21,7 @@ finish() {
 trap finish EXIT
 for mode in shell banner unterminated-banner; do
   program="$cli"
-  marker='SHELL PROMPT cai'
+  marker='Welcome to cai.'
   unset CAI_TEST_APP_BANNER
   if [[ "$mode" != shell ]]; then
     program="$host"

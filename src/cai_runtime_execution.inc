@@ -182,18 +182,20 @@ static int cai_runtime_execution_settled_locked(cai_runtime_execution_stream *s,
   return cai_runtime_execution_emit_locked(s, n, 1, error);
 }
 
-static int
-cai_runtime_execution_error_locked(cai_agent_runtime *runtime, const char *kind,
-                                   const char *tool, const char *call,
-                                   const cai_error *failure, cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_runtime_execution_error_locked_scratch {
   cai_runtime_execution_stream s;
+} cai_runtime_execution_error_locked_scratch;
+static int cai_runtime_execution_error_locked_with_scratch(
+    cai_agent_runtime *runtime, const char *kind, const char *tool,
+    const char *call, const cai_error *failure, cai_error *error,
+    cai_runtime_execution_error_locked_scratch *scratch) {
+
   const char *fields[4];
   const char *names[4] = {"message", "detail", "provider_code", "request_id"};
   size_t i, n, prefix, remaining;
   cai_error local;
   int rc;
-  if (!runtime->record_transcript)
-    return CAI_OK;
   fields[0] = failure != NULL ? failure->message : NULL;
   fields[1] = failure != NULL ? failure->detail : NULL;
   fields[2] = failure != NULL ? failure->server_code : NULL;
@@ -202,17 +204,17 @@ cai_runtime_execution_error_locked(cai_agent_runtime *runtime, const char *kind,
   if (call == NULL && strcmp(kind, "turn.failed") == 0 &&
       runtime->active_input_call[0] != '\0')
     call = runtime->active_input_call;
-  cai_runtime_execution_init(&s, runtime, kind, tool, call, NULL);
-  s.record.code = failure != NULL ? failure->code : CAI_ERR_PROTOCOL;
-  s.record.http_status = failure != NULL ? failure->http_status : 0L;
-  rc = cai_runtime_execution_emit_locked(&s, 0U, 1, &local);
+  cai_runtime_execution_init(&scratch->s, runtime, kind, tool, call, NULL);
+  scratch->s.record.code = failure != NULL ? failure->code : CAI_ERR_PROTOCOL;
+  scratch->s.record.http_status = failure != NULL ? failure->http_status : 0L;
+  rc = cai_runtime_execution_emit_locked(&scratch->s, 0U, 1, &local);
   for (i = 0U; rc == CAI_OK && i < 4U; i++) {
     const char *text = fields[i];
     if (text == NULL)
       continue;
-    s.record.field = names[i];
-    s.record.offset = 0U;
-    s.next_line_start = 1;
+    scratch->s.record.field = names[i];
+    scratch->s.record.offset = 0U;
+    scratch->s.next_line_start = 1;
     remaining = strlen(text);
     do {
       n = remaining;
@@ -223,33 +225,53 @@ cai_runtime_execution_error_locked(cai_agent_runtime *runtime, const char *kind,
         rc = CAI_ERR_PROTOCOL;
         break;
       }
-      memcpy(s.bytes, text, prefix);
-      s.length = prefix;
+      memcpy(scratch->s.bytes, text, prefix);
+      scratch->s.length = prefix;
       text += prefix;
       remaining -= prefix;
-      rc = cai_runtime_execution_emit_locked(&s, prefix, *text == '\0', &local);
+      rc = cai_runtime_execution_emit_locked(&scratch->s, prefix, *text == '\0',
+                                             &local);
     } while (rc == CAI_OK && *text != '\0');
   }
   if (rc == CAI_OK && strcmp(kind, "turn.failed") == 0)
     rc = cai_runtime_execution_settled_locked(
-        &s, runtime, failure != NULL ? failure->code : CAI_ERR_PROTOCOL,
-        &local);
+        &scratch->s, runtime,
+        failure != NULL ? failure->code : CAI_ERR_PROTOCOL, &local);
   if (rc != CAI_OK)
     cai_set_error_detail(error, rc, "persist execution failure", local.message);
   cai_error_cleanup(&local);
   return rc;
 }
 
-static int cai_runtime_execution_tool(cai_agent_runtime *runtime,
-                                      const cai_tool_event *event,
-                                      cai_error *error) {
+static int
+cai_runtime_execution_error_locked(cai_agent_runtime *runtime, const char *kind,
+                                   const char *tool, const char *call,
+                                   const cai_error *failure, cai_error *error) {
+  cai_runtime_execution_error_locked_scratch *scratch;
+  int rc;
+  if (!runtime->record_transcript)
+    return CAI_OK;
+  scratch = cai_alloc(NULL, sizeof(*scratch));
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate execution record");
+  rc = cai_runtime_execution_error_locked_with_scratch(
+      runtime, kind, tool, call, failure, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_runtime_execution_tool_scratch {
   cai_runtime_execution_stream s;
+} cai_runtime_execution_tool_scratch;
+static int cai_runtime_execution_tool_with_scratch(
+    cai_agent_runtime *runtime, const cai_tool_event *event, cai_error *error,
+    cai_runtime_execution_tool_scratch *scratch) {
+
   cai_sink_callbacks callbacks;
   cai_sink *sink = NULL;
   cai_error local;
   int rc;
-  if (!runtime->record_transcript)
-    return CAI_OK;
   if (event->type == CAI_TOOL_EVENT_ERROR) {
     pthread_mutex_lock(&runtime->lock);
     rc = cai_runtime_execution_error_locked(runtime, "tool.failed", event->name,
@@ -260,22 +282,23 @@ static int cai_runtime_execution_tool(cai_agent_runtime *runtime,
       return rc;
   }
   cai_runtime_execution_init(
-      &s, runtime,
+      &scratch->s, runtime,
       event->type == CAI_TOOL_EVENT_START ? "tool.started" : "tool.completed",
       event->name, event->call_id, NULL);
   rc = event->type == CAI_TOOL_EVENT_ERROR
            ? CAI_OK
-           : cai_runtime_execution_emit(&s, 0U, 1, error);
+           : cai_runtime_execution_emit(&scratch->s, 0U, 1, error);
   if (rc != CAI_OK)
     return rc;
-  s.record.kind = event->type == CAI_TOOL_EVENT_START   ? "tool.arguments"
-                  : event->type == CAI_TOOL_EVENT_ERROR ? "tool.partial_output"
-                                                        : "tool.output";
-  s.record.field = "data";
-  s.record.offset = 0U;
+  scratch->s.record.kind =
+      event->type == CAI_TOOL_EVENT_START   ? "tool.arguments"
+      : event->type == CAI_TOOL_EVENT_ERROR ? "tool.partial_output"
+                                            : "tool.output";
+  scratch->s.record.field = "data";
+  scratch->s.record.offset = 0U;
   memset(&callbacks, 0, sizeof(callbacks));
   callbacks.write = cai_runtime_execution_write;
-  callbacks.context = &s;
+  callbacks.context = &scratch->s;
   cai_error_init(&local);
   rc = cai_sink_from_callbacks(&callbacks, &sink, &local);
   if (rc == CAI_OK)
@@ -284,73 +307,115 @@ static int cai_runtime_execution_tool(cai_agent_runtime *runtime,
              : cai_tool_event_write_output(event, sink, &local);
   cai_sink_close(sink);
   if (rc == CAI_OK)
-    rc = cai_runtime_execution_emit(&s, s.length, 1, &local);
+    rc = cai_runtime_execution_emit(&scratch->s, scratch->s.length, 1, &local);
   if (rc != CAI_OK)
     cai_set_error_detail(error, rc, "persist tool execution", local.message);
   cai_error_cleanup(&local);
   return rc;
 }
 
-static int cai_runtime_execution_lifecycle_locked(cai_agent_runtime *runtime,
-                                                  int type, const char *text,
-                                                  cai_error *error) {
-  cai_runtime_execution_stream s;
-  const char *kind =
-      type == CAI_AGENT_EVENT_RUN_STARTED            ? "turn.started"
-      : type == CAI_AGENT_EVENT_RUN_COMPLETED        ? "turn.completed"
-      : type == CAI_AGENT_EVENT_RUN_CANCELLED        ? "turn.cancelled"
-      : type == CAI_AGENT_EVENT_COMPACTION_STARTED   ? "compaction.started"
-      : type == CAI_AGENT_EVENT_COMPACTION_COMPLETED ? "compaction.completed"
-      : type == CAI_AGENT_EVENT_RESPONSE_COMPLETED   ? "response.completed"
-      : type == CAI_AGENT_EVENT_GOAL_CHANGED         ? "goal.changed"
-      : type == CAI_AGENT_EVENT_REQUEST_RETRY        ? "request.retry"
-      : type == CAI_AGENT_EVENT_MCP_UPDATED          ? "mcp.updated"
-                                                     : NULL;
-  if (!runtime->record_transcript || kind == NULL)
+static int cai_runtime_execution_tool(cai_agent_runtime *runtime,
+                                      const cai_tool_event *event,
+                                      cai_error *error) {
+  cai_runtime_execution_tool_scratch *scratch;
+  int rc;
+  if (!runtime->record_transcript)
     return CAI_OK;
-  cai_runtime_execution_init(&s, runtime, kind, NULL, NULL, NULL);
+  scratch = cai_alloc(NULL, sizeof(*scratch));
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate execution record");
+  rc = cai_runtime_execution_tool_with_scratch(runtime, event, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
+/** Ignore ordinary feed deltas before allocating any lifecycle scratch. */
+static const char *cai_runtime_execution_kind(int type) {
+  return type == CAI_AGENT_EVENT_RUN_STARTED            ? "turn.started"
+         : type == CAI_AGENT_EVENT_RUN_COMPLETED        ? "turn.completed"
+         : type == CAI_AGENT_EVENT_RUN_CANCELLED        ? "turn.cancelled"
+         : type == CAI_AGENT_EVENT_COMPACTION_STARTED   ? "compaction.started"
+         : type == CAI_AGENT_EVENT_COMPACTION_COMPLETED ? "compaction.completed"
+         : type == CAI_AGENT_EVENT_RESPONSE_COMPLETED   ? "response.completed"
+         : type == CAI_AGENT_EVENT_GOAL_CHANGED         ? "goal.changed"
+         : type == CAI_AGENT_EVENT_REQUEST_RETRY        ? "request.retry"
+         : type == CAI_AGENT_EVENT_MCP_UPDATED          ? "mcp.updated"
+                                                        : NULL;
+}
+
+typedef struct cai_runtime_execution_lifecycle_locked_scratch {
+  cai_runtime_execution_stream s;
+} cai_runtime_execution_lifecycle_locked_scratch;
+static int cai_runtime_execution_lifecycle_locked_with_scratch(
+    cai_agent_runtime *runtime, int type, const char *text, cai_error *error,
+    const char *kind, cai_runtime_execution_lifecycle_locked_scratch *scratch) {
+
+  cai_runtime_execution_init(&scratch->s, runtime, kind, NULL, NULL, NULL);
   if ((type == CAI_AGENT_EVENT_RUN_STARTED ||
        type == CAI_AGENT_EVENT_RUN_COMPLETED ||
        type == CAI_AGENT_EVENT_RUN_CANCELLED ||
        type == CAI_AGENT_EVENT_RESPONSE_COMPLETED) &&
       runtime->active_input_call[0] != '\0')
-    s.record.call_id = runtime->active_input_call;
+    scratch->s.record.call_id = runtime->active_input_call;
   if ((type == CAI_AGENT_EVENT_GOAL_CHANGED ||
        type == CAI_AGENT_EVENT_REQUEST_RETRY ||
        type == CAI_AGENT_EVENT_MCP_UPDATED) &&
       text != NULL) {
     size_t n = strlen(text);
-    s.record.field =
+    scratch->s.record.field =
         type == CAI_AGENT_EVENT_REQUEST_RETRY ? "message" : "change";
     if (n > CAI_EXECUTION_CHUNK_BYTES)
       return cai_set_error(error, CAI_ERR_LIMIT,
                            "goal status exceeds execution chunk");
-    memcpy(s.bytes, text, n);
-    s.length = n;
-    return cai_runtime_execution_emit_locked(&s, n, 1, error);
+    memcpy(scratch->s.bytes, text, n);
+    scratch->s.length = n;
+    return cai_runtime_execution_emit_locked(&scratch->s, n, 1, error);
   }
   {
-    int rc = cai_runtime_execution_emit_locked(&s, 0U, 1, error);
+    int rc = cai_runtime_execution_emit_locked(&scratch->s, 0U, 1, error);
     if (rc == CAI_OK && (type == CAI_AGENT_EVENT_RUN_COMPLETED ||
                          type == CAI_AGENT_EVENT_RUN_CANCELLED))
       rc = cai_runtime_execution_settled_locked(
-          &s, runtime,
+          &scratch->s, runtime,
           type == CAI_AGENT_EVENT_RUN_CANCELLED ? CAI_ERR_CANCELLED : CAI_OK,
           error);
     return rc;
   }
 }
 
-static int cai_runtime_execution_child_input_locked(cai_agent_runtime *runtime,
-                                                    cai_error *error) {
+static int cai_runtime_execution_lifecycle_locked(cai_agent_runtime *runtime,
+                                                  int type, const char *text,
+                                                  cai_error *error) {
+  cai_runtime_execution_lifecycle_locked_scratch *scratch;
+  const char *kind;
+  int rc;
+  if (!runtime->record_transcript ||
+      (kind = cai_runtime_execution_kind(type)) == NULL)
+    return CAI_OK;
+  scratch = cai_alloc(NULL, sizeof(*scratch));
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate execution record");
+  rc = cai_runtime_execution_lifecycle_locked_with_scratch(
+      runtime, type, text, error, kind, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_runtime_execution_child_input_locked_scratch {
   cai_runtime_execution_stream s;
+} cai_runtime_execution_child_input_locked_scratch;
+static int cai_runtime_execution_child_input_locked_with_scratch(
+    cai_agent_runtime *runtime, cai_error *error,
+    cai_runtime_execution_child_input_locked_scratch *scratch) {
+
   const char *text = runtime->active_user_turn;
   size_t remaining, n;
   int rc = CAI_OK;
   if (!runtime->record_transcript || runtime->execution_parent_call == NULL ||
       text == NULL)
     return CAI_OK;
-  cai_runtime_execution_init(&s, runtime, "subagent.input", NULL, NULL,
+  cai_runtime_execution_init(&scratch->s, runtime, "subagent.input", NULL, NULL,
                              "instructions");
   remaining = strlen(text);
   do {
@@ -360,12 +425,60 @@ static int cai_runtime_execution_child_input_locked(cai_agent_runtime *runtime,
     if (n == 0U && remaining != 0U)
       return cai_set_error(error, CAI_ERR_PROTOCOL,
                            "invalid subagent input UTF-8");
-    memcpy(s.bytes, text, n);
-    s.length = n;
+    memcpy(scratch->s.bytes, text, n);
+    scratch->s.length = n;
     text += n;
     remaining -= n;
-    rc = cai_runtime_execution_emit_locked(&s, n, remaining == 0U, error);
+    rc = cai_runtime_execution_emit_locked(&scratch->s, n, remaining == 0U,
+                                           error);
   } while (rc == CAI_OK && remaining != 0U);
+  return rc;
+}
+
+static int cai_runtime_execution_child_input_locked(cai_agent_runtime *runtime,
+                                                    cai_error *error) {
+  cai_runtime_execution_child_input_locked_scratch *scratch;
+  int rc;
+  if (!runtime->record_transcript || runtime->execution_parent_call == NULL ||
+      runtime->active_user_turn == NULL)
+    return CAI_OK;
+  scratch = cai_alloc(NULL, sizeof(*scratch));
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate execution record");
+  rc = cai_runtime_execution_child_input_locked_with_scratch(runtime, error,
+                                                             scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_runtime_execution_hosted_scratch {
+  cai_runtime_execution_stream s;
+} cai_runtime_execution_hosted_scratch;
+static int cai_runtime_execution_hosted_with_scratch(
+    void *context, const char *id, int index, const char *type,
+    const lonejson_spooled *item, cai_error *error,
+    cai_runtime_execution_hosted_scratch *scratch) {
+  cai_agent_runtime *runtime = context;
+
+  cai_tool_event source;
+  cai_sink_callbacks callbacks;
+  cai_sink *sink = NULL;
+  int rc;
+  (void)index;
+  cai_runtime_execution_init(&scratch->s, runtime, "hosted.tool", type, id,
+                             "item");
+  memset(&source, 0, sizeof(source));
+  source.output_json = item;
+  memset(&callbacks, 0, sizeof(callbacks));
+  callbacks.write = cai_runtime_execution_write;
+  callbacks.context = &scratch->s;
+  rc = cai_sink_from_callbacks(&callbacks, &sink, error);
+  if (rc == CAI_OK)
+    rc = cai_tool_event_write_output(&source, sink, error);
+  cai_sink_close(sink);
+  if (rc == CAI_OK)
+    rc = cai_runtime_execution_emit(&scratch->s, scratch->s.length, 1, error);
   return rc;
 }
 
@@ -374,13 +487,9 @@ static int cai_runtime_execution_hosted(void *context, const char *id,
                                         const lonejson_spooled *item,
                                         cai_error *error) {
   cai_agent_runtime *runtime = context;
-  cai_runtime_execution_stream s;
-  cai_tool_event source;
-  cai_sink_callbacks callbacks;
-  cai_sink *sink = NULL;
-  int rc;
+  cai_runtime_execution_hosted_scratch *scratch;
   size_t length;
-  (void)index;
+  int rc;
   if (type == NULL)
     return CAI_OK;
   length = strlen(type);
@@ -393,18 +502,12 @@ static int cai_runtime_execution_hosted(void *context, const char *id,
   pthread_mutex_unlock(&runtime->lock);
   if (!runtime->record_transcript)
     return CAI_OK;
-  cai_runtime_execution_init(&s, runtime, "hosted.tool", type, id, "item");
-  memset(&source, 0, sizeof(source));
-  source.output_json = item;
-  memset(&callbacks, 0, sizeof(callbacks));
-  callbacks.write = cai_runtime_execution_write;
-  callbacks.context = &s;
-  rc = cai_sink_from_callbacks(&callbacks, &sink, error);
-  if (rc == CAI_OK)
-    rc = cai_tool_event_write_output(&source, sink, error);
-  cai_sink_close(sink);
-  if (rc == CAI_OK)
-    rc = cai_runtime_execution_emit(&s, s.length, 1, error);
+  scratch = cai_alloc(NULL, sizeof(*scratch));
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate execution record");
+  rc = cai_runtime_execution_hosted_with_scratch(context, id, index, type, item,
+                                                 error, scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 
@@ -431,29 +534,33 @@ static int cai_runtime_execution_parent(cai_agent_runtime *child,
  * envelope retains the child sequence and delegation identity. Each forwarder
  * retains only a bounded source chunk; no additional worker or whole journal
  * is staged. Source and destination locks are never held together. */
-static int
-cai_runtime_mirror_journal_locked(cai_agent_runtime *child,
-                                  const cai_agent_session_event *event,
-                                  cai_error *error) {
-  cai_agent_runtime *parent = child->journal_parent;
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_runtime_mirror_journal_locked_scratch {
   cai_runtime_execution_stream s;
+} cai_runtime_mirror_journal_locked_scratch;
+static int cai_runtime_mirror_journal_locked_with_scratch(
+    cai_agent_runtime *child, const cai_agent_session_event *event,
+    cai_error *error, cai_runtime_mirror_journal_locked_scratch *scratch) {
+  cai_agent_runtime *parent = child->journal_parent;
+
   int rc;
   /* Admission can run concurrently with inference. Envelope identity is
    * immutable; unlike worker-generated execution records it must not inspect
    * the child's model or last-response pointers while its session changes. */
-  memset(&s, 0, sizeof(s));
-  s.record.kind = event->type;
-  s.record.session_id = child->session_id;
-  s.record.parent_session_id = child->execution_parent_session;
-  s.record.parent_call_id = child->execution_parent_call;
-  s.record.subagent = child->execution_subagent;
-  s.next_line_start = 1;
-  s.record.timestamp_ns = event->timestamp_ns;
-  s.record.utc_offset_seconds = event->utc_offset_seconds;
-  s.runtime = parent;
-  s.record.source_sequence = event->sequence;
-  s.journal_type = "subagent";
-  s.journal_only = 1;
+  memset(&scratch->s, 0, sizeof(scratch->s));
+  scratch->s.record.kind = event->type;
+  scratch->s.record.session_id = child->session_id;
+  scratch->s.record.parent_session_id = child->execution_parent_session;
+  scratch->s.record.parent_call_id = child->execution_parent_call;
+  scratch->s.record.subagent = child->execution_subagent;
+  scratch->s.next_line_start = 1;
+  scratch->s.record.timestamp_ns = event->timestamp_ns;
+  scratch->s.record.utc_offset_seconds = event->utc_offset_seconds;
+  scratch->s.runtime = parent;
+  scratch->s.record.source_sequence = event->sequence;
+  scratch->s.journal_type = "subagent";
+  scratch->s.journal_only = 1;
   pthread_mutex_unlock(&child->lock);
   if (strcmp(event->type, "execution") == 0 ||
       strcmp(event->type, "subagent") == 0) {
@@ -462,13 +569,30 @@ cai_runtime_mirror_journal_locked(cai_agent_runtime *child,
                                                  event->data, NULL, error);
     pthread_mutex_unlock(&parent->lock);
   } else {
-    rc = event->data != NULL ? cai_runtime_execution_write(
-                                   &s, event->data, strlen(event->data), error)
-                             : CAI_OK;
+    rc = event->data != NULL
+             ? cai_runtime_execution_write(&scratch->s, event->data,
+                                           strlen(event->data), error)
+             : CAI_OK;
     if (rc == CAI_OK)
-      rc = cai_runtime_execution_emit(&s, s.length, 1, error);
+      rc = cai_runtime_execution_emit(&scratch->s, scratch->s.length, 1, error);
   }
   pthread_mutex_lock(&child->lock);
+  return rc;
+}
+
+static int
+cai_runtime_mirror_journal_locked(cai_agent_runtime *child,
+                                  const cai_agent_session_event *event,
+                                  cai_error *error) {
+  cai_runtime_mirror_journal_locked_scratch *scratch =
+      (cai_runtime_mirror_journal_locked_scratch *)cai_alloc(NULL,
+                                                             sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate execution record");
+  rc = cai_runtime_mirror_journal_locked_with_scratch(child, event, error,
+                                                      scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 

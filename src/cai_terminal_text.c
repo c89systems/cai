@@ -197,6 +197,7 @@ static unsigned long utf8_scalar(const cai_terminal_text *t) {
 static void byte(cai_terminal_text *t, unsigned char ch) {
   static const char replacement[] = "\xef\xbf\xbd";
   unsigned long scalar;
+again:
   if (t->state == STRING || t->state == STRING_ESCAPE) {
     /* A continuation byte is payload, not a standalone C1 terminator. */
     if (t->utf8_length != 0U) {
@@ -272,8 +273,7 @@ static void byte(cai_terminal_text *t, unsigned char ch) {
     if ((ch & 192U) != 128U) {
       t->utf8_length = 0U;
       put_scalar(t, replacement, 3U);
-      byte(t, ch);
-      return;
+      goto again;
     }
     t->utf8[t->utf8_length++] = ch;
     if (t->utf8_length != t->utf8_need)

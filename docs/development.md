@@ -23,6 +23,11 @@ make clangd-check
 Native library and CLI configurations share `build/debug`; see `make help` for narrower targets.
 Do not edit source or reconfigure that tree while its build/tests run.
 
+Production C sources reject variable-length arrays, `alloca`, and frames larger than 8 KiB at compile time.
+This is a per-frame guard, not a call-chain budget: large scratch storage and input-dependent traversal state belong on the heap.
+Keep headroom for callbacks and dependencies on musl's default 128 KiB worker stack; never enlarge it to make a test pass.
+`cai_core_worker_stack`, `cai_app_worker_stack`, `cai_app_skill_stack`, and `cai_lua_tools` exercise that contract (native glibc fixtures emulate the same budget).
+
 ## Static Linux CLI
 
 ```sh

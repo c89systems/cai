@@ -814,7 +814,7 @@ static int cai_local_session_commit(void *context, const char *scope,
   cai_local_session_store *store;
   char hash[65];
   char filename[CAI_STORE_SESSION_FILENAME_MAX];
-  char buffer[8192];
+  char buffer[2048];
   char record_prefix[128];
   unsigned long long created_at_ns;
   int scope_fd;
@@ -1777,14 +1777,19 @@ void cai_agent_local_session_store_config_init(
   }
 }
 
-int cai_agent_local_session_store_open(
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_agent_local_session_store_open_scratch {
+  char default_path[PATH_MAX];
+} cai_agent_local_session_store_open_scratch;
+static int cai_agent_local_session_store_open_with_scratch(
     const cai_agent_local_session_store_config *config,
-    cai_agent_session_store *out, cai_error *error) {
+    cai_agent_session_store *out, cai_error *error,
+    cai_agent_local_session_store_open_scratch *scratch) {
   cai_local_session_store *store;
   const char *root;
   const char *xdg_state;
   const char *home;
-  char default_path[PATH_MAX];
+
   int written;
   int rc;
 
@@ -1798,21 +1803,21 @@ int cai_agent_local_session_store_open(
     xdg_state = getenv("XDG_STATE_HOME");
     home = getenv("HOME");
     if (xdg_state != NULL && xdg_state[0] != '\0') {
-      written = snprintf(default_path, sizeof(default_path), "%s/cai/sessions",
-                         xdg_state);
+      written = snprintf(scratch->default_path, sizeof(scratch->default_path),
+                         "%s/cai/sessions", xdg_state);
     } else if (home != NULL && home[0] != '\0') {
-      written = snprintf(default_path, sizeof(default_path),
+      written = snprintf(scratch->default_path, sizeof(scratch->default_path),
                          "%s/.local/state/cai/sessions", home);
     } else {
       return cai_set_error(
           error, CAI_ERR_INVALID,
           "XDG_STATE_HOME or HOME is required for local sessions");
     }
-    if (written < 0 || (size_t)written >= sizeof(default_path)) {
+    if (written < 0 || (size_t)written >= sizeof(scratch->default_path)) {
       return cai_set_error(error, CAI_ERR_INVALID,
                            "default session store path is too long");
     }
-    root = default_path;
+    root = scratch->default_path;
   }
   rc = cai_store_make_directory(root, error);
   if (rc != CAI_OK) {
@@ -1857,6 +1862,23 @@ int cai_agent_local_session_store_open(
   out->load_id = cai_local_session_load_id;
   out->context = store;
   return CAI_OK;
+}
+
+int cai_agent_local_session_store_open(
+    const cai_agent_local_session_store_config *config,
+    cai_agent_session_store *out, cai_error *error) {
+  cai_agent_local_session_store_open_scratch *scratch =
+      (cai_agent_local_session_store_open_scratch *)cai_alloc(NULL,
+                                                              sizeof(*scratch));
+  int rc;
+  if (out != NULL)
+    memset(out, 0, sizeof(*out));
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate session store path");
+  rc = cai_agent_local_session_store_open_with_scratch(config, out, error,
+                                                       scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 void cai_agent_local_session_store_close(cai_agent_session_store *store) {

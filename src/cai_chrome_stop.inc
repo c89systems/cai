@@ -77,9 +77,15 @@ static int chrome_missing_control(const char *path, const char *executable,
   return rc;
 }
 
-static int chrome_stop_hosts(const char *selected, pslog_logger *logger,
-                             cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct chrome_stop_hosts_scratch {
   char directory[4096], executable[4096], path[4096], control[4096];
+} chrome_stop_hosts_scratch;
+static int chrome_stop_hosts_with_scratch(const char *selected,
+                                          pslog_logger *logger,
+                                          cai_error *error,
+                                          chrome_stop_hosts_scratch *scratch) {
+
   DIR *entries;
   struct dirent *entry;
   struct stat st;
@@ -98,56 +104,61 @@ static int chrome_stop_hosts(const char *selected, pslog_logger *logger,
       }
     }
     if (root == NULL || root[0] != '/' ||
-        snprintf(directory, sizeof(directory), "%s%s", root, suffix) >=
-            (int)sizeof(directory))
+        snprintf(scratch->directory, sizeof(scratch->directory), "%s%s", root,
+                 suffix) >= (int)sizeof(scratch->directory))
       return cai_set_error(error, CAI_ERR_INVALID,
                            "Cannot resolve the Chrome host directory");
   } else {
-    if (strlen(selected) >= sizeof(directory))
+    if (strlen(selected) >= sizeof(scratch->directory))
       return cai_set_error(error, CAI_ERR_INVALID,
                            "Chrome host directory is too long");
-    strcpy(directory, selected);
+    strcpy(scratch->directory, selected);
   }
-  if (lstat(directory, &st) != 0 && errno == ENOENT)
+  if (lstat(scratch->directory, &st) != 0 && errno == ENOENT)
     return CAI_OK;
-  rc = cai_chrome_private_directory(directory, error);
+  rc = cai_chrome_private_directory(scratch->directory, error);
   if (rc != CAI_OK)
     return rc;
-  n = readlink("/proc/self/exe", executable, sizeof(executable) - 1U);
-  if (n <= 0 || (size_t)n >= sizeof(executable) - 1U)
+  n = readlink("/proc/self/exe", scratch->executable,
+               sizeof(scratch->executable) - 1U);
+  if (n <= 0 || (size_t)n >= sizeof(scratch->executable) - 1U)
     return cai_set_error(error, CAI_ERR_TRANSPORT,
                          "Cannot identify the Chrome host executable");
-  executable[n] = '\0';
-  entries = opendir(directory);
+  scratch->executable[n] = '\0';
+  entries = opendir(scratch->directory);
   if (entries == NULL)
     return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "Cannot enumerate Chrome hosts", directory);
+                                "Cannot enumerate Chrome hosts",
+                                scratch->directory);
   cai_error_init(&local);
   while ((entry = readdir(entries)) != NULL) {
     length = strlen(entry->d_name);
     if (length < 6U || strcmp(entry->d_name + length - 5U, ".sock") != 0)
       continue;
-    if (snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name) >=
-            (int)sizeof(path) ||
-        snprintf(control, sizeof(control), "%s/%.*s.ctl", directory,
-                 (int)(length - 5U), entry->d_name) >= (int)sizeof(control)) {
+    if (snprintf(scratch->path, sizeof(scratch->path), "%s/%s",
+                 scratch->directory,
+                 entry->d_name) >= (int)sizeof(scratch->path) ||
+        snprintf(scratch->control, sizeof(scratch->control), "%s/%.*s.ctl",
+                 scratch->directory, (int)(length - 5U),
+                 entry->d_name) >= (int)sizeof(scratch->control)) {
       rc = cai_set_error(&local, CAI_ERR_INVALID,
                          "Chrome host path is too long");
-    } else if (lstat(control, &st) != 0 && errno == ENOENT) {
+    } else if (lstat(scratch->control, &st) != 0 && errno == ENOENT) {
       /* Detect live older hosts; never claim that they stopped. */
-      rc = chrome_missing_control(path, executable, &local);
+      rc = chrome_missing_control(scratch->path, scratch->executable, &local);
     } else {
-      rc = chrome_stop_one(control, executable, &stopped, &unavailable, &local);
+      rc = chrome_stop_one(scratch->control, scratch->executable, &stopped,
+                           &unavailable, &local);
       if (unavailable) {
         cai_error_cleanup(&local);
         cai_error_init(&local);
-        rc = chrome_missing_control(path, executable, &local);
+        rc = chrome_missing_control(scratch->path, scratch->executable, &local);
       }
     }
     if (rc != CAI_OK) {
       if (logger != NULL)
         logger->errorf(logger, "Chrome host shutdown failed",
-                       "socket=%s error=%s", path,
+                       "socket=%s error=%s", scratch->path,
                        local.message != NULL ? local.message : "failed");
       if (result == CAI_OK) {
         result = rc;
@@ -166,6 +177,19 @@ static int chrome_stop_hosts(const char *selected, pslog_logger *logger,
   if (stopped > 0)
     printf("Stopped %d Chrome native host(s).\n", stopped);
   return result;
+}
+
+static int chrome_stop_hosts(const char *selected, pslog_logger *logger,
+                             cai_error *error) {
+  chrome_stop_hosts_scratch *scratch =
+      (chrome_stop_hosts_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate chrome_stop_hosts scratch");
+  rc = chrome_stop_hosts_with_scratch(selected, logger, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 int cai_chrome_native_host_setup_at(const char *program_name,

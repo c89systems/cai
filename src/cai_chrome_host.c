@@ -603,11 +603,16 @@ int cai_chrome_native_host_run(const char *origin, pslog_logger *logger,
                                cai_error *error) {
   return cai_chrome_native_host_run_at(origin, NULL, logger, error);
 }
-int cai_chrome_native_host_run_at(const char *origin,
-                                  const char *selected_directory,
-                                  pslog_logger *logger, cai_error *error) {
-  chrome_host h;
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_chrome_native_host_run_at_scratch {
   char directory[4096], path[4096], control_path[4096], executable[4096];
+} cai_chrome_native_host_run_at_scratch;
+static int cai_chrome_native_host_run_at_with_scratch(
+    const char *origin, const char *selected_directory, pslog_logger *logger,
+    cai_error *error, cai_chrome_native_host_run_at_scratch *scratch) {
+  chrome_host h;
+
   struct sockaddr_un address;
   struct pollfd fds[6];
   int listener = -1, control_listener = -1, rc, ready, accept_fd;
@@ -625,37 +630,40 @@ int cai_chrome_native_host_run_at(const char *origin,
                          "CAI native host accepts only the official ChatGPT "
                          "Chrome extension origin");
   if (selected_directory != NULL) {
-    if (strlen(selected_directory) >= sizeof(directory))
+    if (strlen(selected_directory) >= sizeof(scratch->directory))
       return cai_set_error(error, CAI_ERR_INVALID,
                            "Chrome socket directory is too long");
-    strcpy(directory, selected_directory);
-    rc = cai_chrome_private_directory(directory, error);
+    strcpy(scratch->directory, selected_directory);
+    rc = cai_chrome_private_directory(scratch->directory, error);
   } else
-    rc = cai_cli_chrome_directory(directory, sizeof(directory), 1, error);
+    rc = cai_cli_chrome_directory(scratch->directory,
+                                  sizeof(scratch->directory), 1, error);
   if (rc != CAI_OK)
     return rc;
-  executable_length =
-      readlink("/proc/self/exe", executable, sizeof(executable) - 1U);
+  executable_length = readlink("/proc/self/exe", scratch->executable,
+                               sizeof(scratch->executable) - 1U);
   if (executable_length <= 0 ||
-      (size_t)executable_length >= sizeof(executable) - 1U)
+      (size_t)executable_length >= sizeof(scratch->executable) - 1U)
     return cai_set_error(error, CAI_ERR_TRANSPORT,
                          "Cannot identify Chrome host executable");
-  executable[executable_length] = '\0';
-  if (snprintf(path, sizeof(path), "%s/%ld.sock", directory, (long)getpid()) >=
-          (int)sizeof(address.sun_path) ||
-      snprintf(control_path, sizeof(control_path), "%s/%ld.ctl", directory,
+  scratch->executable[executable_length] = '\0';
+  if (snprintf(scratch->path, sizeof(scratch->path), "%s/%ld.sock",
+               scratch->directory,
+               (long)getpid()) >= (int)sizeof(address.sun_path) ||
+      snprintf(scratch->control_path, sizeof(scratch->control_path),
+               "%s/%ld.ctl", scratch->directory,
                (long)getpid()) >= (int)sizeof(address.sun_path))
     return cai_set_error(
         error, CAI_ERR_INVALID,
         "Chrome socket path exceeds the Unix socket path limit");
-  control_listener = host_listener(control_path, error);
+  control_listener = host_listener(scratch->control_path, error);
   if (control_listener < 0)
     return error != NULL ? error->code : CAI_ERR_TRANSPORT;
-  listener = host_listener(path, error);
+  listener = host_listener(scratch->path, error);
   if (listener < 0) {
     rc = error != NULL ? error->code : CAI_ERR_TRANSPORT;
     close(control_listener);
-    (void)unlink(control_path);
+    (void)unlink(scratch->control_path);
     return rc;
   }
   old_in = fcntl(STDIN_FILENO, F_GETFL);
@@ -679,7 +687,8 @@ int cai_chrome_native_host_run_at(const char *origin,
   }
   pipe_changed = 1;
   if (logger != NULL)
-    logger->infof(logger, "CAI Chrome native host ready", "socket=%s", path);
+    logger->infof(logger, "CAI Chrome native host ready", "socket=%s",
+                  scratch->path);
   rc = CAI_OK;
   for (;;) {
     fds[0].fd = STDIN_FILENO;
@@ -789,7 +798,7 @@ int cai_chrome_native_host_run_at(const char *origin,
       }
     }
     if (h.control >= 0 && (fds[5].revents & POLLIN)) {
-      rc = control_read(&h, executable, error);
+      rc = control_read(&h, scratch->executable, error);
       if (rc != CAI_OK) {
         control_close(&h);
         cai_error_cleanup(error);
@@ -841,8 +850,8 @@ done:
                        "Chrome disconnected before shutdown cleanup completed");
   close(control_listener);
   close(listener);
-  (void)unlink(control_path);
-  (void)unlink(path);
+  (void)unlink(scratch->control_path);
+  (void)unlink(scratch->path);
   if (h.stopping && h.control >= 0) {
     cai_error reply_error;
     long long deadline = cai_chrome_now_ms() + 250LL;
@@ -875,5 +884,21 @@ done:
   queue_clear(&h.extension_queue);
   clear_identity(&h);
   free(h.pending_id);
+  return rc;
+}
+
+int cai_chrome_native_host_run_at(const char *origin,
+                                  const char *selected_directory,
+                                  pslog_logger *logger, cai_error *error) {
+  cai_chrome_native_host_run_at_scratch *scratch =
+      (cai_chrome_native_host_run_at_scratch *)cai_alloc(NULL,
+                                                         sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_chrome_native_host_run_at scratch");
+  rc = cai_chrome_native_host_run_at_with_scratch(origin, selected_directory,
+                                                  logger, error, scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }

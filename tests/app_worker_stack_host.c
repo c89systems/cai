@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "worker_stack.h"
 #include <cai/app.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -36,27 +37,11 @@ static void *run_application(void *context) {
 int main(int argc, char **argv) {
   worker_invocation invocation;
   pthread_t thread;
-  const pthread_attr_t *attributes = NULL;
-#ifdef __GLIBC__
-  pthread_attr_t bounded;
-  /* Reproduce the musl contract in native glibc checks too. Musl itself uses
-   * NULL/default attributes; no production or fixture stack is enlarged. */
-  if (pthread_attr_init(&bounded) != 0)
-    return 2;
-  if (pthread_attr_setstacksize(&bounded, 128U * 1024U) != 0) {
-    pthread_attr_destroy(&bounded);
-    return 2;
-  }
-  attributes = &bounded;
-#endif
   invocation.argc = argc;
   invocation.argv = argv;
   invocation.code = 1;
-  if (pthread_create(&thread, attributes, run_application, &invocation) != 0)
+  if (test_worker_start(&thread, run_application, &invocation) != 0)
     return 2;
-#ifdef __GLIBC__
-  pthread_attr_destroy(&bounded);
-#endif
   if (pthread_join(thread, NULL) != 0)
     return 2;
   return invocation.code;

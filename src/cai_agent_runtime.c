@@ -4885,39 +4885,61 @@ static int cai_runtime_patch_write(void *context, const void *bytes,
 }
 /** Both providers hand native custom tools decoded raw input here. The Chat
  * Completions adapter owns its JSON envelope, just as for tool execution. */
-static int cai_runtime_emit_patch(cai_agent_runtime *runtime,
-                                  const cai_tool_event *event,
-                                  cai_error *error) {
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_runtime_emit_patch_scratch {
   cai_runtime_patch_stream stream;
+} cai_runtime_emit_patch_scratch;
+static int cai_runtime_emit_patch_with_scratch(
+    cai_agent_runtime *runtime, const cai_tool_event *event, cai_error *error,
+    cai_runtime_emit_patch_scratch *scratch) {
+
   cai_sink_callbacks callbacks;
   cai_sink *sink = NULL;
   int rc;
   if (runtime->event_callback == NULL && !runtime->record_transcript)
     return CAI_OK;
-  memset(&stream, 0, sizeof(stream));
-  stream.runtime = runtime;
-  stream.event = event;
-  stream.type = CAI_AGENT_EVENT_TOOL_PATCH_LOCATIONS;
-  cai_runtime_execution_init(&stream.execution, runtime, "tool.patch_locations",
-                             event->name, event->call_id, "data");
+  memset(&scratch->stream, 0, sizeof(scratch->stream));
+  scratch->stream.runtime = runtime;
+  scratch->stream.event = event;
+  scratch->stream.type = CAI_AGENT_EVENT_TOOL_PATCH_LOCATIONS;
+  cai_runtime_execution_init(&scratch->stream.execution, runtime,
+                             "tool.patch_locations", event->name,
+                             event->call_id, "data");
   memset(&callbacks, 0, sizeof(callbacks));
   callbacks.write = cai_runtime_patch_write;
-  callbacks.context = &stream;
+  callbacks.context = &scratch->stream;
   rc = cai_sink_from_callbacks(&callbacks, &sink, error);
   if (rc == CAI_OK)
     rc = cai_patch_tool_write_locations(CAI_AGENT_IMPL(runtime->agent)->tools,
                                         event->name, sink, error);
   if (rc == CAI_OK)
-    rc = cai_runtime_patch_write(&stream, NULL, 0U, error);
-  stream.type = CAI_AGENT_EVENT_TOOL_PATCH;
-  cai_runtime_execution_init(&stream.execution, runtime, "tool.patch",
+    rc = cai_runtime_patch_write(&scratch->stream, NULL, 0U, error);
+  scratch->stream.type = CAI_AGENT_EVENT_TOOL_PATCH;
+  cai_runtime_execution_init(&scratch->stream.execution, runtime, "tool.patch",
                              event->name, event->call_id, "data");
   if (rc == CAI_OK)
     rc = cai_patch_tool_write_preview(CAI_AGENT_IMPL(runtime->agent)->tools,
                                       event, sink, error);
   cai_sink_close(sink);
   if (rc == CAI_OK)
-    rc = cai_runtime_patch_write(&stream, NULL, 0U, error);
+    rc = cai_runtime_patch_write(&scratch->stream, NULL, 0U, error);
+  return rc;
+}
+
+static int cai_runtime_emit_patch(cai_agent_runtime *runtime,
+                                  const cai_tool_event *event,
+                                  cai_error *error) {
+  cai_runtime_emit_patch_scratch *scratch;
+  int rc;
+  if (runtime->event_callback == NULL && !runtime->record_transcript)
+    return CAI_OK;
+  scratch = cai_alloc(NULL, sizeof(*scratch));
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_runtime_emit_patch scratch");
+  rc = cai_runtime_emit_patch_with_scratch(runtime, event, error, scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 
@@ -7384,15 +7406,23 @@ void cai_agent_review_request_init(cai_agent_review_request *request) {
   }
 }
 
-int cai_agent_runtime_open(cai_client *client,
-                           const cai_agent_runtime_config *config,
-                           cai_agent_runtime **out, cai_error *error) {
-  cai_agent_runtime *runtime;
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_agent_runtime_open_scratch {
   cai_smith_config smith;
   cai_agent_preset builtin_preset;
   cai_agent_preset effective_preset;
-  const cai_agent_preset *preset;
   cai_terminal_tool_config terminal_config;
+  char workspace[4096];
+} cai_agent_runtime_open_scratch;
+static int
+cai_agent_runtime_open_with_scratch(cai_client *client,
+                                    const cai_agent_runtime_config *config,
+                                    cai_agent_runtime **out, cai_error *error,
+                                    cai_agent_runtime_open_scratch *scratch) {
+  cai_agent_runtime *runtime;
+
+  const cai_agent_preset *preset;
+
   char *subagent_instructions;
   char *combined_instructions;
   int review_mode;
@@ -7434,16 +7464,16 @@ int cai_agent_runtime_open(cai_client *client,
                          "exact session resume requires one valid ID and no "
                          "other session selection");
   }
-  cai_agent_preset_from_smith(&builtin_preset);
+  cai_agent_preset_from_smith(&scratch->builtin_preset);
   preset = config->preset_descriptor != NULL ? config->preset_descriptor
-                                             : &builtin_preset;
-  effective_preset = *preset;
+                                             : &scratch->builtin_preset;
+  scratch->effective_preset = *preset;
   {
     unsigned long disabled = cai_runtime_disabled_tools(config);
-    effective_preset.tool_capabilities &= ~disabled;
-    effective_preset.review_tool_capabilities &= ~disabled;
+    scratch->effective_preset.tool_capabilities &= ~disabled;
+    scratch->effective_preset.review_tool_capabilities &= ~disabled;
   }
-  preset = &effective_preset;
+  preset = &scratch->effective_preset;
   if (config->synchronize_input_boundaries && config->event_callback == NULL)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "synchronized input requires an event callback");
@@ -7562,34 +7592,34 @@ int cai_agent_runtime_open(cai_client *client,
     cai_free_mem(NULL, runtime);
     return rc;
   }
-  cai_smith_config_init(&smith);
-  smith.environment = CAI_CLIENT_IMPL(client)->environment;
-  smith.workspace_directory = config->workspace_directory;
-  smith.workspace_instructions_root =
+  cai_smith_config_init(&scratch->smith);
+  scratch->smith.environment = CAI_CLIENT_IMPL(client)->environment;
+  scratch->smith.workspace_directory = config->workspace_directory;
+  scratch->smith.workspace_instructions_root =
       config->insecure ? config->workspace_directory
                        : config->workspace_approval_directory;
-  smith.agent_config_directory = config->agent_config_directory;
-  smith.global_agents_md_path = config->global_agents_md_path;
-  smith.global_instruction_store = config->global_instruction_store;
-  smith.skills = config->skills;
-  smith.codex_compat_agents_md = config->codex_compat_agents_md;
-  smith.agent_identity = config->agent_identity;
-  smith.model = config->model;
-  smith.reasoning_effort = config->reasoning_effort;
-  smith.reasoning_summary = config->reasoning_summary;
-  smith.service_tier = config->service_tier;
-  smith.developer_instructions_extension =
+  scratch->smith.agent_config_directory = config->agent_config_directory;
+  scratch->smith.global_agents_md_path = config->global_agents_md_path;
+  scratch->smith.global_instruction_store = config->global_instruction_store;
+  scratch->smith.skills = config->skills;
+  scratch->smith.codex_compat_agents_md = config->codex_compat_agents_md;
+  scratch->smith.agent_identity = config->agent_identity;
+  scratch->smith.model = config->model;
+  scratch->smith.reasoning_effort = config->reasoning_effort;
+  scratch->smith.reasoning_summary = config->reasoning_summary;
+  scratch->smith.service_tier = config->service_tier;
+  scratch->smith.developer_instructions_extension =
       config->developer_instructions_extension;
-  smith.developer_instructions_override =
+  scratch->smith.developer_instructions_override =
       config->developer_instructions_override;
-  memset(&terminal_config, 0, sizeof(terminal_config));
+  memset(&scratch->terminal_config, 0, sizeof(scratch->terminal_config));
   if (config->terminal_tool_config != NULL) {
-    terminal_config = *config->terminal_tool_config;
-    runtime->terminal_event_callback = terminal_config.event_callback;
-    runtime->terminal_event_context = terminal_config.event_context;
+    scratch->terminal_config = *config->terminal_tool_config;
+    runtime->terminal_event_callback = scratch->terminal_config.event_callback;
+    runtime->terminal_event_context = scratch->terminal_config.event_context;
   }
   rc = cai_runtime_capture_preset_profile(runtime, config, preset,
-                                          &terminal_config, error);
+                                          &scratch->terminal_config, error);
   if (rc == CAI_OK) {
     rc = cai_runtime_capture_mcp_config(runtime, config, error);
   }
@@ -7605,20 +7635,21 @@ int cai_agent_runtime_open(cai_client *client,
         config->developer_instructions_extension, subagent_instructions,
         &combined_instructions, error);
   }
-  terminal_config.event_callback = cai_runtime_terminal_event;
-  terminal_config.event_context = runtime;
-  smith.terminal_tool_config = &terminal_config;
-  smith.disable_terminal = runtime->terminal_enabled ? 0 : 1;
-  smith.yolo = config->yolo;
-  smith.image_directory = runtime->smith_image_directory;
+  scratch->terminal_config.event_callback = cai_runtime_terminal_event;
+  scratch->terminal_config.event_context = runtime;
+  scratch->smith.terminal_tool_config = &scratch->terminal_config;
+  scratch->smith.disable_terminal = runtime->terminal_enabled ? 0 : 1;
+  scratch->smith.yolo = config->yolo;
+  scratch->smith.image_directory = runtime->smith_image_directory;
   if (combined_instructions != NULL) {
-    smith.developer_instructions_extension = combined_instructions;
+    scratch->smith.developer_instructions_extension = combined_instructions;
   }
   if (rc == CAI_OK) {
-    rc = review_mode ? cai_client_new_preset_review_agent(
-                           client, preset, &smith, &runtime->agent, error)
-                     : cai_client_new_preset_agent(client, preset, &smith,
-                                                   &runtime->agent, error);
+    rc = review_mode
+             ? cai_client_new_preset_review_agent(
+                   client, preset, &scratch->smith, &runtime->agent, error)
+             : cai_client_new_preset_agent(client, preset, &scratch->smith,
+                                           &runtime->agent, error);
   }
   cai_free_mem(NULL, combined_instructions);
   cai_free_mem(NULL, subagent_instructions);
@@ -7767,16 +7798,16 @@ int cai_agent_runtime_open(cai_client *client,
   if (rc == CAI_OK) {
     const char *scope;
     char session_id[CAI_AGENT_SESSION_ID_MAX];
-    char workspace[4096];
 
-    if (realpath(config->workspace_directory, workspace) == NULL) {
+    if (realpath(config->workspace_directory, scratch->workspace) == NULL) {
       rc = cai_set_error(error, CAI_ERR_INVALID,
                          "agent workspace directory must exist");
     }
-    scope = config->session_scope != NULL ? config->session_scope : workspace;
+    scope = config->session_scope != NULL ? config->session_scope
+                                          : scratch->workspace;
     if (rc == CAI_OK) {
-      rc = cai_runtime_copy_string(workspace, &runtime->workspace_directory,
-                                   error);
+      rc = cai_runtime_copy_string(scratch->workspace,
+                                   &runtime->workspace_directory, error);
     }
     if (rc == CAI_OK) {
       rc = review_mode
@@ -8112,6 +8143,22 @@ int cai_agent_runtime_open(cai_client *client,
   cai_runtime_log_opened(runtime);
   *out = runtime;
   return CAI_OK;
+}
+
+int cai_agent_runtime_open(cai_client *client,
+                           const cai_agent_runtime_config *config,
+                           cai_agent_runtime **out, cai_error *error) {
+  cai_agent_runtime_open_scratch *scratch =
+      (cai_agent_runtime_open_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (out != NULL)
+    *out = NULL;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate runtime configuration scratch");
+  rc = cai_agent_runtime_open_with_scratch(client, config, out, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 /** A previous outcome is not an in-flight turn. All input paths share this
@@ -9349,11 +9396,17 @@ static int cai_runtime_review_text_valid(const char *value, size_t maximum) {
   return 1;
 }
 
-static int cai_runtime_git_executable(char output[PATH_MAX], cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_runtime_git_executable_scratch {
+  char candidate[PATH_MAX];
+} cai_runtime_git_executable_scratch;
+static int cai_runtime_git_executable_with_scratch(
+    char output[PATH_MAX], cai_error *error,
+    cai_runtime_git_executable_scratch *scratch) {
   const char *path;
   const char *cursor;
   const char *next;
-  char candidate[PATH_MAX];
+
   size_t length;
 
   path = getenv("PATH");
@@ -9366,11 +9419,12 @@ static int cai_runtime_git_executable(char output[PATH_MAX], cai_error *error) {
     next = strchr(cursor, ':');
     length = next != NULL ? (size_t)(next - cursor) : strlen(cursor);
     if (length > 0U && length <= PATH_MAX - sizeof("/git")) {
-      memcpy(candidate, cursor, length);
-      memcpy(candidate + length, "/git", sizeof("/git"));
+      memcpy(scratch->candidate, cursor, length);
+      memcpy(scratch->candidate + length, "/git", sizeof("/git"));
       /* execve() follows chdir(workspace). A relative PATH entry would
        * otherwise resolve against another directory than this probe. */
-      if (realpath(candidate, output) != NULL && access(output, X_OK) == 0) {
+      if (realpath(scratch->candidate, output) != NULL &&
+          access(output, X_OK) == 0) {
         return CAI_OK;
       }
     }
@@ -9381,6 +9435,18 @@ static int cai_runtime_git_executable(char output[PATH_MAX], cai_error *error) {
   }
   return cai_set_error(error, CAI_ERR_INVALID,
                        "git executable was not found on PATH for review");
+}
+
+static int cai_runtime_git_executable(char output[PATH_MAX], cai_error *error) {
+  cai_runtime_git_executable_scratch *scratch =
+      (cai_runtime_git_executable_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate Git executable scratch");
+  rc = cai_runtime_git_executable_with_scratch(output, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 /** Git's repository-selection variables override a process's current working

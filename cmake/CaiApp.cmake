@@ -258,6 +258,15 @@ if(CAI_BUILD_TESTS)
     set_tests_properties(cai_app_worker_stack PROPERTIES
       LABELS "cli;local;offline" TIMEOUT 15
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+    add_test(NAME cai_app_skill_stack COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_skill_stack_test.sh"
+      "$<TARGET_FILE:cai_app_worker_stack_host>")
+    set_tests_properties(cai_app_skill_stack PROPERTIES LABELS "cli;local;offline" TIMEOUT 20)
+    add_test(NAME cai_cli_banner COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_banner_test.sh"
+      "$<TARGET_FILE:cai_cli_mock_fixture>")
+    set_tests_properties(cai_cli_banner PROPERTIES LABELS "cli;local;offline" TIMEOUT 25
+      ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
   endif()
   add_executable(cai_app_controls_host tests/app_controls_host.c)
   target_sources(cai_app_controls_host PRIVATE tests/cli_storage_fixture.c)

@@ -1069,10 +1069,13 @@ static int command_byte(command_writer *w, unsigned char ch) {
   unsigned long scalar;
   size_t i;
   int rc;
+again:
   if (c->command_utf8_length != 0U) {
     if ((ch & 192U) != 128U) {
       rc = command_invalid_utf8(w);
-      return rc == CAI_OK ? command_byte(w, ch) : rc;
+      if (rc != CAI_OK)
+        return rc;
+      goto again;
     }
     c->command_utf8[c->command_utf8_length++] = ch;
     if (c->command_utf8_length != c->command_utf8_need)

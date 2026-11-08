@@ -351,7 +351,6 @@ void *cai_realloc_mem(const cai_allocator *allocator, void *ptr, size_t size);
 /** Release storage through the allocator that created it; NULL is a no-op. */
 void cai_free_mem(const cai_allocator *allocator, void *ptr);
 /** Release producer-owned mapped tool results (not lonejson parse storage). */
-void cai_tool_result_cleanup_plain(const lonejson_map *map, void *value);
 /** Copy a NUL-terminated string with the selected allocator; NULL stays NULL.
  */
 char *cai_strdup(const cai_allocator *allocator, const char *value);

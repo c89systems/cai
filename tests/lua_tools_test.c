@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
+#include "worker_stack.h"
 #include <assert.h>
 #include <cai/lua_tools.h>
 #include <lauxlib.h>
@@ -239,6 +240,59 @@ static void test_files(const char *base) {
                          "{\"answer\":44}", 1);
   assert(execute_optional_error(plugins, "lua_example", "{", &call, NULL, 1) ==
          CAI_ERR_INVALID);
+  /* Exercise the accepted depth and its rejection boundary on the worker. */
+  file_write(
+      source,
+      "return function(input,ctx) local a=assert(input:decode()); "
+      "if a.mixed then return {1,{flag=true},ctx.null,a.empty,{},"
+      "{{nested={false,2.5,'x'}}}} end; "
+      "if a.cycle then local t={} t.value=t; return t end; "
+      "if a.badkey then return {[true]=1} end; "
+      "local t=ctx.null; for i=1,a.depth do t={value=t} end; return t end");
+  assert(cai_plugins_load(plugins, package, &error) == CAI_OK);
+  {
+    char *expected = calloc(1U, 1024U);
+    size_t i;
+    assert(expected != NULL);
+    for (i = 0U; i < 48U; i++)
+      strcat(expected, "{\"value\":");
+    strcat(expected, "null");
+    for (i = 0U; i < 48U; i++)
+      strcat(expected, "}");
+    execute(plugins, "lua_example", "{\"depth\":48}", &call, expected);
+    free(expected);
+  }
+  assert(execute(plugins, "lua_example", "{\"depth\":49}", &call, NULL) ==
+         CAI_ERR_INVALID);
+  execute(plugins, "lua_example", "{\"mixed\":true,\"empty\":[]}", &call,
+          "[1,{\"flag\":true},null,[],{},[{\"nested\":[false,2.5,\"x\"]}]]");
+  assert(execute(plugins, "lua_example", "{\"cycle\":true}", &call, NULL) ==
+         CAI_ERR_INVALID);
+  assert(execute(plugins, "lua_example", "{\"badkey\":true}", &call, NULL) ==
+         CAI_ERR_INVALID);
+  /* Dependencies must reject excessive parser/C-call depth on this worker too.
+   */
+  {
+    char *syntax = calloc(1U, 2048U);
+    size_t i, offset;
+    assert(syntax != NULL);
+    strcpy(syntax, "return function() return ");
+    offset = strlen(syntax);
+    for (i = 0U; i < 512U; i++)
+      syntax[offset++] = '(';
+    syntax[offset++] = '0';
+    for (i = 0U; i < 512U; i++)
+      syntax[offset++] = ')';
+    strcpy(syntax + offset, " end");
+    file_write(source, syntax);
+    free(syntax);
+    assert(cai_plugins_load(plugins, package, &error) == CAI_ERR_INVALID);
+    cai_error_cleanup(&error);
+    cai_error_init(&error);
+  }
+  /* Restore the original handler for the following reload-failure check. */
+  file_write(source, "return function(input,ctx) return {answer=44} end");
+  assert(cai_plugins_load(plugins, package, &error) == CAI_OK);
   /* Syntax failure preserves the loaded source; file edits alone do not reload.
    */
   file_write(source, "this is not Lua !");
@@ -304,18 +358,8 @@ static void *test_worker(void *context) {
 }
 int main(int argc, char **argv) {
   pthread_t worker;
-  const pthread_attr_t *attributes = NULL;
-#ifdef __GLIBC__
-  pthread_attr_t bounded;
-  assert(pthread_attr_init(&bounded) == 0 &&
-         pthread_attr_setstacksize(&bounded, 128U * 1024U) == 0);
-  attributes = &bounded;
-#endif
   assert(argc == 2);
-  assert(pthread_create(&worker, attributes, test_worker, argv[1]) == 0);
-#ifdef __GLIBC__
-  pthread_attr_destroy(&bounded);
-#endif
+  assert(test_worker_start(&worker, test_worker, argv[1]) == 0);
   assert(pthread_join(worker, NULL) == 0);
   return 0;
 }

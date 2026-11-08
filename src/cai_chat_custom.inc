@@ -85,7 +85,7 @@ static int cai_chat_custom_delta(cai_chat_stream_state *state,
   lonejson_read_result result;
   lonejson_error error;
   lonejson_config config;
-  unsigned char bytes[8192];
+  unsigned char bytes[2048];
   lonejson_error_init(&error);
   if (custom == NULL) {
     /* Heap ownership keeps parser destinations and visitor contexts stable

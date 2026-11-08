@@ -434,10 +434,15 @@ static lonejson_read_result read_message(void *context, unsigned char *bytes,
   out.eof = out.bytes_read == 0U && !out.error_code;
   return out;
 }
-static int consume(void *context, lc_consumer_message *delivery,
-                   lc_error *error) {
-  cai_cli_messages *m = context;
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct consume_scratch {
   message_doc doc, receipt;
+} consume_scratch;
+static int consume_with_scratch(void *context, lc_consumer_message *delivery,
+                                lc_error *error, consume_scratch *scratch) {
+  cai_cli_messages *m = context;
+
   message_reader reader;
   lc_lease *lease = NULL;
   lc_lease *binding = NULL;
@@ -446,23 +451,23 @@ static int consume(void *context, lc_consumer_message *delivery,
   cai_error local;
   char key[300];
   int rc = LC_OK, fresh = 0;
-  memset(&doc, 0, sizeof(doc));
+  memset(&scratch->doc, 0, sizeof(scratch->doc));
   memset(&reader, 0, sizeof(reader));
   lc_error_init(&reader.error);
   cai_error_init(&local);
   reader.source = delivery->message->payload_reader(delivery->message);
   json = lonejson_new(NULL, &parse_error);
   if (json == NULL ||
-      lonejson_parse_reader(json, &message_map, &doc, read_message, &reader,
-                            &parse_error) != LONEJSON_STATUS_OK ||
-      !lc_xid_is_valid(doc.id) || !safe_id(doc.sender)) {
+      lonejson_parse_reader(json, &message_map, &scratch->doc, read_message,
+                            &reader, &parse_error) != LONEJSON_STATUS_OK ||
+      !lc_xid_is_valid(scratch->doc.id) || !safe_id(scratch->doc.sender)) {
     rc = lc_error_set(error, LC_ERR_PROTOCOL, 0,
                       "Invalid agent message envelope", NULL, NULL, NULL);
     goto done;
   }
-  if (strcmp(doc.kind, "receipt") == 0) {
-    if (strcmp(doc.recipient_instance, m->instance) != 0 ||
-        !safe_id(doc.recipient)) {
+  if (strcmp(scratch->doc.kind, "receipt") == 0) {
+    if (strcmp(scratch->doc.recipient_instance, m->instance) != 0 ||
+        !safe_id(scratch->doc.recipient)) {
       rc = lc_error_set(error, LC_ERR_PROTOCOL, 0,
                         "Receipt targets another application instance", NULL,
                         NULL, NULL);
@@ -471,20 +476,21 @@ static int consume(void *context, lc_consumer_message *delivery,
     pthread_mutex_lock(&m->lock);
     /* The private return address survives /queue; a delayed duplicate may
      * still name the former public mailbox. Only the active send matches. */
-    if (strcmp(m->waiting, doc.id) == 0 &&
-        strcmp(m->waiting_recipient, doc.sender) == 0) {
+    if (strcmp(m->waiting, scratch->doc.id) == 0 &&
+        strcmp(m->waiting_recipient, scratch->doc.sender) == 0) {
       m->receipt = 1;
       pthread_cond_broadcast(&m->condition);
     }
     pthread_mutex_unlock(&m->lock);
     goto done;
   }
-  if (strcmp(doc.recipient, m->queue) != 0 ||
-      strcmp(doc.kind, "message") != 0 || !valid_text(doc.text) ||
-      !safe_id(doc.sender_session) || doc.deadline_ms < 0 ||
-      (doc.instance[0] != '\0' &&
-       (!lc_xid_is_valid(doc.instance) || !safe_id(doc.reply_queue) ||
-        doc.deadline_ms == 0))) {
+  if (strcmp(scratch->doc.recipient, m->queue) != 0 ||
+      strcmp(scratch->doc.kind, "message") != 0 ||
+      !valid_text(scratch->doc.text) || !safe_id(scratch->doc.sender_session) ||
+      scratch->doc.deadline_ms < 0 ||
+      (scratch->doc.instance[0] != '\0' &&
+       (!lc_xid_is_valid(scratch->doc.instance) ||
+        !safe_id(scratch->doc.reply_queue) || scratch->doc.deadline_ms == 0))) {
     rc = lc_error_set(error, LC_ERR_PROTOCOL, 0,
                       "Invalid agent message content", NULL, NULL, NULL);
     goto done;
@@ -514,14 +520,15 @@ static int consume(void *context, lc_consumer_message *delivery,
     }
     goto done;
   }
-  inbox_key(key, &doc);
+  inbox_key(key, &scratch->doc);
   rc = lease_open(m, key, &lease, error);
   if (rc == LC_OK) {
     fresh = lease->state_etag == NULL || lease->state_etag[0] == '\0';
-    if (fresh && (doc.deadline_ms == 0 || doc.deadline_ms > realtime_ms())) {
-      strcpy(doc.kind, "pending");
-      strcpy(doc.pending_for, m->session);
-      rc = lc_lease_save(lease, &message_map, &doc, NULL, error);
+    if (fresh && (scratch->doc.deadline_ms == 0 ||
+                  scratch->doc.deadline_ms > realtime_ms())) {
+      strcpy(scratch->doc.kind, "pending");
+      strcpy(scratch->doc.pending_for, m->session);
+      rc = lc_lease_save(lease, &message_map, &scratch->doc, NULL, error);
     } else if (fresh) {
       rc = lease_finish(lease, rc, error);
       lease = NULL;
@@ -537,16 +544,18 @@ static int consume(void *context, lc_consumer_message *delivery,
   binding = NULL;
   if (rc != LC_OK)
     goto done;
-  memset(&receipt, 0, sizeof(receipt));
-  strcpy(receipt.kind, "receipt");
-  strcpy(receipt.id, doc.id);
-  strcpy(receipt.sender, m->queue);
-  strcpy(receipt.recipient, doc.reply_queue);
-  strcpy(receipt.recipient_instance, doc.instance);
+  memset(&scratch->receipt, 0, sizeof(scratch->receipt));
+  strcpy(scratch->receipt.kind, "receipt");
+  strcpy(scratch->receipt.id, scratch->doc.id);
+  strcpy(scratch->receipt.sender, m->queue);
+  strcpy(scratch->receipt.recipient, scratch->doc.reply_queue);
+  strcpy(scratch->receipt.recipient_instance, scratch->doc.instance);
   /* Durable inbox acceptance is delivery. Approval and execution are separate.
    */
   /* An absent return address means enqueue-only delivery, with no receipt. */
-  rc = doc.instance[0] != '\0' ? enqueue(m->pouch, &receipt, &local) : CAI_OK;
+  rc = scratch->doc.instance[0] != '\0'
+           ? enqueue(m->pouch, &scratch->receipt, &local)
+           : CAI_OK;
   if (rc != CAI_OK) {
     rc = lc_error_set(error, LC_ERR_TRANSPORT, 0,
                       "Cannot acknowledge agent delivery", local.message, NULL,
@@ -556,22 +565,35 @@ static int consume(void *context, lc_consumer_message *delivery,
   notify_owner(m);
   if (fresh && m->pouch->logger != NULL) {
     pslog_field fields[3];
-    fields[0] = pslog_str("sender_session_id", doc.sender_session);
-    fields[1] = pslog_str("message_id", doc.id);
-    fields[2] = pslog_str("sender_queue", doc.sender);
+    fields[0] = pslog_str("sender_session_id", scratch->doc.sender_session);
+    fields[1] = pslog_str("message_id", scratch->doc.id);
+    fields[2] = pslog_str("sender_queue", scratch->doc.sender);
     cai_cli_log_message(m->pouch->logger, PSLOG_LEVEL_INFO,
-                        "agent_message_received", "agent", doc.text,
-                        strlen(doc.text), fields, 3U);
+                        "agent_message_received", "agent", scratch->doc.text,
+                        strlen(scratch->doc.text), fields, 3U);
   }
 done:
   if (binding != NULL)
     rc = lease_finish(binding, rc, error);
-  lonejson_cleanup(&message_map, &doc);
+  lonejson_cleanup(&message_map, &scratch->doc);
   lonejson_free(json);
   lc_error_cleanup(&reader.error);
   cai_error_cleanup(&local);
   return rc;
 }
+
+static int consume(void *context, lc_consumer_message *delivery,
+                   lc_error *error) {
+  consume_scratch *scratch = (consume_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return lc_error_set(error, LC_ERR_NOMEM, 0, "allocate message scratch",
+                        NULL, NULL, NULL);
+  rc = consume_with_scratch(context, delivery, error, scratch);
+  free(scratch);
+  return rc;
+}
+
 static int service_error(void *context, const lc_consumer_error *event,
                          lc_error *error) {
   cai_cli_messages *m = context;
@@ -872,14 +894,20 @@ static int name_catalog_append(name_catalog *catalog, const message_doc *doc,
   return CAI_OK;
 }
 
-static int name_catalog_read(cai_cli_messages *m, lc_lease *guard,
-                             name_catalog *catalog, cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct name_catalog_read_scratch {
+  message_page page;
+} name_catalog_read_scratch;
+static int name_catalog_read_with_scratch(cai_cli_messages *m, lc_lease *guard,
+                                          name_catalog *catalog,
+                                          cai_error *error,
+                                          name_catalog_read_scratch *scratch) {
   lc_query_req query;
   lc_query_res result;
   lc_query_key_handler handler;
   lc_keepalive_req keepalive;
   lc_error local;
-  message_page page;
+
   message_doc *doc;
   char *cursor = NULL;
   size_t i;
@@ -901,12 +929,12 @@ static int name_catalog_read(cai_cli_messages *m, lc_lease *guard,
   query.selector_lql = "eq{field=/kind,value=\"mailbox\"}";
   query.limit = PAGE_KEYS;
   do {
-    memset(&page, 0, sizeof(page));
+    memset(&scratch->page, 0, sizeof(scratch->page));
     memset(&result, 0, sizeof(result));
     query.cursor = cursor;
     if (lc_lease_keepalive(guard, &keepalive, &local) != LC_OK ||
-        lc_query_keys(m->pouch->sessions, &query, &handler, &page, &result,
-                      &local) != LC_OK) {
+        lc_query_keys(m->pouch->sessions, &query, &handler, &scratch->page,
+                      &result, &local) != LC_OK) {
       rc = fail_lc(error, &local);
       lc_query_res_cleanup(&result);
       break;
@@ -916,8 +944,8 @@ static int name_catalog_read(cai_cli_messages *m, lc_lease *guard,
     if (result.cursor != NULL && cursor == NULL)
       rc = cai_cli_error(error, CAI_ERR_NOMEM, "copy mailbox catalog cursor");
     lc_query_res_cleanup(&result);
-    for (i = 0U; rc == CAI_OK && i < page.count; i++) {
-      rc = load_doc(m, page.keys[i], doc, error);
+    for (i = 0U; rc == CAI_OK && i < scratch->page.count; i++) {
+      rc = load_doc(m, scratch->page.keys[i], doc, error);
       if (rc == CAI_OK && strcmp(doc->kind, "mailbox") == 0)
         rc = name_catalog_append(catalog, doc, error);
       lonejson_cleanup(&message_map, doc);
@@ -926,6 +954,19 @@ static int name_catalog_read(cai_cli_messages *m, lc_lease *guard,
   free(cursor);
   free(doc);
   lc_error_cleanup(&local);
+  return rc;
+}
+
+static int name_catalog_read(cai_cli_messages *m, lc_lease *guard,
+                             name_catalog *catalog, cai_error *error) {
+  name_catalog_read_scratch *scratch =
+      (name_catalog_read_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate name_catalog_read scratch");
+  rc = name_catalog_read_with_scratch(m, guard, catalog, error, scratch);
+  free(scratch);
   return rc;
 }
 
@@ -994,13 +1035,18 @@ static int mailbox_cell(cai_sink *output, const char *text, cai_error *error) {
   return rc;
 }
 
-static int list_mailboxes(cai_cli_messages *m, cai_sink *output,
-                          cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct list_mailboxes_scratch {
+  message_page page;
+} list_mailboxes_scratch;
+static int list_mailboxes_with_scratch(cai_cli_messages *m, cai_sink *output,
+                                       cai_error *error,
+                                       list_mailboxes_scratch *scratch) {
   lc_query_req query;
   lc_query_res result;
   lc_query_key_handler handler;
   lc_error local;
-  message_page page;
+
   message_doc *doc;
   char *cursor = NULL;
   size_t i;
@@ -1037,19 +1083,19 @@ static int list_mailboxes(cai_cli_messages *m, cai_sink *output,
   query.selector_lql = "eq{field=/kind,value=\"mailbox\"}";
   query.limit = PAGE_KEYS;
   do {
-    memset(&page, 0, sizeof(page));
+    memset(&scratch->page, 0, sizeof(scratch->page));
     memset(&result, 0, sizeof(result));
     query.cursor = cursor;
-    if (lc_query_keys(m->pouch->sessions, &query, &handler, &page, &result,
-                      &local) != LC_OK)
+    if (lc_query_keys(m->pouch->sessions, &query, &handler, &scratch->page,
+                      &result, &local) != LC_OK)
       rc = fail_lc(error, &local);
     free(cursor);
     cursor = result.cursor != NULL ? strdup(result.cursor) : NULL;
     if (result.cursor != NULL && cursor == NULL)
       rc = cai_cli_error(error, CAI_ERR_NOMEM, "copy mailbox listing cursor");
     lc_query_res_cleanup(&result);
-    for (i = 0U; rc == CAI_OK && i < page.count; i++) {
-      rc = load_doc(m, page.keys[i], doc, error);
+    for (i = 0U; rc == CAI_OK && i < scratch->page.count; i++) {
+      rc = load_doc(m, scratch->page.keys[i], doc, error);
       if (rc == CAI_OK) {
         rc = cai_sink_write(output, "| ", 2U, error);
         if (rc == CAI_OK)
@@ -1073,6 +1119,20 @@ static int list_mailboxes(cai_cli_messages *m, cai_sink *output,
   lc_error_cleanup(&local);
   return rc;
 }
+
+static int list_mailboxes(cai_cli_messages *m, cai_sink *output,
+                          cai_error *error) {
+  list_mailboxes_scratch *scratch =
+      (list_mailboxes_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate list_mailboxes scratch");
+  rc = list_mailboxes_with_scratch(m, output, error, scratch);
+  free(scratch);
+  return rc;
+}
+
 int cai_cli_messages_is_message(const cai_cli_messages *m,
                                 unsigned long long id) {
   message_link *link;
@@ -1182,16 +1242,24 @@ int cai_cli_messages_flush_decisions(cai_cli_messages *m,
   }
   return CAI_OK;
 }
-int cai_cli_messages_sync(cai_cli_messages *m, cai_input_queue *queue,
-                          cai_error *error) {
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_cli_messages_sync_scratch {
+  message_page page;
+  message_doc doc;
+  cai_input_state pending;
+} cai_cli_messages_sync_scratch;
+static int
+cai_cli_messages_sync_with_scratch(cai_cli_messages *m, cai_input_queue *queue,
+                                   cai_error *error,
+                                   cai_cli_messages_sync_scratch *scratch) {
   lc_query_req query;
   lc_query_res result;
   lc_query_key_handler handler;
   lc_error local;
-  message_page page;
-  message_doc doc;
+
   message_link *link;
-  cai_input_state pending;
+
   cai_input_entry entry;
   cai_input_origin_status origin_status;
   char *cursor = NULL, *text, selector[256];
@@ -1206,10 +1274,11 @@ int cai_cli_messages_sync(cai_cli_messages *m, cai_input_queue *queue,
   if (rc != CAI_OK)
     return rc;
   if (m->capacity_blocked) {
-    rc = cai_input_queue_get_state(queue, &pending, error);
+    rc = cai_input_queue_get_state(queue, &scratch->pending, error);
     if (rc != CAI_OK)
       return rc;
-    if (pending.count != 0U && pending.count >= m->blocked_count)
+    if (scratch->pending.count != 0U &&
+        scratch->pending.count >= m->blocked_count)
       return CAI_OK;
     m->capacity_blocked = 0;
   }
@@ -1234,11 +1303,11 @@ int cai_cli_messages_sync(cai_cli_messages *m, cai_input_queue *queue,
   query.selector_lql = selector;
   query.limit = PAGE_KEYS;
   do {
-    memset(&page, 0, sizeof(page));
+    memset(&scratch->page, 0, sizeof(scratch->page));
     memset(&result, 0, sizeof(result));
     query.cursor = cursor;
-    if (lc_query_keys(m->pouch->sessions, &query, &handler, &page, &result,
-                      &local) != LC_OK) {
+    if (lc_query_keys(m->pouch->sessions, &query, &handler, &scratch->page,
+                      &result, &local) != LC_OK) {
       rc = fail_lc(error, &local);
       lc_query_res_cleanup(&result);
       break;
@@ -1248,29 +1317,29 @@ int cai_cli_messages_sync(cai_cli_messages *m, cai_input_queue *queue,
     if (result.cursor != NULL && cursor == NULL)
       rc = cai_cli_error(error, CAI_ERR_NOMEM, "copy message query cursor");
     lc_query_res_cleanup(&result);
-    for (i = 0U; rc == CAI_OK && i < page.count; i++) {
-      rc = load_doc(m, page.keys[i], &doc, error);
+    for (i = 0U; rc == CAI_OK && i < scratch->page.count; i++) {
+      rc = load_doc(m, scratch->page.keys[i], &scratch->doc, error);
       if (rc != CAI_OK) {
-        lonejson_cleanup(&message_map, &doc);
+        lonejson_cleanup(&message_map, &scratch->doc);
         break;
       }
-      if (strcmp(doc.kind, "pending") != 0 ||
-          strcmp(doc.pending_for, m->session) != 0 ||
-          find_doc(m, doc.id) != NULL) {
-        lonejson_cleanup(&message_map, &doc);
+      if (strcmp(scratch->doc.kind, "pending") != 0 ||
+          strcmp(scratch->doc.pending_for, m->session) != 0 ||
+          find_doc(m, scratch->doc.id) != NULL) {
+        lonejson_cleanup(&message_map, &scratch->doc);
         continue;
       }
-      if (cai_input_queue_find_origin(queue, doc.id, &entry, &origin_status,
-                                      NULL) == CAI_OK) {
+      if (cai_input_queue_find_origin(queue, scratch->doc.id, &entry,
+                                      &origin_status, NULL) == CAI_OK) {
         link = calloc(1U, sizeof(*link));
         if (link == NULL) {
-          lonejson_cleanup(&message_map, &doc);
+          lonejson_cleanup(&message_map, &scratch->doc);
           rc = cai_cli_error(error, CAI_ERR_NOMEM,
                              "restore pending message link");
           break;
         }
         link->prompt_id = entry.id;
-        link->doc = doc;
+        link->doc = scratch->doc;
         link->next = m->links;
         m->links = link;
         if (origin_status != CAI_INPUT_ORIGIN_PENDING)
@@ -1281,43 +1350,46 @@ int cai_cli_messages_sync(cai_cli_messages *m, cai_input_queue *queue,
                               error);
         continue;
       }
-      rc = cai_input_queue_get_state(queue, &pending, error);
-      if (rc != CAI_OK || pending.count >= 128U) {
+      rc = cai_input_queue_get_state(queue, &scratch->pending, error);
+      if (rc != CAI_OK || scratch->pending.count >= 128U) {
         m->capacity_blocked = rc == CAI_OK;
-        m->blocked_count = rc == CAI_OK ? pending.count : 0U;
+        m->blocked_count = rc == CAI_OK ? scratch->pending.count : 0U;
         pthread_mutex_lock(&m->lock);
         m->dirty = 1;
         pthread_mutex_unlock(&m->lock);
-        lonejson_cleanup(&message_map, &doc);
+        lonejson_cleanup(&message_map, &scratch->doc);
         break;
       }
-      capacity = strlen(doc.text != NULL ? doc.text : "") + 384U;
+      capacity =
+          strlen(scratch->doc.text != NULL ? scratch->doc.text : "") + 384U;
       text = malloc(capacity);
       link = calloc(1U, sizeof(*link));
       if (text == NULL || link == NULL) {
         free(text);
         free(link);
-        lonejson_cleanup(&message_map, &doc);
+        lonejson_cleanup(&message_map, &scratch->doc);
         rc =
             cai_cli_error(error, CAI_ERR_NOMEM, "queue incoming agent message");
         break;
       }
       snprintf(text, capacity,
-               strcmp(doc.sender_session, "cli") == 0
+               strcmp(scratch->doc.sender_session, "cli") == 0
                    ? "[CLI message %s from %s (%s)]\n\n%s"
                    : "[Agent message %s from %s (conversation %s)]\n\n%s",
-               doc.id, doc.sender, doc.sender_session,
-               doc.text != NULL ? doc.text : "");
-      rc = input_request(m, CAI_INPUT_OFFER, doc.id, text, &link->prompt_id,
-                         error);
+               scratch->doc.id, scratch->doc.sender,
+               scratch->doc.sender_session,
+               scratch->doc.text != NULL ? scratch->doc.text : "");
+      rc = input_request(m, CAI_INPUT_OFFER, scratch->doc.id, text,
+                         &link->prompt_id, error);
       if (rc != CAI_OK) {
         free(text);
         free(link);
-        lonejson_cleanup(&message_map, &doc);
+        lonejson_cleanup(&message_map, &scratch->doc);
         if (rc == CAI_ERR_LIMIT) {
-          if (cai_input_queue_get_state(queue, &pending, NULL) == CAI_OK) {
-            m->capacity_blocked = pending.count != 0U;
-            m->blocked_count = pending.count;
+          if (cai_input_queue_get_state(queue, &scratch->pending, NULL) ==
+              CAI_OK) {
+            m->capacity_blocked = scratch->pending.count != 0U;
+            m->blocked_count = scratch->pending.count;
           }
           pthread_mutex_lock(&m->lock);
           m->dirty = 1;
@@ -1328,15 +1400,29 @@ int cai_cli_messages_sync(cai_cli_messages *m, cai_input_queue *queue,
         break;
       }
       free(text);
-      link->doc = doc;
+      link->doc = scratch->doc;
       link->next = m->links;
       m->links = link;
     }
-  } while (rc == CAI_OK && cursor != NULL && i == page.count);
+  } while (rc == CAI_OK && cursor != NULL && i == scratch->page.count);
   free(cursor);
   lc_error_cleanup(&local);
   return rc;
 }
+
+int cai_cli_messages_sync(cai_cli_messages *m, cai_input_queue *queue,
+                          cai_error *error) {
+  cai_cli_messages_sync_scratch *scratch =
+      (cai_cli_messages_sync_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_cli_messages_sync scratch");
+  rc = cai_cli_messages_sync_with_scratch(m, queue, error, scratch);
+  free(scratch);
+  return rc;
+}
+
 static int send_cancelled(cai_cli_messages *m, unsigned long long sequence) {
   int cancelled;
   pthread_mutex_lock(&m->lock);
@@ -1345,16 +1431,22 @@ static int send_cancelled(cai_cli_messages *m, unsigned long long sequence) {
   return cancelled;
 }
 
-int cai_cli_messages_delete_session(cai_cli_pouch *pouch, const char *id,
-                                    cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_cli_messages_delete_session_scratch {
   cai_cli_messages owner;
+  message_page page;
+  message_doc doc;
+} cai_cli_messages_delete_session_scratch;
+static int cai_cli_messages_delete_session_with_scratch(
+    cai_cli_pouch *pouch, const char *id, cai_error *error,
+    cai_cli_messages_delete_session_scratch *scratch) {
+
   lc_query_req query;
   lc_query_res result;
   lc_query_key_handler handler;
   lc_lease *lease;
   lc_error local;
-  message_page page;
-  message_doc doc;
+
   char selector[256], *cursor;
   char (*keys)[300] = NULL, (*grown)[300];
   size_t i, count;
@@ -1362,9 +1454,9 @@ int cai_cli_messages_delete_session(cai_cli_pouch *pouch, const char *id,
   if (!safe_id(id))
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "unsafe conversation inbox ID");
-  memset(&owner, 0, sizeof(owner));
-  owner.pouch = pouch;
-  strcpy(owner.instance, "conversation-delete");
+  memset(&scratch->owner, 0, sizeof(scratch->owner));
+  scratch->owner.pouch = pouch;
+  strcpy(scratch->owner.instance, "conversation-delete");
   lc_error_init(&local);
   lc_query_req_init(&query);
   memset(&handler, 0, sizeof(handler));
@@ -1382,11 +1474,11 @@ int cai_cli_messages_delete_session(cai_cli_pouch *pouch, const char *id,
     cursor = NULL;
     count = 0U;
     do {
-      memset(&page, 0, sizeof(page));
+      memset(&scratch->page, 0, sizeof(scratch->page));
       memset(&result, 0, sizeof(result));
       query.cursor = cursor;
-      rc = lc_query_keys(pouch->sessions, &query, &handler, &page, &result,
-                         &local);
+      rc = lc_query_keys(pouch->sessions, &query, &handler, &scratch->page,
+                         &result, &local);
       free(cursor);
       cursor = result.cursor != NULL ? strdup(result.cursor) : NULL;
       if (rc == LC_OK && result.cursor != NULL && cursor == NULL)
@@ -1395,19 +1487,20 @@ int cai_cli_messages_delete_session(cai_cli_pouch *pouch, const char *id,
       lc_query_res_cleanup(&result);
       /* Finish key discovery before removing index entries: continuation
        * cursors must not race this operation's own mutations. */
-      if (rc == LC_OK && page.count != 0U) {
-        if (count > (size_t)-1 / sizeof(*keys) - page.count)
+      if (rc == LC_OK && scratch->page.count != 0U) {
+        if (count > (size_t)-1 / sizeof(*keys) - scratch->page.count)
           rc = lc_error_set(&local, LC_ERR_NOMEM, 0, "inbox key list too large",
                             NULL, NULL, NULL);
         else {
-          grown = realloc(keys, (count + page.count) * sizeof(*keys));
+          grown = realloc(keys, (count + scratch->page.count) * sizeof(*keys));
           if (grown == NULL)
             rc = lc_error_set(&local, LC_ERR_NOMEM, 0, "collect inbox keys",
                               NULL, NULL, NULL);
           else {
             keys = grown;
-            memcpy(keys + count, page.keys, page.count * sizeof(*keys));
-            count += page.count;
+            memcpy(keys + count, scratch->page.keys,
+                   scratch->page.count * sizeof(*keys));
+            count += scratch->page.count;
           }
         }
       }
@@ -1415,20 +1508,21 @@ int cai_cli_messages_delete_session(cai_cli_pouch *pouch, const char *id,
     free(cursor);
     for (i = 0U; rc == LC_OK && i < count; i++) {
       lease = NULL;
-      memset(&doc, 0, sizeof(doc));
-      rc = lease_open(&owner, keys[i], &lease, &local);
+      memset(&scratch->doc, 0, sizeof(scratch->doc));
+      rc = lease_open(&scratch->owner, keys[i], &lease, &local);
       if (rc == LC_OK)
-        rc = mailbox_load(lease, &doc, &local);
-      if (rc == LC_OK && mode == 0 && strcmp(doc.pending_for, id) == 0)
+        rc = mailbox_load(lease, &scratch->doc, &local);
+      if (rc == LC_OK && mode == 0 && strcmp(scratch->doc.pending_for, id) == 0)
         rc = lc_lease_remove(lease, NULL, &local);
-      else if (rc == LC_OK && mode == 1 && strcmp(doc.kind, "mailbox") == 0 &&
-               strcmp(doc.sender_session, id) == 0) {
-        doc.sender_session[0] = doc.instance[0] = '\0';
-        rc = lc_lease_save(lease, &message_map, &doc, NULL, &local);
+      else if (rc == LC_OK && mode == 1 &&
+               strcmp(scratch->doc.kind, "mailbox") == 0 &&
+               strcmp(scratch->doc.sender_session, id) == 0) {
+        scratch->doc.sender_session[0] = scratch->doc.instance[0] = '\0';
+        rc = lc_lease_save(lease, &message_map, &scratch->doc, NULL, &local);
       }
       if (lease != NULL)
         rc = lease_finish(lease, rc, &local);
-      lonejson_cleanup(&message_map, &doc);
+      lonejson_cleanup(&message_map, &scratch->doc);
     }
     free(keys);
     keys = NULL;
@@ -1438,6 +1532,20 @@ int cai_cli_messages_delete_session(cai_cli_pouch *pouch, const char *id,
   lc_error_cleanup(&local);
   return rc;
 }
+
+int cai_cli_messages_delete_session(cai_cli_pouch *pouch, const char *id,
+                                    cai_error *error) {
+  cai_cli_messages_delete_session_scratch *scratch =
+      (cai_cli_messages_delete_session_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_cli_messages_delete_session scratch");
+  rc = cai_cli_messages_delete_session_with_scratch(pouch, id, error, scratch);
+  free(scratch);
+  return rc;
+}
+
 static int send_tool(void *context, const char *arguments, cai_sink *output,
                      cai_error *error) {
   cai_cli_messages *m = context;

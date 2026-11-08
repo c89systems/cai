@@ -310,7 +310,19 @@ LONEJSON_MAP_DEFINE(cai_stream_ws_error_event_map,
                     cai_stream_ws_error_event_doc,
                     cai_stream_ws_error_event_fields);
 
+/** Reused event scratch is owned by its stream, independent of worker stack. */
+typedef struct cai_sse_emit_event_scratch {
+  cai_stream_delta_event_doc delta_doc;
+  cai_stream_function_call_done_event_doc done_doc;
+  cai_stream_output_item_event_doc item_event;
+  cai_stream_output_item_doc item_doc;
+  cai_stream_output_item_doc function_item_doc;
+  cai_stream_response_event_doc response_event;
+  cai_stream_response_doc response_doc;
+} cai_sse_emit_event_scratch;
+
 typedef struct cai_sse_state {
+  cai_sse_emit_event_scratch *event_scratch;
   cai_stream_sinks sinks;
   char **out_response_id;
   cai_token_usage *out_usage;
@@ -507,7 +519,7 @@ static int cai_sse_record_call_id(cai_sse_state *state, const char *call_id) {
   return CAI_OK;
 }
 
-static void cai_sse_cleanup_call_ids(cai_sse_state *state) {
+static void cai_sse_cleanup(cai_sse_state *state) {
   size_t i;
 
   if (state == NULL) {
@@ -516,6 +528,8 @@ static void cai_sse_cleanup_call_ids(cai_sse_state *state) {
   for (i = 0U; i < state->emitted_call_count; i++) {
     cai_free_mem(NULL, state->emitted_call_ids[i]);
   }
+  cai_free_mem(NULL, state->event_scratch);
+  state->event_scratch = NULL;
   cai_free_mem(NULL, state->emitted_call_ids);
   state->emitted_call_ids = NULL;
   state->emitted_call_count = 0U;
@@ -1837,15 +1851,11 @@ static int cai_sse_failure(cai_sse_state *state, const char *request_id) {
                             state->failed_message, NULL, NULL, request_id);
 }
 
-static int cai_sse_emit_event(cai_sse_state *state,
-                              const lonejson_sse_event *event) {
-  cai_stream_delta_event_doc delta_doc;
-  cai_stream_function_call_done_event_doc done_doc;
-  cai_stream_output_item_event_doc item_event;
-  cai_stream_output_item_doc item_doc;
-  cai_stream_output_item_doc function_item_doc;
-  cai_stream_response_event_doc response_event;
-  cai_stream_response_doc response_doc;
+static int
+cai_sse_emit_event_with_scratch(cai_sse_state *state,
+                                const lonejson_sse_event *event,
+                                cai_sse_emit_event_scratch *scratch) {
+
   const char *event_name;
   char *owned_event_name;
   int rc;
@@ -1878,13 +1888,13 @@ static int cai_sse_emit_event(cai_sse_state *state,
     return rc;
   }
 
-  memset(&delta_doc, 0, sizeof(delta_doc));
-  memset(&done_doc, 0, sizeof(done_doc));
-  memset(&item_event, 0, sizeof(item_event));
-  memset(&item_doc, 0, sizeof(item_doc));
-  memset(&function_item_doc, 0, sizeof(function_item_doc));
-  memset(&response_event, 0, sizeof(response_event));
-  memset(&response_doc, 0, sizeof(response_doc));
+  memset(&scratch->delta_doc, 0, sizeof(scratch->delta_doc));
+  memset(&scratch->done_doc, 0, sizeof(scratch->done_doc));
+  memset(&scratch->item_event, 0, sizeof(scratch->item_event));
+  memset(&scratch->item_doc, 0, sizeof(scratch->item_doc));
+  memset(&scratch->function_item_doc, 0, sizeof(scratch->function_item_doc));
+  memset(&scratch->response_event, 0, sizeof(scratch->response_event));
+  memset(&scratch->response_doc, 0, sizeof(scratch->response_doc));
   delta_initialized = 0;
   done_initialized = 0;
   item_event_initialized = 0;
@@ -1900,29 +1910,31 @@ static int cai_sse_emit_event(cai_sse_state *state,
       strcmp(event_name, "response.reasoning_text.delta") == 0 ||
       strcmp(event_name, "response.function_call_arguments.delta") == 0 ||
       strcmp(event_name, "response.custom_tool_call_input.delta") == 0) {
-    CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_delta_event_map, &delta_doc);
+    CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_delta_event_map,
+                        &scratch->delta_doc);
     delta_initialized = 1;
-    rc = cai_stream_parse_spooled(&cai_stream_delta_event_map, &delta_doc,
+    rc = cai_stream_parse_spooled(&cai_stream_delta_event_map,
+                                  &scratch->delta_doc,
                                   &state->event_json_storage);
     if (rc != CAI_OK) {
       goto done;
     }
     if (strcmp(event_name, "response.output_text.delta") == 0 &&
-        !cai_stream_spooled_empty(&delta_doc.delta)) {
-      rc = cai_sse_emit_output_text_delta(state, &delta_doc);
+        !cai_stream_spooled_empty(&scratch->delta_doc.delta)) {
+      rc = cai_sse_emit_output_text_delta(state, &scratch->delta_doc);
     } else if (strcmp(event_name, "response.function_call_arguments.delta") ==
                    0 &&
-               !cai_stream_spooled_empty(&delta_doc.delta)) {
-      rc = cai_sse_emit_function_call_delta(state, &delta_doc, 0);
+               !cai_stream_spooled_empty(&scratch->delta_doc.delta)) {
+      rc = cai_sse_emit_function_call_delta(state, &scratch->delta_doc, 0);
     } else if (strcmp(event_name, "response.custom_tool_call_input.delta") ==
                    0 &&
-               !cai_stream_spooled_empty(&delta_doc.delta)) {
-      rc = cai_sse_emit_function_call_delta(state, &delta_doc, 1);
+               !cai_stream_spooled_empty(&scratch->delta_doc.delta)) {
+      rc = cai_sse_emit_function_call_delta(state, &scratch->delta_doc, 1);
     } else if ((strcmp(event_name, "response.reasoning_summary_text.delta") ==
                     0 ||
                 strcmp(event_name, "response.reasoning_summary.delta") == 0) &&
-               !cai_stream_spooled_empty(&delta_doc.delta)) {
-      rc = cai_sse_write_reasoning_delta(state, &delta_doc.delta);
+               !cai_stream_spooled_empty(&scratch->delta_doc.delta)) {
+      rc = cai_sse_write_reasoning_delta(state, &scratch->delta_doc.delta);
     }
     goto done;
   }
@@ -1946,56 +1958,62 @@ static int cai_sse_emit_event(cai_sse_state *state,
 
   if (strcmp(event_name, "response.function_call_arguments.done") == 0) {
     CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_function_call_done_event_map,
-                        &done_doc);
+                        &scratch->done_doc);
     done_initialized = 1;
     rc = cai_stream_parse_spooled(&cai_stream_function_call_done_event_map,
-                                  &done_doc, &state->event_json_storage);
+                                  &scratch->done_doc,
+                                  &state->event_json_storage);
     if (rc != CAI_OK) {
       goto done;
     }
-    if (done_doc.call_id != NULL && done_doc.name != NULL &&
-        !cai_stream_spooled_empty(&done_doc.arguments)) {
-      rc = cai_sse_emit_function_call_done(state, &done_doc);
+    if (scratch->done_doc.call_id != NULL && scratch->done_doc.name != NULL &&
+        !cai_stream_spooled_empty(&scratch->done_doc.arguments)) {
+      rc = cai_sse_emit_function_call_done(state, &scratch->done_doc);
     }
     goto done;
   }
 
   if (strcmp(event_name, "response.output_item.done") == 0) {
     rc = cai_stream_parse_output_item_event(&state->event_json_storage,
-                                            &item_event);
+                                            &scratch->item_event);
     if (rc != CAI_OK) {
       goto done;
     }
     item_event_initialized = 1;
-    rc = cai_stream_parse_item_meta(&item_event.item_storage, &item_doc);
+    rc = cai_stream_parse_item_meta(&scratch->item_event.item_storage,
+                                    &scratch->item_doc);
     if (rc != CAI_OK) {
       goto done;
     }
     item_doc_initialized = 1;
-    if (item_doc.type != NULL &&
-        (strcmp(item_doc.type, "function_call") == 0 ||
-         strcmp(item_doc.type, "custom_tool_call") == 0) &&
-        cai_stream_parse_output_item_spooled(&item_event.item_storage,
-                                             &function_item_doc) == CAI_OK) {
+    if (scratch->item_doc.type != NULL &&
+        (strcmp(scratch->item_doc.type, "function_call") == 0 ||
+         strcmp(scratch->item_doc.type, "custom_tool_call") == 0) &&
+        cai_stream_parse_output_item_spooled(&scratch->item_event.item_storage,
+                                             &scratch->function_item_doc) ==
+            CAI_OK) {
       function_item_doc_initialized = 1;
     }
-    rc = cai_sse_emit_output_item_done(state, item_doc.id,
-                                       (int)item_event.output_index,
-                                       item_doc.type, &item_event.item_storage);
+    rc = cai_sse_emit_output_item_done(
+        state, scratch->item_doc.id, (int)scratch->item_event.output_index,
+        scratch->item_doc.type, &scratch->item_event.item_storage);
     if (rc == CAI_OK && function_item_doc_initialized &&
-        function_item_doc.call_id != NULL && function_item_doc.name != NULL &&
-        (strcmp(item_doc.type, "custom_tool_call") == 0 ||
-         !cai_stream_spooled_empty(&function_item_doc.arguments)) &&
-        !cai_sse_has_emitted_call_id(state, function_item_doc.call_id)) {
+        scratch->function_item_doc.call_id != NULL &&
+        scratch->function_item_doc.name != NULL &&
+        (strcmp(scratch->item_doc.type, "custom_tool_call") == 0 ||
+         !cai_stream_spooled_empty(&scratch->function_item_doc.arguments)) &&
+        !cai_sse_has_emitted_call_id(state,
+                                     scratch->function_item_doc.call_id)) {
       rc = cai_sse_emit_function_call_done_values(
-          state, function_item_doc.id, (int)item_event.output_index,
-          function_item_doc.call_id, function_item_doc.name,
-          strcmp(item_doc.type, "custom_tool_call") == 0
-              ? &function_item_doc.input
-              : &function_item_doc.arguments,
-          strcmp(item_doc.type, "custom_tool_call") == 0 ? 1 : 0);
+          state, scratch->function_item_doc.id,
+          (int)scratch->item_event.output_index,
+          scratch->function_item_doc.call_id, scratch->function_item_doc.name,
+          strcmp(scratch->item_doc.type, "custom_tool_call") == 0
+              ? &scratch->function_item_doc.input
+              : &scratch->function_item_doc.arguments,
+          strcmp(scratch->item_doc.type, "custom_tool_call") == 0 ? 1 : 0);
       if (rc == CAI_OK) {
-        rc = cai_sse_record_call_id(state, function_item_doc.call_id);
+        rc = cai_sse_record_call_id(state, scratch->function_item_doc.call_id);
       }
     }
     goto done;
@@ -2004,17 +2022,17 @@ static int cai_sse_emit_event(cai_sse_state *state,
   if (strcmp(event_name, "response.created") == 0 ||
       strcmp(event_name, "response.in_progress") == 0) {
     rc = cai_stream_parse_response_event(&state->event_json_storage,
-                                         &response_event);
+                                         &scratch->response_event);
     if (rc != CAI_OK) {
       goto done;
     }
     completed_initialized = 1;
-    rc = cai_stream_parse_response_meta(&response_event.response_storage,
-                                        &response_doc);
+    rc = cai_stream_parse_response_meta(
+        &scratch->response_event.response_storage, &scratch->response_doc);
     if (rc != CAI_OK) {
       goto done;
     }
-    rc = cai_sse_set_response_id(state, response_doc.id);
+    rc = cai_sse_set_response_id(state, scratch->response_doc.id);
     goto done;
   }
 
@@ -2023,13 +2041,13 @@ static int cai_sse_emit_event(cai_sse_state *state,
     response_incomplete = strcmp(event_name, "response.incomplete") == 0;
     state->done_seen = 1;
     rc = cai_stream_parse_response_event(&state->event_json_storage,
-                                         &response_event);
+                                         &scratch->response_event);
     if (rc != CAI_OK) {
       goto done;
     }
     completed_initialized = 1;
-    rc = cai_stream_parse_response_meta(&response_event.response_storage,
-                                        &response_doc);
+    rc = cai_stream_parse_response_meta(
+        &scratch->response_event.response_storage, &scratch->response_doc);
     if (rc != CAI_OK) {
       goto done;
     }
@@ -2038,17 +2056,17 @@ static int cai_sse_emit_event(cai_sse_state *state,
       rc = cai_sse_finish_output(state);
     }
     if (rc == CAI_OK) {
-      rc = cai_sse_set_response_id(state, response_doc.id);
+      rc = cai_sse_set_response_id(state, scratch->response_doc.id);
     }
     if (rc == CAI_OK && state->out_usage != NULL) {
-      cai_stream_copy_usage(state->out_usage, &response_doc.usage);
+      cai_stream_copy_usage(state->out_usage, &scratch->response_doc.usage);
     }
     if (rc == CAI_OK && response_incomplete) {
       state->response_incomplete_seen = 1;
-      if (response_doc.has_incomplete_reason) {
+      if (scratch->response_doc.has_incomplete_reason) {
         memcpy(state->response_incomplete_reason,
-               response_doc.incomplete_reason,
-               strlen(response_doc.incomplete_reason) + 1U);
+               scratch->response_doc.incomplete_reason,
+               strlen(scratch->response_doc.incomplete_reason) + 1U);
       }
     } else if (rc == CAI_OK) {
       state->response_completed_seen = 1;
@@ -2061,30 +2079,43 @@ done:
                                "failed to process streaming response event",
                                event_name);
   }
-  cai_free_mem(NULL, response_doc.id);
+  cai_free_mem(NULL, scratch->response_doc.id);
   cai_free_mem(NULL, owned_event_name);
   if (completed_initialized) {
-    cai_stream_response_event_cleanup(&response_event);
+    cai_stream_response_event_cleanup(&scratch->response_event);
   }
   if (item_doc_initialized) {
-    cai_stream_item_meta_cleanup(&item_doc);
+    cai_stream_item_meta_cleanup(&scratch->item_doc);
   }
   if (function_item_doc_initialized) {
     CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_output_item_map,
-                           &function_item_doc);
+                           &scratch->function_item_doc);
   }
   if (item_event_initialized) {
-    cai_stream_output_item_event_cleanup(&item_event);
+    cai_stream_output_item_event_cleanup(&scratch->item_event);
   }
   if (done_initialized) {
     CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM,
-                           &cai_stream_function_call_done_event_map, &done_doc);
+                           &cai_stream_function_call_done_event_map,
+                           &scratch->done_doc);
   }
   if (delta_initialized) {
     CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_delta_event_map,
-                           &delta_doc);
+                           &scratch->delta_doc);
   }
   return rc;
+}
+
+static int cai_sse_emit_event(cai_sse_state *state,
+                              const lonejson_sse_event *event) {
+  if (state->event_scratch == NULL) {
+    state->event_scratch = (cai_sse_emit_event_scratch *)cai_alloc(
+        NULL, sizeof(*state->event_scratch));
+    if (state->event_scratch == NULL)
+      return cai_set_error(state->error, CAI_ERR_NOMEM,
+                           "allocate stream event scratch");
+  }
+  return cai_sse_emit_event_with_scratch(state, event, state->event_scratch);
 }
 
 static lonejson_status cai_sse_data_chunk(void *user, const void *bytes,
@@ -2473,7 +2504,7 @@ int cai_stream_fuzz_sse(const unsigned char *data, size_t size) {
   }
   lonejson_sse_close(state.sse);
   cai_stream_event_json_cleanup(&state);
-  cai_sse_cleanup_call_ids(&state);
+  cai_sse_cleanup(&state);
   cai_sink_close(sink);
   return 0;
 }
@@ -2599,9 +2630,14 @@ static int cai_ws_send_all(CURL *curl, const unsigned char *buffer,
   return CAI_OK;
 }
 
-static int cai_ws_send_request(CURL *curl, cai_response_request_upload *upload,
-                               long timeout_ms, cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_ws_send_request_scratch {
   unsigned char buffer[CAI_WEBSOCKET_FRAME_BUFFER_SIZE];
+} cai_ws_send_request_scratch;
+static int cai_ws_send_request_with_scratch(
+    CURL *curl, cai_response_request_upload *upload, long timeout_ms,
+    cai_error *error, cai_ws_send_request_scratch *scratch) {
+
   curl_off_t total;
   curl_off_t offset;
   size_t nread;
@@ -2615,8 +2651,8 @@ static int cai_ws_send_request(CURL *curl, cai_response_request_upload *upload,
   }
   offset = 0;
   while (offset < total) {
-    nread = cai_response_request_upload_read((char *)buffer, 1U, sizeof(buffer),
-                                             upload);
+    nread = cai_response_request_upload_read((char *)scratch->buffer, 1U,
+                                             sizeof(scratch->buffer), upload);
     if (nread == CURL_READFUNC_ABORT || nread == CURL_READFUNC_PAUSE) {
       return cai_set_error(error, CAI_ERR_TRANSPORT,
                            "failed to read websocket request body");
@@ -2630,12 +2666,27 @@ static int cai_ws_send_request(CURL *curl, cai_response_request_upload *upload,
     if (offset < total) {
       flags |= CURLWS_CONT;
     }
-    rc = cai_ws_send_all(curl, buffer, nread, flags, timeout_ms, error);
+    rc =
+        cai_ws_send_all(curl, scratch->buffer, nread, flags, timeout_ms, error);
     if (rc != CAI_OK) {
       return rc;
     }
   }
   return CAI_OK;
+}
+
+static int cai_ws_send_request(CURL *curl, cai_response_request_upload *upload,
+                               long timeout_ms, cai_error *error) {
+  cai_ws_send_request_scratch *scratch =
+      (cai_ws_send_request_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_ws_send_request scratch");
+  rc = cai_ws_send_request_with_scratch(curl, upload, timeout_ms, error,
+                                        scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static int cai_ws_http_status_is_transient(long http_status) {
@@ -2805,9 +2856,15 @@ static int cai_ws_append_message_bytes(cai_sse_state *state,
                               json_error.message);
 }
 
-static int cai_ws_receive_events(CURL *curl, cai_sse_state *state,
-                                 long timeout_ms, cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_ws_receive_events_scratch {
   unsigned char buffer[CAI_WEBSOCKET_FRAME_BUFFER_SIZE];
+} cai_ws_receive_events_scratch;
+static int
+cai_ws_receive_events_with_scratch(CURL *curl, cai_sse_state *state,
+                                   long timeout_ms, cai_error *error,
+                                   cai_ws_receive_events_scratch *scratch) {
+
   const struct curl_ws_frame *meta;
   size_t received;
   CURLcode curl_rc;
@@ -2822,7 +2879,8 @@ static int cai_ws_receive_events(CURL *curl, cai_sse_state *state,
     }
     received = 0U;
     meta = NULL;
-    curl_rc = curl_ws_recv(curl, buffer, sizeof(buffer), &received, &meta);
+    curl_rc = curl_ws_recv(curl, scratch->buffer, sizeof(scratch->buffer),
+                           &received, &meta);
     if (curl_rc == CURLE_AGAIN) {
       rc = cai_ws_wait(curl, 0, timeout_ms, error);
       if (rc != CAI_OK) {
@@ -2861,7 +2919,7 @@ static int cai_ws_receive_events(CURL *curl, cai_sse_state *state,
                !receiving_text) {
       continue;
     }
-    rc = cai_ws_append_message_bytes(state, buffer, received, error);
+    rc = cai_ws_append_message_bytes(state, scratch->buffer, received, error);
     if (rc != CAI_OK) {
       return rc;
     }
@@ -2875,6 +2933,20 @@ static int cai_ws_receive_events(CURL *curl, cai_sse_state *state,
     }
   }
   return state->failed ? state->failed_code : CAI_OK;
+}
+
+static int cai_ws_receive_events(CURL *curl, cai_sse_state *state,
+                                 long timeout_ms, cai_error *error) {
+  cai_ws_receive_events_scratch *scratch =
+      (cai_ws_receive_events_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_ws_receive_events scratch");
+  rc = cai_ws_receive_events_with_scratch(curl, state, timeout_ms, error,
+                                          scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static int cai_client_stream_response_websocket_with_id(
@@ -3093,7 +3165,7 @@ retry_request:
     cai_free_mem(&impl->allocator, http_url);
     cai_free_mem(&impl->allocator, url);
     cai_response_request_upload_close(upload);
-    cai_sse_cleanup_call_ids(&state);
+    cai_sse_cleanup(&state);
     cai_stream_event_json_cleanup(&state);
     if (error != NULL) {
       cai_error_cleanup(error);
@@ -3116,7 +3188,7 @@ retry_request:
   cai_free_mem(&impl->allocator, http_url);
   cai_free_mem(&impl->allocator, url);
   cai_response_request_upload_close(upload);
-  cai_sse_cleanup_call_ids(&state);
+  cai_sse_cleanup(&state);
   if (out_caller_output_attempted != NULL && state.caller_output_attempted) {
     *out_caller_output_attempted = 1;
   }
@@ -3177,15 +3249,26 @@ static int cai_client_should_use_responses_websocket(cai_client *client) {
   return strstr(impl->base_url, "api.openai.com") != NULL;
 }
 
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
 static int cai_client_stream_response_params_with_id(
     cai_client *client, const cai_response_create_params *params,
     const cai_stream_sinks *sinks, char **out_response_id,
-    cai_token_usage *out_usage, cai_error *error) {
+    cai_token_usage *out_usage, cai_error *error);
+typedef struct cai_client_stream_response_params_with_id_scratch {
+  cai_sse_state state;
+  lonejson_sse_options sse_options;
+  lonejson_error sse_error;
+} cai_client_stream_response_params_with_id_scratch;
+static int cai_client_stream_response_params_with_id_with_scratch(
+    cai_client *client, const cai_response_create_params *params,
+    const cai_stream_sinks *sinks, char **out_response_id,
+    cai_token_usage *out_usage, cai_error *error,
+    cai_client_stream_response_params_with_id_scratch *scratch) {
   cai_client_impl *impl;
   CURL *curl;
   CURLcode curl_rc;
   struct curl_slist *headers;
-  cai_sse_state state;
+
   cai_response_request_upload *upload;
   char *url;
   char *request_id;
@@ -3194,8 +3277,7 @@ static int cai_client_stream_response_params_with_id(
   int http_success;
   int websocket_caller_output_attempted;
   int websocket_caller_output_seen;
-  lonejson_sse_options sse_options;
-  lonejson_error sse_error;
+
   lonejson_status sse_status;
   int retried_auth;
 
@@ -3254,51 +3336,54 @@ retry_request:
   headers = NULL;
   upload = NULL;
   request_id = NULL;
-  memset(&state, 0, sizeof(state));
-  sse_options = lonejson_default_sse_options();
-  sse_options.max_line_bytes = CAI_DEFAULT_SSE_EVENT_LIMIT;
-  sse_options.max_event_data_bytes = CAI_DEFAULT_SSE_EVENT_LIMIT;
-  sse_options.max_buffered_bytes = CAI_DEFAULT_SSE_EVENT_LIMIT;
-  memset(&sse_error, 0, sizeof(sse_error));
-  state.sinks = *sinks;
-  state.out_response_id = out_response_id;
-  state.out_usage = out_usage;
-  state.error = error;
-  state.sse = lonejson_sse_open(&sse_options, &sse_error);
-  if (cai_stream_event_json_init(&state, &sse_error) != LONEJSON_STATUS_OK) {
-    if (state.sse != NULL) {
-      lonejson_sse_close(state.sse);
+  memset(&scratch->state, 0, sizeof(scratch->state));
+  scratch->sse_options = lonejson_default_sse_options();
+  scratch->sse_options.max_line_bytes = CAI_DEFAULT_SSE_EVENT_LIMIT;
+  scratch->sse_options.max_event_data_bytes = CAI_DEFAULT_SSE_EVENT_LIMIT;
+  scratch->sse_options.max_buffered_bytes = CAI_DEFAULT_SSE_EVENT_LIMIT;
+  memset(&scratch->sse_error, 0, sizeof(scratch->sse_error));
+  scratch->state.sinks = *sinks;
+  scratch->state.out_response_id = out_response_id;
+  scratch->state.out_usage = out_usage;
+  scratch->state.error = error;
+  scratch->state.sse =
+      lonejson_sse_open(&scratch->sse_options, &scratch->sse_error);
+  if (cai_stream_event_json_init(&scratch->state, &scratch->sse_error) !=
+      LONEJSON_STATUS_OK) {
+    if (scratch->state.sse != NULL) {
+      lonejson_sse_close(scratch->state.sse);
     }
-    cai_sse_cleanup_call_ids(&state);
-    return cai_set_error(error, cai_sse_status_to_code(sse_error.code),
-                         cai_sse_status_to_message(sse_error.code));
+    cai_sse_cleanup(&scratch->state);
+    return cai_set_error(error, cai_sse_status_to_code(scratch->sse_error.code),
+                         cai_sse_status_to_message(scratch->sse_error.code));
   }
-  memset(&state.json_options, 0, sizeof(state.json_options));
-  state.json_options.event_names = cai_stream_json_event_names;
-  state.json_options.event_name_count = sizeof(cai_stream_json_event_names) /
-                                        sizeof(cai_stream_json_event_names[0]);
-  state.body = NULL;
-  state.body_length = 0U;
-  state.body_capacity = 0U;
-  state.failed = 0;
-  state.failed_code = CAI_ERR_TRANSPORT;
-  state.failed_message = "streaming response sink failed";
-  state.reasoning_summary_started = 0;
-  state.reasoning_summary_suffixed = 0;
-  state.output_text_started = 0;
-  state.output_text_suffixed = 0;
-  state.done_line_length = 0U;
-  state.done_line_start = 1;
-  state.done_seen = 0;
-  state.response_completed_seen = 0;
-  state.response_incomplete_seen = 0;
-  state.response_incomplete_reason[0] = '\0';
+  memset(&scratch->state.json_options, 0, sizeof(scratch->state.json_options));
+  scratch->state.json_options.event_names = cai_stream_json_event_names;
+  scratch->state.json_options.event_name_count =
+      sizeof(cai_stream_json_event_names) /
+      sizeof(cai_stream_json_event_names[0]);
+  scratch->state.body = NULL;
+  scratch->state.body_length = 0U;
+  scratch->state.body_capacity = 0U;
+  scratch->state.failed = 0;
+  scratch->state.failed_code = CAI_ERR_TRANSPORT;
+  scratch->state.failed_message = "streaming response sink failed";
+  scratch->state.reasoning_summary_started = 0;
+  scratch->state.reasoning_summary_suffixed = 0;
+  scratch->state.output_text_started = 0;
+  scratch->state.output_text_suffixed = 0;
+  scratch->state.done_line_length = 0U;
+  scratch->state.done_line_start = 1;
+  scratch->state.done_seen = 0;
+  scratch->state.response_completed_seen = 0;
+  scratch->state.response_incomplete_seen = 0;
+  scratch->state.response_incomplete_reason[0] = '\0';
   http_success = 0;
-  if (state.sse == NULL) {
-    rc = cai_set_error(error, cai_sse_status_to_code(sse_error.code),
-                       cai_sse_status_to_message(sse_error.code));
-    cai_stream_event_json_cleanup(&state);
-    cai_sse_cleanup_call_ids(&state);
+  if (scratch->state.sse == NULL) {
+    rc = cai_set_error(error, cai_sse_status_to_code(scratch->sse_error.code),
+                       cai_sse_status_to_message(scratch->sse_error.code));
+    cai_stream_event_json_cleanup(&scratch->state);
+    cai_sse_cleanup(&scratch->state);
     return rc;
   }
 
@@ -3338,9 +3423,9 @@ retry_request:
     curl_slist_free_all(headers);
     cai_free_mem(&CAI_CLIENT_IMPL(client)->allocator, url);
     cai_response_request_upload_close(upload);
-    lonejson_sse_close(state.sse);
-    cai_stream_event_json_cleanup(&state);
-    cai_sse_cleanup_call_ids(&state);
+    lonejson_sse_close(scratch->state.sse);
+    cai_stream_event_json_cleanup(&scratch->state);
+    cai_sse_cleanup(&scratch->state);
     return rc;
   }
   curl = curl_easy_init();
@@ -3348,9 +3433,9 @@ retry_request:
     curl_slist_free_all(headers);
     cai_free_mem(&CAI_CLIENT_IMPL(client)->allocator, url);
     cai_response_request_upload_close(upload);
-    lonejson_sse_close(state.sse);
-    cai_stream_event_json_cleanup(&state);
-    cai_sse_cleanup_call_ids(&state);
+    lonejson_sse_close(scratch->state.sse);
+    cai_stream_event_json_cleanup(&scratch->state);
+    cai_sse_cleanup(&scratch->state);
     return cai_set_error(error, CAI_ERR_TRANSPORT, "failed to initialize curl");
   }
   if (rc == CAI_OK) {
@@ -3363,7 +3448,7 @@ retry_request:
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE,
                      cai_response_request_upload_size(upload));
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, cai_sse_write);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &state);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &scratch->state);
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION,
                      cai_http_request_id_header_write);
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, &request_id);
@@ -3391,7 +3476,8 @@ retry_request:
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
     if (curl_rc == CURLE_OK) {
       cai_log_http_request_done(CAI_CLIENT_IMPL(client), "POST", "responses",
-                                http_status, state.body_length, request_id);
+                                http_status, scratch->state.body_length,
+                                request_id);
     }
   } else {
     curl_rc = CURLE_OK;
@@ -3400,45 +3486,46 @@ retry_request:
   curl_easy_cleanup(curl);
   http_success =
       curl_rc == CURLE_OK && http_status >= 200L && http_status < 300L;
-  if (http_success && !state.failed) {
-    rc = cai_sse_flush_done_line(&state);
+  if (http_success && !scratch->state.failed) {
+    rc = cai_sse_flush_done_line(&scratch->state);
     if (rc != CAI_OK) {
-      state.failed = 1;
-      state.failed_code = rc;
-      state.failed_message = "streaming response callback failed";
+      scratch->state.failed = 1;
+      scratch->state.failed_code = rc;
+      scratch->state.failed_message = "streaming response callback failed";
     }
   }
-  if (http_success && !state.failed && !state.done_seen) {
+  if (http_success && !scratch->state.failed && !scratch->state.done_seen) {
     lonejson_sse_handler handler;
 
     memset(&handler, 0, sizeof(handler));
     handler.data_chunk = cai_sse_data_chunk;
     handler.end_event = cai_sse_end_event;
-    memset(&sse_error, 0, sizeof(sse_error));
-    sse_status = lonejson_sse_finish(state.sse, &handler, &state, &sse_error);
+    memset(&scratch->sse_error, 0, sizeof(scratch->sse_error));
+    sse_status = lonejson_sse_finish(scratch->state.sse, &handler,
+                                     &scratch->state, &scratch->sse_error);
     if (sse_status != LONEJSON_STATUS_OK) {
-      if (!state.failed) {
-        state.failed = 1;
-        state.failed_code = cai_sse_status_to_code(sse_status);
-        state.failed_message = cai_sse_status_to_message(sse_status);
+      if (!scratch->state.failed) {
+        scratch->state.failed = 1;
+        scratch->state.failed_code = cai_sse_status_to_code(sse_status);
+        scratch->state.failed_message = cai_sse_status_to_message(sse_status);
       }
     }
   }
   curl_slist_free_all(headers);
   cai_free_mem(&CAI_CLIENT_IMPL(client)->allocator, url);
-  lonejson_sse_close(state.sse);
-  cai_stream_event_json_cleanup(&state);
-  cai_sse_cleanup_call_ids(&state);
+  lonejson_sse_close(scratch->state.sse);
+  cai_stream_event_json_cleanup(&scratch->state);
+  cai_sse_cleanup(&scratch->state);
   cai_response_request_upload_close(upload);
   if (rc != CAI_OK) {
-    cai_free_mem(NULL, state.body);
+    cai_free_mem(NULL, scratch->state.body);
     cai_free_mem(NULL, request_id);
     return rc;
   }
   if (!http_success && !retried_auth &&
       (http_status == 401L || http_status == 403L) &&
       CAI_CLIENT_IMPL(client)->chatgpt_auth != NULL) {
-    cai_free_mem(NULL, state.body);
+    cai_free_mem(NULL, scratch->state.body);
     cai_free_mem(NULL, request_id);
     rc = cai_client_refresh_chatgpt_auth_after_http(client, http_status, error);
     if (rc != CAI_OK) {
@@ -3450,30 +3537,32 @@ retry_request:
   if (curl_rc != CURLE_OK) {
     if (curl_rc == CURLE_ABORTED_BY_CALLBACK &&
         cai_stream_thread_cancel_requested()) {
-      cai_free_mem(NULL, state.body);
+      cai_free_mem(NULL, scratch->state.body);
       cai_free_mem(NULL, request_id);
       return cai_set_error(error, CAI_ERR_CANCELLED,
                            "agent turn was cancelled");
     }
     if (http_status > 0L && (http_status < 200L || http_status >= 300L)) {
       rc = cai_set_openai_error(
-          error, http_status, state.body != NULL ? state.body : "", request_id);
+          error, http_status,
+          scratch->state.body != NULL ? scratch->state.body : "", request_id);
       cai_log_provider_stream_error(CAI_CLIENT_IMPL(client), "POST", error);
-      cai_free_mem(NULL, state.body);
+      cai_free_mem(NULL, scratch->state.body);
       cai_free_mem(NULL, request_id);
       return rc;
     }
-    cai_free_mem(NULL, state.body);
-    if (state.failed) {
-      rc = cai_sse_failure(&state, request_id);
+    cai_free_mem(NULL, scratch->state.body);
+    if (scratch->state.failed) {
+      rc = cai_sse_failure(&scratch->state, request_id);
       if (rc == CAI_ERR_SERVER)
         cai_log_provider_stream_error(CAI_CLIENT_IMPL(client), "POST", error);
       else
         cai_log_http_transport_error(
             CAI_CLIENT_IMPL(client), "POST", "responses",
-            error != NULL && error->detail != NULL    ? error->detail
-            : error != NULL && error->message != NULL ? error->message
-                                                      : state.failed_message);
+            error != NULL && error->detail != NULL ? error->detail
+            : error != NULL && error->message != NULL
+                ? error->message
+                : scratch->state.failed_message);
       cai_free_mem(NULL, request_id);
       return rc;
     }
@@ -3485,45 +3574,64 @@ retry_request:
                                 curl_easy_strerror(curl_rc));
   }
   if (!http_success) {
-    rc = cai_set_openai_error(error, http_status,
-                              state.body != NULL ? state.body : "", request_id);
+    rc = cai_set_openai_error(
+        error, http_status,
+        scratch->state.body != NULL ? scratch->state.body : "", request_id);
     cai_log_provider_stream_error(CAI_CLIENT_IMPL(client), "POST", error);
-    cai_free_mem(NULL, state.body);
+    cai_free_mem(NULL, scratch->state.body);
     cai_free_mem(NULL, request_id);
     return rc;
   }
-  if (state.failed) {
-    cai_free_mem(NULL, state.body);
-    rc = cai_sse_failure(&state, request_id);
+  if (scratch->state.failed) {
+    cai_free_mem(NULL, scratch->state.body);
+    rc = cai_sse_failure(&scratch->state, request_id);
     if (rc == CAI_ERR_SERVER)
       cai_log_provider_stream_error(CAI_CLIENT_IMPL(client), "POST", error);
     else
-      cai_log_http_transport_error(
-          CAI_CLIENT_IMPL(client), "POST", "responses",
-          error != NULL && error->detail != NULL    ? error->detail
-          : error != NULL && error->message != NULL ? error->message
-                                                    : state.failed_message);
+      cai_log_http_transport_error(CAI_CLIENT_IMPL(client), "POST", "responses",
+                                   error != NULL && error->detail != NULL
+                                       ? error->detail
+                                   : error != NULL && error->message != NULL
+                                       ? error->message
+                                       : scratch->state.failed_message);
     cai_free_mem(NULL, request_id);
     return rc;
   }
-  if (state.response_incomplete_seen) {
-    cai_free_mem(NULL, state.body);
+  if (scratch->state.response_incomplete_seen) {
+    cai_free_mem(NULL, scratch->state.body);
     cai_free_mem(NULL, request_id);
-    return cai_set_error_detail(error, CAI_ERR_LIMIT,
-                                "response ended incomplete",
-                                state.response_incomplete_reason[0] != '\0'
-                                    ? state.response_incomplete_reason
-                                    : NULL);
+    return cai_set_error_detail(
+        error, CAI_ERR_LIMIT, "response ended incomplete",
+        scratch->state.response_incomplete_reason[0] != '\0'
+            ? scratch->state.response_incomplete_reason
+            : NULL);
   }
-  if (!state.response_completed_seen) {
-    cai_free_mem(NULL, state.body);
+  if (!scratch->state.response_completed_seen) {
+    cai_free_mem(NULL, scratch->state.body);
     cai_free_mem(NULL, request_id);
     return cai_set_error(error, CAI_ERR_PROTOCOL,
                          "stream ended before response.completed");
   }
-  cai_free_mem(NULL, state.body);
+  cai_free_mem(NULL, scratch->state.body);
   cai_free_mem(NULL, request_id);
   return CAI_OK;
+}
+
+static int cai_client_stream_response_params_with_id(
+    cai_client *client, const cai_response_create_params *params,
+    const cai_stream_sinks *sinks, char **out_response_id,
+    cai_token_usage *out_usage, cai_error *error) {
+  cai_client_stream_response_params_with_id_scratch *scratch =
+      (cai_client_stream_response_params_with_id_scratch *)cai_alloc(
+          NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate response stream state");
+  rc = cai_client_stream_response_params_with_id_with_scratch(
+      client, params, sinks, out_response_id, out_usage, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 int cai_client_stream_response_text(cai_client *client,

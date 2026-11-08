@@ -102,20 +102,28 @@ static int deletion_reviews(session_deletion *plan,
 }
 static int deletion_children(session_deletion *plan, size_t parent_index,
                              cai_error *error) {
-  cai_cli_session parent = plan->items[parent_index], *children = NULL;
+  cai_cli_session *parent, *children = NULL;
   char scope[256];
   size_t count = 0U, i;
   int review, rc = CAI_OK;
+  parent = malloc(sizeof(*parent));
+  if (parent == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate child deletion metadata");
+  *parent = plan->items[parent_index];
   for (review = 0; rc == CAI_OK && review < 2; review++) {
     snprintf(scope, sizeof(scope), "%ssmith-subagent:%s",
-             review ? "smith-review:" : "", parent.id);
+             review ? "smith-review:" : "", parent->id);
     rc = session_list(plan->pouch, scope, 0, &children, &count, error);
     for (i = 0U; rc == CAI_OK && i < count; i++)
       rc = deletion_add(plan, &children[i], error);
     free(children);
     children = NULL;
   }
-  return rc == CAI_OK ? deletion_reviews(plan, &parent, error) : rc;
+  if (rc == CAI_OK)
+    rc = deletion_reviews(plan, parent, error);
+  free(parent);
+  return rc;
 }
 static int deletion_drop(cai_cli_pouch *pouch, const char *id, const char *kind,
                          cai_error *error) {
@@ -131,19 +139,27 @@ static int deletion_drop(cai_cli_pouch *pouch, const char *id, const char *kind,
   lc_error_cleanup(&local);
   return rc;
 }
-static int deletion_one(cai_cli_pouch *pouch, const cai_cli_session *item,
-                        cai_error *error) {
-  lc_lease *directory = NULL, *lease = NULL;
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct deletion_one_scratch {
   latest_index index;
+} deletion_one_scratch;
+static int deletion_one_with_scratch(cai_cli_pouch *pouch,
+                                     const cai_cli_session *item,
+                                     cai_error *error,
+                                     deletion_one_scratch *scratch) {
+  lc_lease *directory = NULL, *lease = NULL;
+
   lc_error local;
   int deleted = 0;
   int rc = scope_indexed(item->workspace)
-               ? latest_open(pouch, item->workspace, &directory, &index, error)
+               ? latest_open(pouch, item->workspace, &directory,
+                             &scratch->index, error)
                : CAI_OK;
   lc_error_init(&local);
   if (rc == CAI_OK && directory != NULL) {
-    index.dirty = 1;
-    rc = latest_write(pouch, directory, &index, error);
+    scratch->index.dirty = 1;
+    rc = latest_write(pouch, directory, &scratch->index, error);
   }
   if (rc == CAI_OK)
     rc = acquire(pouch, item->id, &lease, error);
@@ -158,35 +174,51 @@ static int deletion_one(cai_cli_pouch *pouch, const cai_cli_session *item,
     rc = cai_cli_lc_error(error, &local);
   rc = release(lease, rc, error);
   if (rc == CAI_OK && directory != NULL)
-    rc = latest_rebuild(pouch, &index, error);
+    rc = latest_rebuild(pouch, &scratch->index, error);
   if (rc == CAI_OK && directory != NULL)
-    rc = latest_write(pouch, directory, &index, error);
+    rc = latest_write(pouch, directory, &scratch->index, error);
   lc_error_cleanup(&local);
   return release(directory, rc, error);
 }
+
+static int deletion_one(cai_cli_pouch *pouch, const cai_cli_session *item,
+                        cai_error *error) {
+  deletion_one_scratch *scratch =
+      (deletion_one_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate deletion_one scratch");
+  rc = deletion_one_with_scratch(pouch, item, error, scratch);
+  free(scratch);
+  return rc;
+}
+
 int cai_cli_pouch_delete(cai_cli_pouch *pouch, const char *workspace,
                          const char *id,
                          int (*cleanup)(void *, const char *, cai_error *),
                          void *context, cai_error *error) {
   session_deletion plan;
-  cai_cli_session root;
+  cai_cli_session *root;
   cai_cli_session_guard *guard = NULL;
   size_t i;
   int rc = history_supported(pouch, error);
+  root = calloc(1U, sizeof(*root));
+  if (root == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate deletion metadata");
   memset(&plan, 0, sizeof(plan));
   plan.pouch = pouch;
   if (rc == CAI_OK)
     rc = session_guard_open(pouch, id, 1, &guard, NULL, error);
   if (rc == CAI_OK)
-    rc = cai_cli_pouch_session(pouch, id, &root, error);
-  if (rc == CAI_OK && strcmp(root.id, id) != 0)
+    rc = cai_cli_pouch_session(pouch, id, root, error);
+  if (rc == CAI_OK && strcmp(root->id, id) != 0)
     rc = cai_cli_error(error, CAI_ERR_INVALID,
                        "conversation metadata identity does not match its key");
-  if (rc == CAI_OK && strcmp(root.workspace, workspace) != 0)
+  if (rc == CAI_OK && strcmp(root->workspace, workspace) != 0)
     rc = cai_cli_error(error, CAI_ERR_INVALID,
                        "conversation belongs to another directory");
   if (rc == CAI_OK)
-    rc = deletion_add(&plan, &root, error);
+    rc = deletion_add(&plan, root, error);
   for (i = 0U; rc == CAI_OK && i < plan.count; i++)
     rc = deletion_children(&plan, i, error);
   /* Local cleanup fails before any collection is dropped. Metadata stays
@@ -201,6 +233,7 @@ int cai_cli_pouch_delete(cai_cli_pouch *pouch, const char *workspace,
     rc =
         cai_cli_error(error, CAI_ERR_TRANSPORT, "remove conversation use lock");
   free(plan.items);
+  free(root);
   session_guard_close(guard);
   return rc;
 }

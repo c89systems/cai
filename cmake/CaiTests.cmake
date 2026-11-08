@@ -99,6 +99,14 @@ if(CAI_BUILD_TESTS)
   add_test(NAME cai_yaml_c89_test COMMAND cai_yaml_c89_test)
   set_tests_properties(cai_yaml_c89_test PROPERTIES LABELS "unit;local" TIMEOUT 5)
   add_executable(cai_config_test tests/config_test.c)
+  add_executable(cai_core_worker_stack_test tests/core_worker_stack_test.c)
+  cai_link_internal_consumer(cai_core_worker_stack_test)
+  cai_configure_cli_target(cai_core_worker_stack_test)
+  target_compile_options(cai_core_worker_stack_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_core_worker_stack COMMAND bash
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/core_worker_stack_test.sh"
+    "$<TARGET_FILE:cai_core_worker_stack_test>")
+  set_tests_properties(cai_core_worker_stack PROPERTIES LABELS "unit;local;offline" TIMEOUT 15)
   cai_link_internal_consumer(cai_config_test)
   # Like the workspace fixtures, run directly without a host musl loader.
   cai_configure_cli_target(cai_config_test)

@@ -26,7 +26,7 @@ if printf '/quit\n' | "$cli" -C "$fixture/work" >"$fixture/out" 2>"$fixture/err"
   echo 'Codex auth was not preferred' >&2
   exit 1
 fi
-grep -q 'import ChatGPT auth' "$fixture/err"
+grep -q 'failed to parse auth JSON' "$fixture/err"
 rm "$fixture/home/.codex/auth.json"
 stored=$(printf '/status\n/quit\n' | "$cli" -C "$fixture/work")
 [[ "$stored" == *"chatgpt"* ]]
@@ -73,20 +73,20 @@ if printf '/quit\n' | env -u OPENAI_API_KEY "$cli" -N -p openai -C "$fixture/wor
   echo 'missing OpenAI key was accepted' >&2
   exit 1
 fi
-grep -q 'OPENAI_API_KEY' "$fixture/out"
+grep -q 'OPENAI_API_KEY' "$fixture/err"
 if printf '/quit\n' | env -u BERGET_API_KEY "$cli" -N -p berget -C "$fixture/work" \
   >"$fixture/out" 2>"$fixture/err"; then
   echo 'missing Berget key was accepted' >&2
   exit 1
 fi
-grep -q 'BERGET_API_KEY' "$fixture/out"
+grep -q 'BERGET_API_KEY' "$fixture/err"
 
 export XDG_STATE_HOME="$fixture/state-empty"
 if printf '/quit\n' | "$cli" -C "$fixture/work" >"$fixture/out" 2>"$fixture/err"; then
   echo 'missing auth was accepted' >&2
   exit 1
 fi
-grep -q 'run cai --login' "$fixture/out"
+grep -q 'auth JSON is not stored' "$fixture/err"
 help=$("$cli" --help)
 [[ "$help" == $'cai and libcai Copyright (C) 2026 C89 Systems AB https://c89.systems\n\nUsage: cai '* ]]
 [[ "$("$cli" -h)" == "$help" ]]

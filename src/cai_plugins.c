@@ -388,9 +388,16 @@ static int approved_directory(cai_plugins *plugins, const char *directory,
   return cai_set_error(error, CAI_ERR_INVALID,
                        "plugin package is outside configured tool roots");
 }
-int cai_plugins_load(cai_plugins *plugins, const char *directory,
-                     cai_error *error) {
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_plugins_load_scratch {
   char path[4096], manifest_path[4096];
+} cai_plugins_load_scratch;
+static int cai_plugins_load_with_scratch(cai_plugins *plugins,
+                                         const char *directory,
+                                         cai_error *error,
+                                         cai_plugins_load_scratch *scratch) {
+
   char *bytes;
   FILE *file;
   size_t length;
@@ -403,13 +410,14 @@ int cai_plugins_load(cai_plugins *plugins, const char *directory,
   int rc;
   if (plugins == NULL)
     return cai_set_error(error, CAI_ERR_INVALID, "plugin catalog required");
-  rc = approved_directory(plugins, directory, path, error);
+  rc = approved_directory(plugins, directory, scratch->path, error);
   if (rc != CAI_OK)
     return rc;
-  if (snprintf(manifest_path, sizeof(manifest_path), "%s/tool.json", path) >=
-      (int)sizeof(manifest_path))
+  if (snprintf(scratch->manifest_path, sizeof(scratch->manifest_path),
+               "%s/tool.json",
+               scratch->path) >= (int)sizeof(scratch->manifest_path))
     return cai_set_error(error, CAI_ERR_INVALID, "plugin path too long");
-  file = fopen(manifest_path, "rb");
+  file = fopen(scratch->manifest_path, "rb");
   if (file == NULL)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "cannot open plugin tool.json");
@@ -441,7 +449,7 @@ int cai_plugins_load(cai_plugins *plugins, const char *directory,
   definition.description = manifest.description;
   definition.parameters_json = manifest.parameters.json;
   definition.executor = manifest.executor;
-  definition.directory = path;
+  definition.directory = scratch->path;
   definition.entrypoint = manifest.entrypoint;
   definition.argv = (const char *const *)manifest.argv.items;
   definition.argc = manifest.argv.count;
@@ -468,11 +476,31 @@ int cai_plugins_load(cai_plugins *plugins, const char *directory,
   CAI_LJ->cleanup(CAI_LJ, &manifest_map, &manifest);
   return rc;
 }
-int cai_plugins_reload(cai_plugins *plugins, cai_error *error) {
+
+int cai_plugins_load(cai_plugins *plugins, const char *directory,
+                     cai_error *error) {
+  cai_plugins_load_scratch *scratch =
+      (cai_plugins_load_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_plugins_load scratch");
+  rc = cai_plugins_load_with_scratch(plugins, directory, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_plugins_reload_scratch {
+  char path[4096], manifest[4096];
+} cai_plugins_reload_scratch;
+static int
+cai_plugins_reload_with_scratch(cai_plugins *plugins, cai_error *error,
+                                cai_plugins_reload_scratch *scratch) {
   DIR *directory;
   struct dirent *item;
   struct stat info;
-  char path[4096], manifest[4096];
+
   size_t i;
   int rc = CAI_OK;
   if (plugins == NULL)
@@ -489,20 +517,34 @@ int cai_plugins_reload(cai_plugins *plugins, cai_error *error) {
     while (rc == CAI_OK && (item = readdir(directory)) != NULL) {
       if (item->d_name[0] == '.')
         continue;
-      if (snprintf(path, sizeof(path), "%s/%s", plugins->directories[i],
-                   item->d_name) >= (int)sizeof(path) ||
-          snprintf(manifest, sizeof(manifest), "%s/tool.json", path) >=
-              (int)sizeof(manifest)) {
+      if (snprintf(scratch->path, sizeof(scratch->path), "%s/%s",
+                   plugins->directories[i],
+                   item->d_name) >= (int)sizeof(scratch->path) ||
+          snprintf(scratch->manifest, sizeof(scratch->manifest), "%s/tool.json",
+                   scratch->path) >= (int)sizeof(scratch->manifest)) {
         rc = cai_set_error(error, CAI_ERR_INVALID, "plugin path too long");
         break;
       }
-      if (stat(manifest, &info) == 0 && S_ISREG(info.st_mode))
-        rc = cai_plugins_load(plugins, path, error);
+      if (stat(scratch->manifest, &info) == 0 && S_ISREG(info.st_mode))
+        rc = cai_plugins_load(plugins, scratch->path, error);
     }
     closedir(directory);
   }
   return rc;
 }
+
+int cai_plugins_reload(cai_plugins *plugins, cai_error *error) {
+  cai_plugins_reload_scratch *scratch =
+      (cai_plugins_reload_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_plugins_reload scratch");
+  rc = cai_plugins_reload_with_scratch(plugins, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
 int cai_plugins_unload(cai_plugins *plugins, const char *name,
                        cai_error *error) {
   plugin_entry **link, *entry;

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "skills.h"
+#include "identity.h"
 #include "log.h"
 #include <cai/skills.h>
 #include <dirent.h>
@@ -75,42 +76,63 @@ static int mkdir_root(char *path, const char *source, cai_error *error) {
   }
   return CAI_OK;
 }
-static int root_path(const cai_cli_options *options, char *out,
-                     cai_error *error) {
-  const char *base;
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct root_path_scratch {
   char relative[PATH_MAX], cwd[PATH_MAX];
+} root_path_scratch;
+static int root_path_with_scratch(const cai_cli_options *options, char *out,
+                                  cai_error *error,
+                                  root_path_scratch *scratch) {
+  const char *base;
+
   int n;
   if (options->skills_dir != NULL)
-    n = snprintf(relative, sizeof(relative), "%s", options->skills_dir);
+    n = snprintf(scratch->relative, sizeof(scratch->relative), "%s",
+                 options->skills_dir);
   else if (options->config_dir != NULL)
-    n = snprintf(relative, sizeof(relative), "%s/skills", options->config_dir);
+    n = snprintf(scratch->relative, sizeof(scratch->relative), "%s/skills",
+                 options->config_dir);
   else {
     base = getenv("XDG_CONFIG_HOME");
     if (base != NULL && base[0] != '\0')
-      n = snprintf(relative, sizeof(relative), "%s/%s/skills", base,
-                   options->program_name);
+      n = snprintf(scratch->relative, sizeof(scratch->relative), "%s/%s/skills",
+                   base, options->program_name);
     else {
       base = getenv("HOME");
       if (base == NULL || base[0] == '\0')
         return invalid(error,
                        "set HOME or XDG_CONFIG_HOME for the skills directory");
-      n = snprintf(relative, sizeof(relative), "%s/.config/%s/skills", base,
-                   options->program_name);
+      n = snprintf(scratch->relative, sizeof(scratch->relative),
+                   "%s/.config/%s/skills", base, options->program_name);
     }
   }
-  if (n < 0 || (size_t)n >= sizeof(relative))
+  if (n < 0 || (size_t)n >= sizeof(scratch->relative))
     return invalid(error, "skills directory path exceeds PATH_MAX");
-  if (relative[0] == '/')
-    n = snprintf(out, PATH_MAX, "%s", relative);
+  if (scratch->relative[0] == '/')
+    n = snprintf(out, PATH_MAX, "%s", scratch->relative);
   else {
-    if (getcwd(cwd, sizeof(cwd)) == NULL)
-      return fail(error, "resolve skills directory", relative);
-    n = snprintf(out, PATH_MAX, "%s/%s", cwd, relative);
+    if (getcwd(scratch->cwd, sizeof(scratch->cwd)) == NULL)
+      return fail(error, "resolve skills directory", scratch->relative);
+    n = snprintf(out, PATH_MAX, "%s/%s", scratch->cwd, scratch->relative);
   }
   return n >= 0 && n < PATH_MAX
              ? CAI_OK
              : invalid(error, "skills directory path exceeds PATH_MAX");
 }
+
+static int root_path(const cai_cli_options *options, char *out,
+                     cai_error *error) {
+  root_path_scratch *scratch =
+      (root_path_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate skill paths");
+  rc = root_path_with_scratch(options, out, error, scratch);
+  free(scratch);
+  return rc;
+}
+
 static int metadata_at(int fd, const char *fallback, cai_skill_metadata **out,
                        cai_error *error) {
   FILE *file;
@@ -142,41 +164,11 @@ static int metadata_at(int fd, const char *fallback, cai_skill_metadata **out,
 }
 /* Both cleanup and copying stay below opened directories; symlinks are never
  * followed. Copy uses bounded buffers and preserves executable artifacts. */
-static int remove_tree(int parent, const char *name) {
-  int fd, rc = 0;
-  DIR *directory;
-  struct dirent *entry;
-  struct stat st;
-  if (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) != 0)
-    return errno == ENOENT ? 0 : -1;
-  if (!S_ISDIR(st.st_mode))
-    return unlinkat(parent, name, 0);
-  fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-  if (fd < 0)
-    return -1;
-  if (st.st_uid == geteuid() && fchmod(fd, 0700) != 0) {
-    close(fd);
-    return -1;
-  }
-  directory = fdopendir(fd);
-  if (directory == NULL) {
-    close(fd);
-    return -1;
-  }
-  while ((entry = readdir(directory)) != NULL) {
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-      continue;
-    if (remove_tree(fd, entry->d_name) != 0)
-      rc = -1;
-  }
-  closedir(directory);
-  return rc == 0 ? unlinkat(parent, name, AT_REMOVEDIR) : rc;
-}
-static int copy_file(int src, int dst, const char *name, cai_error *error) {
-  char bytes[65536];
+static int copy_file(int src, int dst, const char *name, char *bytes,
+                     size_t capacity, cai_error *error) {
   ssize_t n, written;
   size_t offset;
-  while ((n = read(src, bytes, sizeof(bytes))) != 0) {
+  while ((n = read(src, bytes, capacity)) != 0) {
     if (n < 0) {
       if (errno == EINTR)
         continue;
@@ -194,24 +186,50 @@ static int copy_file(int src, int dst, const char *name, cai_error *error) {
   }
   return CAI_OK;
 }
-static int copy_tree(int source, int destination, unsigned int depth,
-                     cai_error *error) {
+typedef struct skill_copy_frame {
   DIR *directory;
+  int destination;
+} skill_copy_frame;
+
+typedef struct skill_copy {
+  skill_copy_frame frames[129];
+  char bytes[65536];
+} skill_copy;
+
+static int copy_tree(int source, int destination, cai_error *error) {
+  skill_copy *copy;
+  skill_copy_frame *frames, *frame;
   struct dirent *entry;
   struct stat st;
+  unsigned int depth = 0U;
   int src, dst, rc = CAI_OK;
-  if (depth > 128U)
-    return invalid(error, "skill artifact tree exceeds 128 directory levels");
-  directory = fdopendir(dup(source));
-  if (directory == NULL)
-    return fail(error, "list skill source", "directory");
+  copy = calloc(1U, sizeof(*copy));
+  if (copy == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate skill traversal");
+  frames = copy->frames;
+  src = dup(source);
+  frames[0].directory = src >= 0 ? fdopendir(src) : NULL;
+  if (frames[0].directory == NULL && src >= 0)
+    close(src);
+  frames[0].destination = dup(destination);
+  if (frames[0].directory == NULL || frames[0].destination < 0)
+    rc = fail(error, "list skill source", "directory");
   while (rc == CAI_OK) {
+    frame = &frames[depth];
+    source = dirfd(frame->directory);
+    destination = frame->destination;
     errno = 0;
-    entry = readdir(directory);
+    entry = readdir(frame->directory);
     if (entry == NULL) {
       if (errno != 0)
         rc = fail(error, "list skill source", "directory");
-      break;
+      if (rc != CAI_OK || depth == 0U)
+        break;
+      closedir(frame->directory);
+      close(frame->destination);
+      memset(frame, 0, sizeof(*frame));
+      depth--;
+      continue;
     }
     if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
       continue;
@@ -220,6 +238,10 @@ static int copy_tree(int source, int destination, unsigned int depth,
       break;
     }
     if (S_ISDIR(st.st_mode)) {
+      if (depth == 128U) {
+        rc = invalid(error, "skill artifact tree exceeds 128 directory levels");
+        break;
+      }
       if (mkdirat(destination, entry->d_name, 0700) != 0) {
         rc = fail(error, "create skill artifact directory", entry->d_name);
         break;
@@ -230,8 +252,17 @@ static int copy_tree(int source, int destination, unsigned int depth,
                    O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
       if (src < 0 || dst < 0 || fchmod(dst, 0700) != 0)
         rc = fail(error, "open skill artifact directory", entry->d_name);
-      else
-        rc = copy_tree(src, dst, depth + 1U, error);
+      else {
+        DIR *child = fdopendir(src);
+        if (child == NULL)
+          rc = fail(error, "list skill source", entry->d_name);
+        else {
+          depth++;
+          frames[depth].directory = child;
+          frames[depth].destination = dst;
+          src = dst = -1;
+        }
+      }
       if (src >= 0)
         close(src);
       if (dst >= 0)
@@ -244,7 +275,8 @@ static int copy_tree(int source, int destination, unsigned int depth,
           fchmod(dst, 0600 | ((st.st_mode & 0111U) ? 0100 : 0)) != 0)
         rc = fail(error, "open skill artifact", entry->d_name);
       else
-        rc = copy_file(src, dst, entry->d_name, error);
+        rc = copy_file(src, dst, entry->d_name, copy->bytes,
+                       sizeof(copy->bytes), error);
       if (src >= 0)
         close(src);
       if (dst >= 0 && close(dst) != 0 && rc == CAI_OK)
@@ -253,28 +285,45 @@ static int copy_tree(int source, int destination, unsigned int depth,
       rc = invalid(error, "skill packages may contain only regular files and "
                           "directories; symlinks/devices/FIFOs are rejected");
   }
-  closedir(directory);
+  do {
+    if (frames[depth].directory != NULL)
+      closedir(frames[depth].directory);
+    if (frames[depth].destination >= 0)
+      close(frames[depth].destination);
+  } while (depth-- != 0U);
+  free(copy);
   return rc;
 }
 static int check_existing_name(int fd, const char *name, const char *except,
                                unsigned int depth, cai_error *error) {
-  DIR *directory;
+  DIR **directories;
   struct dirent *entry;
   struct stat st;
   cai_skill_metadata *metadata = NULL;
   cai_error ignored;
   int child, rc = CAI_OK;
-  directory = fdopendir(dup(fd));
-  if (directory == NULL)
-    return fail(error, "list installed skills", "directory");
+  directories = calloc(9U, sizeof(*directories));
+  if (directories == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate skill name scan");
+  child = dup(fd);
+  directories[depth] = child >= 0 ? fdopendir(child) : NULL;
+  if (directories[depth] == NULL && child >= 0)
+    close(child);
+  if (directories[depth] == NULL)
+    rc = fail(error, "list installed skills", "directory");
   while (rc == CAI_OK) {
     errno = 0;
-    entry = readdir(directory);
+    entry = readdir(directories[depth]);
     if (entry == NULL) {
       if (errno != 0)
         rc = fail(error, "list installed skills", "directory");
-      break;
+      if (rc != CAI_OK || depth == 0U)
+        break;
+      closedir(directories[depth]);
+      directories[depth--] = NULL;
+      continue;
     }
+    fd = dirfd(directories[depth]);
     if (entry->d_name[0] == '.' ||
         (depth == 0U && except != NULL && strcmp(entry->d_name, except) == 0) ||
         fstatat(fd, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0 ||
@@ -294,40 +343,59 @@ static int check_existing_name(int fd, const char *name, const char *except,
       cai_skill_metadata_close(metadata);
       metadata = NULL;
       cai_error_cleanup(&ignored);
-    } else if (depth < 8U)
-      rc = check_existing_name(child, name, NULL, depth + 1U, error);
-    close(child);
+    } else if (depth < 8U) {
+      directories[depth + 1U] = fdopendir(child);
+      if (directories[depth + 1U] != NULL) {
+        child = -1;
+        depth++;
+      } else
+        rc = fail(error, "list installed skills", "directory");
+    }
+    if (child >= 0)
+      close(child);
   }
-  closedir(directory);
+  do {
+    if (directories[depth] != NULL)
+      closedir(directories[depth]);
+  } while (depth-- != 0U);
+  free(directories);
   return rc;
 }
-int cai_cli_install_skill(const cai_cli_options *options,
-                          pslog_logger *logger) {
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_cli_install_skill_scratch {
+  char source_path[PATH_MAX], root[PATH_MAX], canonical[PATH_MAX],
+      temporary[PATH_MAX];
+} cai_cli_install_skill_scratch;
+static int
+cai_cli_install_skill_with_scratch(const cai_cli_options *options,
+                                   pslog_logger *logger,
+                                   cai_cli_install_skill_scratch *scratch) {
   cai_error error;
   cai_skill_metadata *metadata = NULL;
   struct stat st;
-  char source_path[PATH_MAX], root[PATH_MAX], canonical[PATH_MAX],
-      temporary[PATH_MAX];
+
   const char *name, *stage;
   int source = -1, parent = -1, destination = -1, rc, exists = 0;
   cai_error_init(&error);
-  temporary[0] = '\0';
+  scratch->temporary[0] = '\0';
   if (lstat(options->install_skill, &st) != 0 || !S_ISDIR(st.st_mode)) {
     rc = invalid(
         &error,
         "--install-skill requires a real directory containing SKILL.md");
     goto done;
   }
-  if (realpath(options->install_skill, source_path) == NULL) {
+  if (realpath(options->install_skill, scratch->source_path) == NULL) {
     rc = fail(&error, "resolve skill source", options->install_skill);
     goto done;
   }
-  source = open(source_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  source = open(scratch->source_path,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (source < 0) {
-    rc = fail(&error, "open skill source", source_path);
+    rc = fail(&error, "open skill source", scratch->source_path);
     goto done;
   }
-  rc = metadata_at(source, source_path, &metadata, &error);
+  rc = metadata_at(source, scratch->source_path, &metadata, &error);
   if (rc != CAI_OK)
     goto done;
   name = metadata->name(metadata);
@@ -335,38 +403,39 @@ int cai_cli_install_skill(const cai_cli_options *options,
     rc = invalid(&error, "installed skill names must not begin with '.'");
     goto done;
   }
-  rc = root_path(options, root, &error);
+  rc = root_path(options, scratch->root, &error);
   if (rc != CAI_OK)
     goto done;
-  rc = mkdir_root(root, source_path, &error);
+  rc = mkdir_root(scratch->root, scratch->source_path, &error);
   if (rc != CAI_OK)
     goto done;
-  if (realpath(root, canonical) == NULL) {
-    rc = fail(&error, "resolve skills directory", root);
+  if (realpath(scratch->root, scratch->canonical) == NULL) {
+    rc = fail(&error, "resolve skills directory", scratch->root);
     goto done;
   }
-  if (snprintf(temporary, sizeof(temporary), "%s/%s", canonical, name) >=
-      (int)sizeof(temporary)) {
-    temporary[0] = '\0';
+  if (snprintf(scratch->temporary, sizeof(scratch->temporary), "%s/%s",
+               scratch->canonical, name) >= (int)sizeof(scratch->temporary)) {
+    scratch->temporary[0] = '\0';
     rc = invalid(&error, "installed skill path exceeds PATH_MAX");
     goto done;
   }
-  if (strcmp(temporary, source_path) == 0) {
-    temporary[0] = '\0';
+  if (strcmp(scratch->temporary, scratch->source_path) == 0) {
+    scratch->temporary[0] = '\0';
     rc = invalid(
         &error,
         "source and installed skill destination are the same directory");
     goto done;
   }
-  temporary[0] = '\0';
-  if (inside(canonical, source_path)) {
+  scratch->temporary[0] = '\0';
+  if (inside(scratch->canonical, scratch->source_path)) {
     rc = invalid(&error,
                  "skills destination must not be inside the source package");
     goto done;
   }
-  parent = open(canonical, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  parent =
+      open(scratch->canonical, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
   if (parent < 0) {
-    rc = fail(&error, "open skills directory", canonical);
+    rc = fail(&error, "open skills directory", scratch->canonical);
     goto done;
   }
   if (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
@@ -399,21 +468,23 @@ int cai_cli_install_skill(const cai_cli_options *options,
   rc = check_existing_name(parent, name, exists ? name : NULL, 0U, &error);
   if (rc != CAI_OK)
     goto done;
-  if (snprintf(temporary, sizeof(temporary), "%s/.skill-install-XXXXXX",
-               canonical) >= (int)sizeof(temporary) ||
-      mkdtemp(temporary) == NULL) {
-    temporary[0] = '\0';
-    rc = fail(&error, "create skill installation staging directory", canonical);
+  if (snprintf(scratch->temporary, sizeof(scratch->temporary),
+               "%s/.skill-install-XXXXXX",
+               scratch->canonical) >= (int)sizeof(scratch->temporary) ||
+      mkdtemp(scratch->temporary) == NULL) {
+    scratch->temporary[0] = '\0';
+    rc = fail(&error, "create skill installation staging directory",
+              scratch->canonical);
     goto done;
   }
-  stage = strrchr(temporary, '/') + 1;
+  stage = strrchr(scratch->temporary, '/') + 1;
   destination =
       openat(parent, stage, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
   if (destination < 0 || fchmod(destination, 0700) != 0) {
-    rc = fail(&error, "open skill staging directory", canonical);
+    rc = fail(&error, "open skill staging directory", scratch->canonical);
     goto done;
   }
-  rc = copy_tree(source, destination, 0U, &error);
+  rc = copy_tree(source, destination, &error);
   if (rc != CAI_OK)
     goto done;
   close(destination);
@@ -423,7 +494,7 @@ int cai_cli_install_skill(const cai_cli_options *options,
     rc = fail(&error, "publish skill (atomic rename required)", name);
     goto done;
   }
-  if (exists && remove_tree(parent, stage) != 0)
+  if (exists && cai_cli_remove_at(parent, stage) != 0)
     cai_cli_log_message(logger, PSLOG_LEVEL_WARN, "skill_install_cleanup",
                         "diagnostic",
                         "Skill replaced; the previous package could not be "
@@ -431,24 +502,24 @@ int cai_cli_install_skill(const cai_cli_options *options,
                         strlen("Skill replaced; the previous package could not "
                                "be removed from the hidden staging directory."),
                         NULL, 0U);
-  temporary[0] = '\0';
+  scratch->temporary[0] = '\0';
   {
     pslog_field fields[3];
     fields[0] = pslog_str("skill", name);
-    fields[1] = pslog_str("directory", canonical);
+    fields[1] = pslog_str("directory", scratch->canonical);
     fields[2] = pslog_bool("replaced", exists);
     cai_cli_log_message(logger, PSLOG_LEVEL_INFO, "skill_install", "diagnostic",
                         "Skill package installed",
                         strlen("Skill package installed"), fields, 3U);
   }
   printf("%s skill %s at %s/%s\n", exists ? "Replaced" : "Installed", name,
-         canonical, name);
+         scratch->canonical, name);
   rc = CAI_OK;
 done:
   if (destination >= 0)
     close(destination);
-  if (temporary[0] != '\0' && parent >= 0)
-    (void)remove_tree(parent, strrchr(temporary, '/') + 1);
+  if (scratch->temporary[0] != '\0' && parent >= 0)
+    (void)cai_cli_remove_at(parent, strrchr(scratch->temporary, '/') + 1);
   if (source >= 0)
     close(source);
   if (parent >= 0)
@@ -458,6 +529,25 @@ done:
   cai_skill_metadata_close(metadata);
   cai_error_cleanup(&error);
   return rc == CAI_OK ? 0 : 1;
+}
+
+int cai_cli_install_skill(const cai_cli_options *options,
+                          pslog_logger *logger) {
+  cai_cli_install_skill_scratch *scratch =
+      (cai_cli_install_skill_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL) {
+    cai_error failure;
+    cai_error_init(&failure);
+    (void)cai_cli_error(&failure, CAI_ERR_NOMEM,
+                        "allocate skill installation paths");
+    cai_cli_log_error(logger, "install skill", &failure);
+    cai_error_cleanup(&failure);
+    return 1;
+  }
+  rc = cai_cli_install_skill_with_scratch(options, logger, scratch);
+  free(scratch);
+  return rc;
 }
 
 typedef struct skill_inventory {

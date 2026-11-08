@@ -54,6 +54,9 @@ static const cli_field fields[] = {
     B("ui", "utc", utc,
       "Show DTG timestamps in UTC (Zulu); false uses local time. Default "
       "false."),
+    B("ui", "no_banner", no_banner,
+      "Suppress the initial interactive welcome, banner and introduction. "
+      "Default false; attachment readiness is still shown."),
     B("ui", "prefer_native_pager", prefer_native_pager,
       "Use only libmdf for log paging, even when less is available. Default "
       "false tries less first. Help paging always renders Markdown in libmdf."),
@@ -257,6 +260,12 @@ static int fail(cai_error *error, const char *path, const char *reason) {
   }
   return -1;
 }
+static int nomem(cai_error *error, const char *message) {
+  (void)fail(error, NULL, message);
+  if (error != NULL)
+    error->code = CAI_ERR_NOMEM;
+  return -1;
+}
 static int absolute_path(char *out, size_t size, const char *path,
                          const char *directory, const cai_config *cfg,
                          cai_error *error) {
@@ -310,9 +319,15 @@ static int default_string(cai_config *cfg, const char *directory,
     *target = resolved;
   return rc;
 }
-static int application_defaults(cai_config *cfg, cai_cli_options *o,
-                                const cai_app_config *app, int document,
-                                cai_error *error) {
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct application_defaults_scratch {
+  char path[PATH_MAX];
+  char home_path[PATH_MAX];
+} application_defaults_scratch;
+static int application_defaults_with_scratch(
+    cai_config *cfg, cai_cli_options *o, const cai_app_config *app,
+    int document, cai_error *error, application_defaults_scratch *scratch) {
   static const char *const root_keys[] = {"config_dir", "state_dir",
                                           "cache_dir", "data_dir"};
   static const char *const variables[] = {"XDG_CONFIG_HOME", "XDG_STATE_HOME",
@@ -351,8 +366,7 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
                                         "messages_namespace"};
   static const char *const ns_suffixes[] = {"sessions", "auth", "scopes",
                                             "todo", "messages"};
-  char path[PATH_MAX];
-  char home_path[PATH_MAX];
+
   size_t i;
   int rc, n;
   const char *home = o->home_dir != NULL ? o->home_dir
@@ -362,14 +376,14 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
     if (home[0] == '\0')
       return fail(error, "home_dir",
                   "application home must be a nonempty path");
-    if (absolute_path(home_path, sizeof(home_path), home, o->directory, cfg,
-                      error) < 0)
+    if (absolute_path(scratch->home_path, sizeof(scratch->home_path), home,
+                      o->directory, cfg, error) < 0)
       return -1;
-    rc = default_string(cfg, o->directory, "paths", "home_dir", home_path,
-                        &o->home_dir, document, 1, error);
+    rc = default_string(cfg, o->directory, "paths", "home_dir",
+                        scratch->home_path, &o->home_dir, document, 1, error);
     if (rc != CAI_OK)
       return rc;
-    home = home_path;
+    home = scratch->home_path;
   }
   roots[0] = &o->config_dir;
   roots[1] = &o->state_dir;
@@ -383,18 +397,19 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
     const char *v = *roots[i] != NULL ? *roots[i] : host_roots[i];
     if (v == NULL) {
       if (home != NULL) {
-        n = snprintf(path, sizeof(path), "%s/%s", home, home_children[i]);
-        rc = n < 0 || (size_t)n >= sizeof(path)
+        n = snprintf(scratch->path, sizeof(scratch->path), "%s/%s", home,
+                     home_children[i]);
+        rc = n < 0 || (size_t)n >= sizeof(scratch->path)
                  ? fail(error, NULL, "application home path too long")
                  : CAI_OK;
       } else
-        rc = cai_cli_xdg_path_values(path, sizeof(path),
+        rc = cai_cli_xdg_path_values(scratch->path, sizeof(scratch->path),
                                      cai_config_getenv(cfg, variables[i]),
                                      cai_config_getenv(cfg, "HOME"),
                                      fallbacks[i], o->program_name, error);
       if (rc != CAI_OK)
         return rc;
-      v = path;
+      v = scratch->path;
     }
     rc = default_string(cfg, o->directory, "paths", root_keys[i], v, roots[i],
                         document, 1, error);
@@ -421,19 +436,20 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
     const char *chrome = cfg->get(cfg, "chrome", "socket_directory");
     if (v == NULL) {
       if (home != NULL)
-        n = snprintf(path, sizeof(path), "%s/run", home);
+        n = snprintf(scratch->path, sizeof(scratch->path), "%s/run", home);
       else if (runtime != NULL && runtime[0] == '/')
-        n = snprintf(path, sizeof(path), "%s/%s", runtime, o->program_name);
+        n = snprintf(scratch->path, sizeof(scratch->path), "%s/%s", runtime,
+                     o->program_name);
       else {
         if (!document && runtime != NULL && runtime[0] != '\0' &&
             (chrome == NULL || chrome[0] == '\0'))
           return fail(error, "XDG_RUNTIME_DIR",
                       "Chrome requires an absolute runtime directory");
-        n = snprintf(path, sizeof(path), "%s", o->cache_dir);
+        n = snprintf(scratch->path, sizeof(scratch->path), "%s", o->cache_dir);
       }
-      if (n < 0 || (size_t)n >= sizeof(path))
+      if (n < 0 || (size_t)n >= sizeof(scratch->path))
         return fail(error, NULL, "application runtime path too long");
-      v = path;
+      v = scratch->path;
     }
     rc = default_string(cfg, o->directory, "paths", "runtime_dir", v,
                         &o->runtime_dir, document, 1, error);
@@ -462,10 +478,11 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
     if (!document && i >= 4U && v == NULL)
       continue;
     if (v == NULL) {
-      n = snprintf(path, sizeof(path), "%s%s", parents[i], suffixes[i]);
-      if (n < 0 || (size_t)n >= sizeof(path))
+      n = snprintf(scratch->path, sizeof(scratch->path), "%s%s", parents[i],
+                   suffixes[i]);
+      if (n < 0 || (size_t)n >= sizeof(scratch->path))
         return fail(error, NULL, "application path too long");
-      v = path;
+      v = scratch->path;
     }
     rc = default_string(cfg, o->directory, i == 2U ? "store.default" : "paths",
                         i == 2U ? "key_file" : keys[i], v, children[i],
@@ -520,11 +537,11 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
   for (i = 0U; i < 5U; i++) {
     const char *v = *namespaces[i];
     if (v == NULL) {
-      n = snprintf(path, sizeof(path), "%s.%s", o->namespace_prefix,
-                   ns_suffixes[i]);
-      if (n < 0 || (size_t)n >= sizeof(path))
+      n = snprintf(scratch->path, sizeof(scratch->path), "%s.%s",
+                   o->namespace_prefix, ns_suffixes[i]);
+      if (n < 0 || (size_t)n >= sizeof(scratch->path))
         return fail(error, NULL, "namespace too long");
-      v = path;
+      v = scratch->path;
     }
     if (v[0] == '\0' || strlen(v) > 128U ||
         strspn(v, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567"
@@ -547,10 +564,12 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
   if (!document) {
     const char *v = cfg->get(cfg, "chrome", "socket_directory");
     if (v == NULL || v[0] == '\0') {
-      n = snprintf(path, sizeof(path), "%s/chrome", o->runtime_dir);
-      if (n < 0 || (size_t)n >= sizeof(path))
+      n = snprintf(scratch->path, sizeof(scratch->path), "%s/chrome",
+                   o->runtime_dir);
+      if (n < 0 || (size_t)n >= sizeof(scratch->path))
         return fail(error, NULL, "Chrome path too long");
-      if (cfg->set(cfg, "chrome", "socket_directory", path, error) != CAI_OK)
+      if (cfg->set(cfg, "chrome", "socket_directory", scratch->path, error) !=
+          CAI_OK)
         return -1;
     }
     if (o->identity == NULL)
@@ -558,6 +577,20 @@ static int application_defaults(cai_config *cfg, cai_cli_options *o,
   }
   return CAI_OK;
 }
+
+static int application_defaults(cai_config *cfg, cai_cli_options *o,
+                                const cai_app_config *app, int document,
+                                cai_error *error) {
+  application_defaults_scratch *scratch =
+      (application_defaults_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return nomem(error, "allocate application defaults");
+  rc = application_defaults_with_scratch(cfg, o, app, document, error, scratch);
+  free(scratch);
+  return rc;
+}
+
 static int app_schema(const cai_config_context *context, cai_config **out,
                       cai_error *error) {
   static const cai_config_field stores[] = {
@@ -770,6 +803,7 @@ static int tool_environment(cai_config *cfg, const char *prefix,
         {"THEME", "ui", "theme"},
         {"UTC", "ui", "utc"},
         {"PREFER_NATIVE_PAGER", "ui", "prefer_native_pager"},
+        {"NO_BANNER", "ui", "no_banner"},
         {"THEME_OFFSET", "ui", "theme_offset"},
         {"SUBAGENT_THEME_OFFSET", "subagent", "theme_offset"},
         {"REVIEW_THEME_OFFSET", "review", "theme_offset"},
@@ -913,115 +947,130 @@ static int startup_path(char *out, size_t capacity, const char *path,
              ? fail(error, path, "application path is too long")
              : 1;
 }
-int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
-                         cai_config **configuration,
-                         const cai_app_config *application,
-                         const cai_config_context *startup, cai_error *error) {
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_cli_configure_at_scratch {
   cai_cli_options early, defaults, documented;
-  cai_config *cfg = NULL;
-  const char *value, *resolved;
   char selected[PATH_MAX];
   char config_root[PATH_MAX];
   char home_root[PATH_MAX];
   char workspace[PATH_MAX];
   char startup_directory[PATH_MAX];
+} cai_cli_configure_at_scratch;
+static int cai_cli_configure_at_with_scratch(
+    int argc, char *const *argv, cai_cli_options *options,
+    cai_config **configuration, const cai_app_config *application,
+    const cai_config_context *startup, cai_error *error,
+    cai_cli_configure_at_scratch *scratch) {
+
+  cai_config *cfg = NULL;
+  const char *value, *resolved;
+
   cai_config_context context;
   struct stat workspace_status;
   size_t i;
   int rc, n, config_dir_flag, home_flag;
   *configuration = NULL;
-  cai_cli_options_init(&defaults);
-  defaults.program_name =
+  cai_cli_options_init(&scratch->defaults);
+  scratch->defaults.program_name =
       application != NULL && application->program_name != NULL
           ? application->program_name
           : CAI_APP_DEFAULT_PROGRAM_NAME;
-  defaults.invocation_name =
+  scratch->defaults.invocation_name =
       application != NULL && application->invocation_name != NULL
           ? application->invocation_name
-          : defaults.program_name;
-  if (cai_cli_environment_prefix(application, defaults.environment_prefix,
-                                 error) != CAI_OK)
+          : scratch->defaults.program_name;
+  if (cai_cli_environment_prefix(
+          application, scratch->defaults.environment_prefix, error) != CAI_OK)
     return -1;
-  snprintf(defaults.default_api_key_env, sizeof(defaults.default_api_key_env),
-           "%sAPI_KEY", defaults.environment_prefix);
-  defaults.config_file =
-      startup_environment(startup, defaults.environment_prefix, "CONFIG");
-  defaults.home_dir = startup_environment(startup, defaults.environment_prefix,
-                                          "PATHS_HOME_DIR");
-  if (defaults.home_dir == NULL)
-    defaults.home_dir =
-        startup_environment(startup, defaults.environment_prefix, "HOME");
-  defaults.config_dir =
-      startup_environment(startup, defaults.environment_prefix, "CONFIG_DIR");
-  rc = cai_cli_read_options(argc, argv, &defaults, &early);
-  config_dir_flag = early.config_dir != defaults.config_dir;
-  home_flag = early.home_dir != defaults.home_dir;
-  if (rc < 0 || (rc == 0 && (!early.dump_config || early.help ||
-                             early.version || early.list_themes))) {
-    *options = early;
-    if (early.help)
-      return cai_cli_help_print(defaults.program_name, defaults.invocation_name,
-                                defaults.environment_prefix) == CAI_OK
+  snprintf(scratch->defaults.default_api_key_env,
+           sizeof(scratch->defaults.default_api_key_env), "%sAPI_KEY",
+           scratch->defaults.environment_prefix);
+  scratch->defaults.config_file = startup_environment(
+      startup, scratch->defaults.environment_prefix, "CONFIG");
+  scratch->defaults.home_dir = startup_environment(
+      startup, scratch->defaults.environment_prefix, "PATHS_HOME_DIR");
+  if (scratch->defaults.home_dir == NULL)
+    scratch->defaults.home_dir = startup_environment(
+        startup, scratch->defaults.environment_prefix, "HOME");
+  scratch->defaults.config_dir = startup_environment(
+      startup, scratch->defaults.environment_prefix, "CONFIG_DIR");
+  rc = cai_cli_read_options(argc, argv, &scratch->defaults, &scratch->early);
+  config_dir_flag = scratch->early.config_dir != scratch->defaults.config_dir;
+  home_flag = scratch->early.home_dir != scratch->defaults.home_dir;
+  if (rc < 0 ||
+      (rc == 0 && (!scratch->early.dump_config || scratch->early.help ||
+                   scratch->early.version || scratch->early.list_themes))) {
+    *options = scratch->early;
+    if (scratch->early.help)
+      return cai_cli_help_print(scratch->defaults.program_name,
+                                scratch->defaults.invocation_name,
+                                scratch->defaults.environment_prefix) == CAI_OK
                  ? 0
                  : -1;
-    if (early.version)
+    if (scratch->early.version)
       puts(CAI_VERSION_STRING);
     return rc;
   }
   if (application != NULL) {
-    if (early.config_file == NULL && !early.no_config) {
-      early.config_file = application->config_file;
-      early.no_config = application->no_config;
+    if (scratch->early.config_file == NULL && !scratch->early.no_config) {
+      scratch->early.config_file = application->config_file;
+      scratch->early.no_config = application->no_config;
     }
-    if (early.config_dir == NULL)
-      early.config_dir = application->config_directory;
-    if (early.home_dir == NULL)
-      early.home_dir = application->home_directory;
+    if (scratch->early.config_dir == NULL)
+      scratch->early.config_dir = application->config_directory;
+    if (scratch->early.home_dir == NULL)
+      scratch->early.home_dir = application->home_directory;
   }
   {
     const char *directory = startup != NULL ? startup->directory : NULL;
-    const char *path = early.directory != NULL ? early.directory : ".";
+    const char *path =
+        scratch->early.directory != NULL ? scratch->early.directory : ".";
     if (directory == NULL) {
-      if (getcwd(startup_directory, sizeof(startup_directory)) == NULL)
+      if (getcwd(scratch->startup_directory,
+                 sizeof(scratch->startup_directory)) == NULL)
         return fail(error, NULL, "cannot capture startup directory");
-      directory = startup_directory;
+      directory = scratch->startup_directory;
     }
-    if (startup_path(selected, sizeof(selected), path, directory, startup,
-                     error) < 0)
+    if (startup_path(scratch->selected, sizeof(scratch->selected), path,
+                     directory, startup, error) < 0)
       return -1;
   }
-  if (realpath(selected, workspace) == NULL ||
-      stat(workspace, &workspace_status) != 0 ||
+  if (realpath(scratch->selected, scratch->workspace) == NULL ||
+      stat(scratch->workspace, &workspace_status) != 0 ||
       !S_ISDIR(workspace_status.st_mode))
-    return fail(error, early.directory, "cannot resolve workspace directory");
+    return fail(error, scratch->early.directory,
+                "cannot resolve workspace directory");
   memset(&context, 0, sizeof(context));
-  context.directory = workspace;
+  context.directory = scratch->workspace;
   context.environment = startup != NULL ? startup->environment : NULL;
-  config_root[0] = '\0';
-  if (early.home_dir != NULL) {
-    if (early.home_dir[0] == '\0')
+  scratch->config_root[0] = '\0';
+  if (scratch->early.home_dir != NULL) {
+    if (scratch->early.home_dir[0] == '\0')
       return fail(error, "home_dir",
                   "application home must be a nonempty path");
-    if (startup_path(home_root, sizeof(home_root), early.home_dir, workspace,
-                     startup, error) < 0)
+    if (startup_path(scratch->home_root, sizeof(scratch->home_root),
+                     scratch->early.home_dir, scratch->workspace, startup,
+                     error) < 0)
       return -1;
-    early.home_dir = home_root;
+    scratch->early.home_dir = scratch->home_root;
   }
-  if (early.config_dir != NULL &&
-      startup_path(config_root, sizeof(config_root), early.config_dir,
-                   workspace, startup, error) < 0)
+  if (scratch->early.config_dir != NULL &&
+      startup_path(scratch->config_root, sizeof(scratch->config_root),
+                   scratch->early.config_dir, scratch->workspace, startup,
+                   error) < 0)
     return -1;
-  if (early.config_dir == NULL) {
-    if (early.home_dir != NULL) {
-      n = snprintf(config_root, sizeof(config_root), "%s/config",
-                   early.home_dir);
-      if (n < 0 || (size_t)n >= sizeof(config_root))
+  if (scratch->early.config_dir == NULL) {
+    if (scratch->early.home_dir != NULL) {
+      n = snprintf(scratch->config_root, sizeof(scratch->config_root),
+                   "%s/config", scratch->early.home_dir);
+      if (n < 0 || (size_t)n >= sizeof(scratch->config_root))
         return fail(error, NULL, "application home path too long");
     } else if (cai_cli_xdg_path_values(
-                   config_root, sizeof(config_root),
+                   scratch->config_root, sizeof(scratch->config_root),
                    startup_environment(startup, "", "XDG_CONFIG_HOME"),
                    startup_environment(startup, "", "HOME"), ".config",
-                   defaults.program_name, error) != CAI_OK)
+                   scratch->defaults.program_name, error) != CAI_OK)
       return -1;
   }
   rc = app_schema(&context, &cfg, error);
@@ -1030,22 +1079,24 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
     return -1;
   }
   *configuration = cfg;
-  if (early.dump_config) {
+  if (scratch->early.dump_config) {
     cai_sink *sink = NULL;
     FILE *file = stdout;
-    documented = early;
-    documented.directory = workspace;
-    documented.config_dir = config_root;
-    *options = early;
-    if (application_defaults(cfg, &documented, application, 1, error) != CAI_OK)
+    scratch->documented = scratch->early;
+    scratch->documented.directory = scratch->workspace;
+    scratch->documented.config_dir = scratch->config_root;
+    *options = scratch->early;
+    if (application_defaults(cfg, &scratch->documented, application, 1,
+                             error) != CAI_OK)
       return -1;
-    if (early.dump_config_file != NULL) {
-      if (absolute_path(selected, sizeof(selected), early.dump_config_file,
-                        workspace, cfg, error) < 0)
+    if (scratch->early.dump_config_file != NULL) {
+      if (absolute_path(scratch->selected, sizeof(scratch->selected),
+                        scratch->early.dump_config_file, scratch->workspace,
+                        cfg, error) < 0)
         return -1;
-      file = fopen(selected, "wb");
+      file = fopen(scratch->selected, "wb");
       if (file == NULL)
-        return fail(error, early.dump_config_file,
+        return fail(error, scratch->early.dump_config_file,
                     "cannot open configuration template output");
     }
     rc = cai_sink_file(file, 0, &sink, error);
@@ -1053,37 +1104,40 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
       rc = cfg->write_template(cfg, sink, error);
     cai_sink_close(sink);
     if (fflush(file) != 0 && rc == CAI_OK)
-      rc = fail(error, early.dump_config_file,
+      rc = fail(error, scratch->early.dump_config_file,
                 "cannot flush configuration template output");
     if (file != stdout && fclose(file) != 0 && rc == CAI_OK)
-      rc = fail(error, early.dump_config_file,
+      rc = fail(error, scratch->early.dump_config_file,
                 "cannot close configuration template output");
     return rc == CAI_OK ? 0 : -1;
   }
-  if (!early.no_config) {
-    if (early.config_file != NULL)
-      rc = absolute_path(selected, sizeof(selected), early.config_file,
-                         workspace, cfg, error);
+  if (!scratch->early.no_config) {
+    if (scratch->early.config_file != NULL)
+      rc = absolute_path(scratch->selected, sizeof(scratch->selected),
+                         scratch->early.config_file, scratch->workspace, cfg,
+                         error);
     else {
-      n = snprintf(selected, sizeof(selected), "%s/config.ini", config_root);
-      rc = n < 0 || (size_t)n >= sizeof(selected)
+      n = snprintf(scratch->selected, sizeof(scratch->selected),
+                   "%s/config.ini", scratch->config_root);
+      rc = n < 0 || (size_t)n >= sizeof(scratch->selected)
                ? fail(error, NULL, "configuration path too long")
                : 1;
     }
     if (rc < 0)
       return -1;
-    documented = early;
-    documented.directory = workspace;
-    documented.config_dir = config_root;
-    if (application_defaults(cfg, &documented, application, 1, error) != CAI_OK)
+    scratch->documented = scratch->early;
+    scratch->documented.directory = scratch->workspace;
+    scratch->documented.config_dir = scratch->config_root;
+    if (application_defaults(cfg, &scratch->documented, application, 1,
+                             error) != CAI_OK)
       return -1;
-    if (cfg->create_template_file(cfg, selected, error) != CAI_OK ||
-        cai_config_load_file(cfg, selected, error) != CAI_OK)
+    if (cfg->create_template_file(cfg, scratch->selected, error) != CAI_OK ||
+        cai_config_load_file(cfg, scratch->selected, error) != CAI_OK)
       return -1;
   }
   /* Host environment entries participate in the normal explicit env policy. */
-  if (early.headless) {
-    defaults.server_persist = 1;
+  if (scratch->early.headless) {
+    scratch->defaults.server_persist = 1;
     if (cfg->set_default(cfg, "server", "persist", "true", error) != CAI_OK)
       return -1;
   }
@@ -1093,10 +1147,12 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
         cfg->set(cfg, s->section, s->key, s->value, error) != CAI_OK)
       return -1;
   }
-  if (tool_environment(cfg, defaults.environment_prefix, error) < 0)
+  if (tool_environment(cfg, scratch->defaults.environment_prefix, error) < 0)
     return -1;
-  if (app_environment(cfg, defaults.environment_prefix, "CONFIG_DIR") != NULL &&
-      cfg->set(cfg, "paths", "config_dir", config_root, error) != CAI_OK)
+  if (app_environment(cfg, scratch->defaults.environment_prefix,
+                      "CONFIG_DIR") != NULL &&
+      cfg->set(cfg, "paths", "config_dir", scratch->config_root, error) !=
+          CAI_OK)
     return -1;
   for (i = 0U; application != NULL && i < application->setting_count; i++) {
     const cai_app_setting *s = &application->settings[i];
@@ -1104,33 +1160,36 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
         cfg->set(cfg, s->section, s->key, s->value, error) != CAI_OK)
       return -1;
   }
-  defaults.config_file = early.config_file;
+  scratch->defaults.config_file = scratch->early.config_file;
   if (cfg->get(cfg, "ui", "todo_layout") != NULL)
-    defaults.control_explicit |= CAI_CLI_CONTROL_TODO_LAYOUT;
-  if (early.config_file != NULL)
-    defaults.owner_explicit[CAI_CLI_OWNER_config_file] = 1U;
+    scratch->defaults.control_explicit |= CAI_CLI_CONTROL_TODO_LAYOUT;
+  if (scratch->early.config_file != NULL)
+    scratch->defaults.owner_explicit[CAI_CLI_OWNER_config_file] = 1U;
   /* Capture explicit INI/environment/host settings before derived automatic
    * paths are stored. Defaults alone never constrain an existing owner. */
 #define CAI_CLI_OWNER_CONFIG(section, key, member, type)                       \
   if (cfg->get(cfg, section, key) != NULL)                                     \
-    defaults.owner_explicit[CAI_CLI_OWNER_##member] = 1U;
+    scratch->defaults.owner_explicit[CAI_CLI_OWNER_##member] = 1U;
   CAI_CLI_OWNER_FIELDS(CAI_CLI_OWNER_CONFIG)
 #undef CAI_CLI_OWNER_CONFIG
   if (cfg->get(cfg, "runtime", "shell_context_max_lines") != NULL)
-    defaults.owner_explicit[CAI_CLI_OWNER_shell_context_max_lines] = 1U;
+    scratch->defaults.owner_explicit[CAI_CLI_OWNER_shell_context_max_lines] =
+        1U;
   if (cfg->get(cfg, "runtime", "shell_context_max_bytes") != NULL)
-    defaults.owner_explicit[CAI_CLI_OWNER_shell_context_max_bytes] = 1U;
+    scratch->defaults.owner_explicit[CAI_CLI_OWNER_shell_context_max_bytes] =
+        1U;
   for (i = 0U; i < cfg->section_count(cfg); ++i)
     if (strncmp(cfg->section_at(cfg, i), "store.", 6U) == 0)
-      defaults.owner_explicit[CAI_CLI_OWNER_sessions_store] =
-          defaults.owner_explicit[CAI_CLI_OWNER_auth_store] =
-              defaults.owner_explicit[CAI_CLI_OWNER_messaging_store] = 1U;
+      scratch->defaults.owner_explicit[CAI_CLI_OWNER_sessions_store] =
+          scratch->defaults.owner_explicit[CAI_CLI_OWNER_auth_store] =
+              scratch->defaults.owner_explicit[CAI_CLI_OWNER_messaging_store] =
+                  1U;
   {
     long long replay = cai_config_get_integer(cfg, "ui", "replay_turns", 10LL);
     if (replay < -1LL || replay > LONG_MAX)
       return fail(error, NULL,
                   "ui.replay_turns requires -1, 0 or a positive count");
-    defaults.replay_turns = (long)replay;
+    scratch->defaults.replay_turns = (long)replay;
   }
   {
     long long limit =
@@ -1139,9 +1198,9 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
       return fail(
           error, NULL,
           "ui.prompt_history_limit requires a nonnegative count up to INT_MAX");
-    defaults.prompt_history_limit = (int)limit;
+    scratch->defaults.prompt_history_limit = (int)limit;
   }
-  defaults.no_config = early.no_config;
+  scratch->defaults.no_config = scratch->early.no_config;
   {
     long long days = cai_config_get_integer(
         cfg, "storage", "conversation_retention_days", 30LL);
@@ -1149,43 +1208,44 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
       return fail(error, NULL,
                   "storage.conversation_retention_days exceeds the supported "
                   "day range");
-    defaults.conversation_retention_days = (long)days;
+    scratch->defaults.conversation_retention_days = (long)days;
   }
-  defaults.shell_context_max_lines = (size_t)cai_config_get_integer(
+  scratch->defaults.shell_context_max_lines = (size_t)cai_config_get_integer(
       cfg, "runtime", "shell_context_max_lines", 5000LL);
-  defaults.shell_context_max_bytes = (size_t)cai_config_get_integer(
+  scratch->defaults.shell_context_max_bytes = (size_t)cai_config_get_integer(
       cfg, "runtime", "shell_context_max_bytes", 4194304LL);
-  if (defaults.shell_context_max_lines == 0U)
-    defaults.shell_context_max_lines = 5000U;
-  if (defaults.shell_context_max_bytes == 0U)
-    defaults.shell_context_max_bytes = 4194304U;
-  if (defaults.shell_context_max_bytes < 4U)
+  if (scratch->defaults.shell_context_max_lines == 0U)
+    scratch->defaults.shell_context_max_lines = 5000U;
+  if (scratch->defaults.shell_context_max_bytes == 0U)
+    scratch->defaults.shell_context_max_bytes = 4194304U;
+  if (scratch->defaults.shell_context_max_bytes < 4U)
     return fail(error, NULL, "shell_context_max_bytes must be at least 4");
-  optional_string(cfg, "client", "provider", &defaults.provider);
-  defaults.theme_offset =
+  optional_string(cfg, "client", "provider", &scratch->defaults.provider);
+  scratch->defaults.theme_offset =
       cai_config_get_integer(cfg, "ui", "theme_offset", 0LL);
-  defaults.subagent_theme_offset =
+  scratch->defaults.subagent_theme_offset =
       cai_config_get_integer(cfg, "subagent", "theme_offset", 0LL);
-  defaults.review_theme_offset =
+  scratch->defaults.review_theme_offset =
       cai_config_get_integer(cfg, "review", "theme_offset", 1LL);
   for (i = 0U; i < sizeof(agent_keys) / sizeof(agent_keys[0]); i++)
     if (i >= 3U ||
         ((value = cai_config_get(cfg, "agent", agent_keys[i])) != NULL &&
          value[0] != '\0'))
-      optional_string(
-          cfg, "agent", agent_keys[i],
-          (const char **)((unsigned char *)&defaults + agent_offsets[i]));
+      optional_string(cfg, "agent", agent_keys[i],
+                      (const char **)((unsigned char *)&scratch->defaults +
+                                      agent_offsets[i]));
   for (i = 0U; i < sizeof(review_keys) / sizeof(review_keys[0]); i++)
-    optional_string(
-        cfg, "review", review_keys[i],
-        (const char **)((unsigned char *)&defaults + review_offsets[i]));
+    optional_string(cfg, "review", review_keys[i],
+                    (const char **)((unsigned char *)&scratch->defaults +
+                                    review_offsets[i]));
   value = cai_config_get(cfg, "agent", "model");
-  defaults.model_configured = value != NULL && value[0] != '\0';
-  defaults.image_generation = cai_config_get_bool(
-      cfg, "agent", "image_generation", defaults.image_generation);
-  defaults.terminal =
-      cai_config_get_bool(cfg, "agent", "terminal", defaults.terminal);
-  defaults.foreground = cai_config_get_bool(cfg, "terminal", "foreground", 0);
+  scratch->defaults.model_configured = value != NULL && value[0] != '\0';
+  scratch->defaults.image_generation = cai_config_get_bool(
+      cfg, "agent", "image_generation", scratch->defaults.image_generation);
+  scratch->defaults.terminal =
+      cai_config_get_bool(cfg, "agent", "terminal", scratch->defaults.terminal);
+  scratch->defaults.foreground =
+      cai_config_get_bool(cfg, "terminal", "foreground", 0);
   {
     long long interval =
         cai_config_get_integer(cfg, "terminal", "default_yield_time_ms",
@@ -1196,36 +1256,40 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
         cai_config_get_integer(cfg, "terminal", "yield_time_ms", interval);
     if (interval < 0LL || interval > 30000LL)
       return fail(error, NULL, "yield_time_ms must be 0..30000");
-    defaults.yield_time_ms = (long)interval;
+    scratch->defaults.yield_time_ms = (long)interval;
   }
-  if (defaults.yield_time_ms == 0L) {
-    defaults.foreground = 1;
-    defaults.yield_time_ms = CAI_TERMINAL_DEFAULT_YIELD_TIME_MS;
+  if (scratch->defaults.yield_time_ms == 0L) {
+    scratch->defaults.foreground = 1;
+    scratch->defaults.yield_time_ms = CAI_TERMINAL_DEFAULT_YIELD_TIME_MS;
   }
-  defaults.yolo = cai_config_get_bool(cfg, "agent", "yolo", defaults.yolo);
-  defaults.insecure =
-      cai_config_get_bool(cfg, "agent", "insecure", defaults.insecure);
-  defaults.review_subagent = cai_config_get_bool(
-      cfg, "agent", "review_subagent", defaults.review_subagent);
-  defaults.review_and_fix_tool = cai_config_get_bool(
-      cfg, "agent", "review_and_fix_tool", defaults.review_and_fix_tool);
-  defaults.subagent_steering = cai_config_get_bool(
-      cfg, "agent", "subagent_steering", defaults.subagent_steering);
-  defaults.capacity_retry = cai_config_get_bool(cfg, "agent", "capacity_retry",
-                                                defaults.capacity_retry);
-  defaults.codex_agents_md = cai_config_get_bool(
-      cfg, "agent", "codex_agents_md", defaults.codex_agents_md);
-  defaults.web_search =
-      cai_config_get_bool(cfg, "agent", "web_search", defaults.web_search);
-  defaults.chrome =
-      cai_config_get_bool(cfg, "chrome", "enabled", defaults.chrome);
-  defaults.todo = cai_config_get_bool(cfg, "agent", "todo", defaults.todo);
-  defaults.disable_compression = cai_config_get_bool(
-      cfg, "storage", "disable_compression", defaults.disable_compression);
-  optional_string(cfg, "todo", "default_board", &defaults.board);
-  defaults.messaging =
-      cai_config_get_bool(cfg, "messaging", "enabled", defaults.messaging);
-  defaults.enable_auto_enqueue =
+  scratch->defaults.yolo =
+      cai_config_get_bool(cfg, "agent", "yolo", scratch->defaults.yolo);
+  scratch->defaults.insecure =
+      cai_config_get_bool(cfg, "agent", "insecure", scratch->defaults.insecure);
+  scratch->defaults.review_subagent = cai_config_get_bool(
+      cfg, "agent", "review_subagent", scratch->defaults.review_subagent);
+  scratch->defaults.review_and_fix_tool =
+      cai_config_get_bool(cfg, "agent", "review_and_fix_tool",
+                          scratch->defaults.review_and_fix_tool);
+  scratch->defaults.subagent_steering = cai_config_get_bool(
+      cfg, "agent", "subagent_steering", scratch->defaults.subagent_steering);
+  scratch->defaults.capacity_retry = cai_config_get_bool(
+      cfg, "agent", "capacity_retry", scratch->defaults.capacity_retry);
+  scratch->defaults.codex_agents_md = cai_config_get_bool(
+      cfg, "agent", "codex_agents_md", scratch->defaults.codex_agents_md);
+  scratch->defaults.web_search = cai_config_get_bool(
+      cfg, "agent", "web_search", scratch->defaults.web_search);
+  scratch->defaults.chrome =
+      cai_config_get_bool(cfg, "chrome", "enabled", scratch->defaults.chrome);
+  scratch->defaults.todo =
+      cai_config_get_bool(cfg, "agent", "todo", scratch->defaults.todo);
+  scratch->defaults.disable_compression =
+      cai_config_get_bool(cfg, "storage", "disable_compression",
+                          scratch->defaults.disable_compression);
+  optional_string(cfg, "todo", "default_board", &scratch->defaults.board);
+  scratch->defaults.messaging = cai_config_get_bool(
+      cfg, "messaging", "enabled", scratch->defaults.messaging);
+  scratch->defaults.enable_auto_enqueue =
       cai_config_get_bool(cfg, "messaging", "enable_auto_enqueue", 0);
   {
     long long timeout =
@@ -1233,38 +1297,39 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
     if (timeout <= 0 || timeout > 86400000LL)
       return fail(error, NULL,
                   "messaging.ack_timeout_ms must be between 1 and 86400000");
-    defaults.message_ack_timeout_ms = (long)timeout;
+    scratch->defaults.message_ack_timeout_ms = (long)timeout;
   }
-  defaults.searxng =
-      cai_config_get_bool(cfg, "agent", "searxng", defaults.searxng);
-  defaults.revgeo =
-      cai_config_get_bool(cfg, "agent", "revgeo", defaults.revgeo);
-  defaults.read_file =
-      cai_config_get_bool(cfg, "agent", "read_file", defaults.read_file);
-  defaults.list_files =
-      cai_config_get_bool(cfg, "agent", "list_files", defaults.list_files);
-  defaults.apply_patch =
-      cai_config_get_bool(cfg, "agent", "apply_patch", defaults.apply_patch);
-  defaults.view_image =
-      cai_config_get_bool(cfg, "agent", "view_image", defaults.view_image);
-  defaults.goals = cai_config_get_bool(cfg, "agent", "goals", defaults.goals);
-  defaults.reasoning_tool = cai_config_get_bool(cfg, "agent", "reasoning_tool",
-                                                defaults.reasoning_tool);
+  scratch->defaults.searxng =
+      cai_config_get_bool(cfg, "agent", "searxng", scratch->defaults.searxng);
+  scratch->defaults.revgeo =
+      cai_config_get_bool(cfg, "agent", "revgeo", scratch->defaults.revgeo);
+  scratch->defaults.read_file = cai_config_get_bool(
+      cfg, "agent", "read_file", scratch->defaults.read_file);
+  scratch->defaults.list_files = cai_config_get_bool(
+      cfg, "agent", "list_files", scratch->defaults.list_files);
+  scratch->defaults.apply_patch = cai_config_get_bool(
+      cfg, "agent", "apply_patch", scratch->defaults.apply_patch);
+  scratch->defaults.view_image = cai_config_get_bool(
+      cfg, "agent", "view_image", scratch->defaults.view_image);
+  scratch->defaults.goals =
+      cai_config_get_bool(cfg, "agent", "goals", scratch->defaults.goals);
+  scratch->defaults.reasoning_tool = cai_config_get_bool(
+      cfg, "agent", "reasoning_tool", scratch->defaults.reasoning_tool);
   optional_string(cfg, "agent", "normal_reasoning_effort",
-                  &defaults.normal_reasoning_effort);
+                  &scratch->defaults.normal_reasoning_effort);
   optional_string(cfg, "agent", "high_reasoning_effort",
-                  &defaults.high_reasoning_effort);
-  defaults.skills =
-      cai_config_get_bool(cfg, "agent", "skills", defaults.skills);
-  optional_string(cfg, "searxng", "base_url", &defaults.searxng_url);
-  optional_string(cfg, "revgeo", "base_url", &defaults.revgeo_url);
+                  &scratch->defaults.high_reasoning_effort);
+  scratch->defaults.skills =
+      cai_config_get_bool(cfg, "agent", "skills", scratch->defaults.skills);
+  optional_string(cfg, "searxng", "base_url", &scratch->defaults.searxng_url);
+  optional_string(cfg, "revgeo", "base_url", &scratch->defaults.revgeo_url);
   if (cai_config_resolve_path(cfg, "chrome", "socket", &resolved, error) !=
       CAI_OK)
     return -1;
-  defaults.chrome_socket = resolved;
+  scratch->defaults.chrome_socket = resolved;
   for (i = 0U; i < sizeof(fields) / sizeof(fields[0]); i++) {
     const cli_field *f = &fields[i];
-    unsigned char *p = (unsigned char *)&defaults + f->offset;
+    unsigned char *p = (unsigned char *)&scratch->defaults + f->offset;
     if (f->type == CAI_CONFIG_STRING) {
       if ((f->flags & CAI_CONFIG_PATH) != 0U) {
         if (cai_config_resolve_path(cfg, f->section, f->key, &resolved,
@@ -1277,10 +1342,12 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
     } else if (f->type == CAI_CONFIG_BOOL)
       *(int *)p = cai_config_get_bool(cfg, f->section, f->key, *(int *)p);
   }
-  if (strcmp(early.provider_explicit ? early.provider : defaults.provider,
+  if (strcmp(scratch->early.provider_explicit ? scratch->early.provider
+                                              : scratch->defaults.provider,
              "custom") == 0) {
-    optional_string(cfg, "client", "base_url", &defaults.endpoint);
-    optional_string(cfg, "client", "api_key_env", &defaults.api_key_env);
+    optional_string(cfg, "client", "base_url", &scratch->defaults.endpoint);
+    optional_string(cfg, "client", "api_key_env",
+                    &scratch->defaults.api_key_env);
   }
   /* Resolve the complete selected schema, including supplemental SDK paths,
    * before either runtime application or attachment identity projection. Named
@@ -1292,31 +1359,33 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
             CAI_OK)
       return -1;
   }
-  rc = cai_cli_read_options(argc, argv, &defaults, options);
+  rc = cai_cli_read_options(argc, argv, &scratch->defaults, options);
   if (rc <= 0)
     return rc;
-  if (home_flag || (options->home_dir == NULL && early.home_dir != NULL)) {
+  if (home_flag ||
+      (options->home_dir == NULL && scratch->early.home_dir != NULL)) {
     if (default_string(cfg, options->directory, "paths", "home_dir",
-                       early.home_dir, &options->home_dir, 0, 1,
+                       scratch->early.home_dir, &options->home_dir, 0, 1,
                        error) != CAI_OK)
       return -1;
   }
   if (config_dir_flag ||
-      (options->config_dir == NULL && early.config_dir != NULL)) {
-    if (cfg->set(cfg, "paths", "config_dir", config_root, error) != CAI_OK)
+      (options->config_dir == NULL && scratch->early.config_dir != NULL)) {
+    if (cfg->set(cfg, "paths", "config_dir", scratch->config_root, error) !=
+        CAI_OK)
       return -1;
     options->config_dir = cfg->get(cfg, "paths", "config_dir");
   }
   /* Explicit CLI selection was already canonicalized before configuration;
    * do not resolve that relative argv spelling against the host cwd again. */
-  if (early.directory == NULL && options->directory != NULL) {
-    if (realpath(options->directory, workspace) == NULL ||
-        stat(workspace, &workspace_status) != 0 ||
+  if (scratch->early.directory == NULL && options->directory != NULL) {
+    if (realpath(options->directory, scratch->workspace) == NULL ||
+        stat(scratch->workspace, &workspace_status) != 0 ||
         !S_ISDIR(workspace_status.st_mode))
       return fail(error, options->directory,
                   "cannot resolve configured workspace directory");
   }
-  if (cfg->set(cfg, "paths", "directory", workspace, error) != CAI_OK)
+  if (cfg->set(cfg, "paths", "directory", scratch->workspace, error) != CAI_OK)
     return -1;
   options->directory = cfg->get(cfg, "paths", "directory");
   if (application_defaults(cfg, options, application, 0, error) != CAI_OK)
@@ -1337,6 +1406,23 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
   }
   return 1;
 }
+
+int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
+                         cai_config **configuration,
+                         const cai_app_config *application,
+                         const cai_config_context *startup, cai_error *error) {
+  cai_cli_configure_at_scratch *scratch =
+      (cai_cli_configure_at_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  *configuration = NULL;
+  if (scratch == NULL)
+    return nomem(error, "allocate application configuration");
+  rc = cai_cli_configure_at_with_scratch(argc, argv, options, configuration,
+                                         application, startup, error, scratch);
+  free(scratch);
+  return rc;
+}
+
 int cai_cli_configure(int argc, char *const *argv, cai_cli_options *options,
                       cai_config **configuration,
                       const cai_app_config *application, cai_error *error) {

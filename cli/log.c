@@ -220,11 +220,16 @@ static const char *notice_message(const char *event) {
   return event[0] != '\0' ? event : "Log diagnostic";
 }
 
-static void notice(cai_cli_log *log) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct notice_scratch {
   notice_record record;
+  char plain[4096];
+} notice_scratch;
+static void notice_with_scratch(cai_cli_log *log, notice_scratch *scratch) {
+
   lonejson *json;
   lonejson_error error;
-  char plain[4096];
+
   const char *label;
   const char *cursor;
   size_t used;
@@ -246,12 +251,12 @@ static void notice(cai_cli_log *log) {
     } else if (ch == 27U) {
       escape = 1;
     } else if (ch >= 32U && ch != 127U) {
-      plain[used++] = (char)ch;
+      scratch->plain[used++] = (char)ch;
     }
   }
-  plain[used] = '\0';
-  memset(&record, 0, sizeof(record));
-  if (plain[0] == '{') {
+  scratch->plain[used] = '\0';
+  memset(&scratch->record, 0, sizeof(scratch->record));
+  if (scratch->plain[0] == '{') {
     lonejson_path_value_visitor visitor = lonejson_default_path_value_visitor();
     lonejson_status status = LONEJSON_STATUS_INVALID_ARGUMENT;
     visitor.string_begin = notice_value_begin;
@@ -263,45 +268,45 @@ static void notice(cai_cli_log *log) {
     visitor.boolean_value = notice_bool;
     json = lonejson_new(NULL, &error);
     if (json != NULL) {
-      status = lonejson_visit_path_value_buffer(json, plain, used, &visitor,
-                                                &record, &error);
+      status = lonejson_visit_path_value_buffer(
+          json, scratch->plain, used, &visitor, &scratch->record, &error);
       lonejson_free(json);
     }
     if (status != LONEJSON_STATUS_OK) {
       lonejson_value_path partial = {NULL, 1U};
-      record.truncated = 1;
-      if (record.value_open)
-        notice_value_end(&record, &partial, &error);
+      scratch->record.truncated = 1;
+      if (scratch->record.value_open)
+        notice_value_end(&scratch->record, &partial, &error);
     }
-    if (strcmp(record.level, "warn") != 0 &&
-        strcmp(record.level, "error") != 0 &&
-        strcmp(record.level, "fatal") != 0 &&
-        strcmp(record.level, "panic") != 0)
+    if (strcmp(scratch->record.level, "warn") != 0 &&
+        strcmp(scratch->record.level, "error") != 0 &&
+        strcmp(scratch->record.level, "fatal") != 0 &&
+        strcmp(scratch->record.level, "panic") != 0)
       return;
     /* The ordered tool event already renders its failure and explanation.
      * Keep these records in the log, but do not repeat them as UI warnings.
      * Require tool/call attribution; unrelated diagnostics stay visible. */
-    if (strcmp(record.level, "warn") == 0 && record.tool[0] != '\0' &&
-        record.call_id[0] != '\0' &&
-        (strcmp(record.message, "cai.agent.runtime.tool.error") == 0 ||
-         strcmp(record.event, "tool_call_failed") == 0))
+    if (strcmp(scratch->record.level, "warn") == 0 &&
+        scratch->record.tool[0] != '\0' && scratch->record.call_id[0] != '\0' &&
+        (strcmp(scratch->record.message, "cai.agent.runtime.tool.error") == 0 ||
+         strcmp(scratch->record.event, "tool_call_failed") == 0))
       return;
     /* Discovery reports one complete catalog warning. Its lower transport
      * records remain in the log file, without duplicating the UI notice. */
-    if (strcmp(record.operation, "model catalog") == 0 &&
-        (strcmp(record.message, "cai.http.transport_error") == 0 ||
-         strcmp(record.message, "cai.http.request.done") == 0 ||
-         strcmp(record.message, "cai.http.response_limit") == 0))
+    if (strcmp(scratch->record.operation, "model catalog") == 0 &&
+        (strcmp(scratch->record.message, "cai.http.transport_error") == 0 ||
+         strcmp(scratch->record.message, "cai.http.request.done") == 0 ||
+         strcmp(scratch->record.message, "cai.http.response_limit") == 0))
       return;
-    label = strcmp(record.level, "warn") == 0 ? "WARN" : "ERROR";
-    cursor = notice_message(record.message);
+    label = strcmp(scratch->record.level, "warn") == 0 ? "WARN" : "ERROR";
+    cursor = notice_message(scratch->record.message);
   } else {
     /* Find the first native severity token, before the message. Do not
      * surface an INFO message just because its text happens to say WRN. */
-    cursor = plain;
+    cursor = scratch->plain;
     for (;;) {
-      if ((cursor == plain || cursor[-1] == ' ') && strlen(cursor) >= 4U &&
-          cursor[3] == ' ' &&
+      if ((cursor == scratch->plain || cursor[-1] == ' ') &&
+          strlen(cursor) >= 4U && cursor[3] == ' ' &&
           (strncmp(cursor, "TRC", 3U) == 0 || strncmp(cursor, "DBG", 3U) == 0 ||
            strncmp(cursor, "INF", 3U) == 0 || strncmp(cursor, "WRN", 3U) == 0 ||
            strncmp(cursor, "ERR", 3U) == 0 || strncmp(cursor, "FTL", 3U) == 0 ||
@@ -326,21 +331,22 @@ static void notice(cai_cli_log *log) {
     log->dropped++;
   }
   slot = (log->head + log->count++) % 32U;
-  written = snprintf(log->notices[slot], sizeof(log->notices[slot]),
-                     "* %s: %s%s%s%s%s%s%s%s", label, record.operation,
-                     record.operation[0] != '\0' ? ": " : "", cursor,
-                     record.details[0] != '\0' ? ": " : "", record.details,
-                     record.context[0] != '\0' ? " (" : "", record.context,
-                     record.context[0] != '\0' ? ")" : "");
-  if (record.truncated || written >= (int)sizeof(log->notices[slot])) {
+  written = snprintf(
+      log->notices[slot], sizeof(log->notices[slot]), "* %s: %s%s%s%s%s%s%s%s",
+      label, scratch->record.operation,
+      scratch->record.operation[0] != '\0' ? ": " : "", cursor,
+      scratch->record.details[0] != '\0' ? ": " : "", scratch->record.details,
+      scratch->record.context[0] != '\0' ? " (" : "", scratch->record.context,
+      scratch->record.context[0] != '\0' ? ")" : "");
+  if (scratch->record.truncated || written >= (int)sizeof(log->notices[slot])) {
     static const char suffix[] = "... (more detail in the session log)";
     size_t length = strlen(log->notices[slot]);
     if (length + sizeof(suffix) > sizeof(log->notices[slot]))
       length = sizeof(log->notices[slot]) - sizeof(suffix);
     memcpy(log->notices[slot] + length, suffix, sizeof(suffix));
-  } else if (plain[0] == '{' && record.details[0] == '\0' &&
-             record.context[0] == '\0' &&
-             strncmp(record.message, "cai.", 4U) == 0) {
+  } else if (scratch->plain[0] == '{' && scratch->record.details[0] == '\0' &&
+             scratch->record.context[0] == '\0' &&
+             strncmp(scratch->record.message, "cai.", 4U) == 0) {
     size_t length = strlen(log->notices[slot]);
     snprintf(log->notices[slot] + length, sizeof(log->notices[slot]) - length,
              ". See session log: %s", log->path);
@@ -352,6 +358,14 @@ static void notice(cai_cli_log *log) {
   }
   signal = 1U;
   (void)write(log->wakeup_fd, &signal, sizeof(signal));
+}
+
+static void notice(cai_cli_log *log) {
+  notice_scratch *scratch = (notice_scratch *)calloc(1U, sizeof(*scratch));
+  if (scratch == NULL)
+    return;
+  notice_with_scratch(log, scratch);
+  free(scratch);
 }
 
 static int log_write(void *context, const char *data, size_t count,
@@ -492,9 +506,16 @@ int cai_cli_log_file_at(cai_cli_log *log, const char *directory,
   return CAI_OK;
 }
 
-int cai_cli_log_session(cai_cli_log *log, const char *id, cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_cli_log_session_scratch {
   char path[4096];
   char bytes[8192];
+} cai_cli_log_session_scratch;
+static int
+cai_cli_log_session_with_scratch(cai_cli_log *log, const char *id,
+                                 cai_error *error,
+                                 cai_cli_log_session_scratch *scratch) {
+
   int fd;
   ssize_t n = 0;
   struct stat status;
@@ -512,12 +533,13 @@ int cai_cli_log_session(cai_cli_log *log, const char *id, cai_error *error) {
       return cai_cli_error(error, CAI_ERR_INVALID,
                            "unsafe session ID for log path");
   }
-  if (snprintf(path, sizeof(path), "%s/%s.log", log->directory, id) >=
-      (int)sizeof(path))
+  if (snprintf(scratch->path, sizeof(scratch->path), "%s/%s.log",
+               log->directory, id) >= (int)sizeof(scratch->path))
     return cai_cli_error(error, CAI_ERR_INVALID, "session log path too long");
-  if (strcmp(path, log->path) == 0)
+  if (strcmp(scratch->path, log->path) == 0)
     return CAI_OK;
-  fd = open(path, O_CREAT | O_APPEND | O_WRONLY | O_CLOEXEC | O_NOFOLLOW, 0600);
+  fd = open(scratch->path,
+            O_CREAT | O_APPEND | O_WRONLY | O_CLOEXEC | O_NOFOLLOW, 0600);
   if (fd < 0)
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "open session log");
   if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode) ||
@@ -533,10 +555,11 @@ int cai_cli_log_session(cai_cli_log *log, const char *id, cai_error *error) {
   if (log->bootstrap) {
     if (lseek(log->fd, 0, SEEK_SET) < 0)
       rc = CAI_ERR_TRANSPORT;
-    while (rc == CAI_OK && (n = read(log->fd, bytes, sizeof(bytes))) > 0) {
+    while (rc == CAI_OK &&
+           (n = read(log->fd, scratch->bytes, sizeof(scratch->bytes))) > 0) {
       done = 0;
       while (done < n) {
-        written = write(fd, bytes + done, (size_t)(n - done));
+        written = write(fd, scratch->bytes + done, (size_t)(n - done));
         if (written <= 0) {
           rc = CAI_ERR_TRANSPORT;
           break;
@@ -552,7 +575,7 @@ int cai_cli_log_session(cai_cli_log *log, const char *id, cai_error *error) {
   if (rc == CAI_OK) {
     close(log->fd);
     log->fd = fd;
-    strcpy(log->path, path);
+    strcpy(log->path, scratch->path);
     log->bootstrap = 0;
   } else {
     close(fd);
@@ -561,6 +584,18 @@ int cai_cli_log_session(cai_cli_log *log, const char *id, cai_error *error) {
   return rc == CAI_OK ? rc
                       : cai_cli_error(error, rc,
                                       "move bootstrap records to session log");
+}
+
+int cai_cli_log_session(cai_cli_log *log, const char *id, cai_error *error) {
+  cai_cli_log_session_scratch *scratch =
+      (cai_cli_log_session_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_cli_log_session scratch");
+  rc = cai_cli_log_session_with_scratch(log, id, error, scratch);
+  free(scratch);
+  return rc;
 }
 
 int cai_cli_log_notices(cai_cli_log *log, int (*visit)(void *, const char *),

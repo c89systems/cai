@@ -272,11 +272,15 @@ static int cai_view_image_opened_path(int fd, char **out, cai_error *error) {
                              error);
 }
 
-static int cai_view_image_open(const cai_view_image_context *context,
-                               const char *path, int *out_fd,
-                               char **out_resolved, long long *out_size,
-                               cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_view_image_open_scratch {
   char candidate[PATH_MAX];
+} cai_view_image_open_scratch;
+static int cai_view_image_open_with_scratch(
+    const cai_view_image_context *context, const char *path, int *out_fd,
+    char **out_resolved, long long *out_size, cai_error *error,
+    cai_view_image_open_scratch *scratch) {
+
   const char *open_path;
   char *resolved;
   char *opened_path;
@@ -295,12 +299,12 @@ static int cai_view_image_open(const cai_view_image_context *context,
   if (path[0] == '/') {
     open_path = path;
   } else {
-    length = snprintf(candidate, sizeof(candidate), "%s/%s",
+    length = snprintf(scratch->candidate, sizeof(scratch->candidate), "%s/%s",
                       context->default_workdir, path);
-    if (length < 0 || (size_t)length >= sizeof(candidate)) {
+    if (length < 0 || (size_t)length >= sizeof(scratch->candidate)) {
       return cai_set_error(error, CAI_ERR_INVALID, "image path is too long");
     }
-    open_path = candidate;
+    open_path = scratch->candidate;
   }
   resolved = NULL;
   opened_path = NULL;
@@ -350,6 +354,21 @@ static int cai_view_image_open(const cai_view_image_context *context,
   *out_resolved = resolved;
   *out_size = (long long)st.st_size;
   return CAI_OK;
+}
+
+static int cai_view_image_open(const cai_view_image_context *context,
+                               const char *path, int *out_fd,
+                               char **out_resolved, long long *out_size,
+                               cai_error *error) {
+  cai_view_image_open_scratch *scratch =
+      (cai_view_image_open_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate image tool path");
+  rc = cai_view_image_open_with_scratch(context, path, out_fd, out_resolved,
+                                        out_size, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static const char *cai_view_image_mime_type(const unsigned char *data,

@@ -121,17 +121,21 @@ static int shell_foreground(pid_t foreground) {
   return rc;
 }
 
-int cai_cli_shell_handoff(const char *path, const char *directory,
-                          cai_cli_shell_output_fn output, void *context,
-                          int stop_fd, cai_cli_shell_stop_fn stop, int *status,
-                          cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_cli_shell_handoff_scratch {
+  char name[256], buffer[4096], input[4096];
+} cai_cli_shell_handoff_scratch;
+static int cai_cli_shell_handoff_with_scratch(
+    const char *path, const char *directory, cai_cli_shell_output_fn output,
+    void *context, int stop_fd, cai_cli_shell_stop_fn stop, int *status,
+    cai_error *error, cai_cli_shell_handoff_scratch *scratch) {
   struct termios saved, raw;
   struct winsize geometry;
   struct sigaction action, previous;
   struct pollfd fds[4];
   shell_waiter *waiter = NULL;
   pthread_t thread;
-  char name[256], buffer[4096], input[4096];
+
   size_t input_length = 0U, input_offset = 0U;
   int master = -1, slave = -1, pipefd[2] = {-1, -1};
   int rc = CAI_OK, failure = 0, raw_set = 0, signal_set = 0;
@@ -149,10 +153,10 @@ int cai_cli_shell_handoff(const char *path, const char *directory,
       failure = errno;
       goto done;
     }
-    failure = ptsname_r(master, name, sizeof(name));
+    failure = ptsname_r(master, scratch->name, sizeof(scratch->name));
     if (failure != 0)
       goto done;
-    slave = open(name, O_RDWR | O_NOCTTY | O_CLOEXEC);
+    slave = open(scratch->name, O_RDWR | O_NOCTTY | O_CLOEXEC);
     if (slave < 0 || tcsetattr(slave, TCSANOW, &saved) != 0 ||
         ioctl(slave, TIOCSWINSZ, &geometry) != 0) {
       failure = errno;
@@ -296,14 +300,14 @@ int cai_cli_shell_handoff(const char *path, const char *directory,
       break;
     }
     if ((fds[0].revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
-      n = read(master, buffer, sizeof(buffer));
+      n = read(master, scratch->buffer, sizeof(scratch->buffer));
       if (n > 0) {
         if (output != NULL) {
-          rc = output(context, buffer, (size_t)n, error);
+          rc = output(context, scratch->buffer, (size_t)n, error);
           if (rc != CAI_OK)
             break;
         }
-        if (handoff_write(STDOUT_FILENO, buffer, (size_t)n) != 0) {
+        if (handoff_write(STDOUT_FILENO, scratch->buffer, (size_t)n) != 0) {
           failure = errno;
           break;
         }
@@ -315,7 +319,8 @@ int cai_cli_shell_handoff(const char *path, const char *directory,
       }
     }
     if ((fds[0].revents & POLLOUT) != 0 && input_offset < input_length) {
-      n = write(master, input + input_offset, input_length - input_offset);
+      n = write(master, scratch->input + input_offset,
+                input_length - input_offset);
       if (n > 0)
         input_offset += (size_t)n;
       else if (n < 0 && errno != EINTR && errno != EAGAIN && errno != EIO) {
@@ -337,7 +342,7 @@ int cai_cli_shell_handoff(const char *path, const char *directory,
       }
     }
     if (fds[1].revents != 0 && !exited && !eof) {
-      n = read(STDIN_FILENO, input, sizeof(input));
+      n = read(STDIN_FILENO, scratch->input, sizeof(scratch->input));
       if (n == 0) {
         input_open = 0;
         (void)kill(-child, SIGHUP);
@@ -393,6 +398,21 @@ done:
     failure = errno;
   return failure != 0 ? shell_error(error, "interactive shell handoff", failure)
                       : rc;
+}
+
+int cai_cli_shell_handoff(const char *path, const char *directory,
+                          cai_cli_shell_output_fn output, void *context,
+                          int stop_fd, cai_cli_shell_stop_fn stop, int *status,
+                          cai_error *error) {
+  cai_cli_shell_handoff_scratch *scratch =
+      (cai_cli_shell_handoff_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate terminal handoff");
+  rc = cai_cli_shell_handoff_with_scratch(
+      path, directory, output, context, stop_fd, stop, status, error, scratch);
+  free(scratch);
+  return rc;
 }
 
 void cai_cli_shell_cancel(cai_cli_shell *shell) {

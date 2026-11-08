@@ -199,9 +199,16 @@ static void write_http_response(int fd,
   }
 }
 
-int cai_cli_login(const cai_blob_store *storage, pslog_logger *logger,
-                  int stop_fd, cai_cli_login_stop_fn stop, void *context,
-                  cai_environment *environment, const char *directory) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_cli_login_scratch {
+  char request_buffer[16384];
+} cai_cli_login_scratch;
+static int cai_cli_login_with_scratch(const cai_blob_store *storage,
+                                      pslog_logger *logger, int stop_fd,
+                                      cai_cli_login_stop_fn stop, void *context,
+                                      cai_environment *environment,
+                                      const char *directory,
+                                      cai_cli_login_scratch *scratch) {
   char redirect_uri[256];
   int port = 0;
   int server_fd;
@@ -209,7 +216,7 @@ int cai_cli_login(const cai_blob_store *storage, pslog_logger *logger,
   int rc;
   int exit_code = 1;
   char *authorize_url = NULL;
-  char request_buffer[16384];
+
   char bad_request_body[] = "Bad Request\n";
   char callback_failed_body[] = "OAuth callback failed\n";
   char *method;
@@ -294,17 +301,19 @@ int cai_cli_login(const cai_blob_store *storage, pslog_logger *logger,
       logger->error(logger, "login callback", &field, 1U);
       break;
     }
-    memset(request_buffer, 0, sizeof(request_buffer));
+    memset(scratch->request_buffer, 0, sizeof(scratch->request_buffer));
     memset(&login_response, 0, sizeof(login_response));
     response_owned = 0;
-    rc = read_http_request(client_fd, request_buffer, sizeof(request_buffer),
-                           stop_fd, stop, context);
+    rc = read_http_request(client_fd, scratch->request_buffer,
+                           sizeof(scratch->request_buffer), stop_fd, stop,
+                           context);
     if (rc == 1) {
       close(client_fd);
       exit_code = 0;
       break;
     }
-    if (rc != 0 || !parse_request_line(request_buffer, &method, &target)) {
+    if (rc != 0 ||
+        !parse_request_line(scratch->request_buffer, &method, &target)) {
       login_response.status = 400;
       login_response.content_type = "text/plain; charset=utf-8";
       login_response.body = bad_request_body;
@@ -354,4 +363,25 @@ done:
   cai_error_cleanup(&error);
   close(server_fd);
   return exit_code;
+}
+
+int cai_cli_login(const cai_blob_store *storage, pslog_logger *logger,
+                  int stop_fd, cai_cli_login_stop_fn stop, void *context,
+                  cai_environment *environment, const char *directory) {
+  cai_cli_login_scratch *scratch =
+      (cai_cli_login_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL) {
+    cai_error failure;
+    cai_error_init(&failure);
+    failure.code = CAI_ERR_NOMEM;
+    failure.message = strdup("allocate login request buffer");
+    cai_cli_log_error(logger, "login", &failure);
+    cai_error_cleanup(&failure);
+    return 1;
+  }
+  rc = cai_cli_login_with_scratch(storage, logger, stop_fd, stop, context,
+                                  environment, directory, scratch);
+  free(scratch);
+  return rc;
 }

@@ -593,12 +593,18 @@ static int parse_line(config_impl *impl, char *bytes, char **section,
   }
   return put_value(impl, *section, key, value, line, 0, error);
 }
-int cai_config_load(cai_config *self, cai_source *source, const char *origin,
-                    cai_error *error) {
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_config_load_scratch {
+  char bytes[4096], *section;
+} cai_config_load_scratch;
+static int cai_config_load_with_scratch(cai_config *self, cai_source *source,
+                                        const char *origin, cai_error *error,
+                                        cai_config_load_scratch *scratch) {
   config_impl next, *impl;
   cai_buffer_builder line;
   char empty[] = "";
-  char bytes[4096], *section;
+
   size_t n, i;
   unsigned long number = 1UL;
   int rc = CAI_OK;
@@ -619,35 +625,36 @@ int cai_config_load(cai_config *self, cai_source *source, const char *origin,
   next.field_count = impl->field_count;
   next.numeric_locale = impl->numeric_locale;
   next.origin = cai_strdup(NULL, origin != NULL ? origin : "configuration");
-  section = cai_strdup(NULL, "");
-  if (next.origin == NULL || section == NULL)
+  scratch->section = cai_strdup(NULL, "");
+  if (next.origin == NULL || scratch->section == NULL)
     rc = cai_set_error(error, CAI_ERR_NOMEM, "allocate configuration parser");
   while (rc == CAI_OK &&
-         (n = cai_source_read(source, bytes, sizeof(bytes), error)) != 0U) {
+         (n = cai_source_read(source, scratch->bytes, sizeof(scratch->bytes),
+                              error)) != 0U) {
     for (i = 0U; i < n && rc == CAI_OK; i++) {
-      if (bytes[i] == '\0') {
-        rc = config_error(error, next.origin, number, section, NULL,
+      if (scratch->bytes[i] == '\0') {
+        rc = config_error(error, next.origin, number, scratch->section, NULL,
                           "NUL byte in configuration");
         break;
       }
-      if (bytes[i] == '\n') {
-        rc = parse_line(&next, line.data != NULL ? line.data : empty, &section,
-                        number, error);
+      if (scratch->bytes[i] == '\n') {
+        rc = parse_line(&next, line.data != NULL ? line.data : empty,
+                        &scratch->section, number, error);
         line.length = 0U;
         if (line.data != NULL)
           line.data[0] = '\0';
         number++;
       } else if (line.length >= CONFIG_LINE_MAX)
-        rc = config_error(error, next.origin, number, section, NULL,
+        rc = config_error(error, next.origin, number, scratch->section, NULL,
                           "configuration line exceeds limit");
       else
-        rc = cai_buffer_append(&line, bytes + i, 1U, error);
+        rc = cai_buffer_append(&line, scratch->bytes + i, 1U, error);
     }
   }
   if (rc == CAI_OK && error != NULL && error->code != CAI_OK)
     rc = error->code;
   if (rc == CAI_OK && line.length != 0U)
-    rc = parse_line(&next, line.data, &section, number, error);
+    rc = parse_line(&next, line.data, &scratch->section, number, error);
   if (rc == CAI_OK) {
     entries_cleanup(impl);
     impl->entries = next.entries;
@@ -658,10 +665,23 @@ int cai_config_load(cai_config *self, cai_source *source, const char *origin,
     next.origin = NULL;
   }
   entries_cleanup(&next);
-  cai_free_mem(NULL, section);
+  cai_free_mem(NULL, scratch->section);
   cai_free_mem(NULL, line.data);
   return rc;
 }
+
+int cai_config_load(cai_config *self, cai_source *source, const char *origin,
+                    cai_error *error) {
+  cai_config_load_scratch *scratch =
+      (cai_config_load_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate configuration reader");
+  rc = cai_config_load_with_scratch(self, source, origin, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
 int cai_config_load_file(cai_config *self, const char *path, cai_error *error) {
   FILE *file;
   cai_source *source = NULL;

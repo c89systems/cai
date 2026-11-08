@@ -299,35 +299,43 @@ static int cai_runtime_delivery_data(const char *session,
     cai_free_mem(NULL, buffer.data);
   return rc;
 }
-static int cai_runtime_queue_replay(cai_agent_runtime *runtime,
-                                    const cai_agent_session_event *event,
-                                    cai_error *error) {
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_runtime_queue_replay_scratch {
   cai_input_record record;
+  char target[CAI_AGENT_SESSION_ID_MAX];
+  cai_input_delivery delivery;
+} cai_runtime_queue_replay_scratch;
+static int cai_runtime_queue_replay_with_scratch(
+    cai_agent_runtime *runtime, const cai_agent_session_event *event,
+    cai_error *error, cai_runtime_queue_replay_scratch *scratch) {
+
   cai_runtime_input_dispatch *dispatch = NULL;
   const char *json = event->data, *end;
   unsigned long long kind, sequence;
-  char target[CAI_AGENT_SESSION_ID_MAX];
+
   int rc;
   if (strcmp(event->type, "input_queue_delivery") == 0) {
-    cai_input_delivery delivery;
+
     cai_runtime_input_origin *origin;
-    rc = cai_input_delivery_parse(event, &delivery, error);
+    rc = cai_input_delivery_parse(event, &scratch->delivery, error);
     if (rc != CAI_OK)
       return rc;
-    if (delivery.local) {
+    if (scratch->delivery.local) {
       cai_runtime_input_dispatch *entry;
       cai_runtime_input_node *input;
       /* A local delivery is its claim's acknowledgement in the same atomic
        * append. No separate marker or growing local receipt index is needed. */
       for (entry = runtime->input_dispatch; entry != NULL; entry = entry->next)
-        if (entry->sequence == delivery.sequence)
+        if (entry->sequence == scratch->delivery.sequence)
           break;
       if (entry == NULL && event->sequence > runtime->input_checkpoint_after)
         return cai_set_error(error, CAI_ERR_PROTOCOL,
                              "model input delivery has no accepted claim");
-      rc = cai_runtime_replay_journal_event(runtime, &delivery.event, error);
+      rc = cai_runtime_replay_journal_event(runtime, &scratch->delivery.event,
+                                            error);
       if (rc == CAI_OK && entry != NULL) {
-        input = strcmp(delivery.event.type, "steering_queued") == 0
+        input = strcmp(scratch->delivery.event.type, "steering_queued") == 0
                     ? runtime->steering_head
                     : runtime->turn_head;
         for (; input != NULL; input = input->next)
@@ -339,20 +347,23 @@ static int cai_runtime_queue_replay(cai_agent_runtime *runtime,
             entry->input_event_count = 0U;
             break;
           }
-        cai_runtime_dispatch_remove_locked(runtime, delivery.sequence, 0);
+        cai_runtime_dispatch_remove_locked(runtime, scratch->delivery.sequence,
+                                           0);
       }
       return rc;
     }
-    if (cai_runtime_origin_seen_locked(runtime, delivery.source,
-                                       delivery.sequence))
+    if (cai_runtime_origin_seen_locked(runtime, scratch->delivery.source,
+                                       scratch->delivery.sequence))
       return cai_set_error(error, CAI_ERR_PROTOCOL,
                            "duplicate committed input delivery");
-    origin = cai_runtime_origin_new(delivery.source, delivery.sequence, error);
+    origin = cai_runtime_origin_new(scratch->delivery.source,
+                                    scratch->delivery.sequence, error);
     if (origin == NULL)
       return CAI_ERR_NOMEM;
     origin->next = runtime->input_origins;
     runtime->input_origins = origin;
-    return cai_runtime_replay_journal_event(runtime, &delivery.event, error);
+    return cai_runtime_replay_journal_event(runtime, &scratch->delivery.event,
+                                            error);
   }
   if (event->sequence <= runtime->input_checkpoint_after)
     return CAI_OK;
@@ -378,7 +389,7 @@ static int cai_runtime_queue_replay(cai_agent_runtime *runtime,
                            "invalid input claim delivery mode");
     json = end + 1U;
     if (cai_parse_unsigned_decimal(json, &end, &length) != 0 || *end != '\n' ||
-        length == 0U || length >= sizeof(target))
+        length == 0U || length >= sizeof(scratch->target))
       return cai_set_error(error, CAI_ERR_PROTOCOL,
                            "invalid input claim destination");
     json = end + 1U;
@@ -386,31 +397,33 @@ static int cai_runtime_queue_replay(cai_agent_runtime *runtime,
     if (strnlen(json, n + 1U) != n + 1U || json[n] != '\n')
       return cai_set_error(error, CAI_ERR_PROTOCOL,
                            "truncated input claim destination");
-    memcpy(target, json, n);
-    target[n] = '\0';
+    memcpy(scratch->target, json, n);
+    scratch->target[n] = '\0';
     json += n + 1U;
   } else
     kind = CAI_RUNTIME_INPUT_QUEUED_TURN;
-  memset(&record, 0, sizeof(record));
-  rc = cai_input_record_parse(json, &record, error);
+  memset(&scratch->record, 0, sizeof(scratch->record));
+  rc = cai_input_record_parse(json, &scratch->record, error);
   if (rc == CAI_OK && strcmp(event->type, "input_queue_claim") == 0) {
     cai_input_entry pending;
-    if (record.type != CAI_INPUT_RECORD_CLAIM || record.entry.action)
+    if (scratch->record.type != CAI_INPUT_RECORD_CLAIM ||
+        scratch->record.entry.action)
       rc = cai_set_error(error, CAI_ERR_PROTOCOL, "invalid model input claim");
     else {
       const unsigned long long *events = NULL;
       size_t count = 0U;
       rc = cai_runtime_queue_ensure(runtime, error);
       if (rc == CAI_OK)
-        rc = cai_input_queue_lookup(runtime->input_queue, record.entry.id,
-                                    &pending, error);
+        rc = cai_input_queue_lookup(runtime->input_queue,
+                                    scratch->record.entry.id, &pending, error);
       if (rc == CAI_OK)
-        rc = cai_input_queue_input_events(runtime->input_queue, record.entry.id,
-                                          &events, &count, error);
+        rc = cai_input_queue_input_events(runtime->input_queue,
+                                          scratch->record.entry.id, &events,
+                                          &count, error);
       if (rc == CAI_OK) {
         dispatch = cai_runtime_dispatch_new(
-            pending.text, target, (cai_runtime_input_kind)kind, events, count,
-            runtime->session_id, &record.entry, error);
+            pending.text, scratch->target, (cai_runtime_input_kind)kind, events,
+            count, runtime->session_id, &scratch->record.entry, error);
         if (dispatch == NULL)
           rc = error != NULL && error->code != CAI_OK ? error->code
                                                       : CAI_ERR_NOMEM;
@@ -422,15 +435,29 @@ static int cai_runtime_queue_replay(cai_agent_runtime *runtime,
   if (rc == CAI_OK)
     rc = cai_runtime_queue_ensure(runtime, error);
   if (rc == CAI_OK)
-    rc = cai_input_queue_restore(runtime->input_queue, &record, event->sequence,
-                                 error);
+    rc = cai_input_queue_restore(runtime->input_queue, &scratch->record,
+                                 event->sequence, error);
   if (rc == CAI_OK && dispatch != NULL)
     cai_runtime_dispatch_add_locked(runtime, dispatch);
   else if (dispatch != NULL)
     cai_runtime_dispatch_free(dispatch);
-  cai_input_record_cleanup(&record);
+  cai_input_record_cleanup(&scratch->record);
   return rc;
 }
+
+static int cai_runtime_queue_replay(cai_agent_runtime *runtime,
+                                    const cai_agent_session_event *event,
+                                    cai_error *error) {
+  cai_runtime_queue_replay_scratch *scratch =
+      (cai_runtime_queue_replay_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate queue replay state");
+  rc = cai_runtime_queue_replay_with_scratch(runtime, event, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
 static int cai_runtime_queue_deliver(cai_agent_runtime *runtime,
                                      cai_agent_runtime *only_child,
                                      cai_error *error) {

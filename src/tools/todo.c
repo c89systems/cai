@@ -2206,13 +2206,16 @@ static int cai_todo_board_arg_is_default(cai_todo_context *ctx,
   return cai_todo_streq(board_name, ctx->default_board);
 }
 
-static int cai_todo_ensure_board(cai_todo_context *ctx, void *txn,
-                                 const char *name, cai_todo_board *out,
-                                 long long *in_process, long long *items,
-                                 long long wip_limit, int has_wip_limit,
-                                 const char *requested_key, int *created,
-                                 cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_todo_ensure_board_scratch {
   cai_todo_rewrite_state state;
+} cai_todo_ensure_board_scratch;
+static int cai_todo_ensure_board_with_scratch(
+    cai_todo_context *ctx, void *txn, const char *name, cai_todo_board *out,
+    long long *in_process, long long *items, long long wip_limit,
+    int has_wip_limit, const char *requested_key, int *created,
+    cai_error *error, cai_todo_ensure_board_scratch *scratch) {
+
   lonejson_array_rewrite_options options;
   char id[32];
   char key[16];
@@ -2248,19 +2251,19 @@ static int cai_todo_ensure_board(cai_todo_context *ctx, void *txn,
 
     memset(&update_args, 0, sizeof(update_args));
     update_args.board_id = out->id;
-    memset(&state, 0, sizeof(state));
+    memset(&scratch->state, 0, sizeof(scratch->state));
     memset(&options, 0, sizeof(options));
-    state.ctx = ctx;
-    state.args = &update_args;
-    state.new_board_key = key;
-    state.next_sequence = next_sequence;
-    state.now_unix = (long long)time(NULL);
+    scratch->state.ctx = ctx;
+    scratch->state.args = &update_args;
+    scratch->state.new_board_key = key;
+    scratch->state.next_sequence = next_sequence;
+    scratch->state.now_unix = (long long)time(NULL);
     options.item_map = &cai_todo_board_map;
-    options.item_dst = &state.board;
+    options.item_dst = &scratch->state.board;
     options.item = cai_todo_update_board_cb;
-    options.user = &state;
+    options.user = &scratch->state;
     rc = cai_todo_rewrite(ctx, txn, "boards", &options, error);
-    cai_todo_board_cleanup(&state.replacement_board);
+    cai_todo_board_cleanup(&scratch->state.replacement_board);
     if (rc == CAI_OK) {
       rc = cai_todo_replace_string(&out->key, key, error);
     }
@@ -2269,9 +2272,9 @@ static int cai_todo_ensure_board(cai_todo_context *ctx, void *txn,
     return rc;
   }
 
-  memset(&state, 0, sizeof(state));
+  memset(&scratch->state, 0, sizeof(scratch->state));
   memset(&options, 0, sizeof(options));
-  cai_todo_board_init(&state.board);
+  cai_todo_board_init(&scratch->state.board);
   rc = cai_todo_generate_id(ctx, txn, id, error);
   if (rc == CAI_OK) {
     rc = cai_todo_generate_board_key(
@@ -2282,16 +2285,16 @@ static int cai_todo_ensure_board(cai_todo_context *ctx, void *txn,
         NULL, key, error);
   }
   if (rc == CAI_OK) {
-    rc = cai_todo_set_board(&state.board, id, key, name, wip_limit,
+    rc = cai_todo_set_board(&scratch->state.board, id, key, name, wip_limit,
                             has_wip_limit, (long long)time(NULL), error);
   }
   if (rc == CAI_OK) {
     options.append = cai_todo_append_board_cb;
-    options.user = &state;
+    options.user = &scratch->state;
     rc = cai_todo_rewrite(ctx, txn, "boards", &options, error);
   }
   if (rc == CAI_OK) {
-    rc = cai_todo_copy_board(out, &state.board, error);
+    rc = cai_todo_copy_board(out, &scratch->state.board, error);
   }
   if (rc == CAI_OK) {
     *in_process = 0;
@@ -2300,7 +2303,26 @@ static int cai_todo_ensure_board(cai_todo_context *ctx, void *txn,
       *created = 1;
     }
   }
-  cai_todo_board_cleanup(&state.board);
+  cai_todo_board_cleanup(&scratch->state.board);
+  return rc;
+}
+
+static int cai_todo_ensure_board(cai_todo_context *ctx, void *txn,
+                                 const char *name, cai_todo_board *out,
+                                 long long *in_process, long long *items,
+                                 long long wip_limit, int has_wip_limit,
+                                 const char *requested_key, int *created,
+                                 cai_error *error) {
+  cai_todo_ensure_board_scratch *scratch =
+      (cai_todo_ensure_board_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate board rewrite scratch");
+  rc = cai_todo_ensure_board_with_scratch(
+      ctx, txn, name, out, in_process, items, wip_limit, has_wip_limit,
+      requested_key, created, error, scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 
@@ -2630,11 +2652,15 @@ cai_todo_rewrite_items_board_key(cai_todo_context *ctx, void *txn,
   return rc;
 }
 
-static int cai_todo_create_board(cai_todo_context *ctx,
-                                 const cai_todo_args *args,
-                                 cai_todo_result *result, cai_error *error) {
-  cai_todo_board board;
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_todo_create_board_scratch {
   cai_todo_rewrite_state update_state;
+} cai_todo_create_board_scratch;
+static int cai_todo_create_board_with_scratch(
+    cai_todo_context *ctx, const cai_todo_args *args, cai_todo_result *result,
+    cai_error *error, cai_todo_create_board_scratch *scratch) {
+  cai_todo_board board;
+
   lonejson_array_rewrite_options update_options;
   cai_todo_args update_args;
   long long in_process;
@@ -2649,7 +2675,7 @@ static int cai_todo_create_board(cai_todo_context *ctx,
   int rc;
 
   cai_todo_board_init(&board);
-  memset(&update_state, 0, sizeof(update_state));
+  memset(&scratch->update_state, 0, sizeof(scratch->update_state));
   memset(&update_options, 0, sizeof(update_options));
   memset(&update_args, 0, sizeof(update_args));
   in_process = 0;
@@ -2719,19 +2745,19 @@ static int cai_todo_create_board(cai_todo_context *ctx,
       update_args = *args;
       update_args.board_id = board.id;
       update_args.board_key = NULL;
-      update_state.ctx = ctx;
-      update_state.args = &update_args;
-      update_state.new_board_key = has_new_key ? new_key : NULL;
-      update_state.next_sequence = has_new_key ? next_sequence : 0LL;
-      update_state.now_unix = (long long)time(NULL);
+      scratch->update_state.ctx = ctx;
+      scratch->update_state.args = &update_args;
+      scratch->update_state.new_board_key = has_new_key ? new_key : NULL;
+      scratch->update_state.next_sequence = has_new_key ? next_sequence : 0LL;
+      scratch->update_state.now_unix = (long long)time(NULL);
       update_options.item_map = &cai_todo_board_map;
-      update_options.item_dst = &update_state.board;
+      update_options.item_dst = &scratch->update_state.board;
       update_options.item = cai_todo_update_board_cb;
-      update_options.user = &update_state;
+      update_options.user = &scratch->update_state;
       rc = cai_todo_rewrite(ctx, txn, "boards", &update_options, error);
-      cai_todo_board_cleanup(&update_state.replacement_board);
+      cai_todo_board_cleanup(&scratch->update_state.replacement_board);
     }
-    if (rc == CAI_OK && update_state.found) {
+    if (rc == CAI_OK && scratch->update_state.found) {
       if (has_new_key) {
         rc = cai_todo_replace_string(&board.key, new_key, error);
         board.next_sequence = next_sequence;
@@ -2775,6 +2801,20 @@ static int cai_todo_create_board(cai_todo_context *ctx,
     cai_todo_store_rollback(ctx, txn);
   }
   cai_todo_board_cleanup(&board);
+  return rc;
+}
+
+static int cai_todo_create_board(cai_todo_context *ctx,
+                                 const cai_todo_args *args,
+                                 cai_todo_result *result, cai_error *error) {
+  cai_todo_create_board_scratch *scratch =
+      (cai_todo_create_board_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate board creation scratch");
+  rc = cai_todo_create_board_with_scratch(ctx, args, result, error, scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 
@@ -3587,7 +3627,7 @@ int cai_todo_select(cai_todo *self, const char *name, int create,
     rc = cai_todo_run_locked(ctx, &args, &result, error);
     if (rc == CAI_OK && !result.ok)
       rc = cai_set_error(error, CAI_ERR_INVALID, result.message);
-    cai_tool_result_cleanup_plain(&cai_todo_result_map, &result);
+    CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result);
     cai_todo_result_init(&result);
   }
   if (rc == CAI_OK) {
@@ -3608,7 +3648,7 @@ int cai_todo_select(cai_todo *self, const char *name, int create,
                              : cai_status_string(rc));
   }
   pthread_mutex_unlock(&ctx->lock);
-  cai_tool_result_cleanup_plain(&cai_todo_result_map, &result);
+  CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result);
   cai_free_mem(NULL, args.board_name);
   return rc;
 }
@@ -3685,7 +3725,7 @@ int cai_todo_http_snapshot(cai_todo *self, const char *board, int head,
       lonejson_free(json);
     }
   }
-  cai_tool_result_cleanup_plain(&cai_todo_result_map, &result);
+  CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result);
   cai_free_mem(NULL, args.board_name);
   return written != CAI_OK ? written : rc;
 }
@@ -3726,7 +3766,7 @@ int cai_todo_call(cai_todo *self, cai_source *arguments, cai_sink *output,
                                       "write kanban result", local.message);
   }
   lonejson_cleanup(&cai_todo_args_map, &args);
-  cai_tool_result_cleanup_plain(&cai_todo_result_map, &result);
+  CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result);
   lonejson_free(json);
   return rc;
 }

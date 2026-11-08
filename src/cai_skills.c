@@ -372,51 +372,82 @@ static int cai_skill_catalog_visit(void *context, const char *skill_id,
   return rc;
 }
 
+/** Discovery owns each directory cursor and prefix on the heap. */
+typedef struct cai_skill_scan_frame {
+  DIR *directory;
+  char prefix[1024];
+} cai_skill_scan_frame;
+
 static int cai_skill_local_scan_dir(cai_local_skill_provider *local, int dir_fd,
                                     const char *prefix, size_t depth,
                                     cai_skill_provider_visit_fn visit,
                                     void *visit_context, cai_error *error) {
-  DIR *dir;
+  cai_skill_scan_frame *frames, *frame;
   struct dirent *entry;
   struct stat st;
-  char path[1024];
-  int rc;
-
+  char *path;
+  int child, n, rc = CAI_OK;
   (void)local;
-  dir = fdopendir(dup(dir_fd));
-  if (dir == NULL)
+  frames = (cai_skill_scan_frame *)cai_alloc(NULL, (CAI_SKILLS_MAX_DEPTH + 2U) *
+                                                       sizeof(*frames));
+  if (frames == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate skill discovery");
+  memset(frames, 0, (CAI_SKILLS_MAX_DEPTH + 2U) * sizeof(*frames));
+  snprintf(frames[depth].prefix, sizeof(frames[depth].prefix), "%s", prefix);
+  child = dup(dir_fd);
+  frames[depth].directory = child >= 0 ? fdopendir(child) : NULL;
+  if (frames[depth].directory == NULL) {
+    if (child >= 0)
+      close(child);
+    cai_free_mem(NULL, frames);
     return CAI_OK;
-  rc = CAI_OK;
-  while (rc == CAI_OK && (entry = readdir(dir)) != NULL) {
+  }
+  for (;;) {
+    frame = &frames[depth];
+    entry = readdir(frame->directory);
+    if (entry == NULL) {
+      closedir(frame->directory);
+      frame->directory = NULL;
+      if (depth == 0U)
+        break;
+      depth--;
+      continue;
+    }
     if (entry->d_name[0] == '.' || !cai_skill_segment_valid(entry->d_name))
       continue;
+    dir_fd = dirfd(frame->directory);
     if (fstatat(dir_fd, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0 ||
         !S_ISDIR(st.st_mode))
       continue;
-    if (prefix[0] == '\0')
-      snprintf(path, sizeof(path), "%s", entry->d_name);
-    else
-      snprintf(path, sizeof(path), "%s/%s", prefix, entry->d_name);
-    if (strlen(path) >= sizeof(path) - 1U)
+    path = frames[depth + 1U].prefix;
+    n = snprintf(path, sizeof(frame->prefix), "%s%s%s", frame->prefix,
+                 frame->prefix[0] != '\0' ? "/" : "", entry->d_name);
+    if (n < 0 || (size_t)n >= sizeof(frame->prefix) - 1U)
       continue;
-    if (fstatat(dir_fd, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-      int skill_fd = openat(dir_fd, entry->d_name,
-                            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-      if (skill_fd >= 0) {
-        struct stat skill_st;
-        if (fstatat(skill_fd, "SKILL.md", &skill_st, AT_SYMLINK_NOFOLLOW) ==
-                0 &&
-            S_ISREG(skill_st.st_mode) && skill_st.st_nlink == 1) {
-          rc = visit(visit_context, path, error);
-        } else if (rc == CAI_OK && depth < CAI_SKILLS_MAX_DEPTH) {
-          rc = cai_skill_local_scan_dir(local, skill_fd, path, depth + 1U,
-                                        visit, visit_context, error);
-        }
-        (void)close(skill_fd);
+    child = openat(dir_fd, entry->d_name,
+                   O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (child < 0)
+      continue;
+    if (fstatat(child, "SKILL.md", &st, AT_SYMLINK_NOFOLLOW) == 0 &&
+        S_ISREG(st.st_mode) && st.st_nlink == 1)
+      rc = visit(visit_context, path, error);
+    else if (depth < CAI_SKILLS_MAX_DEPTH) {
+      frames[depth + 1U].directory = fdopendir(child);
+      if (frames[depth + 1U].directory != NULL) {
+        depth++;
+        child = -1;
       }
     }
+    if (child >= 0)
+      close(child);
+    if (rc != CAI_OK)
+      break;
   }
-  closedir(dir);
+  do {
+    if (frames[depth].directory != NULL)
+      closedir(frames[depth].directory);
+  } while (depth-- != 0U);
+  cai_free_mem(NULL, frames);
   return rc;
 }
 

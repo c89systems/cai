@@ -10,41 +10,105 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-int cai_cli_remove_at(int parent, const char *name) {
-  struct stat st;
-  struct dirent *entry;
+typedef struct cai_remove_frame {
+  struct cai_remove_frame *parent;
   DIR *directory;
-  int fd, saved = 0;
-  if (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) != 0)
-    return errno == ENOENT ? 0 : -1;
-  if (!S_ISDIR(st.st_mode))
-    return unlinkat(parent, name, 0);
-  fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-  if (fd < 0)
-    return -1;
-  if (fchmod(fd, 0700) != 0 || (directory = fdopendir(fd)) == NULL) {
-    saved = errno;
-    close(fd);
-    errno = saved;
+  int failed;
+  char *name;
+} cai_remove_frame;
+
+static void remove_failure(cai_remove_frame *frame, int *saved) {
+  if (*saved == 0)
+    *saved = errno != 0 ? errno : EIO;
+  if (frame != NULL)
+    frame->failed = 1;
+}
+
+/** Postorder cleanup owns directory cursors on the heap, including rollback
+ * of rejected deep skill packages and temporary workspaces. Never follows
+ * links. */
+int cai_cli_remove_at(int parent, const char *name) {
+  cai_remove_frame *top = NULL, *frame;
+  const char *next = name;
+  struct dirent *entry;
+  struct stat st;
+  int fd, base = parent, saved = 0;
+  if (name == NULL || name[0] == '\0' || strchr(name, '/') != NULL ||
+      strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+    errno = EINVAL;
     return -1;
   }
-  errno = 0;
-  while ((entry = readdir(directory)) != NULL) {
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-      continue;
-    if (cai_cli_remove_at(fd, entry->d_name) != 0 && saved == 0)
-      saved = errno;
+  for (;;) {
+    if (next != NULL) {
+      if (fstatat(base, next, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+        if (errno != ENOENT)
+          remove_failure(top, &saved);
+      } else if (!S_ISDIR(st.st_mode)) {
+        if (unlinkat(base, next, 0) != 0)
+          remove_failure(top, &saved);
+      } else {
+        frame = calloc(1U, sizeof(*frame));
+        if (frame == NULL) {
+          remove_failure(top, &saved);
+          break;
+        }
+        frame->name = strdup(next);
+        if (frame->name == NULL) {
+          remove_failure(top, &saved);
+          free(frame);
+          break;
+        }
+        fd =
+            openat(base, next, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0 || fchmod(fd, 0700) != 0 ||
+            (frame->directory = fdopendir(fd)) == NULL) {
+          remove_failure(top, &saved);
+          if (fd >= 0)
+            close(fd);
+          free(frame->name);
+          free(frame);
+        } else {
+          frame->parent = top;
+          top = frame;
+        }
+      }
+    }
+    next = NULL;
+    if (top == NULL)
+      break;
     errno = 0;
+    entry = readdir(top->directory);
+    if (entry != NULL) {
+      if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+        next = entry->d_name;
+        base = dirfd(top->directory);
+      }
+      continue;
+    }
+    if (errno != 0)
+      remove_failure(top, &saved);
+    frame = top;
+    top = frame->parent;
+    if (closedir(frame->directory) != 0)
+      remove_failure(frame, &saved);
+    base = top != NULL ? dirfd(top->directory) : parent;
+    if (!frame->failed && unlinkat(base, frame->name, AT_REMOVEDIR) != 0)
+      remove_failure(frame, &saved);
+    if (frame->failed && top != NULL)
+      top->failed = 1;
+    free(frame->name);
+    free(frame);
   }
-  if (errno != 0 && saved == 0)
-    saved = errno;
-  if (closedir(directory) != 0 && saved == 0)
-    saved = errno;
-  if (saved != 0) {
+  while (top != NULL) {
+    frame = top;
+    top = frame->parent;
+    closedir(frame->directory);
+    free(frame->name);
+    free(frame);
+  }
+  if (saved != 0)
     errno = saved;
-    return -1;
-  }
-  return unlinkat(parent, name, AT_REMOVEDIR);
+  return saved != 0 ? -1 : 0;
 }
 
 int cai_cli_identity_valid(const char *name) {

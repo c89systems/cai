@@ -645,11 +645,16 @@ static int cai_terminal_open_workdir(cai_terminal_manager *manager,
   return CAI_OK;
 }
 
-static int cai_terminal_resolve_workdir(cai_terminal_manager *manager,
-                                        const char *requested, char **out,
-                                        int *out_fd, cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_terminal_resolve_workdir_scratch {
   char candidate[PATH_MAX];
   char resolved[PATH_MAX];
+} cai_terminal_resolve_workdir_scratch;
+static int cai_terminal_resolve_workdir_with_scratch(
+    cai_terminal_manager *manager, const char *requested, char **out,
+    int *out_fd, cai_error *error,
+    cai_terminal_resolve_workdir_scratch *scratch) {
+
   const char *base;
   int written;
 
@@ -661,28 +666,45 @@ static int cai_terminal_resolve_workdir(cai_terminal_manager *manager,
     base = manager->root_path;
   }
   if (base[0] == '/') {
-    written = snprintf(candidate, sizeof(candidate), "%s", base);
+    written =
+        snprintf(scratch->candidate, sizeof(scratch->candidate), "%s", base);
   } else {
     written = snprintf(
-        candidate, sizeof(candidate), "%s/%s",
+        scratch->candidate, sizeof(scratch->candidate), "%s/%s",
         manager->yolo ? manager->default_workdir : manager->root_path, base);
   }
-  if (written < 0 || (size_t)written >= sizeof(candidate) ||
-      realpath(candidate, resolved) == NULL ||
-      !cai_terminal_under_root(manager->root_path, resolved)) {
+  if (written < 0 || (size_t)written >= sizeof(scratch->candidate) ||
+      realpath(scratch->candidate, scratch->resolved) == NULL ||
+      !cai_terminal_under_root(manager->root_path, scratch->resolved)) {
     return cai_set_error(error, CAI_ERR_INVALID,
                          "terminal workdir must resolve below workspace root");
   }
-  if (cai_terminal_open_workdir(manager, resolved, out_fd, error) != CAI_OK) {
+  if (cai_terminal_open_workdir(manager, scratch->resolved, out_fd, error) !=
+      CAI_OK) {
     return error != NULL ? error->code : CAI_ERR_INVALID;
   }
-  *out = cai_strdup(NULL, resolved);
+  *out = cai_strdup(NULL, scratch->resolved);
   if (*out == NULL) {
     cai_terminal_close_fd(out_fd);
     return cai_set_error(error, CAI_ERR_NOMEM,
                          "failed to copy terminal workdir");
   }
   return CAI_OK;
+}
+
+static int cai_terminal_resolve_workdir(cai_terminal_manager *manager,
+                                        const char *requested, char **out,
+                                        int *out_fd, cai_error *error) {
+  cai_terminal_resolve_workdir_scratch *scratch =
+      (cai_terminal_resolve_workdir_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_terminal_resolve_workdir scratch");
+  rc = cai_terminal_resolve_workdir_with_scratch(manager, requested, out,
+                                                 out_fd, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static int cai_terminal_output_append(cai_terminal_manager *manager,
@@ -737,7 +759,7 @@ static int cai_terminal_output_append(cai_terminal_manager *manager,
 
 static void *cai_terminal_reader(void *value) {
   cai_terminal_manager *manager;
-  char buffer[8192];
+  char buffer[2048];
 
   manager = (cai_terminal_manager *)value;
   for (;;) {

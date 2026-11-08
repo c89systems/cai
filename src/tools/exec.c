@@ -294,17 +294,36 @@ static int cai_exec_path_is_under_root(const char *root, const char *path) {
   return path[root_len] == '\0' || path[root_len] == '/' ? 1 : 0;
 }
 
-static int cai_exec_realpath_dup(const char *path, char **out,
-                                 cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_exec_realpath_dup_scratch {
   char resolved[PATH_MAX];
+} cai_exec_realpath_dup_scratch;
+static int
+cai_exec_realpath_dup_with_scratch(const char *path, char **out,
+                                   cai_error *error,
+                                   cai_exec_realpath_dup_scratch *scratch) {
 
-  if (realpath(path, resolved) == NULL) {
+  if (realpath(path, scratch->resolved) == NULL) {
     return cai_set_error_detail(error, CAI_ERR_INVALID,
                                 "failed to resolve command execution path",
                                 strerror(errno));
   }
-  return cai_exec_strdup_field(
-      out, resolved, "failed to allocate command execution path", error);
+  return cai_exec_strdup_field(out, scratch->resolved,
+                               "failed to allocate command execution path",
+                               error);
+}
+
+static int cai_exec_realpath_dup(const char *path, char **out,
+                                 cai_error *error) {
+  cai_exec_realpath_dup_scratch *scratch =
+      (cai_exec_realpath_dup_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate command canonical path");
+  rc = cai_exec_realpath_dup_with_scratch(path, out, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static int cai_exec_context_new(const cai_exec_tool_config *config,
@@ -472,10 +491,14 @@ static const char *cai_exec_sandbox_name(void) {
 #endif
 }
 
-static int cai_exec_resolve_workdir(const cai_exec_context *ctx,
-                                    const char *requested, char **out,
-                                    cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_exec_resolve_workdir_scratch {
   char joined[PATH_MAX];
+} cai_exec_resolve_workdir_scratch;
+static int cai_exec_resolve_workdir_with_scratch(
+    const cai_exec_context *ctx, const char *requested, char **out,
+    cai_error *error, cai_exec_resolve_workdir_scratch *scratch) {
+
   char *resolved;
   const char *candidate;
 
@@ -484,14 +507,14 @@ static int cai_exec_resolve_workdir(const cai_exec_context *ctx,
                                                         : ctx->default_workdir;
   if (candidate[0] != '/') {
     if (strlen(ctx->default_workdir) + 1U + strlen(candidate) + 1U >
-        sizeof(joined)) {
+        sizeof(scratch->joined)) {
       return cai_set_error(error, CAI_ERR_INVALID,
                            "exec workdir path is too long");
     }
-    strcpy(joined, ctx->default_workdir);
-    strcat(joined, "/");
-    strcat(joined, candidate);
-    candidate = joined;
+    strcpy(scratch->joined, ctx->default_workdir);
+    strcat(scratch->joined, "/");
+    strcat(scratch->joined, candidate);
+    candidate = scratch->joined;
   }
   resolved = NULL;
   if (cai_exec_realpath_dup(candidate, &resolved, error) != CAI_OK) {
@@ -504,6 +527,20 @@ static int cai_exec_resolve_workdir(const cai_exec_context *ctx,
   }
   *out = resolved;
   return CAI_OK;
+}
+
+static int cai_exec_resolve_workdir(const cai_exec_context *ctx,
+                                    const char *requested, char **out,
+                                    cai_error *error) {
+  cai_exec_resolve_workdir_scratch *scratch =
+      (cai_exec_resolve_workdir_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate command workdir path");
+  rc = cai_exec_resolve_workdir_with_scratch(ctx, requested, out, error,
+                                             scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static int cai_exec_shell_allowed(const cai_exec_context *ctx,
@@ -1187,119 +1224,85 @@ static int cai_exec_build_sandbox_exec_argv(
 }
 #endif
 
-static void cai_exec_child_exec(const cai_exec_context *ctx,
-                                const cai_exec_args *args, const char *workdir,
-                                const char *sandbox_path, int use_sandbox) {
+/* Prepared before fork: the child only reads inherited argv storage and calls
+ * async-signal-safe operations. No large child frame or post-fork allocation.
+ */
+typedef struct cai_exec_launch {
   const char *argv[96];
-  char dirs[32][PATH_MAX];
-#if defined(__APPLE__)
-  char sandbox_profile[8192];
-#endif
-  size_t dir_count;
-  const char *shell_path;
-
-  shell_path = args->shell != NULL && args->shell[0] != '\0' ? args->shell
-                                                             : ctx->shell_path;
-  if (chdir(workdir) != 0) {
-    _exit(126);
-  }
-  if (use_sandbox) {
 #if defined(__linux__)
-    if (cai_exec_build_bwrap_argv(
-            ctx, workdir, shell_path, args->cmd, sandbox_path,
-            args->has_login && args->login && ctx->allow_login_shell, argv,
-            sizeof(argv) / sizeof(argv[0]), dirs, &dir_count,
-            sizeof(dirs) / sizeof(dirs[0])) != 0) {
-      _exit(127);
-    }
-    execve(sandbox_path, (char *const *)(void *)argv, ctx->environment);
-    _exit(127);
+  char dirs[32][PATH_MAX];
 #elif defined(__APPLE__)
-    (void)dirs;
-    dir_count = 0U;
-    if (cai_exec_build_sandbox_exec_argv(
-            ctx, args, shell_path, args->cmd, sandbox_path, argv,
-            sizeof(argv) / sizeof(argv[0]), sandbox_profile,
-            sizeof(sandbox_profile)) != 0) {
-      _exit(127);
-    }
-    (void)dir_count;
-    execve(sandbox_path, (char *const *)(void *)argv, ctx->environment);
-    _exit(127);
-#else
-    (void)argv;
-    (void)dirs;
-    (void)dir_count;
-    _exit(127);
+  char profile[8192];
 #endif
-  }
-  {
-    const char *plain_argv[4];
-    plain_argv[0] = shell_path;
-    plain_argv[1] =
-        args->has_login && args->login && ctx->allow_login_shell ? "-lc" : "-c";
-    plain_argv[2] = args->cmd;
-    plain_argv[3] = NULL;
-    execve(shell_path, (char *const *)(void *)plain_argv, ctx->environment);
-  }
-  _exit(127);
-}
+} cai_exec_launch;
 
-static int cai_exec_validate_sandbox_args(const cai_exec_context *ctx,
-                                          const cai_exec_args *args,
-                                          const char *workdir,
-                                          const char *sandbox_path,
-                                          int use_sandbox, cai_error *error) {
-  const char *argv[96];
-  char dirs[32][PATH_MAX];
-  size_t dir_count;
-  const char *shell_path;
-
-  if (!use_sandbox) {
-    return CAI_OK;
-  }
-  shell_path = args->shell != NULL && args->shell[0] != '\0' ? args->shell
-                                                             : ctx->shell_path;
+static int cai_exec_launch_prepare(const cai_exec_context *ctx,
+                                   const cai_exec_args *args,
+                                   const char *workdir, const char *path,
+                                   cai_exec_launch *launch, cai_error *error) {
+  const char *shell = args->shell != NULL && args->shell[0] != '\0'
+                          ? args->shell
+                          : ctx->shell_path;
 #if defined(__linux__)
+  size_t count;
   if (cai_exec_build_bwrap_argv(
-          ctx, workdir, shell_path, args->cmd, sandbox_path,
-          args->has_login && args->login && ctx->allow_login_shell, argv,
-          sizeof(argv) / sizeof(argv[0]), dirs, &dir_count,
-          sizeof(dirs) / sizeof(dirs[0])) != 0) {
-    return cai_set_error(
-        error, CAI_ERR_INVALID,
-        "exec bubblewrap argument list is too large for sandbox setup");
-  }
-  return CAI_OK;
+          ctx, workdir, shell, args->cmd, path,
+          args->has_login && args->login && ctx->allow_login_shell,
+          launch->argv, sizeof(launch->argv) / sizeof(launch->argv[0]),
+          launch->dirs, &count,
+          sizeof(launch->dirs) / sizeof(launch->dirs[0])) == 0)
+    return CAI_OK;
 #elif defined(__APPLE__)
-  {
-    char sandbox_profile[8192];
-
-    (void)workdir;
-    (void)dirs;
-    (void)dir_count;
-    if (cai_exec_build_sandbox_exec_argv(
-            ctx, args, shell_path, args->cmd, sandbox_path, argv,
-            sizeof(argv) / sizeof(argv[0]), sandbox_profile,
-            sizeof(sandbox_profile)) != 0) {
-      return cai_set_error(
-          error, CAI_ERR_INVALID,
-          "exec sandbox-exec argument list is too large for sandbox setup");
-    }
-  }
-  return CAI_OK;
+  (void)workdir;
+  if (cai_exec_build_sandbox_exec_argv(
+          ctx, args, shell, args->cmd, path, launch->argv,
+          sizeof(launch->argv) / sizeof(launch->argv[0]), launch->profile,
+          sizeof(launch->profile)) == 0)
+    return CAI_OK;
 #else
-  (void)argv;
-  (void)dirs;
-  (void)dir_count;
+  (void)shell;
+  (void)workdir;
+  (void)path;
+  (void)launch;
+#endif
+#if defined(__linux__)
+  return cai_set_error(
+      error, CAI_ERR_INVALID,
+      "exec bubblewrap argument list is too large for sandbox setup");
+#elif defined(__APPLE__)
+  return cai_set_error(
+      error, CAI_ERR_INVALID,
+      "exec sandbox-exec argument list is too large for sandbox setup");
+#else
   return cai_set_error(error, CAI_ERR_INVALID,
                        "exec sandbox is not implemented on this platform");
 #endif
 }
 
+static void cai_exec_child_exec(const cai_exec_context *ctx,
+                                const cai_exec_args *args, const char *workdir,
+                                const char *sandbox_path,
+                                cai_exec_launch *launch) {
+  const char *plain[4];
+  if (chdir(workdir) != 0)
+    _exit(126);
+  if (launch != NULL) {
+    execve(sandbox_path, (char *const *)(void *)launch->argv, ctx->environment);
+    _exit(127);
+  }
+  plain[0] = args->shell != NULL && args->shell[0] != '\0' ? args->shell
+                                                           : ctx->shell_path;
+  plain[1] =
+      args->has_login && args->login && ctx->allow_login_shell ? "-lc" : "-c";
+  plain[2] = args->cmd;
+  plain[3] = NULL;
+  execve(plain[0], (char *const *)(void *)plain, ctx->environment);
+  _exit(127);
+}
+
 static int cai_exec_spawn(const cai_exec_context *ctx,
                           const cai_exec_args *args, const char *workdir,
-                          const char *bwrap_path, int use_sandbox,
+                          const char *bwrap_path, cai_exec_launch *launch,
                           const cai_exec_cgroup *cgroup, int stdout_fd[2],
                           int stderr_fd[2], int stdin_pipe[2], int *pty_master,
                           pid_t *pid_out, cai_error *error) {
@@ -1427,7 +1430,7 @@ static int cai_exec_spawn(const cai_exec_context *ctx,
     close(sync_fd[0]);
     if (cai_process_child_signals() != 0)
       _exit(126);
-    cai_exec_child_exec(ctx, args, workdir, bwrap_path, use_sandbox);
+    cai_exec_child_exec(ctx, args, workdir, bwrap_path, launch);
   }
   setpgid(pid, pid);
   if (args->stdin_data == NULL) {
@@ -1491,7 +1494,7 @@ static int cai_exec_drain(cai_exec_capture *capture, int out_fd, int err_fd,
                           int pty_fd, int input_fd, const char *input_data,
                           pid_t pid, long timeout_ms,
                           cai_exec_proc_result *result, cai_error *error) {
-  char buffer[8192];
+  char buffer[2048];
   size_t input_len;
   size_t input_offset;
   sigset_t pipe_signal;
@@ -1680,22 +1683,26 @@ cleanup:
   return rc;
 }
 
-static int cai_exec_run_process(const cai_exec_context *ctx,
-                                const cai_exec_args *args, const char *workdir,
-                                const char *bwrap_path, int use_sandbox,
-                                cai_exec_capture *capture,
-                                cai_exec_proc_result *result,
-                                cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_exec_run_process_scratch {
+  cai_exec_cgroup cgroup;
+} cai_exec_run_process_scratch;
+static int cai_exec_run_process_with_scratch(
+    const cai_exec_context *ctx, const cai_exec_args *args, const char *workdir,
+    const char *bwrap_path, int use_sandbox, cai_exec_capture *capture,
+    cai_exec_proc_result *result, cai_error *error,
+    cai_exec_run_process_scratch *scratch) {
   int stdout_fd[2];
   int stderr_fd[2];
   int stdin_pipe[2];
   int pty_master;
-  cai_exec_cgroup cgroup;
+
   pid_t pid;
   long timeout_ms;
   int rc;
+  cai_exec_launch *launch = NULL;
 
-  memset(&cgroup, 0, sizeof(cgroup));
+  memset(&scratch->cgroup, 0, sizeof(scratch->cgroup));
   pid = (pid_t)-1;
   timeout_ms = ctx->timeout_ms;
   if (args->has_timeout_ms && args->timeout_ms > 0) {
@@ -1704,16 +1711,28 @@ static int cai_exec_run_process(const cai_exec_context *ctx,
   if (timeout_ms > ctx->max_timeout_ms) {
     timeout_ms = ctx->max_timeout_ms;
   }
-  rc = cai_exec_cgroup_prepare(ctx, &cgroup, error);
+  if (use_sandbox) {
+    launch = (cai_exec_launch *)cai_alloc(NULL, sizeof(*launch));
+    if (launch == NULL)
+      return cai_set_error(error, CAI_ERR_NOMEM, "allocate command launch");
+    rc = cai_exec_launch_prepare(ctx, args, workdir, bwrap_path, launch, error);
+    if (rc != CAI_OK) {
+      cai_free_mem(NULL, launch);
+      return rc;
+    }
+  }
+  rc = cai_exec_cgroup_prepare(ctx, &scratch->cgroup, error);
   if (rc != CAI_OK) {
-    cai_exec_cgroup_cleanup(&cgroup);
+    cai_free_mem(NULL, launch);
+    cai_exec_cgroup_cleanup(&scratch->cgroup);
     return rc;
   }
-  rc = cai_exec_spawn(ctx, args, workdir, bwrap_path, use_sandbox, &cgroup,
+  rc = cai_exec_spawn(ctx, args, workdir, bwrap_path, launch, &scratch->cgroup,
                       stdout_fd, stderr_fd, stdin_pipe, &pty_master, &pid,
                       error);
+  cai_free_mem(NULL, launch);
   if (rc != CAI_OK) {
-    cai_exec_cgroup_cleanup(&cgroup);
+    cai_exec_cgroup_cleanup(&scratch->cgroup);
     return rc;
   }
   rc = cai_exec_drain(capture, stdout_fd[0], stderr_fd[0], pty_master,
@@ -1724,7 +1743,26 @@ static int cai_exec_run_process(const cai_exec_context *ctx,
     kill(pid, SIGKILL);
     waitpid(pid, NULL, 0);
   }
-  cai_exec_cgroup_cleanup(&cgroup);
+  cai_exec_cgroup_cleanup(&scratch->cgroup);
+  return rc;
+}
+
+static int cai_exec_run_process(const cai_exec_context *ctx,
+                                const cai_exec_args *args, const char *workdir,
+                                const char *bwrap_path, int use_sandbox,
+                                cai_exec_capture *capture,
+                                cai_exec_proc_result *result,
+                                cai_error *error) {
+  cai_exec_run_process_scratch *scratch =
+      (cai_exec_run_process_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate command cgroup scratch");
+  rc = cai_exec_run_process_with_scratch(ctx, args, workdir, bwrap_path,
+                                         use_sandbox, capture, result, error,
+                                         scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 
@@ -1781,8 +1819,13 @@ static int cai_exec_prepare_sandbox(const cai_exec_context *ctx, char *buffer,
 #endif
 }
 
-static int cai_exec_callback(void *context, const void *params, void *result,
-                             cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_exec_callback_scratch {
+  char sandbox_path[PATH_MAX];
+} cai_exec_callback_scratch;
+static int cai_exec_callback_with_scratch(void *context, const void *params,
+                                          void *result, cai_error *error,
+                                          cai_exec_callback_scratch *scratch) {
   const cai_exec_context *ctx;
   const cai_exec_args *args;
   cai_exec_result *out;
@@ -1790,7 +1833,7 @@ static int cai_exec_callback(void *context, const void *params, void *result,
   cai_exec_proc_result proc;
   lonejson *runtime;
   char *workdir;
-  char sandbox_path[PATH_MAX];
+
   size_t output_max_bytes;
   int have_stdout_data;
   int have_stderr_data;
@@ -1830,17 +1873,11 @@ static int cai_exec_callback(void *context, const void *params, void *result,
     return rc;
   }
   use_sandbox = 0;
-  sandbox_path[0] = '\0';
-  rc = ctx->yolo
-           ? CAI_OK
-           : cai_exec_prepare_sandbox(ctx, sandbox_path, sizeof(sandbox_path),
-                                      &use_sandbox, error);
-  if (rc != CAI_OK) {
-    cai_free_mem(NULL, workdir);
-    return rc;
-  }
-  rc = cai_exec_validate_sandbox_args(ctx, &effective_args, workdir,
-                                      sandbox_path, use_sandbox, error);
+  scratch->sandbox_path[0] = '\0';
+  rc = ctx->yolo ? CAI_OK
+                 : cai_exec_prepare_sandbox(ctx, scratch->sandbox_path,
+                                            sizeof(scratch->sandbox_path),
+                                            &use_sandbox, error);
   if (rc != CAI_OK) {
     cai_free_mem(NULL, workdir);
     return rc;
@@ -1861,8 +1898,9 @@ static int cai_exec_callback(void *context, const void *params, void *result,
   runtime->spooled_init(runtime, &capture.stdout_data);
   runtime->spooled_init(runtime, &capture.stderr_data);
   runtime->spooled_init(runtime, &capture.output);
-  rc = cai_exec_run_process(ctx, &effective_args, workdir, sandbox_path,
-                            use_sandbox, &capture, &proc, error);
+  rc =
+      cai_exec_run_process(ctx, &effective_args, workdir, scratch->sandbox_path,
+                           use_sandbox, &capture, &proc, error);
   if (rc == CAI_OK) {
     out->wall_time_seconds = (double)proc.duration_ms / 1000.0;
     out->timed_out = proc.timed_out;
@@ -1918,6 +1956,18 @@ static int cai_exec_callback(void *context, const void *params, void *result,
     capture.output.cleanup(&capture.output);
   }
   cai_free_mem(NULL, workdir);
+  return rc;
+}
+
+static int cai_exec_callback(void *context, const void *params, void *result,
+                             cai_error *error) {
+  cai_exec_callback_scratch *scratch =
+      (cai_exec_callback_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate exec tool scratch");
+  rc = cai_exec_callback_with_scratch(context, params, result, error, scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 

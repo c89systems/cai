@@ -181,10 +181,16 @@ static int cli_settings_notice(cli_state *state, cai_error *error);
 static int cli_review_event(void *context, const cai_agent_runtime_event *event,
                             cai_error *error);
 
-static int cli_load_model_metadata(const cai_cli_options *options, char **out,
-                                   cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cli_load_model_metadata_scratch {
   char path[PATH_MAX];
   char message[PATH_MAX + 128];
+} cli_load_model_metadata_scratch;
+static int
+cli_load_model_metadata_with_scratch(const cai_cli_options *options, char **out,
+                                     cai_error *error,
+                                     cli_load_model_metadata_scratch *scratch) {
+
   const char *root;
   FILE *file;
   long length;
@@ -193,35 +199,38 @@ static int cli_load_model_metadata(const cai_cli_options *options, char **out,
 
   *out = NULL;
   if (options->model_metadata != NULL) {
-    written = snprintf(path, sizeof(path), "%s", options->model_metadata);
+    written = snprintf(scratch->path, sizeof(scratch->path), "%s",
+                       options->model_metadata);
   } else {
     root = options->config_dir;
     if (root != NULL) {
-      written = snprintf(path, sizeof(path), "%s/models.json", root);
+      written = snprintf(scratch->path, sizeof(scratch->path), "%s/models.json",
+                         root);
     } else {
       return CAI_OK;
     }
   }
-  if (written < 0 || (size_t)written >= sizeof(path)) {
+  if (written < 0 || (size_t)written >= sizeof(scratch->path)) {
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "model metadata path is too long");
   }
-  file = fopen(path, "rb");
+  file = fopen(scratch->path, "rb");
   if (file == NULL) {
     if (options->model_metadata == NULL && errno == ENOENT) {
       return CAI_OK;
     }
-    snprintf(message, sizeof(message), "cannot open model metadata %s: %s",
-             path, strerror(errno));
-    return cai_cli_error(error, CAI_ERR_TRANSPORT, message);
+    snprintf(scratch->message, sizeof(scratch->message),
+             "cannot open model metadata %s: %s", scratch->path,
+             strerror(errno));
+    return cai_cli_error(error, CAI_ERR_TRANSPORT, scratch->message);
   }
   if (fseek(file, 0L, SEEK_END) != 0 || (length = ftell(file)) < 0L ||
       length > 1024L * 1024L || fseek(file, 0L, SEEK_SET) != 0) {
     fclose(file);
-    snprintf(message, sizeof(message),
+    snprintf(scratch->message, sizeof(scratch->message),
              "cannot read model metadata %s (file must be at most 1 MiB)",
-             path);
-    return cai_cli_error(error, CAI_ERR_INVALID, message);
+             scratch->path);
+    return cai_cli_error(error, CAI_ERR_INVALID, scratch->message);
   }
   *out = (char *)malloc((size_t)length + 1U);
   if (*out == NULL) {
@@ -234,13 +243,26 @@ static int cli_load_model_metadata(const cai_cli_options *options, char **out,
       memchr(*out, '\0', size) != NULL) {
     free(*out);
     *out = NULL;
-    snprintf(message, sizeof(message),
+    snprintf(scratch->message, sizeof(scratch->message),
              "cannot read model metadata %s (read error or embedded NUL)",
-             path);
-    return cai_cli_error(error, CAI_ERR_INVALID, message);
+             scratch->path);
+    return cai_cli_error(error, CAI_ERR_INVALID, scratch->message);
   }
   (*out)[size] = '\0';
   return CAI_OK;
+}
+
+static int cli_load_model_metadata(const cai_cli_options *options, char **out,
+                                   cai_error *error) {
+  cli_load_model_metadata_scratch *scratch =
+      (cli_load_model_metadata_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate cli_load_model_metadata scratch");
+  rc = cli_load_model_metadata_with_scratch(options, out, error, scratch);
+  free(scratch);
+  return rc;
 }
 
 static void cli_print_error(cli_state *state, const char *operation,
@@ -1292,10 +1314,15 @@ static cai_cli_pouch *cli_named_store(cli_state *state, const char *name,
   return store;
 }
 
-static int cli_open_plugins(cli_state *state, cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cli_open_plugins_scratch {
+  char global[PATH_MAX], local[PATH_MAX];
+} cli_open_plugins_scratch;
+static int cli_open_plugins_with_scratch(cli_state *state, cai_error *error,
+                                         cli_open_plugins_scratch *scratch) {
   cai_plugins_config config;
   const char *roots[2];
-  char global[PATH_MAX], local[PATH_MAX];
+
   int rc;
   if (!state->options.plugins || state->options.review ||
       state->plugins != NULL)
@@ -1304,16 +1331,18 @@ static int cli_open_plugins(cli_state *state, cai_error *error) {
     state->plugins = state->application->plugins;
     return CAI_OK;
   }
-  if (snprintf(global, sizeof(global), "%s/tools",
-               state->normal_options.data_dir) >= (int)sizeof(global) ||
-      snprintf(local, sizeof(local), "%s/.%s/tools", state->workspace,
-               state->options.program_name) >= (int)sizeof(local))
+  if (snprintf(scratch->global, sizeof(scratch->global), "%s/tools",
+               state->normal_options.data_dir) >=
+          (int)sizeof(scratch->global) ||
+      snprintf(scratch->local, sizeof(scratch->local), "%s/.%s/tools",
+               state->workspace,
+               state->options.program_name) >= (int)sizeof(scratch->local))
     return cai_cli_error(error, CAI_ERR_INVALID, "tool root path too long");
-  roots[0] =
-      state->options.tools_dir != NULL ? state->options.tools_dir : global;
+  roots[0] = state->options.tools_dir != NULL ? state->options.tools_dir
+                                              : scratch->global;
   roots[1] = state->options.workspace_tools_dir != NULL
                  ? state->options.workspace_tools_dir
-                 : local;
+                 : scratch->local;
   cai_plugins_config_init(&config);
   config.directories = roots;
   config.directory_count = 2U;
@@ -1332,6 +1361,18 @@ static int cli_open_plugins(cli_state *state, cai_error *error) {
 #endif
   if (rc == CAI_OK)
     rc = cai_plugins_reload(state->plugins, error);
+  return rc;
+}
+
+static int cli_open_plugins(cli_state *state, cai_error *error) {
+  cli_open_plugins_scratch *scratch =
+      (cli_open_plugins_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate cli_open_plugins scratch");
+  rc = cli_open_plugins_with_scratch(state, error, scratch);
+  free(scratch);
   return rc;
 }
 

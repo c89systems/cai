@@ -319,12 +319,15 @@ static int cai_read_fd_verification_supported(void) {
 #endif
 }
 
-static int cai_read_open_file_under_root(const cai_read_context *ctx,
-                                         const char *request_path, int *out_fd,
-                                         char **out_resolved_path,
-                                         long long *out_file_size,
-                                         cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_read_open_file_under_root_scratch {
   char candidate[PATH_MAX];
+} cai_read_open_file_under_root_scratch;
+static int cai_read_open_file_under_root_with_scratch(
+    const cai_read_context *ctx, const char *request_path, int *out_fd,
+    char **out_resolved_path, long long *out_file_size, cai_error *error,
+    cai_read_open_file_under_root_scratch *scratch) {
+
   const char *open_path;
   char *resolved;
   struct stat st;
@@ -345,12 +348,12 @@ static int cai_read_open_file_under_root(const cai_read_context *ctx,
   if (request_path[0] == '/') {
     open_path = request_path;
   } else {
-    rc = cai_read_join(candidate, sizeof(candidate), ctx->default_workdir,
-                       request_path, error);
+    rc = cai_read_join(scratch->candidate, sizeof(scratch->candidate),
+                       ctx->default_workdir, request_path, error);
     if (rc != CAI_OK) {
       return rc;
     }
-    open_path = candidate;
+    open_path = scratch->candidate;
   }
   resolved = NULL;
   rc = cai_read_realpath_dup(open_path, &resolved, error);
@@ -425,6 +428,24 @@ static int cai_read_open_file_under_root(const cai_read_context *ctx,
   *out_resolved_path = resolved;
   *out_file_size = (long long)st.st_size;
   return CAI_OK;
+}
+
+static int cai_read_open_file_under_root(const cai_read_context *ctx,
+                                         const char *request_path, int *out_fd,
+                                         char **out_resolved_path,
+                                         long long *out_file_size,
+                                         cai_error *error) {
+  cai_read_open_file_under_root_scratch *scratch =
+      (cai_read_open_file_under_root_scratch *)cai_alloc(NULL,
+                                                         sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate read tool path");
+  rc = cai_read_open_file_under_root_with_scratch(
+      ctx, request_path, out_fd, out_resolved_path, out_file_size, error,
+      scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static int cai_read_resolve_dir(const cai_read_context *ctx,
@@ -926,73 +947,100 @@ static int cai_list_add_entry(const cai_read_context *ctx,
   return rc;
 }
 
+/** Depth-first traversal keeps open-directory ownership and paths off the
+ * native stack. Symlinks are listed, never traversed. */
+typedef struct cai_list_frame {
+  struct cai_list_frame *parent;
+  DIR *directory;
+  char path[PATH_MAX];
+  char child[PATH_MAX];
+  char resolved[PATH_MAX];
+} cai_list_frame;
+
 static int cai_list_scan_dir(const cai_read_context *ctx,
                              cai_list_files_result *out,
                              const char *resolved_dir, int recursive,
                              int include_hidden, long long max_entries,
                              cai_error *error) {
-  DIR *dir;
+  cai_list_frame *top, *child;
   struct dirent *entry;
-  char child_path[PATH_MAX];
-  char real_child[PATH_MAX];
   struct stat st;
-  int rc;
-  int n;
-
-  dir = opendir(resolved_dir);
-  if (dir == NULL) {
-    return cai_set_error_detail(error, CAI_ERR_INVALID,
-                                "failed to open directory", strerror(errno));
-  }
-  rc = CAI_OK;
-  while (rc == CAI_OK && (entry = readdir(dir)) != NULL) {
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+  int rc = CAI_OK, n;
+  top = (cai_list_frame *)cai_alloc(NULL, sizeof(*top));
+  if (top == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate list traversal");
+  top->parent = NULL;
+  snprintf(top->path, sizeof(top->path), "%s", resolved_dir);
+  top->directory = opendir(top->path);
+  if (top->directory == NULL)
+    rc = cai_set_error_detail(error, CAI_ERR_INVALID,
+                              "failed to open directory", strerror(errno));
+  while (rc == CAI_OK && top != NULL) {
+    entry = readdir(top->directory);
+    if (entry == NULL) {
+      child = top;
+      top = top->parent;
+      closedir(child->directory);
+      cai_free_mem(NULL, child);
       continue;
     }
-    if (!include_hidden && entry->d_name[0] == '.') {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 ||
+        (!include_hidden && entry->d_name[0] == '.'))
       continue;
-    }
     if (out->entries.count >= (size_t)max_entries) {
       out->truncated = 1;
       break;
     }
-    n = snprintf(child_path, sizeof(child_path), "%s/%s", resolved_dir,
+    n = snprintf(top->child, sizeof(top->child), "%s/%s", top->path,
                  entry->d_name);
-    if (n < 0 || (size_t)n >= sizeof(child_path)) {
+    if (n < 0 || (size_t)n >= sizeof(top->child)) {
       rc = cai_set_error(error, CAI_ERR_INVALID, "list entry path is too long");
       break;
     }
-    if (lstat(child_path, &st) != 0) {
+    if (lstat(top->child, &st) != 0) {
       rc = cai_set_error_detail(error, CAI_ERR_INVALID,
                                 "failed to stat list entry", strerror(errno));
       break;
     }
-    if (realpath(child_path, real_child) == NULL) {
-      if (S_ISLNK(st.st_mode)) {
+    if (realpath(top->child, top->resolved) == NULL) {
+      if (S_ISLNK(st.st_mode))
         continue;
-      }
       rc =
           cai_set_error_detail(error, CAI_ERR_INVALID,
                                "failed to resolve list entry", strerror(errno));
       break;
     }
-    if (!cai_read_path_is_under_root(ctx->root_path, real_child)) {
+    if (!cai_read_path_is_under_root(ctx->root_path, top->resolved))
       continue;
-    }
-    if (S_ISLNK(st.st_mode)) {
-      rc = cai_list_add_entry(ctx, out, entry->d_name, child_path, &st,
-                              max_entries, error);
+    rc = cai_list_add_entry(ctx, out, entry->d_name,
+                            S_ISLNK(st.st_mode) ? top->child : top->resolved,
+                            &st, max_entries, error);
+    if (rc != CAI_OK || !recursive || !S_ISDIR(st.st_mode) ||
+        out->entries.count >= (size_t)max_entries)
       continue;
+    child = (cai_list_frame *)cai_alloc(NULL, sizeof(*child));
+    if (child == NULL) {
+      rc = cai_set_error(error, CAI_ERR_NOMEM, "allocate list traversal");
+      break;
     }
-    rc = cai_list_add_entry(ctx, out, entry->d_name, real_child, &st,
-                            max_entries, error);
-    if (rc == CAI_OK && recursive && S_ISDIR(st.st_mode) &&
-        out->entries.count < (size_t)max_entries) {
-      rc = cai_list_scan_dir(ctx, out, real_child, recursive, include_hidden,
-                             max_entries, error);
+    child->directory = opendir(top->resolved);
+    if (child->directory == NULL) {
+      cai_free_mem(NULL, child);
+      rc = cai_set_error_detail(error, CAI_ERR_INVALID,
+                                "failed to open directory", strerror(errno));
+      break;
     }
+    snprintf(child->path, sizeof(child->path), "%s", top->resolved);
+    child->parent = top;
+    top = child;
   }
-  closedir(dir);
+  while (top != NULL) {
+    child = top;
+    top = top->parent;
+    if (child->directory != NULL)
+      closedir(child->directory);
+    cai_free_mem(NULL, child);
+  }
   return rc;
 }
 

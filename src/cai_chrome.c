@@ -239,13 +239,18 @@ static const lonejson_field info_fields[] = {
     LONEJSON_FIELD_STRING_ALLOC_REQ(chrome_info, family, "family")};
 LONEJSON_MAP_DEFINE(info_map, chrome_info, info_fields);
 
-int cai_chrome_open(const cai_chrome_config *config, cai_chrome **out,
-                    cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_chrome_open_scratch {
+  char path[4096];
+  char selected[4096];
+} cai_chrome_open_scratch;
+static int cai_chrome_open_with_scratch(const cai_chrome_config *config,
+                                        cai_chrome **out, cai_error *error,
+                                        cai_chrome_open_scratch *scratch) {
   cai_chrome *c;
   DIR *directory;
   struct dirent *entry;
-  char path[4096];
-  char selected[4096];
+
   char *json = NULL;
   lonejson_error je;
   chrome_info info;
@@ -260,12 +265,12 @@ int cai_chrome_open(const cai_chrome_config *config, cai_chrome **out,
       config->max_response_bytes > 64U * 1024U * 1024U)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "Invalid Chrome configuration");
-  selected[0] = '\0';
+  scratch->selected[0] = '\0';
   if (config->socket_path != NULL) {
-    if (strlen(config->socket_path) >= sizeof(selected))
+    if (strlen(config->socket_path) >= sizeof(scratch->selected))
       return cai_set_error(error, CAI_ERR_INVALID,
                            "Chrome socket path is too long");
-    strcpy(selected, config->socket_path);
+    strcpy(scratch->selected, config->socket_path);
   } else {
     if (config->socket_directory != NULL &&
         access(config->socket_directory, F_OK) != 0 && errno == ENOENT)
@@ -284,22 +289,23 @@ int cai_chrome_open(const cai_chrome_config *config, cai_chrome **out,
       size_t n = strlen(entry->d_name);
       if (n < 6U || strcmp(entry->d_name + n - 5U, ".sock") != 0)
         continue;
-      if (snprintf(path, sizeof(path), "%s/%s", config->socket_directory,
-                   entry->d_name) >= (int)sizeof(path))
+      if (snprintf(scratch->path, sizeof(scratch->path), "%s/%s",
+                   config->socket_directory,
+                   entry->d_name) >= (int)sizeof(scratch->path))
         continue;
       /* Ignore stale files, but do not choose arbitrarily between live hosts.
        */
       {
         cai_error ignored;
         cai_error_init(&ignored);
-        rc = cai_chrome_connect_socket(path, &probe, &ignored);
+        rc = cai_chrome_connect_socket(scratch->path, &probe, &ignored);
         cai_error_cleanup(&ignored);
       }
       if (rc != CAI_OK)
         continue;
       close(probe);
       candidates++;
-      strcpy(selected, path);
+      strcpy(scratch->selected, scratch->path);
     }
     closedir(directory);
     if (candidates != 1U)
@@ -322,7 +328,7 @@ int cai_chrome_open(const cai_chrome_config *config, cai_chrome **out,
   c->limit = config->max_response_bytes != 0U ? config->max_response_bytes
                                               : CAI_CHROME_RESPONSE_LIMIT;
   c->logger = config->logger;
-  rc = cai_chrome_connect_socket(selected, &c->fd, error);
+  rc = cai_chrome_connect_socket(scratch->selected, &c->fd, error);
   if (rc == CAI_OK)
     rc = cai_chrome_request(c, "getInfo", "{}", &json, error);
   memset(&info, 0, sizeof(info));
@@ -346,6 +352,22 @@ int cai_chrome_open(const cai_chrome_config *config, cai_chrome **out,
   *out = c;
   return CAI_OK;
 }
+
+int cai_chrome_open(const cai_chrome_config *config, cai_chrome **out,
+                    cai_error *error) {
+  cai_chrome_open_scratch *scratch =
+      (cai_chrome_open_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (out != NULL)
+    *out = NULL;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_chrome_open scratch");
+  rc = cai_chrome_open_with_scratch(config, out, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
 void cai_chrome_clear_tool_tabs(cai_chrome *c) {
   while (c->tool_tabs != NULL) {
     cai_chrome_tool_tab *tab = c->tool_tabs;

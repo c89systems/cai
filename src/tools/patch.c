@@ -438,9 +438,15 @@ static int cai_patch_normalize(char *out, size_t out_size, const char *root,
   return CAI_OK;
 }
 
-static int cai_patch_target(const cai_patch_context *ctx, const char *path,
-                            char *out, size_t capacity, cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_patch_target_scratch {
   char raw[PATH_MAX], prefix[PATH_MAX], resolved[PATH_MAX];
+} cai_patch_target_scratch;
+static int cai_patch_target_with_scratch(const cai_patch_context *ctx,
+                                         const char *path, char *out,
+                                         size_t capacity, cai_error *error,
+                                         cai_patch_target_scratch *scratch) {
+
   size_t cut;
   const char *suffix;
   int count;
@@ -450,53 +456,73 @@ static int cai_patch_target(const cai_patch_context *ctx, const char *path,
     return cai_set_error(error, CAI_ERR_INVALID,
                          "patch target must have a file name");
   count = path[0] == '/'
-              ? snprintf(raw, sizeof(raw), "%s", path)
-              : snprintf(raw, sizeof(raw), "%s/%s", ctx->default_workdir, path);
-  if (count < 0 || (size_t)count >= sizeof(raw))
+              ? snprintf(scratch->raw, sizeof(scratch->raw), "%s", path)
+              : snprintf(scratch->raw, sizeof(scratch->raw), "%s/%s",
+                         ctx->default_workdir, path);
+  if (count < 0 || (size_t)count >= sizeof(scratch->raw))
     return cai_set_error(error, CAI_ERR_LIMIT, "patch path is too long");
-  memcpy(prefix, raw, (size_t)count + 1U);
+  memcpy(scratch->prefix, scratch->raw, (size_t)count + 1U);
   cut = (size_t)count;
   /* Resolve existing ancestors before normalizing a missing suffix, so
    * symlink/.. retains ordinary filesystem semantics in unrestricted mode. */
-  while (realpath(prefix, resolved) == NULL) {
+  while (realpath(scratch->prefix, scratch->resolved) == NULL) {
     char *slash;
     if (errno != ENOENT)
       return cai_set_error_detail(error, CAI_ERR_INVALID, "resolve patch path",
                                   strerror(errno));
-    slash = strrchr(prefix, '/');
-    if (slash == NULL || strcmp(prefix, "/") == 0)
+    slash = strrchr(scratch->prefix, '/');
+    if (slash == NULL || strcmp(scratch->prefix, "/") == 0)
       return cai_set_error(error, CAI_ERR_INVALID,
                            "patch path has no existing ancestor");
-    cut = (size_t)(slash - prefix);
-    if (slash == prefix)
-      prefix[1] = '\0';
+    cut = (size_t)(slash - scratch->prefix);
+    if (slash == scratch->prefix)
+      scratch->prefix[1] = '\0';
     else
       *slash = '\0';
   }
-  suffix = raw + cut;
+  suffix = scratch->raw + cut;
   while (*suffix == '/')
     suffix++;
   if (*suffix == '\0') {
-    count = snprintf(out, capacity, "%s", resolved);
+    count = snprintf(out, capacity, "%s", scratch->resolved);
     return count >= 0 && (size_t)count < capacity
                ? CAI_OK
                : cai_set_error(error, CAI_ERR_LIMIT, "patch path is too long");
   }
-  return cai_patch_normalize(out, capacity, resolved, suffix, 1, error);
+  return cai_patch_normalize(out, capacity, scratch->resolved, suffix, 1,
+                             error);
 }
 
-static int cai_patch_resolve_existing(const cai_patch_context *ctx,
-                                      const char *path, char **out,
-                                      cai_error *error) {
+static int cai_patch_target(const cai_patch_context *ctx, const char *path,
+                            char *out, size_t capacity, cai_error *error) {
+  cai_patch_target_scratch *scratch =
+      (cai_patch_target_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_patch_target scratch");
+  rc = cai_patch_target_with_scratch(ctx, path, out, capacity, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_patch_resolve_existing_scratch {
   char candidate[PATH_MAX];
+} cai_patch_resolve_existing_scratch;
+static int cai_patch_resolve_existing_with_scratch(
+    const cai_patch_context *ctx, const char *path, char **out,
+    cai_error *error, cai_patch_resolve_existing_scratch *scratch) {
+
   struct stat st;
   int rc;
 
-  rc = cai_patch_target(ctx, path, candidate, sizeof(candidate), error);
+  rc = cai_patch_target(ctx, path, scratch->candidate,
+                        sizeof(scratch->candidate), error);
   if (rc != CAI_OK) {
     return rc;
   }
-  rc = cai_patch_realpath_copy(candidate, out, error);
+  rc = cai_patch_realpath_copy(scratch->candidate, out, error);
   if (rc != CAI_OK) {
     return rc;
   }
@@ -516,19 +542,38 @@ static int cai_patch_resolve_existing(const cai_patch_context *ctx,
   return CAI_OK;
 }
 
-static int cai_patch_resolve_new(const cai_patch_context *ctx, const char *path,
-                                 char **out, cai_error *error) {
+static int cai_patch_resolve_existing(const cai_patch_context *ctx,
+                                      const char *path, char **out,
+                                      cai_error *error) {
+  cai_patch_resolve_existing_scratch *scratch =
+      (cai_patch_resolve_existing_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate existing patch path");
+  rc = cai_patch_resolve_existing_with_scratch(ctx, path, out, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_patch_resolve_new_scratch {
   char candidate[PATH_MAX];
   char parent[PATH_MAX];
   char resolved_parent[PATH_MAX];
+} cai_patch_resolve_new_scratch;
+static int cai_patch_resolve_new_with_scratch(
+    const cai_patch_context *ctx, const char *path, char **out,
+    cai_error *error, cai_patch_resolve_new_scratch *scratch) {
+
   char *slash;
   int rc;
 
-  rc = cai_patch_target(ctx, path, candidate, sizeof(candidate), error);
+  rc = cai_patch_target(ctx, path, scratch->candidate,
+                        sizeof(scratch->candidate), error);
   if (rc != CAI_OK) {
     return rc;
   }
-  if (access(candidate, F_OK) == 0) {
+  if (access(scratch->candidate, F_OK) == 0) {
     return cai_set_error(error, CAI_ERR_INVALID,
                          "patch add or move target already exists");
   }
@@ -537,42 +582,57 @@ static int cai_patch_resolve_new(const cai_patch_context *ctx, const char *path,
                                 "failed to inspect patch target",
                                 strerror(errno));
   }
-  if (snprintf(parent, sizeof(parent), "%s", candidate) >=
-      (int)sizeof(parent)) {
+  if (snprintf(scratch->parent, sizeof(scratch->parent), "%s",
+               scratch->candidate) >= (int)sizeof(scratch->parent)) {
     return cai_set_error(error, CAI_ERR_INVALID, "patch path is too long");
   }
-  slash = strrchr(parent, '/');
+  slash = strrchr(scratch->parent, '/');
   if (slash == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
                          "patch target must have a workspace parent");
   }
-  if (slash == parent) {
-    parent[1] = '\0';
+  if (slash == scratch->parent) {
+    scratch->parent[1] = '\0';
   } else {
     *slash = '\0';
   }
   /* A new destination can have missing ancestors. Validate the nearest
    * existing ancestor here; descriptor traversal checks every component
    * before any directory or file is created. */
-  while (realpath(parent, resolved_parent) == NULL) {
+  while (realpath(scratch->parent, scratch->resolved_parent) == NULL) {
     if (errno != ENOENT)
       return cai_set_error_detail(error, CAI_ERR_INVALID,
                                   "failed to resolve patch target parent",
                                   strerror(errno));
-    slash = strrchr(parent, '/');
-    if (slash == NULL || parent[0] == '\0' || strcmp(parent, "/") == 0)
+    slash = strrchr(scratch->parent, '/');
+    if (slash == NULL || scratch->parent[0] == '\0' ||
+        strcmp(scratch->parent, "/") == 0)
       return cai_set_error(error, CAI_ERR_INVALID,
                            "patch target has no existing parent");
-    if (slash == parent)
-      parent[1] = '\0';
+    if (slash == scratch->parent)
+      scratch->parent[1] = '\0';
     else
       *slash = '\0';
   }
-  if (!cai_patch_under_root(ctx->root_path, resolved_parent)) {
+  if (!cai_patch_under_root(ctx->root_path, scratch->resolved_parent)) {
     return cai_set_error(error, CAI_ERR_INVALID,
                          "patch target parent escapes configured root");
   }
-  return cai_patch_copy(out, candidate, strlen(candidate), error);
+  return cai_patch_copy(out, scratch->candidate, strlen(scratch->candidate),
+                        error);
+}
+
+static int cai_patch_resolve_new(const cai_patch_context *ctx, const char *path,
+                                 char **out, cai_error *error) {
+  cai_patch_resolve_new_scratch *scratch =
+      (cai_patch_resolve_new_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_patch_resolve_new scratch");
+  rc = cai_patch_resolve_new_with_scratch(ctx, path, out, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static int cai_patch_stat_equal(const struct stat *left,
@@ -1666,27 +1726,34 @@ static int cai_patch_validate_destinations(const cai_patch_plan *plan,
 /** A delete followed by an add is a replacement, even when other file
  * sections separate them. Keep one update so publication and rollback retain
  * the original file's identity checks, permissions and contents. */
-static int cai_patch_coalesce_replacements(const cai_patch_context *ctx,
-                                           cai_patch_plan *plan,
-                                           cai_error *error) {
-  size_t i, j;
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_patch_coalesce_replacements_scratch {
   char deleted[PATH_MAX], added[PATH_MAX];
+} cai_patch_coalesce_replacements_scratch;
+static int cai_patch_coalesce_replacements_with_scratch(
+    const cai_patch_context *ctx, cai_patch_plan *plan, cai_error *error,
+    cai_patch_coalesce_replacements_scratch *scratch) {
+  size_t i, j;
+
   int rc;
   for (i = 0U; i < plan->count; i++) {
     cai_patch_change *change = &plan->items[i];
     if (change->kind != CAI_PATCH_DELETE)
       continue;
-    rc = cai_patch_target(ctx, change->path, deleted, sizeof(deleted), error);
+    rc = cai_patch_target(ctx, change->path, scratch->deleted,
+                          sizeof(scratch->deleted), error);
     if (rc != CAI_OK)
       return rc;
     for (j = i + 1U; j < plan->count; j++) {
       cai_patch_change *addition = &plan->items[j];
       if (addition->kind != CAI_PATCH_ADD)
         continue;
-      rc = cai_patch_target(ctx, addition->path, added, sizeof(added), error);
+      rc = cai_patch_target(ctx, addition->path, scratch->added,
+                            sizeof(scratch->added), error);
       if (rc != CAI_OK)
         return rc;
-      if (strcmp(deleted, added) != 0)
+      if (strcmp(scratch->deleted, scratch->added) != 0)
         continue;
       change->kind = CAI_PATCH_UPDATE;
       change->replace_content = 1;
@@ -1703,8 +1770,29 @@ static int cai_patch_coalesce_replacements(const cai_patch_context *ctx,
   return CAI_OK;
 }
 
-static int cai_patch_preflight(const cai_patch_context *ctx,
-                               cai_patch_plan *plan, cai_error *error) {
+static int cai_patch_coalesce_replacements(const cai_patch_context *ctx,
+                                           cai_patch_plan *plan,
+                                           cai_error *error) {
+  cai_patch_coalesce_replacements_scratch *scratch =
+      (cai_patch_coalesce_replacements_scratch *)cai_alloc(NULL,
+                                                           sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_patch_coalesce_replacements scratch");
+  rc = cai_patch_coalesce_replacements_with_scratch(ctx, plan, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_patch_preflight_scratch {
+  char message[PATH_MAX + 128];
+} cai_patch_preflight_scratch;
+static int
+cai_patch_preflight_with_scratch(const cai_patch_context *ctx,
+                                 cai_patch_plan *plan, cai_error *error,
+                                 cai_patch_preflight_scratch *scratch) {
   size_t i;
   size_t j;
   int rc;
@@ -1718,12 +1806,12 @@ static int cai_patch_preflight(const cai_patch_context *ctx,
     change = &plan->items[i];
     for (j = 0U; j < i; j++) {
       if (strcmp(change->path, plan->items[j].path) == 0) {
-        char message[PATH_MAX + 128];
-        snprintf(message, sizeof(message),
+
+        snprintf(scratch->message, sizeof(scratch->message),
                  "patch changes path '%s' more than once; use one file section "
                  "with multiple @@ hunks, or separate tool calls",
                  change->path);
-        return cai_set_error(error, CAI_ERR_INVALID, message);
+        return cai_set_error(error, CAI_ERR_INVALID, scratch->message);
       }
     }
     if (change->kind == CAI_PATCH_ADD) {
@@ -1812,6 +1900,19 @@ static int cai_patch_preflight(const cai_patch_context *ctx,
     }
   }
   return CAI_OK;
+}
+
+static int cai_patch_preflight(const cai_patch_context *ctx,
+                               cai_patch_plan *plan, cai_error *error) {
+  cai_patch_preflight_scratch *scratch =
+      (cai_patch_preflight_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate patch validation scratch");
+  rc = cai_patch_preflight_with_scratch(ctx, plan, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static int cai_patch_write_atomic(

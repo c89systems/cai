@@ -1072,7 +1072,7 @@ static const char *cai_tool_json_type_for_field(const lonejson_field *field) {
 
 static int cai_tool_schema_add_field(cai_tool_schema *schema,
                                      const lonejson_field *field,
-                                     cai_error *error) {
+                                     const char *nested, cai_error *error) {
   cai_buffer_builder builder;
   const char *type;
   int required;
@@ -1084,19 +1084,9 @@ static int cai_tool_schema_add_field(cai_tool_schema *schema,
     return cai_tool_schema_add_typed_property(schema, field->json_key, NULL,
                                               type, required, error);
   }
-  if (field->kind == LONEJSON_FIELD_KIND_OBJECT) {
-    cai_tool_schema *nested;
-
-    nested = NULL;
-    rc = cai_tool_schema_from_map(field->submap, &nested, error);
-    if (rc == CAI_OK) {
-      rc = cai_tool_schema_add_property_json(schema, field->json_key,
-                                             cai_tool_schema_json(nested),
+  if (field->kind == LONEJSON_FIELD_KIND_OBJECT)
+    return cai_tool_schema_add_property_json(schema, field->json_key, nested,
                                              required, error);
-    }
-    cai_tool_schema_destroy(nested);
-    return rc;
-  }
   memset(&builder, 0, sizeof(builder));
   switch (field->kind) {
   case LONEJSON_FIELD_KIND_STRING_ARRAY:
@@ -1112,18 +1102,9 @@ static int cai_tool_schema_add_field(cai_tool_schema *schema,
   case LONEJSON_FIELD_KIND_BOOL_ARRAY:
     rc = cai_tool_schema_build_array_property(&builder, "boolean", NULL, error);
     break;
-  case LONEJSON_FIELD_KIND_OBJECT_ARRAY: {
-    cai_tool_schema *nested;
-
-    nested = NULL;
-    rc = cai_tool_schema_from_map(field->submap, &nested, error);
-    if (rc == CAI_OK) {
-      rc = cai_tool_schema_build_array_property(
-          &builder, NULL, cai_tool_schema_json(nested), error);
-    }
-    cai_tool_schema_destroy(nested);
+  case LONEJSON_FIELD_KIND_OBJECT_ARRAY:
+    rc = cai_tool_schema_build_array_property(&builder, NULL, nested, error);
     break;
-  }
   case LONEJSON_FIELD_KIND_JSON_VALUE:
     rc = cai_tool_schema_build_empty_object(&builder, error);
     break;
@@ -1140,47 +1121,116 @@ static int cai_tool_schema_add_field(cai_tool_schema *schema,
   return rc;
 }
 
-void cai_tool_result_cleanup_plain(const lonejson_map *map, void *value) {
-  size_t i;
+#define CAI_TOOL_RESULT_DEPTH 128U
+typedef struct cai_result_frame {
+  const lonejson_map *map;
+  void *value;
+  size_t field, element;
+} cai_result_frame;
+typedef struct cai_result_walk {
+  cai_result_frame frames[CAI_TOOL_RESULT_DEPTH];
+} cai_result_walk;
 
-  if (map == NULL || value == NULL) {
-    return;
+/** Reserve cleanup before invoking user code. Destruction cannot fail an
+ * allocation or recurse after the callback has acquired output resources. */
+static int cai_result_walk_prepare(const lonejson_map *map,
+                                   cai_result_walk **out, cai_error *error) {
+  cai_result_walk *walk;
+  cai_result_frame *frame;
+  const lonejson_field *field;
+  size_t level = 0U, i;
+  int rc = CAI_OK;
+  *out = NULL;
+  walk = (cai_result_walk *)cai_alloc(NULL, sizeof(*walk));
+  if (walk == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate tool result traversal");
+  memset(walk, 0, sizeof(*walk));
+  walk->frames[0].map = map;
+  for (;;) {
+    frame = &walk->frames[level];
+    if (frame->field == frame->map->field_count) {
+      if (level == 0U)
+        break;
+      level--;
+      continue;
+    }
+    field = &frame->map->fields[frame->field++];
+    if (field->kind != LONEJSON_FIELD_KIND_OBJECT &&
+        field->kind != LONEJSON_FIELD_KIND_OBJECT_ARRAY)
+      continue;
+    if (field->submap == NULL || level + 1U == CAI_TOOL_RESULT_DEPTH) {
+      rc = cai_set_error(error, CAI_ERR_INVALID,
+                         "invalid or too deeply nested tool result map");
+      break;
+    }
+    for (i = 0U; i <= level; i++)
+      if (walk->frames[i].map == field->submap)
+        break;
+    if (i <= level) {
+      rc = cai_set_error(error, CAI_ERR_INVALID, "cyclic tool result map");
+      break;
+    }
+    frame = &walk->frames[++level];
+    frame->map = field->submap;
+    frame->field = 0U;
   }
-  for (i = 0U; i < map->field_count; i++) {
-    const lonejson_field *field;
-    void *ptr;
+  if (rc != CAI_OK)
+    cai_free_mem(NULL, walk);
+  else
+    *out = walk;
+  return rc;
+}
 
-    field = &map->fields[i];
-    ptr = (unsigned char *)value + field->struct_offset;
+static void cai_tool_result_cleanup_plain(const lonejson_map *map, void *value,
+                                          cai_result_walk *walk) {
+  cai_result_frame *frame, *child;
+  const lonejson_field *field;
+  lonejson_object_array *array;
+  void *ptr;
+  size_t level = 0U;
+  memset(walk, 0, sizeof(*walk));
+  walk->frames[0].map = map;
+  walk->frames[0].value = value;
+  for (;;) {
+    frame = &walk->frames[level];
+    if (frame->field == frame->map->field_count) {
+      if (level == 0U)
+        break;
+      level--;
+      continue;
+    }
+    field = &frame->map->fields[frame->field];
+    ptr = (unsigned char *)frame->value + field->struct_offset;
+    if (field->kind == LONEJSON_FIELD_KIND_OBJECT ||
+        field->kind == LONEJSON_FIELD_KIND_OBJECT_ARRAY) {
+      if (field->kind == LONEJSON_FIELD_KIND_OBJECT_ARRAY) {
+        array = (lonejson_object_array *)ptr;
+        if (frame->element == array->count) {
+          cai_free_mem(NULL, array->items);
+          array->items = NULL;
+          array->count = array->capacity = 0U;
+          frame->element = 0U;
+          frame->field++;
+          continue;
+        }
+        ptr =
+            (unsigned char *)array->items + frame->element++ * array->elem_size;
+      } else
+        frame->field++;
+      child = &walk->frames[++level];
+      memset(child, 0, sizeof(*child));
+      child->map = field->submap;
+      child->value = ptr;
+      continue;
+    }
     switch (field->kind) {
     case LONEJSON_FIELD_KIND_STRING:
       if (field->storage == LONEJSON_STORAGE_DYNAMIC) {
-        char **p;
-
-        p = (char **)ptr;
-        cai_free_mem(NULL, *p);
-        *p = NULL;
+        cai_free_mem(NULL, *(char **)ptr);
+        *(char **)ptr = NULL;
       }
       break;
-    case LONEJSON_FIELD_KIND_OBJECT:
-      cai_tool_result_cleanup_plain(field->submap, ptr);
-      break;
-    case LONEJSON_FIELD_KIND_OBJECT_ARRAY: {
-      lonejson_object_array *array;
-      size_t j;
-
-      array = (lonejson_object_array *)ptr;
-      for (j = 0U; j < array->count; j++) {
-        cai_tool_result_cleanup_plain(field->submap,
-                                      (unsigned char *)array->items +
-                                          (j * array->elem_size));
-      }
-      cai_free_mem(NULL, array->items);
-      array->items = NULL;
-      array->count = 0U;
-      array->capacity = 0U;
-      break;
-    }
     case LONEJSON_FIELD_KIND_STRING_STREAM:
     case LONEJSON_FIELD_KIND_BASE64_STREAM:
       ((lonejson_spooled *)ptr)->cleanup((lonejson_spooled *)ptr);
@@ -1195,6 +1245,7 @@ void cai_tool_result_cleanup_plain(const lonejson_map *map, void *value) {
     default:
       break;
     }
+    frame->field++;
   }
 }
 
@@ -2137,6 +2188,7 @@ int cai_tool_registry_run(cai_tool_registry *registry, const char *name,
                           const char *arguments_json, cai_sink *output,
                           cai_error *error) {
   cai_tool_entry *entry;
+  cai_result_walk *walk;
   lonejson_error json_error;
   lonejson_status status;
   void *params;
@@ -2221,6 +2273,12 @@ int cai_tool_registry_run(cai_tool_registry *registry, const char *name,
     return cai_set_error(error, CAI_ERR_NOMEM,
                          "failed to allocate tool result");
   }
+  rc = cai_result_walk_prepare(entry->result_map, &walk, error);
+  if (rc != CAI_OK) {
+    cai_free_mem(NULL, result);
+    cai_free_mem(NULL, params);
+    return rc;
+  }
   memset(params, 0, entry->params_map->struct_size);
   memset(result, 0, entry->result_map->struct_size);
   CAI_LJ->init(CAI_LJ, entry->params_map, params);
@@ -2231,6 +2289,7 @@ int cai_tool_registry_run(cai_tool_registry *registry, const char *name,
   if (status != LONEJSON_STATUS_OK) {
     CAI_LJ->cleanup(CAI_LJ, entry->params_map, params);
     CAI_LJ->cleanup(CAI_LJ, entry->result_map, result);
+    cai_free_mem(NULL, walk);
     cai_free_mem(NULL, result);
     cai_free_mem(NULL, params);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
@@ -2252,7 +2311,8 @@ int cai_tool_registry_run(cai_tool_registry *registry, const char *name,
     }
   }
   CAI_LJ->cleanup(CAI_LJ, entry->params_map, params);
-  cai_tool_result_cleanup_plain(entry->result_map, result);
+  cai_tool_result_cleanup_plain(entry->result_map, result, walk);
+  cai_free_mem(NULL, walk);
   cai_free_mem(NULL, result);
   cai_free_mem(NULL, params);
   return rc;
@@ -2262,6 +2322,7 @@ int cai_tool_registry_run_spooled(cai_tool_registry *registry, const char *name,
                                   lonejson_spooled *arguments_json,
                                   cai_sink *output, cai_error *error) {
   cai_tool_entry *entry;
+  cai_result_walk *walk;
   cai_tool_spooled_reader reader;
   lonejson_error json_error;
   lonejson_status status;
@@ -2396,6 +2457,12 @@ int cai_tool_registry_run_spooled(cai_tool_registry *registry, const char *name,
     return cai_set_error(error, CAI_ERR_NOMEM,
                          "failed to allocate tool result");
   }
+  rc = cai_result_walk_prepare(entry->result_map, &walk, error);
+  if (rc != CAI_OK) {
+    cai_free_mem(NULL, result);
+    cai_free_mem(NULL, params);
+    return rc;
+  }
   memset(params, 0, entry->params_map->struct_size);
   memset(result, 0, entry->result_map->struct_size);
   CAI_LJ->init(CAI_LJ, entry->params_map, params);
@@ -2405,6 +2472,7 @@ int cai_tool_registry_run_spooled(cai_tool_registry *registry, const char *name,
   if (reader.cursor.rewind(&reader.cursor, &json_error) != LONEJSON_STATUS_OK) {
     CAI_LJ->cleanup(CAI_LJ, entry->params_map, params);
     CAI_LJ->cleanup(CAI_LJ, entry->result_map, result);
+    cai_free_mem(NULL, walk);
     cai_free_mem(NULL, result);
     cai_free_mem(NULL, params);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
@@ -2416,6 +2484,7 @@ int cai_tool_registry_run_spooled(cai_tool_registry *registry, const char *name,
   if (status != LONEJSON_STATUS_OK) {
     CAI_LJ->cleanup(CAI_LJ, entry->params_map, params);
     CAI_LJ->cleanup(CAI_LJ, entry->result_map, result);
+    cai_free_mem(NULL, walk);
     cai_free_mem(NULL, result);
     cai_free_mem(NULL, params);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
@@ -2437,7 +2506,8 @@ int cai_tool_registry_run_spooled(cai_tool_registry *registry, const char *name,
     }
   }
   CAI_LJ->cleanup(CAI_LJ, entry->params_map, params);
-  cai_tool_result_cleanup_plain(entry->result_map, result);
+  cai_tool_result_cleanup_plain(entry->result_map, result, walk);
+  cai_free_mem(NULL, walk);
   cai_free_mem(NULL, result);
   cai_free_mem(NULL, params);
   return rc;
@@ -2497,31 +2567,89 @@ int cai_tool_schema_new(cai_tool_schema **out, cai_error *error) {
   return CAI_OK;
 }
 
+/** Build nested maps in postorder without using the caller's thread stack.
+ * Ancestor identity detects cyclic maps before allocating another level. */
+typedef struct cai_schema_frame {
+  struct cai_schema_frame *parent;
+  const lonejson_map *map;
+  cai_tool_schema *schema;
+  size_t index;
+} cai_schema_frame;
+
 int cai_tool_schema_from_map(const lonejson_map *map, cai_tool_schema **out,
                              cai_error *error) {
-  cai_tool_schema *schema;
-  size_t i;
+  cai_schema_frame *top, *frame, *ancestor;
+  cai_tool_schema *nested = NULL;
+  const lonejson_field *field;
   int rc;
-
-  if (out == NULL) {
+  if (out == NULL)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "tool schema output pointer is required");
-  }
   *out = NULL;
-  if (map == NULL) {
+  if (map == NULL)
     return cai_set_error(error, CAI_ERR_INVALID, "lonejson map is required");
+  top = (cai_schema_frame *)cai_alloc(NULL, sizeof(*top));
+  if (top == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate schema traversal");
+  memset(top, 0, sizeof(*top));
+  top->map = map;
+  rc = cai_tool_schema_new(&top->schema, error);
+  while (rc == CAI_OK) {
+    if (top->index == top->map->field_count) {
+      if (top->parent == NULL) {
+        *out = top->schema;
+        top->schema = NULL;
+        break;
+      }
+      frame = top;
+      top = top->parent;
+      nested = frame->schema;
+      cai_free_mem(NULL, frame);
+      field = &top->map->fields[top->index++];
+      rc = cai_tool_schema_add_field(top->schema, field,
+                                     cai_tool_schema_json(nested), error);
+      cai_tool_schema_destroy(nested);
+      nested = NULL;
+      continue;
+    }
+    field = &top->map->fields[top->index];
+    if (field->kind != LONEJSON_FIELD_KIND_OBJECT &&
+        field->kind != LONEJSON_FIELD_KIND_OBJECT_ARRAY) {
+      rc = cai_tool_schema_add_field(top->schema, field, NULL, error);
+      top->index++;
+      continue;
+    }
+    if (field->submap == NULL) {
+      rc = cai_set_error(error, CAI_ERR_INVALID,
+                         "nested lonejson map is required");
+      break;
+    }
+    for (ancestor = top; ancestor != NULL; ancestor = ancestor->parent)
+      if (ancestor->map == field->submap)
+        break;
+    if (ancestor != NULL) {
+      rc = cai_set_error(error, CAI_ERR_INVALID,
+                         "cyclic lonejson tool schema map");
+      break;
+    }
+    frame = (cai_schema_frame *)cai_alloc(NULL, sizeof(*frame));
+    if (frame == NULL) {
+      rc = cai_set_error(error, CAI_ERR_NOMEM, "allocate schema traversal");
+      break;
+    }
+    memset(frame, 0, sizeof(*frame));
+    frame->map = field->submap;
+    frame->parent = top;
+    top = frame;
+    rc = cai_tool_schema_new(&top->schema, error);
   }
-  schema = NULL;
-  rc = cai_tool_schema_new(&schema, error);
-  for (i = 0U; rc == CAI_OK && i < map->field_count; i++) {
-    rc = cai_tool_schema_add_field(schema, &map->fields[i], error);
+  while (top != NULL) {
+    frame = top;
+    top = top->parent;
+    cai_tool_schema_destroy(frame->schema);
+    cai_free_mem(NULL, frame);
   }
-  if (rc != CAI_OK) {
-    cai_tool_schema_destroy(schema);
-    return rc;
-  }
-  *out = schema;
-  return CAI_OK;
+  return rc;
 }
 
 void cai_tool_schema_destroy(cai_tool_schema *schema) {

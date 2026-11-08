@@ -263,11 +263,17 @@ cleanup:
   cai_free_mem(NULL, buffers);
   return rc;
 }
-int cai_plugin_process_prepare(void *context,
-                               const cai_plugin_definition *definition,
-                               cai_plugin_handler *handler, cai_error *error) {
-  plugin_process *process;
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_plugin_process_prepare_scratch {
   char path[4096], resolved[4096];
+} cai_plugin_process_prepare_scratch;
+static int cai_plugin_process_prepare_with_scratch(
+    void *context, const cai_plugin_definition *definition,
+    cai_plugin_handler *handler, cai_error *error,
+    cai_plugin_process_prepare_scratch *scratch) {
+  plugin_process *process;
+
   size_t i, directory_length;
   int has_entry;
   (void)context;
@@ -278,15 +284,17 @@ int cai_plugin_process_prepare(void *context,
                          "process plugin needs argv or entrypoint");
   if (has_entry) {
     if (definition->entrypoint[0] == '/' ||
-        snprintf(path, sizeof(path), "%s/%s", definition->directory,
-                 definition->entrypoint) >= (int)sizeof(path) ||
-        realpath(path, resolved) == NULL)
+        snprintf(scratch->path, sizeof(scratch->path), "%s/%s",
+                 definition->directory,
+                 definition->entrypoint) >= (int)sizeof(scratch->path) ||
+        realpath(scratch->path, scratch->resolved) == NULL)
       return cai_set_error(error, CAI_ERR_INVALID,
                            "plugin entrypoint is unavailable");
     directory_length = strlen(definition->directory);
-    if (strncmp(resolved, definition->directory, directory_length) != 0 ||
+    if (strncmp(scratch->resolved, definition->directory, directory_length) !=
+            0 ||
         (definition->directory[directory_length - 1U] != '/' &&
-         resolved[directory_length] != '/'))
+         scratch->resolved[directory_length] != '/'))
       return cai_set_error(error, CAI_ERR_INVALID,
                            "plugin entrypoint escapes package");
   }
@@ -301,8 +309,8 @@ int cai_plugin_process_prepare(void *context,
     return cai_set_error(error, CAI_ERR_NOMEM, "allocate plugin argv");
   }
   for (i = 0U; i < definition->argc + (size_t)has_entry; i++) {
-    process->argv[i] =
-        cai_strdup(NULL, i < definition->argc ? definition->argv[i] : resolved);
+    process->argv[i] = cai_strdup(
+        NULL, i < definition->argc ? definition->argv[i] : scratch->resolved);
     if (process->argv[i] == NULL) {
       process_close(process);
       return cai_set_error(error, CAI_ERR_NOMEM, "copy plugin argv");
@@ -314,4 +322,19 @@ int cai_plugin_process_prepare(void *context,
   handler->invoke = process_run;
   handler->destroy = process_close;
   return CAI_OK;
+}
+
+int cai_plugin_process_prepare(void *context,
+                               const cai_plugin_definition *definition,
+                               cai_plugin_handler *handler, cai_error *error) {
+  cai_plugin_process_prepare_scratch *scratch =
+      (cai_plugin_process_prepare_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_plugin_process_prepare scratch");
+  rc = cai_plugin_process_prepare_with_scratch(context, definition, handler,
+                                               error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }

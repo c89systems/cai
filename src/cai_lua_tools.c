@@ -377,85 +377,123 @@ static int input_decode(lua_State *state) {
   }
   return 1;
 }
+/** Lua values stay on the VM's heap stack; traversal frames are GC-owned so a
+ * Lua allocation error/nonlocal return cannot leak a native scratch allocation.
+ */
+typedef struct lua_encode_frame {
+  int absolute, array;
+  lua_Integer next, count;
+} lua_encode_frame;
+
 static lonejson_status encode_value(lua_State *state, int index,
                                     lonejson_writer *writer, unsigned int depth,
                                     lonejson_error *error) {
-  size_t length, count = 0U;
-  lua_Integer i, n;
+  lua_encode_frame *frames, *frame;
+  size_t length, count;
+  lua_Integer n;
   const char *text;
-  int array = 1, absolute = lua_absindex(state, index);
+  int array, absolute = lua_absindex(state, index);
+  int base = lua_gettop(state), pending = 1;
+  unsigned int level = 0U;
   lonejson_status status = LONEJSON_STATUS_OK;
-  if (depth > 48U || !lua_checkstack(state, 8))
-    return LONEJSON_STATUS_OVERFLOW;
-  switch (lua_type(state, absolute)) {
-  case LUA_TNIL:
-    return writer->null_fn(writer, error);
-  case LUA_TBOOLEAN:
-    return writer->bool_fn(writer, lua_toboolean(state, absolute), error);
-  case LUA_TNUMBER:
-    return lua_isinteger(state, absolute)
-               ? writer->i64(writer,
-                             (lonejson_int64)lua_tointeger(state, absolute),
-                             error)
-               : writer->f64(writer, (double)lua_tonumber(state, absolute),
-                             error);
-  case LUA_TSTRING:
-    text = lua_tolstring(state, absolute, &length);
-    return writer->string(writer, text, length, error);
-  case LUA_TLIGHTUSERDATA:
-    if (lua_touserdata(state, absolute) == &null_key)
-      return writer->null_fn(writer, error);
-    return LONEJSON_STATUS_TYPE_MISMATCH;
-  case LUA_TTABLE:
-    break;
-  default:
-    return LONEJSON_STATUS_TYPE_MISMATCH;
-  }
-  n = (lua_Integer)lua_rawlen(state, absolute);
-  lua_pushnil(state);
-  while (lua_next(state, absolute) != 0) {
-    count++;
-    if (!lua_isinteger(state, -2) || lua_tointeger(state, -2) < 1 ||
-        lua_tointeger(state, -2) > n)
-      array = 0;
-    lua_pop(state, 1);
-  }
-  if (count == 0U) {
-    array = 0;
-    if (lua_getmetatable(state, absolute)) {
-      luaL_getmetatable(state, ARRAY_MT);
-      array = lua_rawequal(state, -1, -2);
-      lua_pop(state, 2);
+  frames = lua_newuserdatauv(state, 49U * sizeof(*frames), 0);
+  while (status == LONEJSON_STATUS_OK) {
+    if (pending) {
+      if (depth + level > 48U || !lua_checkstack(state, 8)) {
+        status = LONEJSON_STATUS_OVERFLOW;
+        break;
+      }
+      switch (lua_type(state, absolute)) {
+      case LUA_TNIL:
+        status = writer->null_fn(writer, error);
+        break;
+      case LUA_TBOOLEAN:
+        status = writer->bool_fn(writer, lua_toboolean(state, absolute), error);
+        break;
+      case LUA_TNUMBER:
+        status =
+            lua_isinteger(state, absolute)
+                ? writer->i64(writer,
+                              (lonejson_int64)lua_tointeger(state, absolute),
+                              error)
+                : writer->f64(writer, (double)lua_tonumber(state, absolute),
+                              error);
+        break;
+      case LUA_TSTRING:
+        text = lua_tolstring(state, absolute, &length);
+        status = writer->string(writer, text, length, error);
+        break;
+      case LUA_TLIGHTUSERDATA:
+        status = lua_touserdata(state, absolute) == &null_key
+                     ? writer->null_fn(writer, error)
+                     : LONEJSON_STATUS_TYPE_MISMATCH;
+        break;
+      case LUA_TTABLE:
+        n = (lua_Integer)lua_rawlen(state, absolute);
+        count = 0U;
+        array = 1;
+        lua_pushnil(state);
+        while (lua_next(state, absolute) != 0) {
+          count++;
+          if (!lua_isinteger(state, -2) || lua_tointeger(state, -2) < 1 ||
+              lua_tointeger(state, -2) > n)
+            array = 0;
+          lua_pop(state, 1);
+        }
+        if (count == 0U) {
+          array = 0;
+          if (lua_getmetatable(state, absolute)) {
+            luaL_getmetatable(state, ARRAY_MT);
+            array = lua_rawequal(state, -1, -2);
+            lua_pop(state, 2);
+          }
+        }
+        frame = &frames[level++];
+        frame->absolute = absolute;
+        frame->array = array && count == (size_t)n;
+        frame->next = 1;
+        frame->count = n;
+        status = frame->array ? writer->begin_array(writer, error)
+                              : writer->begin_object(writer, error);
+        if (!frame->array)
+          lua_pushnil(state);
+        pending = 0;
+        continue;
+      default:
+        status = LONEJSON_STATUS_TYPE_MISMATCH;
+      }
+      if (level != 0U)
+        lua_pop(state, 1);
+      pending = 0;
     }
-  }
-  if (array && count == (size_t)n) {
-    status = writer->begin_array(writer, error);
-    for (i = 1; status == LONEJSON_STATUS_OK && i <= n; i++) {
-      lua_rawgeti(state, absolute, i);
-      status = encode_value(state, -1, writer, depth + 1U, error);
-      lua_pop(state, 1);
-    }
-    if (status == LONEJSON_STATUS_OK)
+    if (level == 0U)
+      break;
+    frame = &frames[level - 1U];
+    if (frame->array) {
+      if (frame->next <= frame->count) {
+        lua_rawgeti(state, frame->absolute, frame->next++);
+        absolute = lua_gettop(state);
+        pending = 1;
+        continue;
+      }
       status = writer->end_array(writer, error);
-  } else {
-    status = writer->begin_object(writer, error);
-    lua_pushnil(state);
-    while (status == LONEJSON_STATUS_OK && lua_next(state, absolute) != 0) {
+    } else if (lua_next(state, frame->absolute) != 0) {
       if (lua_type(state, -2) != LUA_TSTRING) {
-        lua_pop(state, 2);
-        return LONEJSON_STATUS_TYPE_MISMATCH;
+        status = LONEJSON_STATUS_TYPE_MISMATCH;
+        break;
       }
       text = lua_tolstring(state, -2, &length);
       status = writer->key(writer, text, length, error);
-      if (status == LONEJSON_STATUS_OK)
-        status = encode_value(state, -1, writer, depth + 1U, error);
-      lua_pop(state, 1);
-    }
-    if (status != LONEJSON_STATUS_OK)
-      lua_pop(state, 1);
-    if (status == LONEJSON_STATUS_OK)
+      absolute = lua_gettop(state);
+      pending = 1;
+      continue;
+    } else
       status = writer->end_object(writer, error);
+    level--;
+    if (level != 0U)
+      lua_pop(state, 1);
   }
+  lua_settop(state, base);
   return status;
 }
 static int encode_result(lua_job *job, lua_State *state, int index) {
@@ -880,27 +918,35 @@ static void handler_destroy(void *context) {
   free(handler->directory);
   free(handler);
 }
-static int file_prepare(void *context, const cai_plugin_definition *definition,
-                        cai_plugin_handler *out, cai_error *error) {
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct file_prepare_scratch {
+  char path[4096], canonical[4096];
+} file_prepare_scratch;
+static int file_prepare_with_scratch(void *context,
+                                     const cai_plugin_definition *definition,
+                                     cai_plugin_handler *out, cai_error *error,
+                                     file_prepare_scratch *scratch) {
   cai_lua_tools *tools = context;
   lua_handler *handler;
   lua_State *check;
-  char path[4096], canonical[4096];
+
   size_t root_length;
   FILE *file;
   int status;
   if (definition->entrypoint == NULL || definition->entrypoint[0] == '/' ||
-      snprintf(path, sizeof(path), "%s/%s", definition->directory,
-               definition->entrypoint) >= (int)sizeof(path) ||
-      realpath(path, canonical) == NULL)
+      snprintf(scratch->path, sizeof(scratch->path), "%s/%s",
+               definition->directory,
+               definition->entrypoint) >= (int)sizeof(scratch->path) ||
+      realpath(scratch->path, scratch->canonical) == NULL)
     return tools_error(error, CAI_ERR_INVALID,
                        "Lua tool entrypoint is unavailable");
   root_length = strlen(definition->directory);
-  if (strncmp(canonical, definition->directory, root_length) != 0 ||
-      canonical[root_length] != '/')
+  if (strncmp(scratch->canonical, definition->directory, root_length) != 0 ||
+      scratch->canonical[root_length] != '/')
     return tools_error(error, CAI_ERR_INVALID,
                        "Lua entrypoint escapes package");
-  file = fopen(canonical, "rb");
+  file = fopen(scratch->canonical, "rb");
   if (file == NULL)
     return tools_error(error, CAI_ERR_INVALID, "open Lua entrypoint");
   handler = calloc(1U, sizeof(*handler));
@@ -929,8 +975,8 @@ static int file_prepare(void *context, const cai_plugin_definition *definition,
     handler_destroy(handler);
     return tools_error(error, CAI_ERR_NOMEM, "validate Lua entrypoint");
   }
-  status =
-      luaL_loadbufferx(check, handler->source, handler->length, canonical, "t");
+  status = luaL_loadbufferx(check, handler->source, handler->length,
+                            scratch->canonical, "t");
   if (status != LUA_OK)
     (void)tools_error(error, CAI_ERR_INVALID, lua_tostring(check, -1));
   lua_close(check);
@@ -943,6 +989,19 @@ static int file_prepare(void *context, const cai_plugin_definition *definition,
   out->destroy = handler_destroy;
   return CAI_OK;
 }
+
+static int file_prepare(void *context, const cai_plugin_definition *definition,
+                        cai_plugin_handler *out, cai_error *error) {
+  file_prepare_scratch *scratch =
+      (file_prepare_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return tools_error(error, CAI_ERR_NOMEM, "allocate Lua entrypoint paths");
+  rc = file_prepare_with_scratch(context, definition, out, error, scratch);
+  free(scratch);
+  return rc;
+}
+
 void cai_lua_tools_config_init(cai_lua_tools_config *config) {
   if (config != NULL) {
     memset(config, 0, sizeof(*config));

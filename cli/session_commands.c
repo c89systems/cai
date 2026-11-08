@@ -197,14 +197,19 @@ void cai_cli_history_row(char *out, size_t capacity,
   out[length] = '\0';
 }
 
-int cai_cli_sessions_print(cai_sink *destination,
-                           const cai_cli_session *sessions, size_t count,
-                           int numbered, int width, cai_error *error) {
-  size_t i;
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_cli_sessions_print_scratch {
   char directory[PATH_MAX];
   char prompt[2048];
   char line[PATH_MAX + 2304];
   char clipped[PATH_MAX + 2304];
+} cai_cli_sessions_print_scratch;
+static int cai_cli_sessions_print_with_scratch(
+    cai_sink *destination, const cai_cli_session *sessions, size_t count,
+    int numbered, int width, cai_error *error,
+    cai_cli_sessions_print_scratch *scratch) {
+  size_t i;
+
   char number[32];
   int dir_width;
   int prompt_width;
@@ -227,18 +232,20 @@ int cai_cli_sessions_print(cai_sink *destination,
     dir_width = width > prefix_width ? (width - prefix_width) / 2 : 0;
     if (dir_width > 32)
       dir_width = 32;
-    row_field(directory, sizeof(directory), sessions[i].workspace, dir_width);
+    row_field(scratch->directory, sizeof(scratch->directory),
+              sessions[i].workspace, dir_width);
     /* A conservative directory allocation keeps a prompt column on every row.
      */
-    prompt_width = width - prefix_width - row_cells(directory);
-    row_field(prompt, sizeof(prompt), sessions[i].first_prompt, prompt_width);
-    snprintf(line, sizeof(line), "%s%s  %s  %s", number, sessions[i].id,
-             directory, prompt);
-    row_field(clipped, sizeof(clipped), line, width);
+    prompt_width = width - prefix_width - row_cells(scratch->directory);
+    row_field(scratch->prompt, sizeof(scratch->prompt),
+              sessions[i].first_prompt, prompt_width);
+    snprintf(scratch->line, sizeof(scratch->line), "%s%s  %s  %s", number,
+             sessions[i].id, scratch->directory, scratch->prompt);
+    row_field(scratch->clipped, sizeof(scratch->clipped), scratch->line, width);
     if (locale != (locale_t)0)
       (void)uselocale(previous);
-    if (cai_sink_write(destination, clipped, strlen(clipped), error) !=
-            CAI_OK ||
+    if (cai_sink_write(destination, scratch->clipped, strlen(scratch->clipped),
+                       error) != CAI_OK ||
         cai_sink_write(destination, "\n", 1U, error) != CAI_OK) {
       rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "write session list");
       break;
@@ -246,6 +253,21 @@ int cai_cli_sessions_print(cai_sink *destination,
   }
   if (locale != (locale_t)0)
     freelocale(locale);
+  return rc;
+}
+
+int cai_cli_sessions_print(cai_sink *destination,
+                           const cai_cli_session *sessions, size_t count,
+                           int numbered, int width, cai_error *error) {
+  cai_cli_sessions_print_scratch *scratch =
+      (cai_cli_sessions_print_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_cli_sessions_print scratch");
+  rc = cai_cli_sessions_print_with_scratch(destination, sessions, count,
+                                           numbered, width, error, scratch);
+  free(scratch);
   return rc;
 }
 
@@ -340,32 +362,41 @@ static int export_file(const char *path, char *temporary, size_t capacity,
 
 /* Named destinations are workspace-relative, independent of the managed
  * export root. Only an exact .md/.jsonl suffix selects one projection. */
-static int export_targets(const cai_cli_pouch *pouch, const char *workspace,
-                          const char *root, const char *id,
-                          const char *basename, char paths[2][PATH_MAX],
-                          cai_error *error) {
-  static const char *const suffixes[] = {".md", ".jsonl"};
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct export_targets_scratch {
   char directory[PATH_MAX], resolved[PATH_MAX];
+} export_targets_scratch;
+static int export_targets_with_scratch(const cai_cli_pouch *pouch,
+                                       const char *workspace, const char *root,
+                                       const char *id, const char *basename,
+                                       char paths[2][PATH_MAX],
+                                       cai_error *error,
+                                       export_targets_scratch *scratch) {
+  static const char *const suffixes[] = {".md", ".jsonl"};
+
   char *slash;
   size_t length, i;
   int selected = -1, n, rc;
   struct stat status;
   memset(paths, 0, 2U * PATH_MAX);
   if (basename != NULL) {
-    rc = cai_cli_workspace_path(resolved, sizeof(resolved), workspace, basename,
-                                error);
+    rc = cai_cli_workspace_path(scratch->resolved, sizeof(scratch->resolved),
+                                workspace, basename, error);
     if (rc != CAI_OK)
       return rc;
-    basename = resolved;
+    basename = scratch->resolved;
   }
   if (basename == NULL) {
-    rc = export_path(pouch, directory, sizeof(directory), root, id, error);
+    rc = export_path(pouch, scratch->directory, sizeof(scratch->directory),
+                     root, id, error);
     if (rc == CAI_OK)
-      rc = export_directory(directory, 1, error);
+      rc = export_directory(scratch->directory, 1, error);
     if (rc != CAI_OK)
       return rc;
     for (i = 0U; i < 2U; i++) {
-      n = snprintf(paths[i], PATH_MAX, "%s/%s%s", directory, id, suffixes[i]);
+      n = snprintf(paths[i], PATH_MAX, "%s/%s%s", scratch->directory, id,
+                   suffixes[i]);
       if (n < 0 || n >= PATH_MAX)
         return cai_cli_error(error, CAI_ERR_INVALID,
                              "export file path too long");
@@ -393,15 +424,15 @@ static int export_targets(const cai_cli_pouch *pouch, const char *workspace,
         return cai_cli_error(error, CAI_ERR_INVALID,
                              "export file path too long");
     }
-    strcpy(directory, basename);
-    slash = strrchr(directory, '/');
-    if (slash == directory)
+    strcpy(scratch->directory, basename);
+    slash = strrchr(scratch->directory, '/');
+    if (slash == scratch->directory)
       slash[1] = '\0';
     else if (slash != NULL)
       *slash = '\0';
     else
-      strcpy(directory, ".");
-    rc = export_directory(directory, 0, error);
+      strcpy(scratch->directory, ".");
+    rc = export_directory(scratch->directory, 0, error);
     if (rc != CAI_OK)
       return rc;
   }
@@ -420,6 +451,22 @@ static int export_targets(const cai_cli_pouch *pouch, const char *workspace,
                            "cannot inspect export destination");
   }
   return CAI_OK;
+}
+
+static int export_targets(const cai_cli_pouch *pouch, const char *workspace,
+                          const char *root, const char *id,
+                          const char *basename, char paths[2][PATH_MAX],
+                          cai_error *error) {
+  export_targets_scratch *scratch =
+      (export_targets_scratch *)calloc(1U, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate export_targets scratch");
+  rc = export_targets_with_scratch(pouch, workspace, root, id, basename, paths,
+                                   error, scratch);
+  free(scratch);
+  return rc;
 }
 
 struct cai_cli_export {

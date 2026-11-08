@@ -34,10 +34,14 @@ static void cai_history_summary(char *out, size_t capacity, const char *text) {
   out[used] = '\0';
 }
 
-static int cai_history_prefix(cai_session *session, size_t keep,
-                              lonejson_spooled *out, size_t *total,
-                              cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_history_prefix_scratch {
   cai_spooled_record_reader reader;
+} cai_history_prefix_scratch;
+static int cai_history_prefix_with_scratch(
+    cai_session *session, size_t keep, lonejson_spooled *out, size_t *total,
+    cai_error *error, cai_history_prefix_scratch *scratch) {
+
   lonejson_error local;
   unsigned long length;
   unsigned long remaining;
@@ -45,15 +49,17 @@ static int cai_history_prefix(cai_session *session, size_t keep,
   char header[32];
   size_t count = 0U, chunk, i;
   int have, rc;
-  memset(&reader, 0, sizeof(reader));
-  reader.cursor = CAI_SESSION_IMPL(session)->history;
+  memset(&scratch->reader, 0, sizeof(scratch->reader));
+  scratch->reader.cursor = CAI_SESSION_IMPL(session)->history;
   lonejson_error_init(&local);
-  if (reader.cursor.rewind(&reader.cursor, &local) != LONEJSON_STATUS_OK)
+  if (scratch->reader.cursor.rewind(&scratch->reader.cursor, &local) !=
+      LONEJSON_STATUS_OK)
     return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
                                 "cannot read conversation history",
                                 local.message);
   for (;;) {
-    rc = cai_history_read_record_length(&reader, &length, &have, error);
+    rc =
+        cai_history_read_record_length(&scratch->reader, &length, &have, error);
     if (rc != CAI_OK || !have)
       break;
     if (out != NULL && count < keep) {
@@ -66,7 +72,8 @@ static int cai_history_prefix(cai_session *session, size_t keep,
     while (rc == CAI_OK && remaining != 0UL) {
       chunk = remaining > sizeof(bytes) ? sizeof(bytes) : (size_t)remaining;
       for (i = 0U; i < chunk; i++) {
-        if (cai_spooled_record_reader_next(&reader, &bytes[i], error) <= 0) {
+        if (cai_spooled_record_reader_next(&scratch->reader, &bytes[i],
+                                           error) <= 0) {
           rc = cai_set_error(error, CAI_ERR_PROTOCOL,
                              "truncated conversation history");
           break;
@@ -84,6 +91,21 @@ static int cai_history_prefix(cai_session *session, size_t keep,
   }
   if (total != NULL)
     *total = count;
+  return rc;
+}
+
+static int cai_history_prefix(cai_session *session, size_t keep,
+                              lonejson_spooled *out, size_t *total,
+                              cai_error *error) {
+  cai_history_prefix_scratch *scratch =
+      (cai_history_prefix_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_history_prefix scratch");
+  rc = cai_history_prefix_with_scratch(session, keep, out, total, error,
+                                       scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 

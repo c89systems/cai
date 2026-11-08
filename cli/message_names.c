@@ -9,7 +9,12 @@ typedef struct name_path {
   size_t count;
 } name_path;
 
+typedef struct name_frame {
+  size_t next, cursor, left, bytes;
+} name_frame;
+
 typedef struct name_search {
+  name_frame *frames;
   const cai_cli_message_name *self, *known;
   size_t count;
   name_path own, *others;
@@ -121,28 +126,42 @@ static int candidate(name_search *s, size_t chosen) {
   return 1;
 }
 
+/** Enumerate ancestor subsets using heap cursors, preserving nearest-first
+ * candidate order without recursion proportional to the workspace path. */
 static int choose(name_search *s, size_t next, size_t selected, size_t left,
                   size_t bytes) {
-  size_t i, j, at, n;
-  if (left == 0U)
-    return candidate(s, selected);
-  for (i = next; i >= left && i > 0U; i--) {
-    at = s->eligible[i - 1U];
-    /* The nearest occurrence of an identical component admits every prefix
-     * available to earlier occurrences. Explore that representative once. */
-    for (j = i; j < next; j++)
-      if (strcmp(s->own.parts[at], s->own.parts[s->eligible[j]]) == 0)
-        break;
-    if (j != next)
+  name_frame *frame;
+  size_t level = selected, i, j, at, n;
+  s->frames[level].next = s->frames[level].cursor = next;
+  s->frames[level].left = left;
+  s->frames[level].bytes = bytes;
+  for (;;) {
+    frame = &s->frames[level];
+    if (frame->left == 0U) {
+      if (candidate(s, level))
+        return 1;
+    } else if (frame->cursor >= frame->left && frame->cursor > 0U) {
+      i = frame->cursor--;
+      at = s->eligible[i - 1U];
+      for (j = i; j < frame->next; j++)
+        if (strcmp(s->own.parts[at], s->own.parts[s->eligible[j]]) == 0)
+          break;
+      if (j != frame->next)
+        continue;
+      n = strlen(s->own.parts[at]) + 1U;
+      if (n > 128U - frame->bytes)
+        continue;
+      s->chosen[level] = at;
+      s->frames[level + 1U].next = s->frames[level + 1U].cursor = i - 1U;
+      s->frames[level + 1U].left = frame->left - 1U;
+      s->frames[level + 1U].bytes = frame->bytes + n;
+      level++;
       continue;
-    n = strlen(s->own.parts[at]) + 1U;
-    if (n > 128U - bytes)
-      continue;
-    s->chosen[selected] = at;
-    if (choose(s, i - 1U, selected + 1U, left - 1U, bytes + n))
-      return 1;
+    }
+    if (level == selected)
+      return 0;
+    level--;
   }
-  return 0;
 }
 
 int cai_cli_message_name_select(const char *prefix,
@@ -193,7 +212,9 @@ int cai_cli_message_name_select(const char *prefix,
   s.others = calloc(count == 0U ? 1U : count, sizeof(*s.others));
   s.eligible = malloc(s.own.count * sizeof(*s.eligible));
   s.chosen = malloc(s.own.count * sizeof(*s.chosen));
-  if (s.others == NULL || s.eligible == NULL || s.chosen == NULL)
+  s.frames = calloc(s.own.count + 1U, sizeof(*s.frames));
+  if (s.others == NULL || s.eligible == NULL || s.chosen == NULL ||
+      s.frames == NULL)
     goto nomem;
   for (i = 0U; i < count; i++) {
     if (!same_prefix(known[i].name, prefix) ||
@@ -238,6 +259,7 @@ done:
   free(s.others);
   free(s.eligible);
   free(s.chosen);
+  free(s.frames);
   path_free(&s.own);
   return rc;
 }

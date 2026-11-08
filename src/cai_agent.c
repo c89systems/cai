@@ -2568,11 +2568,16 @@ static lonejson_status cai_history_normalizer_null(void *user,
              : LONEJSON_STATUS_OK;
 }
 
-static int cai_history_append_array_record_to_spool(
-    cai_session *session, lonejson_spooled *history,
-    const lonejson_spooled *json, cai_error *error) {
-  cai_spooled_reader_context reader_context;
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_history_append_array_record_to_spool_scratch {
   cai_history_normalizer normalizer;
+} cai_history_append_array_record_to_spool_scratch;
+static int cai_history_append_array_record_to_spool_with_scratch(
+    cai_session *session, lonejson_spooled *history,
+    const lonejson_spooled *json, cai_error *error,
+    cai_history_append_array_record_to_spool_scratch *scratch) {
+  cai_spooled_reader_context reader_context;
+
   lonejson_value_visitor visitor;
   lonejson_error json_error;
   lonejson_status status;
@@ -2589,11 +2594,11 @@ static int cai_history_append_array_record_to_spool(
                                 "failed to rewind history items",
                                 json_error.message);
   }
-  memset(&normalizer, 0, sizeof(normalizer));
-  normalizer.session = session;
-  normalizer.history = history;
-  normalizer.error = error;
-  normalizer.rc = CAI_OK;
+  memset(&scratch->normalizer, 0, sizeof(scratch->normalizer));
+  scratch->normalizer.session = session;
+  scratch->normalizer.history = history;
+  scratch->normalizer.error = error;
+  scratch->normalizer.rc = CAI_OK;
   visitor = lonejson_default_value_visitor();
   visitor.object_begin = cai_history_normalizer_object_begin;
   visitor.object_end = cai_history_normalizer_object_end;
@@ -2613,23 +2618,39 @@ static int cai_history_append_array_record_to_spool(
   lonejson_error_init(&json_error);
   status = cai_agent_history_runtime(session)->visit_value_reader(
       cai_agent_history_runtime(session), cai_history_spooled_reader,
-      &reader_context, &visitor, &normalizer, &json_error);
-  if (normalizer.writer_active) {
-    normalizer.writer.cleanup(&normalizer.writer);
+      &reader_context, &visitor, &scratch->normalizer, &json_error);
+  if (scratch->normalizer.writer_active) {
+    scratch->normalizer.writer.cleanup(&scratch->normalizer.writer);
   }
-  if (normalizer.has_record) {
-    normalizer.record.cleanup(&normalizer.record);
+  if (scratch->normalizer.has_record) {
+    scratch->normalizer.record.cleanup(&scratch->normalizer.record);
   }
-  if (normalizer.rc != CAI_OK) {
-    return normalizer.rc;
+  if (scratch->normalizer.rc != CAI_OK) {
+    return scratch->normalizer.rc;
   }
-  if (status != LONEJSON_STATUS_OK || !normalizer.root_array_seen ||
-      normalizer.depth != 0U) {
+  if (status != LONEJSON_STATUS_OK || !scratch->normalizer.root_array_seen ||
+      scratch->normalizer.depth != 0U) {
     return cai_set_error_detail(error, CAI_ERR_INVALID,
                                 "failed to parse history item array",
                                 json_error.message);
   }
   return CAI_OK;
+}
+
+static int cai_history_append_array_record_to_spool(
+    cai_session *session, lonejson_spooled *history,
+    const lonejson_spooled *json, cai_error *error) {
+  cai_history_append_array_record_to_spool_scratch *scratch =
+      (cai_history_append_array_record_to_spool_scratch *)cai_alloc(
+          NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate history normalization scratch");
+  rc = cai_history_append_array_record_to_spool_with_scratch(
+      session, history, json, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static int cai_history_append_one_array_record_to_spool(
@@ -3322,9 +3343,14 @@ static int cai_history_read_record_length(cai_spooled_record_reader *reader,
   return CAI_OK;
 }
 
-static int cai_history_to_array_spool(cai_session *session,
-                                      lonejson_spooled *out, cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_history_to_array_spool_scratch {
   cai_spooled_record_reader reader;
+} cai_history_to_array_spool_scratch;
+static int cai_history_to_array_spool_with_scratch(
+    cai_session *session, lonejson_spooled *out, cai_error *error,
+    cai_history_to_array_spool_scratch *scratch) {
+
   cai_history_record_json_reader record_reader;
   cai_history_sink_context sink_context;
   lonejson_writer writer;
@@ -3346,17 +3372,18 @@ static int cai_history_to_array_spool(cai_session *session,
   if (status == LONEJSON_STATUS_OK) {
     status = writer.begin_array(&writer, &json_error);
   }
-  reader.cursor = CAI_SESSION_IMPL(session)->history;
-  reader.offset = 0U;
-  reader.length = 0U;
-  reader.eof = 0;
+  scratch->reader.cursor = CAI_SESSION_IMPL(session)->history;
+  scratch->reader.offset = 0U;
+  scratch->reader.length = 0U;
+  scratch->reader.eof = 0;
   if (status == LONEJSON_STATUS_OK &&
-      reader.cursor.rewind(&reader.cursor, &json_error) != LONEJSON_STATUS_OK) {
+      scratch->reader.cursor.rewind(&scratch->reader.cursor, &json_error) !=
+          LONEJSON_STATUS_OK) {
     status = LONEJSON_STATUS_CALLBACK_FAILED;
   }
   while (status == LONEJSON_STATUS_OK) {
-    rc = cai_history_read_record_length(&reader, &item_length, &have_record,
-                                        error);
+    rc = cai_history_read_record_length(&scratch->reader, &item_length,
+                                        &have_record, error);
     if (rc != CAI_OK) {
       status = LONEJSON_STATUS_CALLBACK_FAILED;
       break;
@@ -3365,7 +3392,7 @@ static int cai_history_to_array_spool(cai_session *session,
       break;
     }
     memset(&record_reader, 0, sizeof(record_reader));
-    record_reader.records = &reader;
+    record_reader.records = &scratch->reader;
     record_reader.remaining = item_length;
     record_reader.error = error;
     status = writer.array_items_reader(
@@ -3391,6 +3418,18 @@ static int cai_history_to_array_spool(cai_session *session,
                                 json_error.message);
   }
   return CAI_OK;
+}
+
+static int cai_history_to_array_spool(cai_session *session,
+                                      lonejson_spooled *out, cai_error *error) {
+  cai_history_to_array_spool_scratch *scratch =
+      (cai_history_to_array_spool_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate history array reader");
+  rc = cai_history_to_array_spool_with_scratch(session, out, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static void cai_compaction_classifier_finish_role(
@@ -3652,12 +3691,15 @@ static int cai_compaction_record_is_user_message(cai_session *session,
   return CAI_OK;
 }
 
-static int cai_compaction_copy_history_record(cai_session *session,
-                                              cai_spooled_record_reader *reader,
-                                              unsigned long length,
-                                              lonejson_spooled *out,
-                                              cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_compaction_copy_history_record_scratch {
   unsigned char buffer[4096];
+} cai_compaction_copy_history_record_scratch;
+static int cai_compaction_copy_history_record_with_scratch(
+    cai_session *session, cai_spooled_record_reader *reader,
+    unsigned long length, lonejson_spooled *out, cai_error *error,
+    cai_compaction_copy_history_record_scratch *scratch) {
+
   unsigned long remaining;
   size_t count;
   size_t i;
@@ -3666,9 +3708,10 @@ static int cai_compaction_copy_history_record(cai_session *session,
   cai_history_init_spooled(session, out);
   remaining = length;
   while (remaining > 0UL) {
-    count = remaining > sizeof(buffer) ? sizeof(buffer) : (size_t)remaining;
+    count = remaining > sizeof(scratch->buffer) ? sizeof(scratch->buffer)
+                                                : (size_t)remaining;
     for (i = 0U; i < count; i++) {
-      rc = cai_spooled_record_reader_next(reader, &buffer[i], error);
+      rc = cai_spooled_record_reader_next(reader, &scratch->buffer[i], error);
       if (rc <= 0) {
         out->cleanup(out);
         return rc < 0 ? (error != NULL ? error->code : CAI_ERR_TRANSPORT)
@@ -3676,7 +3719,7 @@ static int cai_compaction_copy_history_record(cai_session *session,
                                       "truncated compaction history record");
       }
     }
-    rc = cai_history_append_bytes(out, buffer, count, error);
+    rc = cai_history_append_bytes(out, scratch->buffer, count, error);
     if (rc != CAI_OK) {
       out->cleanup(out);
       return rc;
@@ -3684,6 +3727,24 @@ static int cai_compaction_copy_history_record(cai_session *session,
     remaining -= (unsigned long)count;
   }
   return CAI_OK;
+}
+
+static int cai_compaction_copy_history_record(cai_session *session,
+                                              cai_spooled_record_reader *reader,
+                                              unsigned long length,
+                                              lonejson_spooled *out,
+                                              cai_error *error) {
+  cai_compaction_copy_history_record_scratch *scratch =
+      (cai_compaction_copy_history_record_scratch *)cai_alloc(NULL,
+                                                              sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate history record copy buffer");
+  rc = cai_compaction_copy_history_record_with_scratch(session, reader, length,
+                                                       out, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static void
@@ -3737,10 +3798,15 @@ static int cai_compaction_retained_records_append(
   return CAI_OK;
 }
 
-static int cai_compaction_collect_retained_user_records(
-    cai_session *session, cai_compaction_retained_record **out_records,
-    size_t *out_count, cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_compaction_collect_retained_user_records_scratch {
   cai_spooled_record_reader reader;
+} cai_compaction_collect_retained_user_records_scratch;
+static int cai_compaction_collect_retained_user_records_with_scratch(
+    cai_session *session, cai_compaction_retained_record **out_records,
+    size_t *out_count, cai_error *error,
+    cai_compaction_collect_retained_user_records_scratch *scratch) {
+
   cai_compaction_retained_record *records;
   lonejson_spooled record;
   unsigned long length;
@@ -3757,8 +3823,8 @@ static int cai_compaction_collect_retained_user_records(
   }
   *out_records = NULL;
   *out_count = 0U;
-  memset(&reader, 0, sizeof(reader));
-  reader.cursor = CAI_SESSION_IMPL(session)->history;
+  memset(&scratch->reader, 0, sizeof(scratch->reader));
+  scratch->reader.cursor = CAI_SESSION_IMPL(session)->history;
   records = NULL;
   count = 0U;
   capacity = 0U;
@@ -3766,7 +3832,7 @@ static int cai_compaction_collect_retained_user_records(
   {
     lonejson_error json_error;
     lonejson_error_init(&json_error);
-    if (reader.cursor.rewind(&reader.cursor, &json_error) !=
+    if (scratch->reader.cursor.rewind(&scratch->reader.cursor, &json_error) !=
         LONEJSON_STATUS_OK) {
       return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
                                   "failed to rewind compaction history",
@@ -3775,13 +3841,14 @@ static int cai_compaction_collect_retained_user_records(
   }
   rc = CAI_OK;
   while (rc == CAI_OK) {
-    rc = cai_history_read_record_length(&reader, &length, &have_record, error);
+    rc = cai_history_read_record_length(&scratch->reader, &length, &have_record,
+                                        error);
     if (rc != CAI_OK || !have_record) {
       break;
     }
     memset(&record, 0, sizeof(record));
-    rc = cai_compaction_copy_history_record(session, &reader, length, &record,
-                                            error);
+    rc = cai_compaction_copy_history_record(session, &scratch->reader, length,
+                                            &record, error);
     if (rc == CAI_OK) {
       rc = cai_compaction_record_is_user_message(session, &record, &is_user,
                                                  error);
@@ -3801,6 +3868,22 @@ static int cai_compaction_collect_retained_user_records(
   *out_records = records;
   *out_count = count;
   return CAI_OK;
+}
+
+static int cai_compaction_collect_retained_user_records(
+    cai_session *session, cai_compaction_retained_record **out_records,
+    size_t *out_count, cai_error *error) {
+  cai_compaction_collect_retained_user_records_scratch *scratch =
+      (cai_compaction_collect_retained_user_records_scratch *)cai_alloc(
+          NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate retained history reader");
+  rc = cai_compaction_collect_retained_user_records_with_scratch(
+      session, out_records, out_count, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 static int cai_session_prepare_history_params(
@@ -4157,12 +4240,17 @@ static int cai_session_history_record_identity(
  * Rebuild the request from that durable history, replacing each matching safe
  * output with its request-only typed counterpart (such as view_image's data
  * URL). This keeps one output per call in the provider input. */
-static int cai_session_refresh_history_input_preserving_transient(
-    cai_session *session, cai_response_create_params *params,
-    cai_error *error) {
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_session_refresh_history_input_preserving_transient_scratch {
   cai_spooled_record_reader reader;
   cai_history_record_json_reader record_reader;
   cai_history_item_identity identity;
+} cai_session_refresh_history_input_preserving_transient_scratch;
+static int cai_session_refresh_history_input_preserving_transient_with_scratch(
+    cai_session *session, cai_response_create_params *params, cai_error *error,
+    cai_session_refresh_history_input_preserving_transient_scratch *scratch) {
+
   cai_history_sink_context sink_context;
   lonejson_spooled filtered_history;
   lonejson_spooled item;
@@ -4206,14 +4294,15 @@ static int cai_session_refresh_history_input_preserving_transient(
                          "failed to reconcile continuation tool outputs");
   }
   memset(has_call, 0, output_count);
-  reader.cursor = CAI_SESSION_IMPL(session)->history;
-  reader.offset = 0U;
-  reader.length = 0U;
-  reader.eof = 0;
+  scratch->reader.cursor = CAI_SESSION_IMPL(session)->history;
+  scratch->reader.offset = 0U;
+  scratch->reader.length = 0U;
+  scratch->reader.eof = 0;
   memset(&writer, 0, sizeof(writer));
   memset(&json_error, 0, sizeof(json_error));
   lonejson_error_init(&json_error);
-  if (reader.cursor.rewind(&reader.cursor, &json_error) != LONEJSON_STATUS_OK) {
+  if (scratch->reader.cursor.rewind(&scratch->reader.cursor, &json_error) !=
+      LONEJSON_STATUS_OK) {
     cai_free_mem(NULL, has_call);
     return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
                                 "failed to rewind continuation history",
@@ -4231,14 +4320,14 @@ static int cai_session_refresh_history_input_preserving_transient(
     cai_spooled_record_reader identity_reader;
     size_t index;
 
-    rc = cai_history_read_record_length(&reader, &item_length, &have_record,
-                                        error);
+    rc = cai_history_read_record_length(&scratch->reader, &item_length,
+                                        &have_record, error);
     if (rc != CAI_OK || !have_record) {
       break;
     }
     memset(&item, 0, sizeof(item));
-    rc = cai_compaction_copy_history_record(session, &reader, item_length,
-                                            &item, error);
+    rc = cai_compaction_copy_history_record(session, &scratch->reader,
+                                            item_length, &item, error);
     memset(&identity_reader, 0, sizeof(identity_reader));
     identity_reader.cursor = item;
     if (rc == CAI_OK &&
@@ -4249,22 +4338,24 @@ static int cai_session_refresh_history_input_preserving_transient(
                                 json_error.message);
     }
     if (rc == CAI_OK) {
-      rc = cai_session_history_record_identity(session, &identity_reader,
-                                               item_length, &identity, error);
+      rc = cai_session_history_record_identity(
+          session, &identity_reader, item_length, &scratch->identity, error);
     }
     skip_item = 0;
-    if (rc == CAI_OK && identity.has_type && identity.has_call_id) {
-      if (cai_session_params_tool_output_index(params, identity.type,
-                                               identity.call_id, &index)) {
+    if (rc == CAI_OK && scratch->identity.has_type &&
+        scratch->identity.has_call_id) {
+      if (cai_session_params_tool_output_index(params, scratch->identity.type,
+                                               scratch->identity.call_id,
+                                               &index)) {
         skip_item = 1;
-      } else if ((strcmp(identity.type, "function_call") == 0 &&
+      } else if ((strcmp(scratch->identity.type, "function_call") == 0 &&
                   cai_session_params_tool_output_index(
-                      params, "function_call_output", identity.call_id,
+                      params, "function_call_output", scratch->identity.call_id,
                       &index)) ||
-                 (strcmp(identity.type, "custom_tool_call") == 0 &&
+                 (strcmp(scratch->identity.type, "custom_tool_call") == 0 &&
                   cai_session_params_tool_output_index(
-                      params, "custom_tool_call_output", identity.call_id,
-                      &index))) {
+                      params, "custom_tool_call_output",
+                      scratch->identity.call_id, &index))) {
         has_call[index] = 1U;
       }
     }
@@ -4277,16 +4368,17 @@ static int cai_session_refresh_history_input_preserving_transient(
                                   "failed to rewind continuation history item",
                                   json_error.message);
       }
-      memset(&record_reader, 0, sizeof(record_reader));
-      record_reader.records = &identity_reader;
-      record_reader.remaining = item_length;
-      record_reader.error = error;
+      memset(&scratch->record_reader, 0, sizeof(scratch->record_reader));
+      scratch->record_reader.records = &identity_reader;
+      scratch->record_reader.remaining = item_length;
+      scratch->record_reader.error = error;
       if (rc == CAI_OK) {
         status =
             writer.array_items_reader(&writer, "", cai_history_record_json_read,
-                                      &record_reader, &json_error);
+                                      &scratch->record_reader, &json_error);
       }
-      if (status == LONEJSON_STATUS_OK && record_reader.remaining != 0UL) {
+      if (status == LONEJSON_STATUS_OK &&
+          scratch->record_reader.remaining != 0UL) {
         status = LONEJSON_STATUS_CALLBACK_FAILED;
       }
     }
@@ -4341,6 +4433,24 @@ static int cai_session_refresh_history_input_preserving_transient(
   if (rc != CAI_OK) {
     filtered_history.cleanup(&filtered_history);
   }
+  return rc;
+}
+
+static int cai_session_refresh_history_input_preserving_transient(
+    cai_session *session, cai_response_create_params *params,
+    cai_error *error) {
+  cai_session_refresh_history_input_preserving_transient_scratch *scratch =
+      (cai_session_refresh_history_input_preserving_transient_scratch *)
+          cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(
+        error, CAI_ERR_NOMEM,
+        "allocate cai_session_refresh_history_input_preserving_transient "
+        "scratch");
+  rc = cai_session_refresh_history_input_preserving_transient_with_scratch(
+      session, params, error, scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 
@@ -4984,9 +5094,15 @@ static int cai_chat_summarize_fragment(cai_session *session,
 /** Keep complete recent turns under an 8k-token approximate budget, starting
  * at a user message so tool calls and their results stay together. Older
  * records feed the summary in their original order. */
-static int cai_chat_split_history(cai_session *session, lonejson_spooled *head,
-                                  lonejson_spooled *tail, cai_error *error) {
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_chat_split_history_scratch {
   cai_spooled_record_reader reader;
+} cai_chat_split_history_scratch;
+static int cai_chat_split_history_with_scratch(
+    cai_session *session, lonejson_spooled *head, lonejson_spooled *tail,
+    cai_error *error, cai_chat_split_history_scratch *scratch) {
+
   lonejson_spooled record;
   cai_history_sink_context sink_context;
   size_t *lengths = NULL;
@@ -5016,22 +5132,24 @@ static int cai_chat_split_history(cai_session *session, lonejson_spooled *head,
       tail_limit = quarter < 32768U ? quarter : 32768U;
     }
   }
-  memset(&reader, 0, sizeof(reader));
-  reader.cursor = CAI_SESSION_IMPL(session)->history;
+  memset(&scratch->reader, 0, sizeof(scratch->reader));
+  scratch->reader.cursor = CAI_SESSION_IMPL(session)->history;
   lonejson_error_init(&json_error);
-  if (reader.cursor.rewind(&reader.cursor, &json_error) != LONEJSON_STATUS_OK) {
+  if (scratch->reader.cursor.rewind(&scratch->reader.cursor, &json_error) !=
+      LONEJSON_STATUS_OK) {
     rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
                               "failed to rewind Chat Completions history",
                               json_error.message);
     goto done;
   }
   while (rc == CAI_OK) {
-    rc = cai_history_read_record_length(&reader, &length, &have_record, error);
+    rc = cai_history_read_record_length(&scratch->reader, &length, &have_record,
+                                        error);
     if (rc != CAI_OK || !have_record)
       break;
     memset(&record, 0, sizeof(record));
-    rc = cai_compaction_copy_history_record(session, &reader, length, &record,
-                                            error);
+    rc = cai_compaction_copy_history_record(session, &scratch->reader, length,
+                                            &record, error);
     if (rc == CAI_OK) {
       rc = cai_compaction_record_is_user_message(session, &record, &is_user,
                                                  error);
@@ -5083,9 +5201,9 @@ static int cai_chat_split_history(cai_session *session, lonejson_spooled *head,
   if (start == 0U)
     start = count;
   if (rc == CAI_OK) {
-    memset(&reader, 0, sizeof(reader));
-    reader.cursor = CAI_SESSION_IMPL(session)->history;
-    if (reader.cursor.rewind(&reader.cursor, &json_error) !=
+    memset(&scratch->reader, 0, sizeof(scratch->reader));
+    scratch->reader.cursor = CAI_SESSION_IMPL(session)->history;
+    if (scratch->reader.cursor.rewind(&scratch->reader.cursor, &json_error) !=
         LONEJSON_STATUS_OK) {
       rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
                                 "failed to rewind Chat Completions history",
@@ -5093,7 +5211,8 @@ static int cai_chat_split_history(cai_session *session, lonejson_spooled *head,
     }
   }
   for (i = 0U; rc == CAI_OK && i < count; i++) {
-    rc = cai_history_read_record_length(&reader, &length, &have_record, error);
+    rc = cai_history_read_record_length(&scratch->reader, &length, &have_record,
+                                        error);
     if (rc != CAI_OK || !have_record) {
       if (rc == CAI_OK)
         rc = cai_set_error(error, CAI_ERR_PROTOCOL,
@@ -5101,8 +5220,8 @@ static int cai_chat_split_history(cai_session *session, lonejson_spooled *head,
       break;
     }
     memset(&record, 0, sizeof(record));
-    rc = cai_compaction_copy_history_record(session, &reader, length, &record,
-                                            error);
+    rc = cai_compaction_copy_history_record(session, &scratch->reader, length,
+                                            &record, error);
     if (rc == CAI_OK && i < start) {
       sink_context.spool = head;
       if (record.write_to_sink(&record, cai_history_lonejson_sink,
@@ -5130,10 +5249,20 @@ done:
   return rc;
 }
 
-static int cai_session_compact_chat(cai_session *session,
-                                    const cai_stream_sinks *caller_sinks,
-                                    cai_error *error) {
-  cai_spooled_record_reader reader;
+static int cai_chat_split_history(cai_session *session, lonejson_spooled *head,
+                                  lonejson_spooled *tail, cai_error *error) {
+  cai_chat_split_history_scratch *scratch =
+      (cai_chat_split_history_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate split history reader");
+  rc = cai_chat_split_history_with_scratch(session, head, tail, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_session_compact_chat_scratch {
   lonejson_spooled head;
   lonejson_spooled tail;
   lonejson_spooled fragment;
@@ -5141,8 +5270,15 @@ static int cai_session_compact_chat(cai_session *session,
   lonejson_spooled next_summary;
   lonejson_spooled next_history;
   lonejson_spooled summary_item;
-  cai_history_sink_context sink_context;
   lonejson_writer writer;
+  cai_spooled_record_reader reader;
+} cai_session_compact_chat_scratch;
+static int cai_session_compact_chat_with_scratch(
+    cai_session *session, const cai_stream_sinks *caller_sinks,
+    cai_error *error, cai_session_compact_chat_scratch *scratch) {
+
+  cai_history_sink_context sink_context;
+
   lonejson_error json_error;
   lonejson_status status;
   long long context_window;
@@ -5151,29 +5287,30 @@ static int cai_session_compact_chat(cai_session *session,
   int read_rc;
   int rc;
 
-  memset(&head, 0, sizeof(head));
-  memset(&tail, 0, sizeof(tail));
-  rc = cai_chat_split_history(session, &head, &tail, error);
+  memset(&scratch->head, 0, sizeof(scratch->head));
+  memset(&scratch->tail, 0, sizeof(scratch->tail));
+  rc = cai_chat_split_history(session, &scratch->head, &scratch->tail, error);
   if (rc != CAI_OK)
     return rc;
   has_history_split = 1;
-  memset(&reader, 0, sizeof(reader));
-  reader.cursor = head;
+  memset(&scratch->reader, 0, sizeof(scratch->reader));
+  scratch->reader.cursor = scratch->head;
   lonejson_error_init(&json_error);
-  if (reader.cursor.rewind(&reader.cursor, &json_error) != LONEJSON_STATUS_OK) {
+  if (scratch->reader.cursor.rewind(&scratch->reader.cursor, &json_error) !=
+      LONEJSON_STATUS_OK) {
     rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
                               "failed to rewind Chat Completions history",
                               json_error.message);
-    head.cleanup(&head);
-    tail.cleanup(&tail);
+    scratch->head.cleanup(&scratch->head);
+    scratch->tail.cleanup(&scratch->tail);
     return rc;
   }
   context_window =
       cai_client_model_context_window(CAI_SESSION_AGENT_IMPL(session)->client,
                                       CAI_SESSION_AGENT_IMPL(session)->model);
   if (context_window > 0LL && context_window < 1024LL) {
-    head.cleanup(&head);
-    tail.cleanup(&tail);
+    scratch->head.cleanup(&scratch->head);
+    scratch->tail.cleanup(&scratch->tail);
     return cai_set_error(error, CAI_ERR_LIMIT,
                          "model context window is too small for Chat "
                          "Completions compaction");
@@ -5182,18 +5319,18 @@ static int cai_session_compact_chat(cai_session *session,
                        ? (size_t)context_window / 4U
                    : context_window == 0LL ? 3072U
                                            : 24000U;
-  cai_history_init_spooled(session, &summary);
-  memset(&summary_item, 0, sizeof(summary_item));
-  memset(&next_history, 0, sizeof(next_history));
+  cai_history_init_spooled(session, &scratch->summary);
+  memset(&scratch->summary_item, 0, sizeof(scratch->summary_item));
+  memset(&scratch->next_history, 0, sizeof(scratch->next_history));
   read_rc = 0;
   rc = CAI_OK;
   for (;;) {
     size_t count = 0U;
     unsigned char ch;
     unsigned int utf8_remaining = 0U;
-    cai_history_init_spooled(session, &fragment);
+    cai_history_init_spooled(session, &scratch->fragment);
     while (count < fragment_limit || utf8_remaining != 0U) {
-      read_rc = cai_spooled_record_reader_next(&reader, &ch, error);
+      read_rc = cai_spooled_record_reader_next(&scratch->reader, &ch, error);
       if (read_rc <= 0)
         break;
       if (utf8_remaining > 0U) {
@@ -5205,72 +5342,79 @@ static int cai_session_compact_chat(cai_session *session,
       } else if (ch >= 0xC2U && ch <= 0xDFU) {
         utf8_remaining = 1U;
       }
-      rc = cai_history_append_bytes(&fragment, &ch, 1U, error);
+      rc = cai_history_append_bytes(&scratch->fragment, &ch, 1U, error);
       if (rc != CAI_OK)
         break;
       count++;
     }
     if (rc == CAI_OK && count > 0U) {
-      rc = cai_chat_summarize_fragment(session, &fragment, &summary,
-                                       &next_summary, caller_sinks, error);
+      rc = cai_chat_summarize_fragment(
+          session, &scratch->fragment, &scratch->summary,
+          &scratch->next_summary, caller_sinks, error);
       if (rc == CAI_OK) {
-        summary.cleanup(&summary);
-        summary = next_summary;
+        scratch->summary.cleanup(&scratch->summary);
+        scratch->summary = scratch->next_summary;
       }
     }
-    fragment.cleanup(&fragment);
+    scratch->fragment.cleanup(&scratch->fragment);
     if (rc != CAI_OK || read_rc <= 0)
       break;
   }
   if (rc == CAI_OK && read_rc < 0) {
     rc = error != NULL ? error->code : CAI_ERR_TRANSPORT;
   }
-  if (rc == CAI_OK && summary.size_fn(&summary) == 0U) {
+  if (rc == CAI_OK && scratch->summary.size_fn(&scratch->summary) == 0U) {
     rc = cai_set_error(error, CAI_ERR_INVALID,
                        "session has no Chat Completions history to compact");
   }
   if (rc == CAI_OK) {
-    cai_history_init_spooled(session, &summary_item);
-    sink_context.spool = &summary_item;
-    status = CAI_LJ->writer_init_sink(
-        CAI_LJ, &writer, cai_history_lonejson_sink, &sink_context, &json_error);
+    cai_history_init_spooled(session, &scratch->summary_item);
+    sink_context.spool = &scratch->summary_item;
+    status = CAI_LJ->writer_init_sink(CAI_LJ, &scratch->writer,
+                                      cai_history_lonejson_sink, &sink_context,
+                                      &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.begin_array(&writer, &json_error);
+      status = scratch->writer.begin_array(&scratch->writer, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.begin_object(&writer, &json_error);
+      status = scratch->writer.begin_object(&scratch->writer, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.key(&writer, "type", 4U, &json_error);
+      status = scratch->writer.key(&scratch->writer, "type", 4U, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.string(&writer, "message", 7U, &json_error);
+      status =
+          scratch->writer.string(&scratch->writer, "message", 7U, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.key(&writer, "role", 4U, &json_error);
+      status = scratch->writer.key(&scratch->writer, "role", 4U, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.string(&writer, "user", 4U, &json_error);
+      status =
+          scratch->writer.string(&scratch->writer, "user", 4U, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.key(&writer, "content", 7U, &json_error);
+      status =
+          scratch->writer.key(&scratch->writer, "content", 7U, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.begin_array(&writer, &json_error);
+      status = scratch->writer.begin_array(&scratch->writer, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.begin_object(&writer, &json_error);
+      status = scratch->writer.begin_object(&scratch->writer, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.key(&writer, "type", 4U, &json_error);
+      status = scratch->writer.key(&scratch->writer, "type", 4U, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.string(&writer, "input_text", 10U, &json_error);
+      status = scratch->writer.string(&scratch->writer, "input_text", 10U,
+                                      &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.key(&writer, "text", 4U, &json_error);
+      status = scratch->writer.key(&scratch->writer, "text", 4U, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.string_spooled(&writer, &summary, &json_error);
+      status = scratch->writer.string_spooled(&scratch->writer,
+                                              &scratch->summary, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.end_object(&writer, &json_error);
+      status = scratch->writer.end_object(&scratch->writer, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.end_array(&writer, &json_error);
+      status = scratch->writer.end_array(&scratch->writer, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.end_object(&writer, &json_error);
+      status = scratch->writer.end_object(&scratch->writer, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.end_array(&writer, &json_error);
+      status = scratch->writer.end_array(&scratch->writer, &json_error);
     if (status == LONEJSON_STATUS_OK)
-      status = writer.finish(&writer, &json_error);
-    writer.cleanup(&writer);
+      status = scratch->writer.finish(&scratch->writer, &json_error);
+    scratch->writer.cleanup(&scratch->writer);
     if (status != LONEJSON_STATUS_OK) {
       rc = cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to build Chat Completions summary item",
@@ -5278,13 +5422,14 @@ static int cai_session_compact_chat(cai_session *session,
     }
   }
   if (rc == CAI_OK) {
-    cai_history_init_spooled(session, &next_history);
-    rc = cai_history_append_array_record_to_spool(session, &next_history,
-                                                  &summary_item, error);
-    if (rc == CAI_OK && tail.size_fn(&tail) > 0U) {
-      sink_context.spool = &next_history;
-      if (tail.write_to_sink(&tail, cai_history_lonejson_sink, &sink_context,
-                             &json_error) != LONEJSON_STATUS_OK) {
+    cai_history_init_spooled(session, &scratch->next_history);
+    rc = cai_history_append_array_record_to_spool(
+        session, &scratch->next_history, &scratch->summary_item, error);
+    if (rc == CAI_OK && scratch->tail.size_fn(&scratch->tail) > 0U) {
+      sink_context.spool = &scratch->next_history;
+      if (scratch->tail.write_to_sink(&scratch->tail, cai_history_lonejson_sink,
+                                      &sink_context,
+                                      &json_error) != LONEJSON_STATUS_OK) {
         rc = cai_set_error_detail(
             error, CAI_ERR_TRANSPORT,
             "failed to retain recent Chat Completions turns",
@@ -5297,34 +5442,54 @@ static int cai_session_compact_chat(cai_session *session,
           caller_sinks->compaction_progress_context, error);
     }
     if (rc == CAI_OK) {
-      cai_history_replace(session, &next_history);
+      cai_history_replace(session, &scratch->next_history);
       cai_session_history_compacted(session);
       cai_session_forget_context_usage(session);
     } else {
-      next_history.cleanup(&next_history);
+      scratch->next_history.cleanup(&scratch->next_history);
     }
   }
-  if (summary_item.cleanup != NULL)
-    summary_item.cleanup(&summary_item);
-  summary.cleanup(&summary);
+  if (scratch->summary_item.cleanup != NULL)
+    scratch->summary_item.cleanup(&scratch->summary_item);
+  scratch->summary.cleanup(&scratch->summary);
   if (has_history_split) {
-    head.cleanup(&head);
-    tail.cleanup(&tail);
+    scratch->head.cleanup(&scratch->head);
+    scratch->tail.cleanup(&scratch->tail);
   }
   return rc;
 }
 
-int cai_session_compact_with_sinks(cai_session *session,
-                                   const cai_stream_sinks *caller_sinks,
-                                   cai_error *error) {
-  cai_response_create_params *params;
+static int cai_session_compact_chat(cai_session *session,
+                                    const cai_stream_sinks *caller_sinks,
+                                    cai_error *error) {
+  cai_session_compact_chat_scratch *scratch =
+      (cai_session_compact_chat_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_session_compact_chat scratch");
+  rc = cai_session_compact_chat_with_scratch(session, caller_sinks, error,
+                                             scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
+}
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_session_compact_with_sinks_scratch {
   lonejson_spooled history_items;
   lonejson_spooled request_input;
   lonejson_spooled next_history;
   lonejson_spooled item_array;
   cai_compaction_capture capture;
-  cai_compaction_retained_record *retained_records;
   cai_stream_sinks sinks;
+} cai_session_compact_with_sinks_scratch;
+static int cai_session_compact_with_sinks_with_scratch(
+    cai_session *session, const cai_stream_sinks *caller_sinks,
+    cai_error *error, cai_session_compact_with_sinks_scratch *scratch) {
+  cai_response_create_params *params;
+
+  cai_compaction_retained_record *retained_records;
+
   char *response_id;
   cai_token_usage usage;
   size_t retained_record_count;
@@ -5336,13 +5501,13 @@ int cai_session_compact_with_sinks(cai_session *session,
   int rc;
 
   params = NULL;
-  memset(&history_items, 0, sizeof(history_items));
-  memset(&request_input, 0, sizeof(request_input));
-  memset(&next_history, 0, sizeof(next_history));
-  memset(&item_array, 0, sizeof(item_array));
-  memset(&capture, 0, sizeof(capture));
+  memset(&scratch->history_items, 0, sizeof(scratch->history_items));
+  memset(&scratch->request_input, 0, sizeof(scratch->request_input));
+  memset(&scratch->next_history, 0, sizeof(scratch->next_history));
+  memset(&scratch->item_array, 0, sizeof(scratch->item_array));
+  memset(&scratch->capture, 0, sizeof(scratch->capture));
   retained_records = NULL;
-  cai_stream_sinks_init(&sinks);
+  cai_stream_sinks_init(&scratch->sinks);
   response_id = NULL;
   memset(&usage, 0, sizeof(usage));
   has_history_items = 0;
@@ -5382,7 +5547,7 @@ int cai_session_compact_with_sinks(cai_session *session,
     return cai_set_error(error, CAI_ERR_INVALID,
                          "commit pending inputs before compacting a session");
   }
-  rc = cai_history_to_array_spool(session, &history_items, error);
+  rc = cai_history_to_array_spool(session, &scratch->history_items, error);
   if (rc == CAI_OK) {
     has_history_items = 1;
   }
@@ -5393,8 +5558,8 @@ int cai_session_compact_with_sinks(cai_session *session,
     goto done;
   }
   if (rc == CAI_OK) {
-    rc = cai_session_compaction_input_spool(session, &history_items,
-                                            &request_input, error);
+    rc = cai_session_compaction_input_spool(session, &scratch->history_items,
+                                            &scratch->request_input, error);
     if (rc == CAI_OK) {
       has_request_input = 1;
     }
@@ -5410,7 +5575,7 @@ int cai_session_compact_with_sinks(cai_session *session,
   }
   if (rc == CAI_OK) {
     rc = cai_response_create_params_set_raw_input_spooled(
-        params, &request_input, error);
+        params, &scratch->request_input, error);
     if (rc == CAI_OK) {
       has_request_input = 0;
     }
@@ -5419,22 +5584,24 @@ int cai_session_compact_with_sinks(cai_session *session,
     rc = cai_session_check_usage_available(session, error);
   }
   if (rc == CAI_OK) {
-    capture.session = session;
-    sinks.output_item_done = cai_session_compaction_capture_item;
-    sinks.output_item_context = &capture;
+    scratch->capture.session = session;
+    scratch->sinks.output_item_done = cai_session_compaction_capture_item;
+    scratch->sinks.output_item_context = &scratch->capture;
     if (caller_sinks != NULL) {
-      sinks.compaction_progress = caller_sinks->compaction_progress;
-      sinks.compaction_progress_context =
+      scratch->sinks.compaction_progress = caller_sinks->compaction_progress;
+      scratch->sinks.compaction_progress_context =
           caller_sinks->compaction_progress_context;
     }
-    sinks.response_completed = cai_session_compaction_capture_completed;
-    sinks.response_completed_context = &capture;
+    scratch->sinks.response_completed =
+        cai_session_compaction_capture_completed;
+    scratch->sinks.response_completed_context = &scratch->capture;
     rc = cai_client_stream_response_with_id(
-        CAI_SESSION_AGENT_IMPL(session)->client, params, &sinks, &response_id,
-        &usage, error);
+        CAI_SESSION_AGENT_IMPL(session)->client, params, &scratch->sinks,
+        &response_id, &usage, error);
   }
   if (rc == CAI_OK &&
-      (!capture.completed || !capture.has_item || capture.item_count != 1U)) {
+      (!scratch->capture.completed || !scratch->capture.has_item ||
+       scratch->capture.item_count != 1U)) {
     rc = cai_set_error(error, CAI_ERR_PROTOCOL,
                        "compaction stream did not complete with one item");
   }
@@ -5443,43 +5610,43 @@ int cai_session_compact_with_sinks(cai_session *session,
         session, &retained_records, &retained_record_count, error);
   }
   if (rc == CAI_OK) {
-    cai_history_init_spooled(session, &next_history);
+    cai_history_init_spooled(session, &scratch->next_history);
     has_next_history = 1;
     for (i = 0U; rc == CAI_OK && i < retained_record_count; i++) {
       rc = cai_history_append_array_record_to_spool(
-          session, &next_history, &retained_records[i].json, error);
+          session, &scratch->next_history, &retained_records[i].json, error);
     }
   }
   if (rc == CAI_OK) {
-    cai_history_init_spooled(session, &item_array);
+    cai_history_init_spooled(session, &scratch->item_array);
     has_item_array = 1;
-    rc = cai_history_append_bytes(&item_array, "[", 1U, error);
+    rc = cai_history_append_bytes(&scratch->item_array, "[", 1U, error);
     if (rc == CAI_OK) {
       cai_history_sink_context sink_context;
       lonejson_error json_error;
-      sink_context.spool = &item_array;
+      sink_context.spool = &scratch->item_array;
       lonejson_error_init(&json_error);
-      if (capture.item.write_to_sink(&capture.item, cai_history_lonejson_sink,
-                                     &sink_context,
-                                     &json_error) != LONEJSON_STATUS_OK) {
+      if (scratch->capture.item.write_to_sink(
+              &scratch->capture.item, cai_history_lonejson_sink, &sink_context,
+              &json_error) != LONEJSON_STATUS_OK) {
         rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
                                   "failed to build compacted history",
                                   json_error.message);
       }
     }
     if (rc == CAI_OK) {
-      rc = cai_history_append_bytes(&item_array, "]", 1U, error);
+      rc = cai_history_append_bytes(&scratch->item_array, "]", 1U, error);
     }
     if (rc == CAI_OK) {
-      rc = cai_history_append_array_record_to_spool(session, &next_history,
-                                                    &item_array, error);
+      rc = cai_history_append_array_record_to_spool(
+          session, &scratch->next_history, &scratch->item_array, error);
     }
   }
   if (rc == CAI_OK) {
     rc = cai_session_remember_stream(session, response_id, &usage, error);
   }
   if (rc == CAI_OK) {
-    cai_history_replace(session, &next_history);
+    cai_history_replace(session, &scratch->next_history);
     cai_session_history_compacted(session);
     has_next_history = 0;
     /* The compaction response usage bills the complete history sent to make
@@ -5491,23 +5658,39 @@ int cai_session_compact_with_sinks(cai_session *session,
 done:
   cai_response_create_params_destroy(params);
   if (has_history_items) {
-    history_items.cleanup(&history_items);
+    scratch->history_items.cleanup(&scratch->history_items);
   }
   if (has_request_input) {
-    request_input.cleanup(&request_input);
+    scratch->request_input.cleanup(&scratch->request_input);
   }
   if (has_next_history) {
-    next_history.cleanup(&next_history);
+    scratch->next_history.cleanup(&scratch->next_history);
   }
   if (has_item_array) {
-    item_array.cleanup(&item_array);
+    scratch->item_array.cleanup(&scratch->item_array);
   }
-  if (capture.has_item) {
-    capture.item.cleanup(&capture.item);
+  if (scratch->capture.has_item) {
+    scratch->capture.item.cleanup(&scratch->capture.item);
   }
   cai_compaction_retained_records_cleanup(retained_records,
                                           retained_record_count);
   cai_free_mem(NULL, response_id);
+  return rc;
+}
+
+int cai_session_compact_with_sinks(cai_session *session,
+                                   const cai_stream_sinks *caller_sinks,
+                                   cai_error *error) {
+  cai_session_compact_with_sinks_scratch *scratch =
+      (cai_session_compact_with_sinks_scratch *)cai_alloc(NULL,
+                                                          sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate session compaction scratch");
+  rc = cai_session_compact_with_sinks_with_scratch(session, caller_sinks, error,
+                                                   scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 
@@ -7525,14 +7708,17 @@ cai_history_spooled_reader(void *user, unsigned char *buffer, size_t capacity) {
   return context->cursor.read(&context->cursor, buffer, capacity);
 }
 
-static int cai_history_source_to_array_spooled(cai_session *session,
-                                               cai_source *source,
-                                               lonejson_spooled *out,
-                                               cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_history_source_to_array_spooled_scratch {
+  unsigned char buffer[4096];
+} cai_history_source_to_array_spooled_scratch;
+static int cai_history_source_to_array_spooled_with_scratch(
+    cai_session *session, cai_source *source, lonejson_spooled *out,
+    cai_error *error, cai_history_source_to_array_spooled_scratch *scratch) {
   lonejson_spooled raw;
   lonejson_spooled compact;
   lonejson_error json_error;
-  unsigned char buffer[4096];
+
   size_t nread;
   int has_raw;
   int has_compact;
@@ -7552,7 +7738,8 @@ static int cai_history_source_to_array_spooled(cai_session *session,
   has_raw = 1;
   for (;;) {
     previous_error_code = error != NULL ? error->code : CAI_OK;
-    nread = cai_source_read(source, buffer, sizeof(buffer), error);
+    nread = cai_source_read(source, scratch->buffer, sizeof(scratch->buffer),
+                            error);
     if (nread == 0U && error != NULL && error->code != previous_error_code &&
         error->code != CAI_OK) {
       rc = error->code;
@@ -7562,7 +7749,8 @@ static int cai_history_source_to_array_spooled(cai_session *session,
       break;
     }
     lonejson_error_init(&json_error);
-    if (raw.append(&raw, buffer, nread, &json_error) != LONEJSON_STATUS_OK) {
+    if (raw.append(&raw, scratch->buffer, nread, &json_error) !=
+        LONEJSON_STATUS_OK) {
       rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
                                 "failed to append imported history",
                                 json_error.message);
@@ -7593,6 +7781,22 @@ done:
   if (has_compact) {
     compact.cleanup(&compact);
   }
+  return rc;
+}
+
+static int cai_history_source_to_array_spooled(cai_session *session,
+                                               cai_source *source,
+                                               lonejson_spooled *out,
+                                               cai_error *error) {
+  cai_history_source_to_array_spooled_scratch *scratch =
+      (cai_history_source_to_array_spooled_scratch *)cai_alloc(
+          NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM, "allocate history input buffer");
+  rc = cai_history_source_to_array_spooled_with_scratch(session, source, out,
+                                                        error, scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 

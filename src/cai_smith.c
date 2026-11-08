@@ -751,13 +751,17 @@ cai_smith_load_global_instruction_store(const cai_allocator *allocator,
                                           out, error);
 }
 
-static int cai_smith_load_repository_instructions(
-    const cai_allocator *allocator, const cai_agent_preset_config *config,
-    pslog_logger *logger, char **out, cai_agent_instruction_status *status,
-    cai_error *error) {
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_smith_load_repository_instructions_scratch {
   char resolved[PATH_MAX];
   char workspace_path[PATH_MAX];
   char canonical_workspace[PATH_MAX];
+} cai_smith_load_repository_instructions_scratch;
+static int cai_smith_load_repository_instructions_with_scratch(
+    const cai_allocator *allocator, const cai_agent_preset_config *config,
+    pslog_logger *logger, char **out, cai_agent_instruction_status *status,
+    cai_error *error, cai_smith_load_repository_instructions_scratch *scratch) {
+
   char *global_path;
   char *global_part;
   char *hierarchy;
@@ -870,14 +874,17 @@ static int cai_smith_load_repository_instructions(
   }
   if (config->workspace_instructions_root == NULL)
     return CAI_OK;
-  if (realpath(config->workspace_instructions_root, resolved) == NULL ||
-      realpath(config->workspace_directory, canonical_workspace) == NULL)
+  if (realpath(config->workspace_instructions_root, scratch->resolved) ==
+          NULL ||
+      realpath(config->workspace_directory, scratch->canonical_workspace) ==
+          NULL)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "workspace instruction approval root must exist");
-  root_length = strlen(resolved);
-  if (strncmp(resolved, canonical_workspace, root_length) != 0 ||
-      (root_length != 1U && canonical_workspace[root_length] != '\0' &&
-       canonical_workspace[root_length] != '/'))
+  root_length = strlen(scratch->resolved);
+  if (strncmp(scratch->resolved, scratch->canonical_workspace, root_length) !=
+          0 ||
+      (root_length != 1U && scratch->canonical_workspace[root_length] != '\0' &&
+       scratch->canonical_workspace[root_length] != '/'))
     return cai_set_error(error, CAI_ERR_INVALID,
                          "workspace is outside its instruction approval root");
   if (!config->codex_compat_agents_md) {
@@ -889,16 +896,18 @@ static int cai_smith_load_repository_instructions(
     cai_free_mem(allocator, part);
     return rc;
   }
-  if (realpath(config->workspace_directory, canonical_workspace) == NULL) {
+  if (realpath(config->workspace_directory, scratch->canonical_workspace) ==
+      NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
                          "Smith workspace directory must exist");
   }
-  if (strlen(canonical_workspace) >= sizeof(resolved)) {
+  if (strlen(scratch->canonical_workspace) >= sizeof(scratch->resolved)) {
     return cai_set_error(error, CAI_ERR_INVALID,
                          "Smith workspace path is too long");
   }
-  memcpy(resolved, canonical_workspace, strlen(canonical_workspace) + 1U);
-  cursor = resolved;
+  memcpy(scratch->resolved, scratch->canonical_workspace,
+         strlen(scratch->canonical_workspace) + 1U);
+  cursor = scratch->resolved;
   for (;;) {
     dir_fd = open(cursor, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (dir_fd < 0) {
@@ -919,7 +928,7 @@ static int cai_smith_load_repository_instructions(
   }
   if (!rc) {
     rc = cai_smith_load_workspace_instruction_file(
-        allocator, canonical_workspace, &part, error);
+        allocator, scratch->canonical_workspace, &part, error);
     status->repository_agents_md_count = part != NULL && part[0] != '\0';
     if (rc == CAI_OK) {
       rc = cai_smith_append_instructions(allocator, out, part, 0, error);
@@ -927,8 +936,9 @@ static int cai_smith_load_repository_instructions(
     cai_free_mem(allocator, part);
     return rc;
   }
-  memcpy(workspace_path, canonical_workspace, strlen(canonical_workspace) + 1U);
-  cursor = workspace_path;
+  memcpy(scratch->workspace_path, scratch->canonical_workspace,
+         strlen(scratch->canonical_workspace) + 1U);
+  cursor = scratch->workspace_path;
   for (;;) {
     char *workspace_part;
 
@@ -944,7 +954,7 @@ static int cai_smith_load_repository_instructions(
                                          1, error);
     }
     cai_free_mem(allocator, workspace_part);
-    if (rc != CAI_OK || strcmp(cursor, resolved) == 0) {
+    if (rc != CAI_OK || strcmp(cursor, scratch->resolved) == 0) {
       break;
     }
     part = strrchr(cursor, '/');
@@ -960,6 +970,24 @@ static int cai_smith_load_repository_instructions(
   }
   rc = cai_smith_append_instructions(allocator, out, hierarchy, 0, error);
   cai_free_mem(allocator, hierarchy);
+  return rc;
+}
+
+static int cai_smith_load_repository_instructions(
+    const cai_allocator *allocator, const cai_agent_preset_config *config,
+    pslog_logger *logger, char **out, cai_agent_instruction_status *status,
+    cai_error *error) {
+  cai_smith_load_repository_instructions_scratch *scratch =
+      (cai_smith_load_repository_instructions_scratch *)cai_alloc(
+          NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(
+        error, CAI_ERR_NOMEM,
+        "allocate cai_smith_load_repository_instructions scratch");
+  rc = cai_smith_load_repository_instructions_with_scratch(
+      allocator, config, logger, out, status, error, scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 

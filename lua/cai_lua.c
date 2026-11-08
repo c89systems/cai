@@ -6062,7 +6062,7 @@ static int cai_lua_agent_runtime_export_markdown_file(lua_State *L) {
   cai_lua_agent_runtime *self;
   const char *app_name;
   const char *path;
-  char exported_path[8192];
+  char *exported_path;
   cai_error error;
   int rc;
 
@@ -6070,9 +6070,10 @@ static int cai_lua_agent_runtime_export_markdown_file(lua_State *L) {
   app_name = lua_isnoneornil(L, 2) ? NULL : luaL_checkstring(L, 2);
   path = lua_isnoneornil(L, 3) ? NULL : luaL_checkstring(L, 3);
   cai_error_init(&error);
+  exported_path = lua_newuserdatauv(L, 8192U, 0);
   cai_lua_agent_runtime_enter(self);
-  rc = cai_agent_runtime_export_markdown_file(
-      self->ptr, app_name, path, exported_path, sizeof(exported_path), &error);
+  rc = cai_agent_runtime_export_markdown_file(self->ptr, app_name, path,
+                                              exported_path, 8192U, &error);
   cai_lua_agent_runtime_leave(self);
   if (rc != CAI_OK) {
     return cai_lua_fail(L, rc, &error);

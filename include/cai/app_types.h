@@ -139,9 +139,9 @@ typedef struct cai_app_config {
   const char *clipboard_directory;
   const char *log_directory;
   const char *pouch_key_file;
-  /** Optional raw interactive banner, written verbatim before terminal
-   * renderers start. Defaults to NULL; the host supplies all newlines and ANSI
-   * escapes. */
+  /** Optional raw interactive banner, written verbatim after the welcome and
+   * before attachment/replay. Defaults to NULL; the host supplies all newlines
+   * and ANSI escapes. --no-banner suppresses all startup text. */
   const char *banner;
   /** Optional interactive introduction rendered through libmdf before session
    * replay. Defaults to NULL. Neither startup text is shown by help, utilities,

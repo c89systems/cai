@@ -163,10 +163,18 @@ int cai_chrome_native_host_setup(const char *override, int remove,
   return cai_chrome_native_host_setup_named("cai", override, remove, logger,
                                             error);
 }
-static int chrome_registration(const char *program_name, const char *override,
-                               int remove, pslog_logger *logger,
-                               cai_error *error) {
+
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct chrome_registration_scratch {
   char manifest_path[4096], executable[4096], leaf[200], temporary[200];
+  char contents[16385];
+} chrome_registration_scratch;
+static int
+chrome_registration_with_scratch(const char *program_name, const char *override,
+                                 int remove, pslog_logger *logger,
+                                 cai_error *error,
+                                 chrome_registration_scratch *scratch) {
+
   char description[96];
   const char *root;
   const char *suffix;
@@ -174,7 +182,7 @@ static int chrome_registration(const char *program_name, const char *override,
   int parent, fd, rc = CAI_OK;
   struct stat st, current;
   chrome_manifest existing, wanted;
-  char contents[16385];
+
   char *json = NULL;
   lonejson_error je;
   size_t used = 0U, length, offset, i;
@@ -192,21 +200,22 @@ static int chrome_registration(const char *program_name, const char *override,
   memset(&existing, 0, sizeof(existing));
   memset(&wanted, 0, sizeof(wanted));
   lonejson_error_init(&je);
-  n = readlink("/proc/self/exe", executable, sizeof(executable) - 1U);
-  if (n < 0 || (size_t)n >= sizeof(executable) - 1U)
+  n = readlink("/proc/self/exe", scratch->executable,
+               sizeof(scratch->executable) - 1U);
+  if (n < 0 || (size_t)n >= sizeof(scratch->executable) - 1U)
     return cai_set_error(
         error, CAI_ERR_TRANSPORT,
         "Cannot resolve the application executable for Chrome registration");
-  executable[n] = '\0';
-  if (strstr(executable, " (deleted)") != NULL)
+  scratch->executable[n] = '\0';
+  if (strstr(scratch->executable, " (deleted)") != NULL)
     return cai_set_error(
         error, CAI_ERR_INVALID,
         "Reinstall this application before registering its deleted executable");
   if (override != NULL) {
-    if (strlen(override) >= sizeof(manifest_path))
+    if (strlen(override) >= sizeof(scratch->manifest_path))
       return cai_set_error(error, CAI_ERR_INVALID,
                            "Chrome manifest path is too long");
-    strcpy(manifest_path, override);
+    strcpy(scratch->manifest_path, override);
   } else {
     root = getenv("CHROME_CONFIG_HOME");
     suffix = "/google-chrome/NativeMessagingHosts/" HOST_NAME ".json";
@@ -217,14 +226,15 @@ static int chrome_registration(const char *program_name, const char *override,
       suffix = "/.config/google-chrome/NativeMessagingHosts/" HOST_NAME ".json";
     }
     if (root == NULL || root[0] != '/' ||
-        snprintf(manifest_path, sizeof(manifest_path), "%s%s", root, suffix) >=
-            (int)sizeof(manifest_path))
+        snprintf(scratch->manifest_path, sizeof(scratch->manifest_path), "%s%s",
+                 root, suffix) >= (int)sizeof(scratch->manifest_path))
       return cai_set_error(error, CAI_ERR_INVALID,
                            "Chrome manifest requires an absolute config home");
   }
-  parent = open_parent(manifest_path, !remove, leaf, sizeof(leaf), error);
+  parent = open_parent(scratch->manifest_path, !remove, scratch->leaf,
+                       sizeof(scratch->leaf), error);
   if (parent == -2 && remove) {
-    printf("No Chrome registration at %s\n", manifest_path);
+    printf("No Chrome registration at %s\n", scratch->manifest_path);
     return CAI_OK;
   }
   if (parent < 0)
@@ -235,13 +245,14 @@ static int chrome_registration(const char *program_name, const char *override,
         error, CAI_ERR_INVALID,
         "Chrome native-host directory must not be writable by others");
   }
-  if (strcmp(leaf, HOST_NAME ".json") != 0) {
+  if (strcmp(scratch->leaf, HOST_NAME ".json") != 0) {
     close(parent);
     return cai_set_error(
         error, CAI_ERR_INVALID,
         "Chrome manifest must be named com.openai.codexextension.json");
   }
-  fd = openat(parent, leaf, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+  fd = openat(parent, scratch->leaf,
+              O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
   if (fd >= 0) {
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != geteuid() ||
         (st.st_mode & 022U) || st.st_size > 16384) {
@@ -250,20 +261,22 @@ static int chrome_registration(const char *program_name, const char *override,
       return cai_set_error_detail(
           error, CAI_ERR_INVALID,
           "Chrome host registration is unsafe; it was left unchanged",
-          manifest_path);
+          scratch->manifest_path);
     }
-    while (used < sizeof(contents) - 1U &&
-           (n = read(fd, contents + used, sizeof(contents) - 1U - used)) > 0)
+    while (used < sizeof(scratch->contents) - 1U &&
+           (n = read(fd, scratch->contents + used,
+                     sizeof(scratch->contents) - 1U - used)) > 0)
       used += (size_t)n;
     close(fd);
-    contents[used] = '\0';
+    scratch->contents[used] = '\0';
     if (n < 0 ||
         CAI_LJ_CHROME->parse_cstr(CAI_LJ_CHROME, &manifest_map, &existing,
-                                  contents, &je) != LONEJSON_STATUS_OK ||
+                                  scratch->contents,
+                                  &je) != LONEJSON_STATUS_OK ||
         existing.name == NULL || existing.path == NULL ||
         existing.type == NULL || existing.description == NULL ||
         strcmp(existing.name, HOST_NAME) != 0 ||
-        strcmp(existing.path, executable) != 0 ||
+        strcmp(existing.path, scratch->executable) != 0 ||
         strcmp(existing.type, "stdio") != 0 ||
         strcmp(existing.description, description) != 0 ||
         existing.allowed_origins.count != 1U ||
@@ -276,25 +289,26 @@ static int chrome_registration(const char *program_name, const char *override,
           "%s%s%s. The application will not overwrite or remove it. Keep this "
           "registration, or deliberately remove it before running "
           "--chrome-setup.",
-          manifest_path, existing.path != NULL ? " points to " : "",
+          scratch->manifest_path, existing.path != NULL ? " points to " : "",
           existing.path != NULL ? existing.path : "");
       rc = cai_set_error_detail(
           error, CAI_ERR_INVALID,
           "Another or unrecognized Chrome native host is registered", detail);
     } else if (remove) {
       /* Refuse a concurrent replacement between validation and unlink. */
-      if (fstatat(parent, leaf, &current, AT_SYMLINK_NOFOLLOW) != 0 ||
+      if (fstatat(parent, scratch->leaf, &current, AT_SYMLINK_NOFOLLOW) != 0 ||
           current.st_ino != st.st_ino || current.st_dev != st.st_dev ||
-          unlinkat(parent, leaf, 0) != 0)
+          unlinkat(parent, scratch->leaf, 0) != 0)
         rc = cai_set_error(error, CAI_ERR_TRANSPORT,
                            "Chrome registration changed during removal; "
                            "inspect it before retrying");
       else {
         (void)fsync(parent);
-        printf("Removed CAI Chrome registration: %s\n", manifest_path);
+        printf("Removed CAI Chrome registration: %s\n", scratch->manifest_path);
       }
     } else
-      printf("CAI Chrome registration already installed: %s\n", manifest_path);
+      printf("CAI Chrome registration already installed: %s\n",
+             scratch->manifest_path);
     CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &manifest_map, &existing);
   } else if (errno != ENOENT) {
     rc = cai_set_error_detail(
@@ -302,7 +316,7 @@ static int chrome_registration(const char *program_name, const char *override,
         "Cannot inspect Chrome registration; it was left unchanged",
         strerror(errno));
   } else if (remove) {
-    printf("No Chrome registration at %s\n", manifest_path);
+    printf("No Chrome registration at %s\n", scratch->manifest_path);
   } else {
     static const char *const system_paths[] = {
         "/etc/opt/chrome/native-messaging-hosts/" HOST_NAME ".json",
@@ -322,7 +336,7 @@ static int chrome_registration(const char *program_name, const char *override,
     }
     wanted.name = HOST_NAME;
     wanted.description = description;
-    wanted.path = executable;
+    wanted.path = scratch->executable;
     wanted.type = "stdio";
     wanted.allowed_origins.items = origins;
     wanted.allowed_origins.count = 1U;
@@ -333,9 +347,9 @@ static int chrome_registration(const char *program_name, const char *override,
     else {
       /* Publish only after a complete fsynced write, without replacing a
        * competing installer. */
-      snprintf(temporary, sizeof(temporary), ".%s-chrome-%ld.tmp", program_name,
-               (long)getpid());
-      fd = openat(parent, temporary,
+      snprintf(scratch->temporary, sizeof(scratch->temporary),
+               ".%s-chrome-%ld.tmp", program_name, (long)getpid());
+      fd = openat(parent, scratch->temporary,
                   O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
       if (fd < 0)
         rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
@@ -361,17 +375,18 @@ static int chrome_registration(const char *program_name, const char *override,
           rc = cai_set_error(error, CAI_ERR_TRANSPORT,
                              "Cannot sync Chrome registration");
         close(fd);
-        if (rc == CAI_OK && linkat(parent, temporary, parent, leaf, 0) != 0)
+        if (rc == CAI_OK &&
+            linkat(parent, scratch->temporary, parent, scratch->leaf, 0) != 0)
           rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
                                     "Another installer created the Chrome "
                                     "registration; it was left unchanged",
                                     strerror(errno));
-        (void)unlinkat(parent, temporary, 0);
+        (void)unlinkat(parent, scratch->temporary, 0);
         if (rc == CAI_OK) {
           (void)fsync(parent);
           printf("Installed %s Chrome registration: %s\nOpen the ChatGPT "
                  "extension in Chrome, then run %s --chrome.\n",
-                 program_name, manifest_path, program_name);
+                 program_name, scratch->manifest_path, program_name);
         }
       }
     }
@@ -380,7 +395,23 @@ static int chrome_registration(const char *program_name, const char *override,
   close(parent);
   if (logger != NULL)
     logger->debugf(logger, "Chrome registration command finished",
-                   "path=%s remove=%b result=%d", manifest_path, remove, rc);
+                   "path=%s remove=%b result=%d", scratch->manifest_path,
+                   remove, rc);
+  return rc;
+}
+
+static int chrome_registration(const char *program_name, const char *override,
+                               int remove, pslog_logger *logger,
+                               cai_error *error) {
+  chrome_registration_scratch *scratch =
+      (chrome_registration_scratch *)cai_alloc(NULL, sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate chrome_registration scratch");
+  rc = chrome_registration_with_scratch(program_name, override, remove, logger,
+                                        error, scratch);
+  cai_free_mem(NULL, scratch);
   return rc;
 }
 

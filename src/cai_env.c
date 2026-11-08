@@ -128,12 +128,16 @@ static int cai_parse_env_value(const cai_allocator *allocator, const char *key,
   return CAI_OK;
 }
 
-static int cai_load_dotenv_api_key_internal(const cai_allocator *allocator,
-                                            const char *dotenv_path,
-                                            const char *env_name, char **out,
-                                            cai_error *error) {
-  FILE *fp;
+/** Per-invocation scratch belongs to the heap, including callback reentry. */
+typedef struct cai_load_dotenv_api_key_internal_scratch {
   char line[CAI_ENV_LINE_LIMIT];
+} cai_load_dotenv_api_key_internal_scratch;
+static int cai_load_dotenv_api_key_internal_with_scratch(
+    const cai_allocator *allocator, const char *dotenv_path,
+    const char *env_name, char **out, cai_error *error,
+    cai_load_dotenv_api_key_internal_scratch *scratch) {
+  FILE *fp;
+
   const char *value_start;
 
   if (dotenv_path == NULL || dotenv_path[0] == '\0') {
@@ -143,13 +147,13 @@ static int cai_load_dotenv_api_key_internal(const cai_allocator *allocator,
   if (fp == NULL) {
     return CAI_ERR_CANCELLED;
   }
-  while (fgets(line, sizeof(line), fp) != NULL) {
-    if (strchr(line, '\n') == NULL && !feof(fp)) {
+  while (fgets(scratch->line, sizeof(scratch->line), fp) != NULL) {
+    if (strchr(scratch->line, '\n') == NULL && !feof(fp)) {
       fclose(fp);
       return cai_set_error(error, CAI_ERR_INVALID,
                            "dotenv file contains an overlong line");
     }
-    if (cai_key_matches(line, env_name, &value_start)) {
+    if (cai_key_matches(scratch->line, env_name, &value_start)) {
       fclose(fp);
       return cai_parse_env_value(allocator, env_name, value_start, out, error);
     }
@@ -162,6 +166,23 @@ static int cai_load_dotenv_api_key_internal(const cai_allocator *allocator,
              env_name);
     return cai_set_error(error, CAI_ERR_INVALID, message);
   }
+}
+
+static int cai_load_dotenv_api_key_internal(const cai_allocator *allocator,
+                                            const char *dotenv_path,
+                                            const char *env_name, char **out,
+                                            cai_error *error) {
+  cai_load_dotenv_api_key_internal_scratch *scratch =
+      (cai_load_dotenv_api_key_internal_scratch *)cai_alloc(NULL,
+                                                            sizeof(*scratch));
+  int rc;
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate cai_load_dotenv_api_key_internal scratch");
+  rc = cai_load_dotenv_api_key_internal_with_scratch(
+      allocator, dotenv_path, env_name, out, error, scratch);
+  cai_free_mem(NULL, scratch);
+  return rc;
 }
 
 int cai_resolve_api_key(const cai_allocator *allocator,

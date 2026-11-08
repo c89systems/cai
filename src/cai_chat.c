@@ -207,7 +207,7 @@ static lonejson_status cai_chat_text_chunks(lonejson_writer *writer,
   lonejson_spooled cursor;
   lonejson_read_result read_result;
   lonejson_status status;
-  unsigned char buffer[8192];
+  unsigned char buffer[2048];
 
   if (spool == NULL || spool->read == NULL) {
     return LONEJSON_STATUS_OK;
@@ -1508,7 +1508,7 @@ static int cai_chat_emit_glm_content(cai_chat_stream_state *state,
   lonejson_spooled visible;
   lonejson_read_result read_result;
   lonejson_error json_error;
-  unsigned char buffer[8192];
+  unsigned char buffer[2048];
   size_t i;
   int rc;
 
@@ -1605,7 +1605,7 @@ static int cai_chat_tool_append(cai_chat_tool_state *tool,
   lonejson_spooled cursor;
   lonejson_read_result result;
   lonejson_error json_error;
-  unsigned char buffer[8192];
+  unsigned char buffer[2048];
 
   cursor = *fragment;
   lonejson_error_init(&json_error);
