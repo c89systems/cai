@@ -91,6 +91,9 @@ void cai_cli_transcript_frame_borrow(cai_cli_transcript_frame *frame) {
   frame->event.collection = frame->collection;
   frame->event.reason = frame->reason;
   frame->event.data = frame->data;
+  frame->event.call_id = frame->call_id[0] != '\0' ? frame->call_id : NULL;
+  frame->event.terminal_id =
+      frame->terminal_id[0] != '\0' ? frame->terminal_id : NULL;
 }
 static void frame_copy(cai_cli_transcript_frame *out,
                        const cai_transcript_event *e) {
@@ -103,6 +106,8 @@ static void frame_copy(cai_cli_transcript_frame *out,
   COPY(session);
   COPY(collection);
   COPY(reason);
+  COPY(call_id);
+  COPY(terminal_id);
 #undef COPY
   if (e->length != 0U)
     memcpy(out->data, e->data, e->length);
@@ -776,6 +781,44 @@ void cai_cli_transcript_feed_drain(cai_cli_transcript_publisher *f) {
   drain(f);
   pthread_mutex_unlock(&f->lock);
 }
+int cai_cli_transcript_feed_terminal(cai_cli_transcript_publisher *f,
+                                     const cai_agent_runtime_event *event,
+                                     cai_error *error) {
+  size_t i;
+  if (event == NULL || event->runtime_session_id == NULL ||
+      event->tool_call_id == NULL || event->terminal_id == NULL ||
+      event->terminal_command_id == 0U || event->data == NULL ||
+      event->data_length == 0U ||
+      event->data_length > CAI_CLI_TRANSCRIPT_CHUNK ||
+      event->data_length > UINT64_MAX - event->terminal_output_offset)
+    return cai_cli_error(error, CAI_ERR_INVALID, "invalid live terminal span");
+  if (f == NULL)
+    return CAI_OK;
+  pthread_mutex_lock(&f->lock);
+  for (i = 0U; i < PEERS; ++i) {
+    subscriber *s = &f->peers[i];
+    cai_transcript_event e;
+    if (!s->active || !s->prepared || s->replaying || s->catchup ||
+        s->live == NULL || s->live->count == FRAMES)
+      continue;
+    memset(&e, 0, sizeof(e));
+    e.kind = CAI_TRANSCRIPT_TERMINAL_OUTPUT;
+    e.stream = s->stream;
+    e.conversation = f->conversation;
+    e.sequence = event->terminal_command_id;
+    e.session = event->runtime_session_id;
+    e.call_id = event->tool_call_id;
+    e.terminal_id = event->terminal_id;
+    e.offset = event->terminal_output_offset;
+    e.data = event->data;
+    e.length = event->data_length;
+    push(s->live, &e);
+    wake(f);
+  }
+  pthread_mutex_unlock(&f->lock);
+  return CAI_OK;
+}
+
 int cai_cli_transcript_feed_shell(cai_cli_transcript_publisher *f,
                                   uint64_t guard, uint64_t sequence,
                                   uint64_t offset, const void *bytes,

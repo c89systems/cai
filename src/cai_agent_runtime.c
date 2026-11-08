@@ -675,6 +675,7 @@ struct cai_agent_runtime {
   cai_terminal_event_fn terminal_event_callback;
   void *terminal_event_context;
   char *terminal_origin_tool_call_id;
+  unsigned long long terminal_output_offset;
   char *terminal_pending_tool_call_id;
   char *smith_identity;
   char *smith_model;
@@ -1759,6 +1760,17 @@ static int cai_runtime_enqueue_terminal_locked(cai_agent_runtime *runtime,
                            "failed to copy agent runtime terminal id");
     }
     node->event.terminal_id = node->terminal_id;
+    if (type == CAI_AGENT_EVENT_TERMINAL_COMMAND_STARTED)
+      runtime->terminal_output_offset = 0U;
+    if (type == CAI_AGENT_EVENT_TERMINAL_OUTPUT) {
+      if (event->output_length > ULLONG_MAX - runtime->terminal_output_offset) {
+        cai_runtime_event_node_free(node);
+        return cai_set_error(error, CAI_ERR_LIMIT,
+                             "terminal output offset overflow");
+      }
+      node->event.terminal_output_offset = runtime->terminal_output_offset;
+      runtime->terminal_output_offset += event->output_length;
+    }
     node->event.terminal_command_id = event->command_id;
     node->event.terminal_has_exit_code = event->has_exit_code;
     node->event.terminal_exit_code = event->exit_code;
@@ -7542,6 +7554,7 @@ int cai_agent_runtime_open(cai_client *client,
     return rc;
   }
   cai_smith_config_init(&smith);
+  smith.environment = CAI_CLIENT_IMPL(client)->environment;
   smith.workspace_directory = config->workspace_directory;
   smith.workspace_instructions_root =
       config->insecure ? config->workspace_directory

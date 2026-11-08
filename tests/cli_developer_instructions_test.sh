@@ -63,6 +63,17 @@ head -c 1048577 /dev/zero >"$work/large.md"
 run -z large.md -d "$root/large"; bad
 [[ $(requests) == 0 ]]
 
+# Offline export reconstructs the configured policy, including literal base,
+# additions and identity, without opening an inference runtime.
+plan '{"plan":["EXPORT POLICY TURN"]}'
+run --config "$root/cfg/config.ini" -Nni 'export policy' -I EXPORT_ADDITION --identity 'Export Agent'; ok
+export_id=$(current_session_id)
+before=$(requests)
+run --config "$root/cfg/config.ini" --export "$export_id" --export-out "$root/policy.md" -I EXPORT_ADDITION --identity 'Export Agent'; ok
+contains "$root/policy.md" 'CONFIG AGENT'
+contains "$root/policy.md" EXPORT_ADDITION
+[[ $(requests) == "$before" ]]
+
 # Parent-only CLI replacement survives model resolution but cannot enter an
 # isolated reviewer, which uses the preconfigured reviewer default instead.
 report=$(jq -c . "$support/fixtures/review.json")

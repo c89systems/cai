@@ -30,6 +30,15 @@ there is no sizing serialization or complete-event accumulator.
 | STREAM_END | `[position, length]` |
 | REPLAY_END | `[watermark]` |
 | SUBSCRIPTION_ERROR | `[failure, code, reason]` |
+| TERMINAL_OUTPUT | `[source_session, call_id, terminal_id, offset, bytes]` |
+
+`TERMINAL_OUTPUT` carries best-effort live command progress between complete durable events.
+Its envelope sequence is the terminal command ID; call and terminal IDs are bounded to 256 bytes.
+Offsets count the retained command-output bytes, independently of raw-byte totals that include omitted data.
+It uses the same subscription and bounded socket queues, advances no journal/replay cursor, and creates no stored copy of output.
+Slow or catching-up peers skip these spans and recover through the ordinary durable tool result.
+Command results include `output_offset` before `output`; the terminal merges these byte ranges to avoid repeating bytes already displayed live, including when the result reaches the client before an ephemeral span.
+Replay and export read only the durable results and therefore retain the full command presentation.
 
 SUBSCRIBE uses a fresh, strictly increasing, nonzero request ID per attachment
 and stream zero. It names the active persistent session explicitly; conversation

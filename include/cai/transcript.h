@@ -20,7 +20,13 @@ typedef enum cai_transcript_kind {
   /** Contiguous live output completed at offset, before the saved tail.
    * No data and no durable position. Absent if live delivery was interrupted.
    */
-  CAI_TRANSCRIPT_SHELL_OUTPUT_END
+  CAI_TRANSCRIPT_SHELL_OUTPUT_END,
+  /** Best-effort command-tool bytes, scoped by source session/call/terminal.
+   * sequence is the terminal command ID; offset counts retained command bytes.
+   * No durable position or replay cursor is advanced. Gaps recover through the
+   * ordinary saved tool result, whose output_offset identifies the byte range.
+   */
+  CAI_TRANSCRIPT_TERMINAL_OUTPUT
 } cai_transcript_kind;
 typedef enum cai_transcript_failure {
   CAI_TRANSCRIPT_FAILED = 0,
@@ -36,10 +42,11 @@ typedef enum cai_transcript_failure {
  * records, while retaining the last event sequence. ERROR aborts
  * partial rendering and requires explicit synchronization; it never resubmits
  * model input. Replay and durable live events use the same shapes and
- * identities. SHELL_OUTPUT/SHELL_OUTPUT_END are the explicit live-only
- * exception: ordered bounded raw spans, anchored to the shell-start sequence,
- * without a durable position. They never advance a cursor and are absent from
- * replay/export. */
+ * identities. SHELL_OUTPUT/SHELL_OUTPUT_END and TERMINAL_OUTPUT are live-only
+ * exceptions: ordered bounded spans, without a durable position. Shell spans
+ * are anchored to the shell-start sequence; tool spans identify the source
+ * runtime/call/command. They never advance a cursor and are absent from
+ * replay/export, which use retained shell tails and command results. */
 typedef struct cai_transcript_event {
   cai_transcript_kind kind;
   uint64_t stream, conversation, sequence, timestamp_ns, position, offset,
@@ -49,6 +56,8 @@ typedef struct cai_transcript_event {
   uint64_t omitted;
   int64_t utc_offset_seconds;
   const char *session, *collection, *type;
+  /** Present only on TERMINAL_OUTPUT, borrowed for this callback. */
+  const char *call_id, *terminal_id;
   const void *data;
   size_t length;
   int has_data, code;

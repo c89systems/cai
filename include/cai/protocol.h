@@ -48,7 +48,10 @@ typedef enum cai_protocol_kind {
   CAI_PROTOCOL_USER_SHELL,
   /** Ephemeral backend shell output, ordered within its presentation stream. */
   CAI_PROTOCOL_SHELL_OUTPUT,
-  CAI_PROTOCOL_SHELL_OUTPUT_END
+  CAI_PROTOCOL_SHELL_OUTPUT_END,
+  /** Ephemeral command-tool output; durable results remain the replay source.
+   */
+  CAI_PROTOCOL_TERMINAL_OUTPUT
 } cai_protocol_kind;
 /** Each record is a definite eight-pair map, with ascending integer keys:
  * 0 kind, 1 request, 2 conversation, 3 generation, 4 sequence, 5 stream,

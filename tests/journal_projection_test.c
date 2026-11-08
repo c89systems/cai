@@ -696,7 +696,7 @@ static int markdown_project(fixture *f, cai_cli_pouch *pouch,
   rc = cai_cli_journal_view_open(&f->collection, NULL, &view, &error);
   if (rc == CAI_OK)
     rc = cai_cli_markdown_export(view, pouch, session, session->workspace, NULL,
-                                 &sink, &error);
+                                 NULL, &sink, &error);
   cai_cli_journal_view_close(view);
   cai_error_cleanup(&error);
   bounded = 0;

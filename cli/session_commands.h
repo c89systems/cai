@@ -37,15 +37,16 @@ int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
                            const char *workspace, const char *export_directory,
                            const char *basename,
                            const cai_handover_config *active_handover,
-                           cai_sink *destination, cai_error *error);
+                           const cai_cli_options *, cai_sink *destination,
+                           cai_error *error);
 /** Bounded owner-side admission. Pins metadata/receiver and captures the native
- * prefix without traversing payloads. Caller keeps the store alive through
- * close. */
+ * prefix without traversing payloads. Instruction settings are copied; their
+ * immutable strings/environment and the store must outlive close. */
 typedef struct cai_cli_export cai_cli_export;
 int cai_cli_export_prepare(cai_cli_pouch *, const char *id,
                            const char *workspace, const char *directory,
                            const char *basename, cai_cli_export **,
-                           cai_error *);
+                           const cai_cli_options *, cai_error *);
 /** One serialized run on any thread. The immutable header and callback context
  * remain borrowed. Destination receives only the bounded output path listing.
  */

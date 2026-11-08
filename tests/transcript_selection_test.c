@@ -233,6 +233,33 @@ static void join_unowned_response(void) {
          result.text_bytes == 14U);
   cai_transcript_selection_close(selection);
 }
+static void retry_cases(void) {
+  size_t fragment;
+  for (fragment = 1U; fragment <= 34U; ++fragment) {
+    stream s;
+    cai_transcript_selection *selection = NULL;
+    cai_transcript_selection_result result;
+    const char *owner = fragment <= 17U ? work : NULL;
+    base(&s);
+    s.fragment = (fragment - 1U) % 17U + 1U;
+    assert(cai_transcript_selection_open(&s.at, owner, &selection, NULL) ==
+           CAI_OK);
+    s.event = cai_transcript_selection_event;
+    s.context = selection;
+    if (owner != NULL)
+      execution(&s, "turn.started", owner, "parent", 0);
+    assert(emit(&s, "assistant_text_delta", "STALE", 5U) == CAI_OK);
+    execution(&s, "request.failed", NULL, "parent", CAI_ERR_TRANSPORT);
+    execution(&s, "request.retry", NULL, "parent", 0);
+    assert(emit(&s, "assistant_text_delta", "FINAL ONLY", 10U) == CAI_OK);
+    execution(&s, "response.completed", owner, "parent", 0);
+    execution(&s, "turn.completed", owner, "parent", 0);
+    assert(cai_transcript_selection_get(selection, &result, NULL) == CAI_OK);
+    assert(result.state == CAI_TRANSCRIPT_WORK_COMPLETED &&
+           result.text_bytes == 10U);
+    cai_transcript_selection_close(selection);
+  }
+}
 static void terminal_cases(void) {
   int mode;
   for (mode = 0; mode < 6; ++mode) {
@@ -561,6 +588,7 @@ static void *worker(void *unused) {
     last_response(i, "native-goal-start");
   }
   terminal_cases();
+  retry_cases();
   unowned_turn();
   join_unowned_response();
   large_response();

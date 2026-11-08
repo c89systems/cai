@@ -35,7 +35,7 @@ if [[ "$scope" == host ]]; then
   absent "$term/text" PROMPT00; absent "$term/text" ANSWER00
   terminal_close
   [[ $(grep -c ' assistant_text_delta$' "$root/replay-events") == 1 ]]
-  contains "$root/replay-events" turn_submitted
+  contains "$root/replay-events" turn_queued
   terminal_start --resume "$original" --replay-turns 1
   expect ANSWER00; expect PARTB
   terminal_close

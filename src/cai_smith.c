@@ -1,3 +1,4 @@
+#include <cai/environment.h>
 #include <cai/smith.h>
 #include <cai/tools/patch.h>
 #include <cai/tools/read.h>
@@ -567,8 +568,10 @@ static int cai_smith_append_instructions(const cai_allocator *allocator,
   return CAI_OK;
 }
 
-static int cai_smith_default_config_directory(const cai_allocator *allocator,
-                                              char **out, cai_error *error) {
+static int
+cai_smith_default_config_directory(const cai_allocator *allocator,
+                                   const cai_environment *environment,
+                                   char **out, cai_error *error) {
   const char *base;
   const char *suffix;
   size_t base_length;
@@ -579,10 +582,13 @@ static int cai_smith_default_config_directory(const cai_allocator *allocator,
                          "agent config directory output is required");
   }
   *out = NULL;
-  base = getenv("XDG_CONFIG_HOME");
+  base = environment != NULL
+             ? cai_environment_get(environment, "XDG_CONFIG_HOME")
+             : getenv("XDG_CONFIG_HOME");
   suffix = "/cai";
   if (base == NULL || base[0] != '/') {
-    base = getenv("HOME");
+    base = environment != NULL ? cai_environment_get(environment, "HOME")
+                               : getenv("HOME");
     suffix = "/.config/cai";
   }
   if (base == NULL || base[0] != '/') {
@@ -610,21 +616,23 @@ static int cai_smith_load_global_instruction_file(
     const cai_allocator *allocator, const char *path, char **out,
     pslog_logger *logger, const char *kind, cai_error *error);
 
-static int
-cai_smith_load_codex_global_instructions(const cai_allocator *allocator,
-                                         char **out, pslog_logger *logger,
-                                         cai_error *error) {
+static int cai_smith_load_codex_global_instructions(
+    const cai_allocator *allocator, const cai_environment *environment,
+    char **out, pslog_logger *logger, cai_error *error) {
   const char *codex_home;
   const char *home;
   char path[PATH_MAX];
   int length;
 
   *out = NULL;
-  codex_home = getenv("CODEX_HOME");
+  codex_home = environment != NULL
+                   ? cai_environment_get(environment, "CODEX_HOME")
+                   : getenv("CODEX_HOME");
   if (codex_home != NULL && codex_home[0] != '\0') {
     length = snprintf(path, sizeof(path), "%s/AGENTS.md", codex_home);
   } else {
-    home = getenv("HOME");
+    home = environment != NULL ? cai_environment_get(environment, "HOME")
+                               : getenv("HOME");
     if (home == NULL || home[0] == '\0')
       return CAI_OK;
     length = snprintf(path, sizeof(path), "%s/.codex/AGENTS.md", home);
@@ -796,7 +804,8 @@ static int cai_smith_load_repository_instructions(
     } else {
       configured_directory = config->agent_config_directory;
       if (configured_directory == NULL || configured_directory[0] == '\0') {
-        rc = cai_smith_default_config_directory(allocator, &global_path, error);
+        rc = cai_smith_default_config_directory(allocator, config->environment,
+                                                &global_path, error);
       } else {
         size_t length = strlen(configured_directory);
         global_path =
@@ -844,8 +853,8 @@ static int cai_smith_load_repository_instructions(
   if (rc != CAI_OK)
     return rc;
   if (config->codex_compat_agents_md) {
-    rc = cai_smith_load_codex_global_instructions(allocator, &part, logger,
-                                                  error);
+    rc = cai_smith_load_codex_global_instructions(
+        allocator, config->environment, &part, logger, error);
     status->codex_agents_md_loaded = part != NULL && part[0] != '\0';
     if (rc == CAI_OK)
       rc = cai_smith_append_instructions(allocator, out, part, 0, error);
@@ -1098,6 +1107,7 @@ int cai_client_new_preset_agent(cai_client *client,
                                 const cai_agent_preset_config *config,
                                 cai_agent **out, cai_error *error) {
   cai_client_impl *client_impl;
+  cai_agent_preset_config effective;
   cai_agent_config agent_config;
   cai_agent_instruction_status instruction_status;
   cai_read_tool_config read_config;
@@ -1123,6 +1133,12 @@ int cai_client_new_preset_agent(cai_client *client,
   client_impl = CAI_CLIENT_IMPL(client);
   if (client_impl == NULL)
     return cai_set_error(error, CAI_ERR_INVALID, "client is closed");
+  if (config != NULL) {
+    effective = *config;
+    if (effective.environment == NULL)
+      effective.environment = client_impl->environment;
+    config = &effective;
+  }
   instructions = NULL;
   rc = cai_smith_prepare_instruction_inputs(
       &client_impl->allocator,
@@ -1370,6 +1386,7 @@ int cai_client_new_preset_review_agent(cai_client *client,
                                        const cai_agent_preset_config *config,
                                        cai_agent **out, cai_error *error) {
   cai_client_impl *client_impl;
+  cai_agent_preset_config effective;
   cai_agent_config agent_config;
   cai_agent_instruction_status instruction_status;
   cai_read_tool_config read_config;
@@ -1420,6 +1437,10 @@ int cai_client_new_preset_review_agent(cai_client *client,
   if (client_impl == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID, "client is closed");
   }
+  effective = *config;
+  if (effective.environment == NULL)
+    effective.environment = client_impl->environment;
+  config = &effective;
   instructions = NULL;
   review_schema = NULL;
   repository_instructions = NULL;

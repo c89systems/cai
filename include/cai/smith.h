@@ -136,6 +136,11 @@ void cai_agent_preset_from_smith(cai_agent_preset *preset);
 
 /** Generic per-runtime settings used with a cai_agent_preset. */
 typedef struct cai_agent_preset_config {
+  /** Immutable instruction-discovery environment, borrowed for construction.
+   * NULL uses the client's captured environment in client constructors, or the
+   * process environment for runtime-free preparation. Never modifies environ.
+   */
+  const cai_environment *environment;
   /** Canonical workspace root used to constrain local file tools. */
   const char *workspace_directory;
   /** Host-authorized instruction root. NULL disables automatic workspace and

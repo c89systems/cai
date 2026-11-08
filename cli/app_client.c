@@ -200,6 +200,7 @@ static int receive(void *context, const cai_protocol_event *event,
       event->header->kind == CAI_PROTOCOL_STREAM_END ||
       event->header->kind == CAI_PROTOCOL_SHELL_OUTPUT ||
       event->header->kind == CAI_PROTOCOL_SHELL_OUTPUT_END ||
+      event->header->kind == CAI_PROTOCOL_TERMINAL_OUTPUT ||
       event->header->kind == CAI_PROTOCOL_SUBSCRIPTION_ERROR)
     return event->header->request == client->history_stream &&
                    client->history_stream != 0U
@@ -607,6 +608,12 @@ static int receive_transcript(cai_app_client *c,
         e->length > UINT64_MAX - c->output_offset)
       return cai_cli_error(error, CAI_ERR_PROTOCOL, reason);
     break;
+  case CAI_TRANSCRIPT_TERMINAL_OUTPUT:
+    if (!s->active || s->replaying || c->event_open ||
+        e->conversation != s->conversation ||
+        e->length > UINT64_MAX - e->offset)
+      return cai_cli_error(error, CAI_ERR_PROTOCOL, reason);
+    break;
   case CAI_TRANSCRIPT_REPLAY_END:
     if (!s->active || !s->replaying || c->event_open ||
         e->conversation != s->conversation || e->watermark != s->watermark)
@@ -715,6 +722,8 @@ static int receive_history(cai_app_client *c, const cai_protocol_event *event,
   case CAI_TRANSCRIPT_SHELL_OUTPUT:
   case CAI_TRANSCRIPT_SHELL_OUTPUT_END:
     return invalid(error); /* Ephemeral output is never prompt recall. */
+  case CAI_TRANSCRIPT_TERMINAL_OUTPUT:
+    return invalid(error);
   }
   rc =
       c->config.prompt_history != NULL

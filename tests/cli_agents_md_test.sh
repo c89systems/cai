@@ -92,22 +92,46 @@ json "$root/request" '.model == "gpt-6-astra"'
 contains "$root/instructions" CODEX_CUSTOM_MARKER
 # Every startup records resolved paths, rather than relying on a model's claim
 # that it saw an instruction. No configuration comes from the conversation.
-contains "$root/stderr" 'Global AGENTS.md loaded'
-contains "$root/stderr" "$root/custom-codex/AGENTS.md"
+logs
+contains "$root/logs.jsonl" 'Global AGENTS.md loaded'
+contains "$root/logs.jsonl" "$root/custom-codex/AGENTS.md"
+# Explicit configuration precedence includes a conflicting inherited directory
+# and the HOME fallback when CODEX_HOME is explicitly emptied.
+export CODEX_HOME="$root/.codex"
+write_config true
+sed -i '1i config_env_has_precedence = true' "$config"
+printf '[env]\nCODEX_HOME = "%s"\n' "$root/custom-codex" >>"$config"
+turn -ni 'configured Codex home wins over the process'
+contains "$root/instructions" CODEX_CUSTOM_MARKER
+absent "$root/instructions" CODEX_UPDATED_MARKER
+mkdir -p "$root/configured-home/.codex"
+printf 'CONFIGURED_HOME_FALLBACK\n' >"$root/configured-home/.codex/AGENTS.md"
+write_config true
+sed -i '1i config_env_has_precedence = true' "$config"
+printf '[env]\nCODEX_HOME = ""\nHOME = "%s"\n' "$root/configured-home" >>"$config"
+turn -ni 'configured HOME supplies the empty Codex home fallback'
+contains "$root/instructions" CONFIGURED_HOME_FALLBACK
+absent "$root/instructions" CODEX_UPDATED_MARKER
+[[ "$HOME" == "$root" && "$CODEX_HOME" == "$root/.codex" ]]
+unset CODEX_HOME
+write_config true
+printf '[env]\nCODEX_HOME = "%s"\n' "$root/custom-codex" >>"$config"
 # The interactive /resume path reopens the runtime with current startup
 # settings and freshly reads instruction files. Editing config.ini alone is
 # deliberately not a live configuration reload.
 plan "$(jq -n --argjson chat "$([[ "$protocol" == chat_completions ]] && printf true || printf false)" '{chat:$chat,plan:["InteractiveAgentsDone"]}')"
+original=$(current_session_id)
 terminal_start
 printf 'CODEX_INTERACTIVE_MARKER\n' >"$root/custom-codex/AGENTS.md"
 write_config false
+send '/new\r'; expect 'New session'
 send '/resume\r'; expect 'resume'
-send '/resume 1\r'; expect 'restore the saved model and current instructions AGENTS TURN DONE'
+send "/resume $original\r"; expect 'AGENTS TURN DONE'
 prompt 'check instructions after manual resume' InteractiveAgentsDone
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
 contains "$root/request" CODEX_INTERACTIVE_MARKER
 send '/status\r'; expect 'Status'
-expect 'cai global AGENTS.md'; expect 'Codex global AGENTS.md'
-expect 'Repository AGENTS.md'
+expect_table 1 'cai global AGENTS.md'; expect_table 1 'Codex global AGENTS.md'
+expect_table 1 'Repository AGENTS.md'
 has "$term/text" 'Yes' || fail 'Captured global instruction sources not reported'
 terminal_close

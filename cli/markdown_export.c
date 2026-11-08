@@ -7,6 +7,7 @@
 #define LONEJSON_WITH_CURL
 #include "markdown_export.h"
 #include "identity.h"
+#include "instructions.h"
 #include <cai/execution.h>
 #include <cai/handover.h>
 #include <cai/smith.h>
@@ -61,6 +62,8 @@ typedef struct markdown {
   lonejson_path_value_visitor visitor;
   export_value value;
   cai_agent_instructions *instructions;
+  cai_cli_instruction_files files;
+  char approval_root[PATH_MAX];
   cai_execution_decoder *execution;
   cai_execution_record record;
   int execution_started, selected, execution_error, include_subagents;
@@ -321,15 +324,16 @@ static int execution(void *context, const cai_cli_transcript_event *event,
 int cai_cli_markdown_export(cai_cli_journal_view *view, cai_cli_pouch *pouch,
                             const cai_cli_session *session,
                             const char *workspace,
-                            const cai_handover_config *active, cai_sink *sink,
+                            const cai_handover_config *active,
+                            const cai_cli_options *options, cai_sink *sink,
                             cai_error *error) {
   markdown *m;
   cai_agent_preset preset;
   cai_agent_preset_config config;
+  cai_skill_config skills;
   lonejson_config json_config = lonejson_default_config();
   lonejson_error local;
   struct stat info;
-  char config_directory[PATH_MAX];
   long long now = (long long)time(NULL), delta;
   int rc;
   if (view == NULL || pouch == NULL || session == NULL || workspace == NULL ||
@@ -395,13 +399,47 @@ int cai_cli_markdown_export(cai_cli_journal_view *view, cai_cli_pouch *pouch,
           : workspace;
   config.agent_config_directory = pouch->config_directory;
   config.agent_identity = pouch->program_name;
-  config.disable_terminal = 1;
-  if (m->rc == CAI_OK && pouch->config_directory[0] == '\0')
-    m->rc = cai_cli_xdg_path(config_directory, sizeof(config_directory),
-                             "XDG_CONFIG_HOME", ".config", pouch->program_name,
-                             error);
-  if (pouch->config_directory[0] == '\0')
-    config.agent_config_directory = config_directory;
+  if (options != NULL) {
+    config.environment = options->environment;
+    config.agent_config_directory = options->config_dir;
+    config.global_agents_md_path = options->agents_md;
+    config.agent_identity =
+        options->identity != NULL ? options->identity : pouch->program_name;
+    config.developer_instructions_extension = options->developer_instructions;
+    config.codex_compat_agents_md = options->codex_agents_md;
+    config.disable_terminal = !options->terminal;
+    cai_skill_config_init(&skills);
+    skills.skills_directory = options->skills_dir;
+    config.skills = &skills;
+#define ENABLED(member, bit)                                                   \
+  if (!options->member)                                                        \
+  preset.tool_capabilities &= ~(bit)
+    ENABLED(read_file, CAI_AGENT_PRESET_TOOL_READ_FILE);
+    ENABLED(list_files, CAI_AGENT_PRESET_TOOL_LIST_FILES);
+    ENABLED(apply_patch, CAI_AGENT_PRESET_TOOL_APPLY_PATCH);
+    ENABLED(view_image, CAI_AGENT_PRESET_TOOL_VIEW_IMAGE);
+    ENABLED(goals, CAI_AGENT_PRESET_TOOL_GOAL);
+    ENABLED(skills, CAI_AGENT_PRESET_TOOL_SKILLS);
+    ENABLED(mcp, CAI_AGENT_PRESET_TOOL_MCP);
+    ENABLED(chrome, CAI_AGENT_PRESET_TOOL_CHROME);
+    ENABLED(web_search, CAI_AGENT_PRESET_TOOL_WEB_SEARCH);
+    ENABLED(image_generation, CAI_AGENT_PRESET_TOOL_IMAGE_GENERATION);
+#undef ENABLED
+    if (m->rc == CAI_OK)
+      m->rc = cai_cli_instruction_files_open(options, &m->files, error);
+    preset.developer_instructions = m->files.agent;
+    preset.developer_instructions_literal = m->files.agent != NULL;
+    config.developer_instructions_override = m->files.initial;
+    if (options->insecure)
+      config.workspace_instructions_root = config.workspace_directory;
+    else if (m->rc == CAI_OK) {
+      m->rc = cai_cli_pouch_workspace_approval(
+          pouch, config.workspace_directory, m->approval_root,
+          sizeof(m->approval_root), error);
+      if (m->approval_root[0] != '\0')
+        config.workspace_instructions_root = m->approval_root;
+    }
+  }
   if (m->rc == CAI_OK)
     m->rc = cai_agent_preset_prepare_instructions(
         &preset, &config, pouch->logger, &m->instructions, NULL, error);
@@ -454,6 +492,7 @@ write:
   cai_execution_record_cleanup(&m->record);
   cai_execution_decoder_close(m->execution);
   cai_agent_instructions_close(m->instructions);
+  cai_cli_instruction_files_close(&m->files);
   lonejson_free(m->json);
   free(m);
   return rc;

@@ -261,6 +261,9 @@ static int execution(void *context, const cai_app_execution_event *e,
         return rc;
     }
     if (strcmp(r->session_id, b->review_session) == 0) {
+      if (strcmp(r->kind, "request.retry") == 0 && r->offset == 0U &&
+          (r->field == NULL || strcmp(r->field, "message") == 0))
+        cai_cli_batch_document_reset(&b->review_candidate);
       rc = cai_cli_batch_document_capture(&b->review_candidate, &b->at, e,
                                           error);
       if (rc == CAI_OK)

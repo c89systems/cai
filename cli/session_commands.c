@@ -425,6 +425,7 @@ static int export_targets(const cai_cli_pouch *pouch, const char *workspace,
 struct cai_cli_export {
   cai_cli_pouch *pouch;
   cai_cli_session metadata;
+  cai_cli_options instruction_options;
   cai_cli_pouch_transcript *reader;
   cai_cli_journal_view *view;
   lc_collection_head_res head;
@@ -450,7 +451,7 @@ void cai_cli_export_close(cai_cli_export *e) {
 int cai_cli_export_prepare(cai_cli_pouch *pouch, const char *id,
                            const char *workspace, const char *export_root,
                            const char *basename, cai_cli_export **out,
-                           cai_error *error) {
+                           const cai_cli_options *options, cai_error *error) {
   cai_cli_export *e;
   const char *cursor;
   lc_lease *lease = NULL;
@@ -475,6 +476,7 @@ int cai_cli_export_prepare(cai_cli_pouch *pouch, const char *id,
   if (e == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "allocate export context");
   e->pouch = pouch;
+  e->instruction_options = *options;
   strcpy(e->workspace, workspace);
   rc = cai_cli_pouch_begin_read(pouch, id, &e->use, error);
   if (rc == CAI_OK)
@@ -546,7 +548,8 @@ int cai_cli_export_run(cai_cli_export *e, const cai_handover_config *active,
                      &e->file, error);
     if (rc == CAI_OK && i == 0U)
       rc = cai_cli_markdown_export(e->view, e->pouch, &e->metadata,
-                                   e->workspace, active, &sink, error);
+                                   e->workspace, active,
+                                   &e->instruction_options, &sink, error);
     if (rc == CAI_OK && i == 1U)
       rc = cai_cli_journal_view_jsonl(e->view, &sink, error);
     if (e->file != NULL) {
@@ -589,10 +592,11 @@ int cai_cli_session_export(cai_cli_pouch *pouch, const char *id,
                            const char *workspace, const char *directory,
                            const char *basename,
                            const cai_handover_config *active,
+                           const cai_cli_options *options,
                            cai_sink *destination, cai_error *error) {
   cai_cli_export *e = NULL;
   int rc = cai_cli_export_prepare(pouch, id, workspace, directory, basename, &e,
-                                  error);
+                                  options, error);
   if (rc == CAI_OK)
     rc = cai_cli_export_run(e, active, NULL, NULL, destination, error);
   cai_cli_export_close(e);

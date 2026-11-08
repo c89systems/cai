@@ -70,7 +70,14 @@ int cai_cli_plain_feed_open(const cai_cli_options *o, cai_cli_plain_feed **out,
 int cai_cli_plain_feed_transcript(cai_cli_plain_feed *f,
                                   const cai_transcript_event *event,
                                   cai_error *error) {
-  int rc = cai_cli_transcript_presenter_event(f->transcript, event, error);
+  int rc;
+  if (event->kind == CAI_TRANSCRIPT_TERMINAL_OUTPUT) {
+    rc = cai_cli_plain_feed_finish(f, error);
+    if (rc == CAI_OK)
+      rc =
+          cai_cli_replay_tools_live(f->tools, event, f->ui.tool_display, error);
+  } else
+    rc = cai_cli_transcript_presenter_event(f->transcript, event, error);
   if (rc == CAI_OK && fflush(stdout) != 0)
     rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "write plain transcript");
   return rc;

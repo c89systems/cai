@@ -188,10 +188,11 @@ int cai_cli_workspace_host_catalog(cai_cli_workspace_host *host,
 static int send_transcript(host_peer *peer, const cai_transcript_event *event,
                            cai_error *error) {
   static const cai_protocol_kind kinds[] = {
-      CAI_PROTOCOL_REPLAY_BEGIN, CAI_PROTOCOL_STREAM_BEGIN,
-      CAI_PROTOCOL_STREAM_CHUNK, CAI_PROTOCOL_STREAM_END,
-      CAI_PROTOCOL_REPLAY_END,   CAI_PROTOCOL_SUBSCRIPTION_ERROR,
-      CAI_PROTOCOL_SHELL_OUTPUT, CAI_PROTOCOL_SHELL_OUTPUT_END};
+      CAI_PROTOCOL_REPLAY_BEGIN,   CAI_PROTOCOL_STREAM_BEGIN,
+      CAI_PROTOCOL_STREAM_CHUNK,   CAI_PROTOCOL_STREAM_END,
+      CAI_PROTOCOL_REPLAY_END,     CAI_PROTOCOL_SUBSCRIPTION_ERROR,
+      CAI_PROTOCOL_SHELL_OUTPUT,   CAI_PROTOCOL_SHELL_OUTPUT_END,
+      CAI_PROTOCOL_TERMINAL_OUTPUT};
   cai_cli_transcript_message m;
   cai_cli_input_wire_output output;
   memset(&m, 0, sizeof(m));
@@ -202,7 +203,8 @@ static int send_transcript(host_peer *peer, const cai_transcript_event *event,
   if ((event->kind >= CAI_TRANSCRIPT_EVENT_BEGIN &&
        event->kind <= CAI_TRANSCRIPT_EVENT_END) ||
       event->kind == CAI_TRANSCRIPT_SHELL_OUTPUT ||
-      event->kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END)
+      event->kind == CAI_TRANSCRIPT_SHELL_OUTPUT_END ||
+      event->kind == CAI_TRANSCRIPT_TERMINAL_OUTPUT)
     m.header.sequence = event->sequence;
   output.context = peer;
   output.begin = output_begin;
@@ -1141,6 +1143,12 @@ int cai_cli_workspace_host_shell(cai_cli_workspace_host *host,
   return cai_cli_transcript_feed_shell(host != NULL ? host->history : NULL,
                                        guard, sequence, offset, bytes, length,
                                        final, accepted, error);
+}
+int cai_cli_workspace_host_terminal(cai_cli_workspace_host *host,
+                                    const cai_agent_runtime_event *event,
+                                    cai_error *error) {
+  return cai_cli_transcript_feed_terminal(host != NULL ? host->history : NULL,
+                                          event, error);
 }
 int cai_cli_workspace_host_progress(cai_cli_workspace_host *host,
                                     cai_error *error) {

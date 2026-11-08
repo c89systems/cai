@@ -2,8 +2,16 @@
 #define CAI_CLI_REPLAY_TOOLS_H
 #include <cai/display.h>
 #include <cai/execution.h>
+#include <cai/transcript.h>
 
 typedef struct cai_cli_replay_tools cai_cli_replay_tools;
+/** Merge an ephemeral tool-output range into the same bounded command display.
+ * Completed results skip only bytes already displayed; replay needs no live
+ * history/cache. Unknown origins and noncontiguous spans wait for saved output.
+ */
+int cai_cli_replay_tools_live(cai_cli_replay_tools *,
+                              const cai_transcript_event *, cai_tool_display *,
+                              cai_error *);
 /** This record can write subprocess bytes directly to the output sink.
  * Finish a preceding Markdown document before following it; other tool-body
  * chunks retain their parser until a semantic boundary or display receipt. */

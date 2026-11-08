@@ -179,7 +179,7 @@ static int dispatch(utility_run *u) {
     if (rc == CAI_OK)
       rc = cai_cli_session_export(&u->pouch, u->options.export_id, u->workspace,
                                   u->options.export_dir, u->options.export_out,
-                                  NULL, destination, &u->error);
+                                  NULL, &u->options, destination, &u->error);
   } else if (u->options.import_file != NULL) {
     u->operation = "import conversation";
     rc = cai_cli_pouch_import(&u->pouch, u->options.import_file, u->workspace,

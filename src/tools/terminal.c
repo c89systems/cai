@@ -358,6 +358,7 @@ typedef struct cai_terminal_result {
   int has_signal;
   long long command_id;
   long long original_byte_count;
+  long long output_offset;
   int output_truncated;
   int detached_processes_possible;
   long long duration_ms;
@@ -409,7 +410,6 @@ static const lonejson_field cai_terminal_result_fields[] = {
                                           "active_command"),
     LONEJSON_FIELD_STRING_ALLOC_OMIT_NULL(
         cai_terminal_result, requested_command, "requested_command"),
-    LONEJSON_FIELD_STRING_ALLOC_REQ(cai_terminal_result, output, "output"),
     LONEJSON_FIELD_BOOL_REQ(cai_terminal_result, running, "running"),
     LONEJSON_FIELD_BOOL_REQ(cai_terminal_result, completed, "completed"),
     LONEJSON_FIELD_I64_PRESENT(cai_terminal_result, exit_code, has_exit_code,
@@ -417,6 +417,8 @@ static const lonejson_field cai_terminal_result_fields[] = {
     LONEJSON_FIELD_I64_PRESENT(cai_terminal_result, signal, has_signal,
                                "signal"),
     LONEJSON_FIELD_I64_REQ(cai_terminal_result, command_id, "command_id"),
+    LONEJSON_FIELD_I64_REQ(cai_terminal_result, output_offset, "output_offset"),
+    LONEJSON_FIELD_STRING_ALLOC_REQ(cai_terminal_result, output, "output"),
     LONEJSON_FIELD_I64_REQ(cai_terminal_result, original_byte_count,
                            "original_byte_count"),
     LONEJSON_FIELD_BOOL_REQ(cai_terminal_result, output_truncated,
@@ -1337,6 +1339,7 @@ static int cai_terminal_fill_result(cai_terminal_manager *manager,
   if (busy)
     result->active_command = cai_tool_result_strdup(manager->command, error);
   result->output = output;
+  result->output_offset = (long long)manager->delivered_offset;
   result->running = busy || manager->running;
   result->completed = !busy && manager->completed;
   result->command_id = (long long)manager->command_id;

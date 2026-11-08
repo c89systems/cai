@@ -7,6 +7,7 @@ typedef struct cai_cli_transcript_publisher cai_cli_transcript_publisher;
 typedef struct cai_cli_transcript_frame {
   cai_transcript_event event;
   char type[129], session[129], collection[21], reason[192];
+  char call_id[257], terminal_id[257];
   unsigned char data[CAI_CLI_TRANSCRIPT_CHUNK];
 } cai_cli_transcript_frame;
 /* One replay worker for the conversation, sharing its existing SDK client.
@@ -41,6 +42,12 @@ int cai_cli_transcript_feed_shell(cai_cli_transcript_publisher *,
                                   int final, int *accepted, cai_error *);
 int cai_cli_transcript_feed_ready(cai_cli_transcript_publisher *, uint64_t,
                                   int *failed);
+/** Queue one bounded ephemeral tool span between complete durable events.
+ * Slow/catching-up peers skip live bytes and use ordinary tool-result ranges.
+ * No journal writes, waiting, extra readers or worker creation. */
+int cai_cli_transcript_feed_terminal(cai_cli_transcript_publisher *,
+                                     const cai_agent_runtime_event *,
+                                     cai_error *);
 int cai_cli_transcript_feed_next(cai_cli_transcript_publisher *, uint64_t,
                                  cai_cli_transcript_frame *);
 void cai_cli_transcript_frame_borrow(cai_cli_transcript_frame *);

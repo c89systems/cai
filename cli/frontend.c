@@ -52,6 +52,8 @@ typedef struct frontend_view {
   cai_cli_reasoning child_reasoning;
   char session[129];
   unsigned long long producer, epoch;
+  char displayed_collection[21];
+  uint64_t displayed_position, displayed_sequence;
   sl_watch_id_t socket_watch, boot_watch, timer_watch, wake_watch;
   int socket_fd, boot_fd;
   int activity_known, activity_busy;
@@ -647,6 +649,13 @@ static int transcript(void *context, const cai_transcript_event *event,
   if (f->group->active != f || f->group->terminal_active ||
       f->presentation_parked)
     return CAI_OK;
+  if (event->kind == CAI_TRANSCRIPT_TERMINAL_OUTPUT) {
+    if (cai_cli_presenter_finish_response(f->ui) != 0 ||
+        cai_cli_presenter_finish_reasoning(f->ui) != 0)
+      return CAI_ERR_TRANSPORT;
+    return cai_cli_replay_tools_live(f->tools, event, f->ui->tool_display,
+                                     error);
+  }
   if (event->kind == CAI_TRANSCRIPT_EVENT_BEGIN)
     f->transcript_entry = 1;
   else if (event->kind == CAI_TRANSCRIPT_EVENT_END ||
@@ -726,6 +735,17 @@ static int transcript(void *context, const cai_transcript_event *event,
                : CAI_ERR_TRANSPORT;
   }
   rc = cai_cli_transcript_presenter_event(f->transcript, event, error);
+  if (rc == CAI_OK) {
+    frontend_view *v = f->current;
+    if (event->kind == CAI_TRANSCRIPT_REPLAY_BEGIN)
+      snprintf(v->displayed_collection, sizeof(v->displayed_collection), "%s",
+               event->collection);
+    else if (event->kind == CAI_TRANSCRIPT_EVENT_END) {
+      v->displayed_position = event->position;
+      v->displayed_sequence = event->sequence;
+    } else if (event->kind == CAI_TRANSCRIPT_REPLAY_END)
+      v->displayed_position = event->watermark;
+  }
   if (rc == CAI_OK && (f->shell || f->group->switching) &&
       event->kind == CAI_TRANSCRIPT_EVENT_END)
     rc = park_presentation(f, event);
@@ -1644,14 +1664,18 @@ static int select_view(frontend *f, const char *session) {
   frontend_view *v;
   sl_config_t config;
   int fresh = 0;
+  int same_session = f->current != NULL && session != NULL &&
+                     strcmp(f->current->session, session) == 0;
   f->child_theme_scope = 0;
   if (f->current != NULL || session != NULL)
     f->greeting_resumed = session != NULL;
   if (f->current != NULL) {
     park_view(f);
     cai_cli_transcript_presenter_reset(f->transcript);
-    cai_cli_replay_tools_close(f->tools);
-    f->current->tools = f->tools = NULL;
+    if (!same_session) {
+      cai_cli_replay_tools_close(f->tools);
+      f->current->tools = f->tools = NULL;
+    }
     if (sl_output_stream_end(f->ui->sl) != SL_OK)
       return -1;
   }
@@ -1753,6 +1777,12 @@ static int select_view(frontend *f, const char *session) {
       f->subscribed = f->welcomed = 0;
   f->resume_collection[0] = '\0';
   f->resume_position = f->resume_sequence = 0U;
+  if (same_session) {
+    snprintf(f->resume_collection, sizeof(f->resume_collection), "%s",
+             v->displayed_collection);
+    f->resume_position = v->displayed_position;
+    f->resume_sequence = v->displayed_sequence;
+  }
   f->resume_actions = 0;
   f->presentation_parked = f->transcript_entry = f->shell = 0;
   f->history_requested = f->history_loaded = v->history_loaded;

@@ -65,6 +65,8 @@ send 'exercise foreground completion\r'; expect FG_PROGRESS
 printf 'go\n' >"$work/gate"
 expect 'FOREGROUND TURN COMPLETE'; expect 'Worked for'
 contains "$term/text" FG_DONE
+[[ $(grep -o FG_PROGRESS "$term/feed" | wc -l) == 1 ]]
+[[ $(grep -o FG_DONE "$term/feed" | wc -l) == 1 ]]
 plan "$(jq -nc --argjson chat "$chat" '{chat:$chat,plan:[
  {tool:"exec_command",arguments:{cmd:"sh cancel.sh",yield_time_ms:0}},
  "UNWANTED CONTINUATION"]}')"
@@ -76,4 +78,12 @@ plan "$(jq -nc --argjson chat "$chat" '{chat:$chat,plan:[
  "RECOVERED TURN COMPLETE"]}')"
 prompt 'continue after cancellation' 'RECOVERED TURN COMPLETE'
 contains "$term/text" AFTER_CANCEL
+id=$(current_session_id)
 terminal_close
+before=$(requests)
+terminal_start --resume "$id"
+expect 'RECOVERED TURN COMPLETE'
+[[ $(grep -o FG_PROGRESS "$term/feed" | wc -l) == 1 ]]
+[[ $(grep -o FG_DONE "$term/feed" | wc -l) == 1 ]]
+terminal_close
+[[ $(requests) == "$before" ]]

@@ -59,6 +59,9 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *, int *stopping,
  * dispatch socket input or reenter application commands. Slow subscribers
  * retain the ordinary bounded backlog and native catch-up behavior. */
 int cai_cli_workspace_host_progress(cai_cli_workspace_host *, cai_error *);
+int cai_cli_workspace_host_terminal(cai_cli_workspace_host *,
+                                    const cai_agent_runtime_event *,
+                                    cai_error *);
 /** Publish bounded backend bang output without journaling raw bytes. */
 int cai_cli_workspace_host_shell(cai_cli_workspace_host *, uint64_t sequence,
                                  uint64_t offset, const void *, size_t,

@@ -1,6 +1,7 @@
 #include <cai/agent_runtime.h>
 #include <cai/auth.h>
 #include <cai/cai.h>
+#include <cai/environment.h>
 #include <cai/execution.h>
 #include <cai/mcp.h>
 #include <cai/quota.h>
@@ -25839,6 +25840,7 @@ static void test_smith_profile(test_state *state) {
   test_env_snapshot xdg_config_env;
   test_env_snapshot codex_home_env;
   test_env_snapshot policy_home_env;
+  cai_environment *instruction_environment = NULL;
   int external_fd;
 
   cai_error_init(&error);
@@ -25949,6 +25951,13 @@ static void test_smith_profile(test_state *state) {
     config.codex_compat_agents_md = 1;
     expect_int(state, "smith_codex_home_setenv",
                setenv("CODEX_HOME", policy_codex_dir, 1), 0);
+    expect_int(state, "smith_codex_environment_capture",
+               cai_environment_open(NULL, &instruction_environment, &error),
+               CAI_OK);
+    config.environment = instruction_environment;
+    /* Later host changes cannot alter this explicit discovery view. */
+    expect_int(state, "smith_codex_process_changed",
+               setenv("CODEX_HOME", "/", 1), 0);
     expect_int(state, "smith_codex_compat_instructions_open",
                cai_client_new_smith_agent(mock.client, &config, &agent, &error),
                CAI_OK);
@@ -26016,6 +26025,14 @@ static void test_smith_profile(test_state *state) {
     expect_int(state, "smith_codex_home_unsetenv", unsetenv("CODEX_HOME"), 0);
     expect_int(state, "smith_codex_home_fallback_setenv",
                setenv("HOME", policy_root, 1), 0);
+    cai_environment_close(instruction_environment);
+    instruction_environment = NULL;
+    expect_int(state, "smith_codex_fallback_environment_capture",
+               cai_environment_open(NULL, &instruction_environment, &error),
+               CAI_OK);
+    config.environment = instruction_environment;
+    expect_int(state, "smith_codex_home_process_changed",
+               setenv("HOME", "/", 1), 0);
     expect_int(state, "smith_codex_home_fallback_open",
                cai_client_new_smith_agent(mock.client, &config, &agent, &error),
                CAI_OK);
@@ -26056,6 +26073,9 @@ static void test_smith_profile(test_state *state) {
       agent = NULL;
     }
     config.global_agents_md_path = NULL;
+    cai_environment_close(instruction_environment);
+    instruction_environment = NULL;
+    config.environment = NULL;
     test_env_restore(&policy_home_env);
     policy_store_state.reader.text = "Stored global policy.";
     policy_store.load = test_blob_store_load;
@@ -26082,6 +26102,10 @@ static void test_smith_profile(test_state *state) {
       test_fail(state, "smith_default_global_instructions_setup",
                 "failed to configure XDG_CONFIG_HOME");
     } else {
+      expect_int(state, "smith_default_global_environment_capture",
+                 cai_environment_open(NULL, &instruction_environment, &error),
+                 CAI_OK);
+      config.environment = instruction_environment;
       expect_int(
           state, "smith_default_global_instructions_open",
           cai_client_new_smith_agent(mock.client, &config, &agent, &error),
@@ -26094,6 +26118,9 @@ static void test_smith_profile(test_state *state) {
         agent = NULL;
       }
     }
+    cai_environment_close(instruction_environment);
+    instruction_environment = NULL;
+    config.environment = NULL;
     test_env_restore(&xdg_config_env);
     unlink(policy_workspace_agents);
     unlink(policy_project_agents);

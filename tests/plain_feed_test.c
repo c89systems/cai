@@ -79,8 +79,24 @@ static void render(const char *directory, size_t fragment, char out[4096]) {
   record(feed, "exec_command", "tool.started", NULL, "", fragment);
   record(feed, "exec_command", "tool.arguments", "data",
          "{\"cmd\":\"printf COMMAND_BYTES\"}", fragment);
+  event.kind = CAI_TRANSCRIPT_TERMINAL_OUTPUT;
+  event.session = "plain-fixture";
+  event.call_id = "exec_command";
+  event.terminal_id = "terminal-1";
+  event.sequence = 7U;
+  event.offset = 0U;
+  event.data = "LIVE_PROGRESS\n";
+  event.length = strlen(event.data);
+  assert(cai_cli_plain_feed_transcript(feed, &event, NULL) == CAI_OK);
+  /* Progress is flushed before the authoritative result exists. */
+  n = pread(fd, out, 4095U, 0);
+  assert(n > 0 && n < 4095);
+  out[n] = '\0';
+  assert(strstr(out, "LIVE_PROGRESS\n") != NULL);
   record(feed, "exec_command", "tool.output", "data",
-         "{\"output\":\"COMMAND_BYTES\",\"exit_code\":0,\"duration_ms\":1}",
+         "{\"session_id\":\"terminal-1\",\"command_id\":7,\"output_offset\":0,"
+         "\"output\":\"LIVE_PROGRESS\\nCOMMAND_BYTES\",\"exit_code\":0,"
+         "\"duration_ms\":1}",
          fragment);
   record(feed, "exec_command", "tool.completed", NULL, "", fragment);
   assert(cai_cli_plain_feed_finish(feed, NULL) == CAI_OK);
@@ -96,6 +112,8 @@ static void render(const char *directory, size_t fragment, char out[4096]) {
   assert(strstr(out, "BEFORECOMMAND") != NULL &&
          strstr(out, "COMMAND_BYTES") != NULL);
   assert(strstr(out, "BEFORECOMMAND") < strstr(out, "COMMAND_BYTES"));
+  assert(strstr(strstr(out, "LIVE_PROGRESS\n") + strlen("LIVE_PROGRESS\n"),
+                "LIVE_PROGRESS\n") == NULL);
   assert(strstr(out, "Ran printf COMMAND_BYTES (1ms)") != NULL);
   close(fd);
   free(path);

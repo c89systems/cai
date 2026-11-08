@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <cai/dtg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -466,7 +467,67 @@ static void following_cache(void) {
   close_fixture(&f);
 }
 
+static void live_ranges(void) {
+  int order;
+  for (order = 0; order < 3; ++order) {
+    fixture *f = calloc(1U, sizeof(*f));
+    cai_transcript_event span;
+    const char *body =
+        "{\"session_id\":\"slot\",\"command_id\":7,\"output_offset\":0,"
+        "\"output\":\"PFX\\nTAIL\\n\",\"exit_code\":0,\"duration_ms\":50}";
+    const char *p;
+    assert(f != NULL);
+    open_fixture(f, 1);
+    f->phase = 2;
+    assert(record(f, "s", "exec", "exec_command", "tool.started", NULL, "",
+                  1U) == CAI_OK);
+    assert(record(f, "s", "exec", "exec_command", "tool.arguments", "data",
+                  "{\"cmd\":\"run fixture\"}", 1U) == CAI_OK);
+    memset(&span, 0, sizeof(span));
+    span.kind = CAI_TRANSCRIPT_TERMINAL_OUTPUT;
+    span.session = "s";
+    span.call_id = "exec";
+    span.terminal_id = "slot";
+    span.sequence = 7U;
+    span.data = "PFX\n";
+    span.length = 4U;
+    if (order == 0) {
+      assert(cai_cli_replay_tools_live(f->tools, &span, f->display,
+                                       &f->error) == CAI_OK);
+      assert(strstr(f->text, "PFX\n") != NULL);
+      /* Duplicate and foreign-source spans never display another copy. */
+      assert(cai_cli_replay_tools_live(f->tools, &span, f->display,
+                                       &f->error) == CAI_OK);
+      span.session = "other";
+      assert(cai_cli_replay_tools_live(f->tools, &span, f->display,
+                                       &f->error) == CAI_OK);
+      span.session = "s";
+    } else if (order == 2) {
+      span.offset = 8U; /* Missed prefix: wait for the durable result. */
+      assert(cai_cli_replay_tools_live(f->tools, &span, f->display,
+                                       &f->error) == CAI_OK);
+      assert(strstr(f->text, "PFX\n") == NULL);
+      span.offset = 0U;
+    }
+    assert(record(f, "s", "exec", "exec_command", "tool.completed", NULL, "",
+                  1U) == CAI_OK);
+    assert(record(f, "s", "exec", "exec_command", "tool.output", "data", body,
+                  1U) == CAI_OK);
+    if (order == 1)
+      assert(cai_cli_replay_tools_live(f->tools, &span, f->display,
+                                       &f->error) == CAI_OK);
+    p = strstr(f->text, "PFX\n");
+    assert(p != NULL && strstr(p + 4U, "PFX\n") == NULL);
+    p = strstr(f->text, "TAIL\n");
+    assert(p != NULL && strstr(p + 5U, "TAIL\n") == NULL);
+    assert(strstr(f->text, "Ran run fixture (50ms)") != NULL);
+    close_fixture(f);
+    free(f);
+  }
+}
+
 int main(void) {
+  live_ranges();
   call_timestamps();
   commands(0, 1U);
   commands(1, 3U);

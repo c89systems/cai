@@ -115,10 +115,13 @@ static void message(cai_cli_transcript_message *m, cai_protocol_kind kind) {
                                kind == CAI_PROTOCOL_STREAM_CHUNK ||
                                kind == CAI_PROTOCOL_STREAM_END ||
                                kind == CAI_PROTOCOL_SHELL_OUTPUT ||
-                               kind == CAI_PROTOCOL_SHELL_OUTPUT_END
+                               kind == CAI_PROTOCOL_SHELL_OUTPUT_END ||
+                               kind == CAI_PROTOCOL_TERMINAL_OUTPUT
                            ? UINT64_MAX
                            : 0U;
   m->event.session = "conversation";
+  m->event.call_id = "call-live-terminal";
+  m->event.terminal_id = "terminal-1";
   m->event.collection = "12345678901234567890";
   m->event.type = "assistant_text_delta";
   m->event.watermark = UINT64_MAX;
@@ -143,7 +146,7 @@ static void roundtrips(void) {
       CAI_PROTOCOL_STREAM_BEGIN,       CAI_PROTOCOL_STREAM_CHUNK,
       CAI_PROTOCOL_STREAM_END,         CAI_PROTOCOL_REPLAY_END,
       CAI_PROTOCOL_SUBSCRIPTION_ERROR, CAI_PROTOCOL_SHELL_OUTPUT,
-      CAI_PROTOCOL_SHELL_OUTPUT_END};
+      CAI_PROTOCOL_SHELL_OUTPUT_END,   CAI_PROTOCOL_TERMINAL_OUTPUT};
   fixture *f = calloc(1U, sizeof(*f));
   unsigned char *binary = malloc(CAI_CLI_TRANSCRIPT_CHUNK);
   cai_cli_transcript_message m;
@@ -159,6 +162,14 @@ static void roundtrips(void) {
     open_fixture(f);
     assert(send(f, &m) == CAI_OK && f->complete != NULL);
     got = &f->complete->event;
+    if (kinds[i] == CAI_PROTOCOL_TERMINAL_OUTPUT)
+      assert(got->kind == CAI_TRANSCRIPT_TERMINAL_OUTPUT &&
+             strcmp(got->session, m.event.session) == 0 &&
+             strcmp(got->call_id, m.event.call_id) == 0 &&
+             strcmp(got->terminal_id, m.event.terminal_id) == 0 &&
+             got->sequence == UINT64_MAX && got->offset == m.event.offset &&
+             got->length == m.event.length &&
+             memcmp(got->data, binary, m.event.length) == 0);
     if (kinds[i] == CAI_PROTOCOL_SUBSCRIBE ||
         kinds[i] == CAI_PROTOCOL_HISTORY_GET)
       assert(strcmp(got->session, m.event.session) == 0 &&

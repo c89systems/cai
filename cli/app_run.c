@@ -925,6 +925,13 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
     }
   }
   cli_log_event(state, event);
+  if (event->type == CAI_AGENT_EVENT_TERMINAL_OUTPUT &&
+      event->data_length != 0U && event->tool_call_id != NULL) {
+    int forwarded =
+        cai_cli_workspace_host_terminal(state->workspace_host, event, error);
+    if (forwarded != CAI_OK)
+      return forwarded;
+  }
   if (event->parent_tool_call_id == NULL) {
     int notified = cli_settings_notice(state, error);
     if (notified != CAI_OK)
@@ -2696,6 +2703,23 @@ static int cli_settings_command(cli_state *state, const char *arguments,
                 : CAI_MODEL_CATALOG_REFRESH_ONLINE_IF_UNCACHED,
         &catalog, error);
     if (rc != CAI_OK) {
+      char status[96];
+      int length = snprintf(status, sizeof(status), "http_status: %ld\n",
+                            error->http_status);
+      state->list_line_start = 1;
+      if (cli_text(state, "**Model catalog unavailable**\n\n", 31U) != 0 ||
+          cli_list_write(state, status, (size_t)length, NULL) != CAI_OK ||
+          (error->message != NULL &&
+           cli_list_write(state, error->message, strlen(error->message),
+                          NULL) != CAI_OK) ||
+          (error->detail != NULL &&
+           (cli_list_write(state, "\n", 1U, NULL) != CAI_OK ||
+            cli_list_write(state, error->detail, strlen(error->detail), NULL) !=
+                CAI_OK)) ||
+          cli_finish_response(state) != 0) {
+        cai_model_catalog_close(catalog);
+        return CAI_ERR_TRANSPORT;
+      }
       cai_error_cleanup(error);
       cai_error_init(error);
       /* An explicit retry may fail while a previous successful catalog is
@@ -3660,7 +3684,7 @@ static int cli_handle_command(cli_state *state, const char *line,
     if (rc == CAI_OK)
       rc = cai_cli_export_prepare(
           &state->pouch, id, state->workspace, state->options.export_dir,
-          length != 0U ? basename : NULL, &source, error);
+          length != 0U ? basename : NULL, &source, &state->options, error);
     if (rc == CAI_OK && state->export_job == NULL)
       rc = cai_cli_export_job_open(&state->export_job, error);
     if (rc == CAI_OK)
@@ -4061,6 +4085,12 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     goto cleanup;
   }
   if (frontend_startup) {
+    if (state->options.review && application != NULL &&
+        application->register_agent_tools != NULL) {
+      cai_cli_error(&error, CAI_ERR_INVALID,
+                    "isolated review does not support host tools");
+      goto cleanup;
+    }
     state->batch_frontend = frontend_startup == CAI_CLI_OWNER_BATCH_FRONTEND;
     state->options.review = state->options.review_and_fix = 0;
     state->options.non_interactive = 0;

@@ -9,6 +9,6 @@
  * or context spool. All source callbacks and their contexts remain borrowed. */
 int cai_cli_markdown_export(cai_cli_journal_view *, cai_cli_pouch *,
                             const cai_cli_session *, const char *workspace,
-                            const cai_handover_config *active, cai_sink *,
-                            cai_error *);
+                            const cai_handover_config *active,
+                            const cai_cli_options *, cai_sink *, cai_error *);
 #endif

@@ -34,11 +34,13 @@ send '/queue\r'; expect 'Messaging is disabled'
 # Enabling in the running TUI must retain the session and not repeat history
 # or make an inference request. The real tool catalog changes too.
 count=$(requests)
+before_toggle=$(wc -c <"$term/feed")
 send '/queue on\r'; expect 'Message queue: receiver-workspace'
 send '/queue on\r'; expect 'Message queue: receiver-workspace'
 [[ $(requests) == "$count" ]]
 [[ $(grep -c 'RECEIVER READY' "$term/text") == 1 ]]
-absent "$term/feed" 'RECEIVER READY'
+tail -c +$((before_toggle+1)) "$term/feed" >"$root/toggle-feed"
+absent "$root/toggle-feed" 'RECEIVER READY'
 send '/tools\r'; expect_table 1 agent_message
 send '/status\r'; expect 'receiver-workspace'; expect 'off (manual approval)'
 send '/model gpt-6-luna high\r'; expect 'reasoning effort high'
@@ -47,7 +49,7 @@ send '/queue off\r'; expect 'Messaging is disabled'
 send '/tools\r'; expect 'No MCP servers configured'
 tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/disabled-tools"
 ! table_contains "$root/disabled-tools" 1 agent_message
-send '/status\r'; expect 'Message queue'; expect 'disabled'
+send '/status\r'; expect_table 1 'Message queue'; expect 'disabled'
 send '/queue on\r'; expect 'Message queue: receiver-workspace'
 send '/model\r'; expect 'Current: gpt-6-luna'; expect 'Reasoning effort: high'
 [[ $(requests) == "$count" ]]

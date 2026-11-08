@@ -85,6 +85,7 @@ static int stream_event(selection_stream *s, const cai_transcript_event *e,
                                            : "transcript selection failed");
   case CAI_TRANSCRIPT_SHELL_OUTPUT:
   case CAI_TRANSCRIPT_SHELL_OUTPUT_END:
+  case CAI_TRANSCRIPT_TERMINAL_OUTPUT:
     break; /* Ephemeral bytes do not alter durable cursors. */
   default:
     return selection_error(error, "unknown transcript selection event");
@@ -124,6 +125,19 @@ static int selection_execution(cai_transcript_selection *s, cai_error *error) {
   cai_execution_record *r = &s->record;
   int rc;
   rc = cai_execution_decoder_finish(s->decoder, r, error);
+  if (rc == CAI_OK &&
+      (s->result.state == CAI_TRANSCRIPT_WORK_ACTIVE ||
+       (s->result.state == CAI_TRANSCRIPT_WORK_WAITING &&
+        s->call[0] == '\0')) &&
+      strcmp(r->session_id, s->stream.at.session) == 0 &&
+      strcmp(r->kind, "request.retry") == 0 && r->offset == 0U &&
+      (r->field == NULL || strcmp(r->field, "message") == 0)) {
+    /* Retry abandons this attempt, unlike terminal failure which may return
+     * its accepted partial response. Never promote failed-attempt text. */
+    memset(&s->candidate, 0, sizeof(s->candidate));
+    s->result.text_bytes = 0U;
+    s->result.through_position = s->result.through_sequence = 0U;
+  }
   if (rc == CAI_OK && s->call[0] == '\0' &&
       s->result.state == CAI_TRANSCRIPT_WORK_WAITING && r->field == NULL &&
       strcmp(r->session_id, s->stream.at.session) == 0) {

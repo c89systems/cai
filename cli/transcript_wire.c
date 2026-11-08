@@ -14,7 +14,7 @@ struct cai_cli_transcript_decoder {
   const char *format;
   size_t index, offset;
   int phase;
-  char strings[5][193];
+  char strings[5][257];
   unsigned char data[CAI_CLI_TRANSCRIPT_CHUNK];
 };
 static int invalid(cai_error *error) {
@@ -22,6 +22,8 @@ static int invalid(cai_error *error) {
 }
 static const char *shape(cai_protocol_kind kind) {
   switch (kind) {
+  case CAI_PROTOCOL_TERMINAL_OUTPUT:
+    return "sssud";
   case CAI_PROTOCOL_SUBSCRIBE:
     return "ssuui";
   case CAI_PROTOCOL_HISTORY_GET:
@@ -48,6 +50,8 @@ static const char *shape(cai_protocol_kind kind) {
   }
 }
 static size_t capacity(cai_protocol_kind kind, size_t index) {
+  if (kind == CAI_PROTOCOL_TERMINAL_OUTPUT && (index == 1U || index == 2U))
+    return 257U;
   if (kind == CAI_PROTOCOL_SUBSCRIPTION_ERROR)
     return 192U;
   if ((kind == CAI_PROTOCOL_SUBSCRIBE || kind == CAI_PROTOCOL_HISTORY_GET ||
@@ -61,7 +65,8 @@ static int valid_header(const cai_protocol_header *h) {
                h->kind == CAI_PROTOCOL_STREAM_CHUNK ||
                h->kind == CAI_PROTOCOL_STREAM_END ||
                h->kind == CAI_PROTOCOL_SHELL_OUTPUT ||
-               h->kind == CAI_PROTOCOL_SHELL_OUTPUT_END;
+               h->kind == CAI_PROTOCOL_SHELL_OUTPUT_END ||
+               h->kind == CAI_PROTOCOL_TERMINAL_OUTPUT;
   if (shape(h->kind) == NULL || h->request == 0U ||
       (record ? h->sequence == 0U : h->sequence != 0U))
     return 0;
@@ -76,6 +81,18 @@ static int pack(const cai_cli_transcript_message *m, field *f,
                 cai_error *error) {
   const cai_transcript_event *e = &m->event;
   switch (m->header.kind) {
+  case CAI_PROTOCOL_TERMINAL_OUTPUT:
+    if (e->session == NULL || e->session[0] == '\0' || e->call_id == NULL ||
+        e->call_id[0] == '\0' || e->terminal_id == NULL ||
+        e->terminal_id[0] == '\0' || e->length == 0U)
+      return invalid(error);
+    f[0].bytes = e->session;
+    f[1].bytes = e->call_id;
+    f[2].bytes = e->terminal_id;
+    f[3].value = e->offset;
+    f[4].bytes = e->data;
+    f[4].length = e->length;
+    break;
   case CAI_PROTOCOL_SUBSCRIBE:
     if (m->replay_turns < -1 || (e->position != 0U && m->replay_turns != -1))
       return invalid(error);
@@ -141,6 +158,18 @@ static int unpack(cai_cli_transcript_decoder *d, cai_error *error) {
   e->conversation = d->message.header.conversation;
   e->sequence = d->message.header.sequence;
   switch (d->message.header.kind) {
+  case CAI_PROTOCOL_TERMINAL_OUTPUT:
+    if (f[0].length == 0U || f[1].length == 0U || f[2].length == 0U ||
+        f[4].length == 0U)
+      return invalid(error);
+    e->kind = CAI_TRANSCRIPT_TERMINAL_OUTPUT;
+    e->session = f[0].bytes;
+    e->call_id = f[1].bytes;
+    e->terminal_id = f[2].bytes;
+    e->offset = f[3].value;
+    e->data = f[4].bytes;
+    e->length = f[4].length;
+    break;
   case CAI_PROTOCOL_SUBSCRIBE:
     d->message.replay_turns = f[4].integer;
     if (d->message.replay_turns < -1 ||

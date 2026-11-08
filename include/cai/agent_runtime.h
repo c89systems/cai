@@ -283,6 +283,9 @@ typedef struct cai_agent_runtime_event {
   const char *terminal_id;
   /** Monotonic command ID within terminal_id for terminal events. */
   unsigned long long terminal_command_id;
+  /** Retained command-output byte offset of this TERMINAL_OUTPUT span.
+   * Independent of raw original_byte_count, which includes omitted bytes. */
+  unsigned long long terminal_output_offset;
   /** Exit status supplied only by final terminal events. */
   int terminal_has_exit_code;
   long long terminal_exit_code;
