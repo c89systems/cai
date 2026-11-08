@@ -5,6 +5,40 @@ typedef struct event_log_capture {
   size_t length;
 } event_log_capture;
 
+static int test_command_tokens(void) {
+  static const struct {
+    const char *line, *name, *arguments;
+  } cases[] = {
+      {"/review\tcustom inspect fixture", "/review", "custom inspect fixture"},
+      {"/goal  new finish fixture", "/goal", "new finish fixture"},
+      {"/goal \n\tnew\tfinish  fixture\t ", "/goal",
+       "\n\tnew\tfinish  fixture"},
+      {"/goal\tstart {\"prompt\":\"a  b\"} ", "/goal",
+       "start {\"prompt\":\"a  b\"}"},
+      {"/review-and-fix\t uncommitted\t", "/review-and-fix", "uncommitted"},
+      {"/review-and-fix-extra", "/review-and-fix-extra", ""},
+      {"/reviewer\tcustom inspect fixture", "/reviewer",
+       "custom inspect fixture"},
+      {"/review\ncustom", "/review\ncustom", ""},
+      {"/m\t model  literal\t ", "/model", "model  literal"},
+      {"/r  low\t", "/reasoning", "low"},
+      {"/t\tplain", "/theme", "plain"},
+      {"/quit \t ", "/quit", ""},
+      {"", "", ""}};
+  size_t i;
+  for (i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    cai_cli_command_tokens tokens;
+    cai_cli_command_parse(cases[i].line, &tokens);
+    if (tokens.name_length != strlen(cases[i].name) ||
+        memcmp(tokens.name, cases[i].name, tokens.name_length) != 0 ||
+        tokens.arguments_length != strlen(cases[i].arguments) ||
+        memcmp(tokens.arguments, cases[i].arguments, tokens.arguments_length) !=
+            0)
+      return 1;
+  }
+  return 0;
+}
+
 static int test_command_queue_modes(void) {
   static const char *const turns[] = {"/new",
                                       "/resume 1",
@@ -489,6 +523,7 @@ static int test_observer_commands(void) {
   return 0;
 }
 int main(void) {
-  return test_observer_commands() || test_command_queue_modes() ||
-         test_goal_handoff() || test_shared_auth() || test_event_logging();
+  return test_command_tokens() || test_observer_commands() ||
+         test_command_queue_modes() || test_goal_handoff() ||
+         test_shared_auth() || test_event_logging();
 }

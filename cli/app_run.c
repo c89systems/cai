@@ -3727,20 +3727,18 @@ static int cli_dispatch_command(cli_state *state, const char *line,
    * Preserve argument contents (especially goal text and file paths), and
    * leave ! shell commands entirely untouched. The feed echoes the input. */
   if (line[0] == '/') {
-    size_t name = strcspn(line, " \t"), length;
-    const char *arg = line + name;
-    const char *canonical = cai_cli_command_name(line, &name);
-    arg += strspn(arg, " \t");
-    length = strlen(arg);
-    while (length > 0U && strchr(" \t", arg[length - 1U]) != NULL)
-      length--;
+    cai_cli_command_tokens tokens;
+    size_t name, length;
+    cai_cli_command_parse(line, &tokens);
+    name = tokens.name_length;
+    length = tokens.arguments_length;
     normalized = malloc(name + length + 2U);
     if (normalized == NULL)
       return cai_cli_error(error, CAI_ERR_NOMEM, "normalize command input");
-    memcpy(normalized, canonical, name);
+    memcpy(normalized, tokens.name, name);
     if (length != 0U) {
       normalized[name++] = ' ';
-      memcpy(normalized + name, arg, length);
+      memcpy(normalized + name, tokens.arguments, length);
       name += length;
     }
     normalized[name] = '\0';

@@ -30,6 +30,7 @@ cai_cli_command_help
 cai_cli_command_is_theme
 cai_cli_command_name
 cai_cli_command_pager
+cai_cli_command_parse
 cai_cli_configure
 cai_cli_configure_at
 cai_cli_documents_begin

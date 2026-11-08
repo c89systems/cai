@@ -76,6 +76,18 @@ const char *cai_cli_command_name(const char *line, size_t *length) {
   return line;
 }
 
+void cai_cli_command_parse(const char *line, cai_cli_command_tokens *tokens) {
+  tokens->name_length = strcspn(line, " \t");
+  tokens->arguments = line + tokens->name_length;
+  tokens->arguments += strspn(tokens->arguments, " \t");
+  tokens->name = cai_cli_command_name(line, &tokens->name_length);
+  tokens->arguments_length = strlen(tokens->arguments);
+  while (tokens->arguments_length != 0U &&
+         strchr(" \t", tokens->arguments[tokens->arguments_length - 1U]) !=
+             NULL)
+    --tokens->arguments_length;
+}
+
 int cai_cli_command_is_theme(const char *line) {
   size_t length = strcspn(line, " \t");
   const char *name = cai_cli_command_name(line, &length);

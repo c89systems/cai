@@ -12,6 +12,15 @@ typedef enum cli_command_boundary {
 size_t cai_cli_command_count(void);
 const char *cai_cli_command_at(size_t index);
 const char *cai_cli_command_name(const char *line, size_t *length);
+/** Borrowed command/argument spans. Only space and tab separate the command;
+ * argument contents are preserved, with leading/trailing horizontal space
+ * excluded by the span. Names expand aliases. Both pointers are required and
+ * the input must remain valid while its spans are used. */
+typedef struct cai_cli_command_tokens {
+  const char *name, *arguments;
+  size_t name_length, arguments_length;
+} cai_cli_command_tokens;
+void cai_cli_command_parse(const char *, cai_cli_command_tokens *);
 cli_command_boundary cai_cli_command_delivery(const char *line);
 int cai_cli_command_is_theme(const char *line);
 /** Native manual reviewers and admitted review commands share presentation;

@@ -113,6 +113,15 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_batch_test.sh" "$<TARGET_FILE:cai_cli>"
       "$<TARGET_FILE:cai_cli_headless_client_test>")
     set_tests_properties(cai_cli_batch PROPERTIES TIMEOUT 30)
+    foreach(_batch_protocol responses chat_completions)
+      foreach(_batch_scope review goal)
+        add_test(NAME cai_cli_batch_commands_${_batch_protocol}_${_batch_scope} COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_batch_commands_test.sh"
+          "$<TARGET_FILE:cai_cli>" "${_batch_protocol}" "${_batch_scope}")
+        set_tests_properties(cai_cli_batch_commands_${_batch_protocol}_${_batch_scope}
+          PROPERTIES TIMEOUT 30 LABELS "cli;local;offline")
+      endforeach()
+    endforeach()
     add_test(NAME cai_cli_batch_shell COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_batch_shell_test.sh" "$<TARGET_FILE:cai_cli>")
     set_tests_properties(cai_cli_batch_shell PROPERTIES TIMEOUT 30 LABELS "cli;local;offline")

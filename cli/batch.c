@@ -687,6 +687,10 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
       (b->startup.stage < CAI_CLI_STARTUP_DONE ||
        (b->lines != NULL && !b->input_eof))) {
     cai_input_request request = {0};
+    cai_cli_command_tokens tokens;
+    const char *goal_argument;
+    size_t goal_word;
+    int is_goal;
     char *text = NULL;
     int control = 0;
     rc = cai_cli_startup_next(&b->startup, o, &text, &control, error);
@@ -701,28 +705,34 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
     b->startup_control = control;
     b->source_quit = 0;
     b->command = control || text[0] == '/' || text[0] == '!';
+    cai_cli_command_parse(text, &tokens);
     if (b->feed != NULL) {
-      size_t name_length = strcspn(text, " \t");
-      const char *name = cai_cli_command_name(text, &name_length);
-      const char *argument = text + strcspn(text, " \t");
-      argument += strspn(argument, " \t");
-      if (*argument == '\0' &&
-          ((name_length == 5U && memcmp(name, "/quit", 5U) == 0) ||
-           (name_length == 5U && memcmp(name, "/exit", 5U) == 0)))
+      if (tokens.arguments_length == 0U &&
+          ((tokens.name_length == 5U &&
+            memcmp(tokens.name, "/quit", 5U) == 0) ||
+           (tokens.name_length == 5U && memcmp(tokens.name, "/exit", 5U) == 0)))
         b->source_quit = 1;
-      if ((name_length == 4U && memcmp(name, "/new", 4U) == 0) ||
-          (name_length == 7U && memcmp(name, "/resume", 7U) == 0))
+      if ((tokens.name_length == 4U && memcmp(tokens.name, "/new", 4U) == 0) ||
+          (tokens.name_length == 7U && memcmp(tokens.name, "/resume", 7U) == 0))
         b->plain_barrier = b->request;
       b->plain_quiet = 0;
     }
+    /* Match the owner's command spans and goal-action whitespace. A launch
+     * acknowledgement cannot settle work accepted under another spelling. */
+    is_goal = tokens.name_length == 5U && memcmp(tokens.name, "/goal", 5U) == 0;
+    goal_argument = tokens.arguments + strspn(tokens.arguments, " \t\r\n");
+    goal_word = strcspn(goal_argument, " \t\r\n");
     b->goal_command =
-        b->command && (strncmp(text, "/goal new ", 10U) == 0 ||
-                       strncmp(text, "/review-and-fix", 15U) == 0);
-    b->goal_start = strncmp(text, "/goal", 5U) == 0 &&
-                    strchr(" \t\r\n", text[5]) != NULL &&
-                    cai_cli_goal_input_argument(text + 5U) != NULL;
-    b->review_command = b->command && (strcmp(text, "/review") == 0 ||
-                                       strncmp(text, "/review ", 8U) == 0);
+        b->command &&
+        ((is_goal &&
+          ((goal_word == 3U && memcmp(goal_argument, "new", 3U) == 0) ||
+           (goal_word == 6U && memcmp(goal_argument, "resume", 6U) == 0))) ||
+         (tokens.name_length == 15U &&
+          memcmp(tokens.name, "/review-and-fix", 15U) == 0));
+    b->goal_start =
+        is_goal && cai_cli_goal_input_argument(tokens.arguments) != NULL;
+    b->review_command = b->command && tokens.name_length == 7U &&
+                        memcmp(tokens.name, "/review", 7U) == 0;
     b->shell_command = text[0] == '!';
     b->shell_started = b->shell_end = b->shell_done = 0;
     b->shell_sequence = b->shell_offset = 0U;
