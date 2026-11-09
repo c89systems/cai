@@ -841,9 +841,17 @@ int cai_cli_validate_options(cai_cli_options *options) {
   static const char *const providers[] = {"chatgpt", "openai", "openrouter",
                                           "berget",  "custom", NULL};
   if (options->all && !options->terminate_headless && !options->list &&
-      !options->list_all) {
+      !options->list_all && !options->resume_list && !options->delete_list &&
+      options->delete_id == NULL) {
     cai_cli_option_error(options,
-                         "--all requires --list or --terminate-headless");
+                         "--all requires a conversation listing, --delete ID "
+                         "or --terminate-headless");
+    return -1;
+  }
+  if (options->all && options->delete_id != NULL &&
+      strspn(options->delete_id, "0123456789") == strlen(options->delete_id)) {
+    cai_cli_option_error(options, "global deletion requires a conversation ID; "
+                                  "omit --all to select a local row number");
     return -1;
   }
   if (options->all && options->list) {

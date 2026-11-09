@@ -214,8 +214,9 @@ int cai_cli_pouch_begin_read(cai_cli_pouch *pouch, const char *id,
 void cai_cli_pouch_end_read(struct cai_cli_session_guard *guard);
 int cai_cli_pouch_deletable(cai_cli_pouch *pouch, const char *id, int *eligible,
                             cai_error *error);
-int cai_cli_pouch_delete(cai_cli_pouch *pouch, const char *workspace,
-                         const char *id,
+/* IDs are unique across this history store. Workspace scoping belongs only
+ * to listing/number resolution, never to deletion of a resolved identity. */
+int cai_cli_pouch_delete(cai_cli_pouch *pouch, const char *id,
                          int (*cleanup)(void *, const char *, cai_error *),
                          void *context, cai_error *error);
 int cai_cli_pouch_lock(cai_cli_pouch *pouch, const char *id, lc_lease **out,

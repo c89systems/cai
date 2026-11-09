@@ -333,18 +333,20 @@ static int dispatch(utility_run *u) {
   } else if (u->options.list || u->options.list_all || u->options.resume_list ||
              u->options.delete_list) {
     u->operation = "list conversations";
-    rc =
-        cai_cli_pouch_list(&u->pouch, u->options.list_all ? NULL : u->workspace,
-                           &u->sessions, &u->session_count, &u->error);
+    rc = cai_cli_pouch_list(
+        &u->pouch,
+        (u->options.list_all || u->options.all) ? NULL : u->workspace,
+        &u->sessions, &u->session_count, &u->error);
     if (rc == CAI_OK && u->options.delete_list)
       rc = cai_cli_sessions_deletable(&u->pouch, u->sessions, &u->session_count,
                                       &u->error);
     if (rc == CAI_OK)
       rc = cai_sink_stdout(&destination, &u->error);
     if (rc == CAI_OK)
-      rc = cai_cli_sessions_print(
-          destination, u->sessions, u->session_count, !u->options.list_all,
-          mdf_terminal_width(STDOUT_FILENO, 80), &u->error);
+      rc = cai_cli_sessions_print(destination, u->sessions, u->session_count,
+                                  !(u->options.list_all || u->options.all),
+                                  mdf_terminal_width(STDOUT_FILENO, 80),
+                                  &u->error);
   } else if (u->options.delete_id != NULL) {
     cai_cli_pouch *messaging = &u->pouch;
     u->operation = "delete conversation";

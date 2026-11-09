@@ -733,6 +733,10 @@
     add_test(NAME cai_cli_sessions
       COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_sessions_test.sh"
         "$<TARGET_FILE:cai_cli_mock_fixture>" "${CMAKE_CURRENT_BINARY_DIR}")
+    add_test(NAME cai_cli_session_all COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_session_all_test.sh"
+      "$<TARGET_FILE:cai_cli_mock_fixture>")
+    set_tests_properties(cai_cli_session_all PROPERTIES TIMEOUT 20)
     add_executable(cai_cli_resume_selection_test tests/cli_resume_selection_test.c)
     target_link_libraries(cai_cli_resume_selection_test PRIVATE cai_cli_support)
     target_link_options(cai_cli_resume_selection_test PRIVATE

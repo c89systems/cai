@@ -162,6 +162,30 @@ static int terminate_options(void) {
   return 0;
 }
 
+static int global_session_options(void) {
+  cai_cli_options options;
+  static char program[] = "cai", resume[] = "-R", delete_flag[] = "-D";
+  static char all[] = "--all", id[] = "saved-id", number[] = "1";
+  char *resume_args[] = {program, resume, all};
+  char *reverse[] = {program, all, resume};
+  char *delete_args[] = {program, delete_flag, all};
+  char *delete_id[] = {program, delete_flag, id, all};
+  char *delete_number[] = {program, delete_flag, number, all};
+  char *combined[] = {program, resume, delete_flag, all};
+  if (cai_cli_parse_options(3, resume_args, &options) != 1 || !options.all ||
+      !options.resume_list || options.list_all ||
+      cai_cli_parse_options(3, reverse, &options) != 1 ||
+      !options.resume_list ||
+      cai_cli_parse_options(3, delete_args, &options) != 1 || !options.all ||
+      !options.delete_list || options.list_all ||
+      cai_cli_parse_options(4, delete_id, &options) != 1 ||
+      options.delete_id != id ||
+      cai_cli_parse_options(4, delete_number, &options) != -1 ||
+      cai_cli_parse_options(4, combined, &options) != -1)
+    return 1;
+  return 0;
+}
+
 static int attachment_options(void) {
   cai_cli_options options;
   static char program[] = "cai", server[] = "--server", short_server[] = "-s";
@@ -885,7 +909,8 @@ int main(void) {
       cai_cli_parse_options(3, invalid_legacy_instructions, &options) != -1 ||
       cai_cli_parse_options(3, invalid_legacy_workspace, &options) != -1)
     return 1;
-  return headless_options() || terminate_options() || attachment_options() ||
+  return headless_options() || terminate_options() ||
+         global_session_options() || attachment_options() ||
          value_option_instructions() || config_option_precedence() ||
          background_options() || replay_options() || resume_alias_options() ||
          delete_options() || short_argument_options() ||

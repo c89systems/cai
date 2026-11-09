@@ -3,6 +3,8 @@
 Start `cai` in a project directory.
 It resumes the newest conversation there; `cai -N` starts another.
 `cai -R ID` or `cai -R NUMBER` selects that conversation before replay, including when attaching to an existing workspace server.
+`cai -R --all` lists conversations across the history store; use `-C DIR -R ID` to resume one in its workspace.
+`cai -D --all` lists closed conversations eligible for deletion across that store. `cai -D ID` deletes one by its store-wide identity from any directory; numeric choices remain local.
 Startup selection does not submit a `/resume` command or replay a different conversation first.
 Ctrl-D on an empty draft follows the same goodbye and detach path as `/quit` and Alt-Q; with a nonempty draft it retains the editor's forward-delete behavior.
 First-time workspaces require `cai -y` to save approval for that directory and its descendants.

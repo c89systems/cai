@@ -714,8 +714,7 @@ int cai_cli_session_delete(cai_cli_pouch *pouch, cai_cli_pouch *messaging,
   cleanup.pouch = pouch;
   cleanup.messaging = messaging;
   cleanup.options = options;
-  return rc == CAI_OK
-             ? cai_cli_pouch_delete(pouch, workspace, id, cleanup_session_files,
-                                    &cleanup, error)
-             : rc;
+  return rc == CAI_OK ? cai_cli_pouch_delete(pouch, id, cleanup_session_files,
+                                             &cleanup, error)
+                      : rc;
 }

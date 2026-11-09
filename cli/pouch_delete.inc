@@ -193,8 +193,7 @@ static int deletion_one(cai_cli_pouch *pouch, const cai_cli_session *item,
   return rc;
 }
 
-int cai_cli_pouch_delete(cai_cli_pouch *pouch, const char *workspace,
-                         const char *id,
+int cai_cli_pouch_delete(cai_cli_pouch *pouch, const char *id,
                          int (*cleanup)(void *, const char *, cai_error *),
                          void *context, cai_error *error) {
   session_deletion plan;
@@ -214,9 +213,6 @@ int cai_cli_pouch_delete(cai_cli_pouch *pouch, const char *workspace,
   if (rc == CAI_OK && strcmp(root->id, id) != 0)
     rc = cai_cli_error(error, CAI_ERR_INVALID,
                        "conversation metadata identity does not match its key");
-  if (rc == CAI_OK && strcmp(root->workspace, workspace) != 0)
-    rc = cai_cli_error(error, CAI_ERR_INVALID,
-                       "conversation belongs to another directory");
   if (rc == CAI_OK)
     rc = deletion_add(&plan, root, error);
   for (i = 0U; rc == CAI_OK && i < plan.count; i++)

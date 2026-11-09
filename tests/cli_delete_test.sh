@@ -42,14 +42,14 @@ run -D 1; ok; contains "$root/stdout" "Deleted conversation $first."
 run --delete "$first"; bad; contains "$root/stderr" 'was not found'
 terminal_close
 
-# Invalid choices and directory mismatches never remove another conversation.
+# Invalid choices and local row numbers never select another workspace.
 for choice in 0 999999999999999999999999999999999 ../sentinel missing-id; do
   run -D "$choice"; bad
 done
 run --delete ''; bad
 mkdir "$root/elsewhere"
-run -C "$root/elsewhere" -D "$second"; bad
-contains "$root/stderr" 'another directory'
+run -C "$root/elsewhere" -D 1; bad
+contains "$root/stderr" 'No conversation with that number'
 [[ $(session_id) == "$second" ]]
 
 # Deleting the newest repairs auto-resume to the remaining commit.

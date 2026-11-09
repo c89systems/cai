@@ -49,6 +49,16 @@ sufficient; no conversation ID or process scan is involved.
 stops its owners after verifying their identities. Vanished hints are ignored;
 instance checks prevent a stale record from targeting a replacement owner.
 `--all` also modifies `--list`: `cai --list --all` is equivalent to `cai -L`.
+`cai -R --all` lists conversations across the history store, and `cai -D --all`
+lists closed conversations eligible for deletion across that store. These global
+lists show IDs and directories without workspace-local row numbers. Neither
+command changes or deletes conversations.
+
+Conversation IDs are unique within the history store. `cai -D ID` deletes that
+conversation from any working directory, with or without `--all`; open
+conversations remain protected. Numeric deletion choices stay workspace-local
+and require omitting `--all`. Resuming still uses the conversation's workspace:
+use `cai -C DIR -R ID` for an ID from a global listing.
 Other uses of `--all` are rejected.
 
 An explicit local shell/pager action is a separate terminal operation, available

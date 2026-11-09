@@ -125,8 +125,10 @@ retry unrelated errors or standalone compaction requests.
 
 The C and Lua receivers accept `-D` / `--delete` through the same argument
 parser. With no value it lists eligible conversations in the selected workspace;
-an ID or list number deletes the conversation and its owned child history,
-prompt recall, logs, exports and delivered inbox messages. An open conversation
+`--all` lists eligible conversations across the history store. An ID deletes
+that conversation regardless of the working directory; a list number selects
+from the current workspace. Deletion removes the conversation and its owned
+child history, prompt recall, logs, exports and delivered inbox messages. An open conversation
 is omitted and cannot be deleted. Shared stores and workspace files remain.
 Prompt recall is per-conversation, so switching sessions also switches recall.
 
