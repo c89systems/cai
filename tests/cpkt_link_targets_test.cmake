@@ -45,8 +45,7 @@ function(cai_link_command cmake_target output_var)
     set(command "")
     set(found_edge OFF)
     foreach(line IN LISTS ninja_lines)
-      if(line MATCHES "^build .*: [A-Z_]*LINKER__${cmake_target}" AND
-         line MATCHES "CMakeFiles/${cmake_target}[.]dir/")
+      if(line MATCHES "^build .*: [A-Z_]*LINKER__${cmake_target}_${CAI_BUILD_TYPE} ")
         set(command "${line}\n")
         set(found_edge ON)
       elseif(found_edge)
@@ -90,6 +89,10 @@ if(CAI_TARGET_ID MATCHES "darwin")
   set(shared_curl "${cpkt_lib_dir}/libcurl.dylib")
 endif()
 set(static_curl "${cpkt_lib_dir}/libcurl.a")
+set(shared_lua "${cpkt_lib_dir}/liblua.so")
+if(CAI_TARGET_ID MATCHES "darwin")
+  set(shared_lua "${cpkt_lib_dir}/liblua.dylib")
+endif()
 set(static_private_archives
   "${cpkt_lib_dir}/libcrypto.a"
   "${cpkt_lib_dir}/libnghttp2.a"
@@ -107,6 +110,21 @@ if(CAI_BUILD_SHARED)
   endforeach()
   if(CAI_TARGET_ID MATCHES "darwin")
     cai_require_not_contains("cai_shared link edge" "${shared_edge}" "-ldl")
+  endif()
+endif()
+
+# Lua's public version is unchanged between cpkt releases. A cached Lua_DIR
+# must not silently select an older VM than the rest of the selected SDK.
+if(CAI_BUILD_LUA_TOOLS)
+  if(CAI_BUILD_STATIC)
+    cai_link_command(cai_lua_tools_test lua_tools_static_edge)
+    cai_require_contains("Lua tools static link edge" "${lua_tools_static_edge}"
+      "${cpkt_lib_dir}/liblua.a")
+  endif()
+  if(CAI_BUILD_SHARED)
+    cai_link_command(cai_lua_tools_shared lua_tools_shared_edge)
+    cai_require_contains("Lua tools shared link edge" "${lua_tools_shared_edge}"
+      "${shared_lua}")
   endif()
 endif()
 

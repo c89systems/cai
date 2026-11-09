@@ -289,7 +289,28 @@ static void test_files(const char *base) {
     cai_error_cleanup(&error);
     cai_error_init(&error);
   }
-  /* Restore the original handler for the following reload-failure check. */
+  /* cpkt 0.7 guards native Lua recursion on this default-stack worker. These
+   * protected-call and C-callback paths used to segfault under musl. */
+  file_write(source,
+             "return function() local function nested() return pcall(nested) "
+             "end; nested(); return 'PROTECTED RECOVERED' end");
+  assert(cai_plugins_load(plugins, package, &error) == CAI_OK);
+  execute(plugins, "lua_example", "{}", &call, "PROTECTED RECOVERED");
+  file_write(source,
+             "return function() local function f() local ok,v=pcall(f); "
+             "return ok and v or tostring(v) end; "
+             "assert(f():find('stack overflow',1,true)); "
+             "local function callback() return string.gsub('x','x',callback) "
+             "end; local ok,e=pcall(callback); "
+             "assert(not ok and tostring(e):find('stack overflow',1,true)); "
+             "assert(2+2==4); return 'STACK RECOVERED' end");
+  assert(cai_plugins_load(plugins, package, &error) == CAI_OK);
+  execute(plugins, "lua_example", "{}", &call, "STACK RECOVERED");
+  file_write(source, "return function() local function f() return "
+                     "string.gsub('x','x',f) end; return f() end");
+  assert(cai_plugins_load(plugins, package, &error) == CAI_OK);
+  assert(execute(plugins, "lua_example", "{}", &call, NULL) == CAI_ERR_INVALID);
+  /* An unhandled overflow must not prevent later invocations or reloads. */
   file_write(source, "return function(input,ctx) return {answer=44} end");
   assert(cai_plugins_load(plugins, package, &error) == CAI_OK);
   /* Syntax failure preserves the loaded source; file edits alone do not reload.
