@@ -38,11 +38,11 @@ done
 # select it. Malformed entry points start no owner and write no UI.
 for fd in 0 -1 +3 3x 9999999999999999999999999; do
   rc=0
-  "$cli" --_workspace-owner "$fd" -- >"$root/stdout" 2>"$root/stderr" || rc=$?
+  "$cli" -x --_workspace-owner "$fd" -- >"$root/stdout" 2>"$root/stderr" || rc=$?
   [[ $rc == 2 && ! -s "$root/stdout" && ! -s "$root/stderr" ]]
 done
 rc=0
-"$cli" --_workspace-owner 3 missing-separator >"$root/stdout" 2>"$root/stderr" || rc=$?
+"$cli" -x --_workspace-owner 3 missing-separator >"$root/stdout" 2>"$root/stderr" || rc=$?
 [[ $rc == 2 ]]
 # A later occurrence remains an ordinary invalid option, not an exec entry.
 run --_workspace-owner 0 --

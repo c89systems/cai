@@ -66,15 +66,27 @@ static int discover(cai_cli_attach_boot *s, uint64_t now, cai_error *error) {
 }
 static int launch(cai_cli_attach_boot *s, uint64_t now, cai_error *error) {
   char program[PATH_MAX];
+  const char **arguments;
+  int i, rc;
   const char *executable = s->program;
   if (executable == NULL) {
-    int rc = cai_cli_executable_path(program, sizeof(program), error);
+    rc = cai_cli_executable_path(program, sizeof(program), error);
     if (rc != CAI_OK)
       return rc;
     executable = program;
   }
-  return cai_cli_spawn_open(executable, s->argc, s->argv, now, 0U, &s->child,
-                            error);
+  arguments = calloc((size_t)s->argc + 1U, sizeof(*arguments));
+  if (arguments == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate headless server arguments");
+  /* Freeze the resolved lifetime policy across reexec, including overrides. */
+  arguments[0] = s->options->server_persist ? "--persist" : "--no-persist";
+  for (i = 0; i < s->argc; ++i)
+    arguments[i + 1] = s->argv[i];
+  rc = cai_cli_spawn_open(executable, s->argc + 1, arguments, now, 0U,
+                          &s->child, error);
+  free(arguments);
+  return rc;
 }
 static int pump(void *context, uint64_t now, cai_app_client_config *target,
                 int *ready, cai_error *error) {
@@ -165,8 +177,8 @@ int cai_cli_attach_boot_open(const cai_cli_options *options,
   if (out != NULL)
     *out = NULL;
   if (options == NULL || out == NULL || options->directory == NULL ||
-      options->runtime_dir == NULL || argc < 0 || (argc != 0 && argv == NULL) ||
-      strlen(options->directory) >= 4096U)
+      options->runtime_dir == NULL || argc < 0 || argc >= 65536 ||
+      (argc != 0 && argv == NULL) || strlen(options->directory) >= 4096U)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "workspace startup options and output required");
   s = calloc(1U, sizeof(*s));

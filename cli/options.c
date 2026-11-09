@@ -165,6 +165,14 @@ static int cli_read_options(int argc, char *const *argv,
       options->headless = 1;
       continue;
     }
+    if (strcmp(flag, "--terminate-headless") == 0 || strcmp(flag, "-X") == 0) {
+      options->terminate_headless = 1;
+      continue;
+    }
+    if (strcmp(flag, "--all") == 0) {
+      options->all = 1;
+      continue;
+    }
     if (strcmp(flag, "--persist") == 0 || strcmp(flag, "--no-persist") == 0) {
       options->server_persist = strcmp(flag, "--persist") == 0;
       options->owner_explicit[CAI_CLI_OWNER_server_persist] = 1U;
@@ -425,6 +433,8 @@ static int cli_read_options(int argc, char *const *argv,
           options->force = 1;
         else if (flag[j] == 'x')
           options->headless = 1;
+        else if (flag[j] == 'X')
+          options->terminate_headless = 1;
         else if (flag[j + 1U] == '\0' &&
                  cai_cli_short_value_option(flag) != 0) {
           short_flag[0] = '-';
@@ -820,9 +830,9 @@ int cai_cli_read_options(int argc, char *const *argv,
 }
 
 int cai_cli_options_utility(const cai_cli_options *o) {
-  return o->chrome_setup || o->chrome_remove || o->login || o->list ||
-         o->list_all || o->resume_list || o->delete_list ||
-         o->delete_id != NULL || o->export_id != NULL ||
+  return o->terminate_headless || o->chrome_setup || o->chrome_remove ||
+         o->login || o->list || o->list_all || o->resume_list ||
+         o->delete_list || o->delete_id != NULL || o->export_id != NULL ||
          o->import_file != NULL || o->install_skill != NULL ||
          o->message != NULL || o->dump_developer_instructions != NULL;
 }
@@ -830,6 +840,31 @@ int cai_cli_options_utility(const cai_cli_options *o) {
 int cai_cli_validate_options(cai_cli_options *options) {
   static const char *const providers[] = {"chatgpt", "openai", "openrouter",
                                           "berget",  "custom", NULL};
+  if (options->all && !options->terminate_headless && !options->list &&
+      !options->list_all) {
+    cai_cli_option_error(options,
+                         "--all requires --list or --terminate-headless");
+    return -1;
+  }
+  if (options->all && options->list) {
+    options->list_all = 1;
+    options->list = 0;
+  }
+  if (options->terminate_headless &&
+      (options->headless || options->server != NULL || options->temporary ||
+       options->non_interactive || options->review || options->review_and_fix ||
+       options->instruction_count || options->new_session ||
+       options->goal != NULL || options->list || options->list_all ||
+       options->resume_id != NULL || options->resume_list ||
+       options->delete_id != NULL || options->delete_list || options->login ||
+       options->chrome_setup || options->chrome_remove ||
+       options->export_id != NULL || options->import_file != NULL ||
+       options->install_skill != NULL || options->message != NULL ||
+       options->dump_developer_instructions != NULL)) {
+    cai_cli_option_error(options, "--terminate-headless cannot be combined "
+                                  "with server, input or other utility modes");
+    return -1;
+  }
   if (options->identity != NULL &&
       !cai_agent_identity_valid(options->identity)) {
     cai_cli_option_error(

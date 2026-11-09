@@ -137,6 +137,31 @@ static int headless_options(void) {
   return 0;
 }
 
+static int terminate_options(void) {
+  cai_cli_options options;
+  static char program[] = "cai", stop[] = "-X",
+              long_stop[] = "--terminate-headless";
+  static char all_flag[] = "--all", list_flag[] = "--list",
+              mixed_flag[] = "-Xx";
+  char *single[] = {program, stop};
+  char *all[] = {program, long_stop, all_flag};
+  char *list[] = {program, list_flag, all_flag};
+  char *reverse[] = {program, all_flag, list_flag};
+  char *alone[] = {program, all_flag};
+  char *mixed[] = {program, mixed_flag};
+  if (cai_cli_parse_options(2, single, &options) != 1 ||
+      !options.terminate_headless || !cai_cli_options_utility(&options) ||
+      options.headless || options.all ||
+      cai_cli_parse_options(3, all, &options) != 1 || !options.all ||
+      !options.terminate_headless ||
+      cai_cli_parse_options(3, list, &options) != 1 || !options.list_all ||
+      options.list || cai_cli_parse_options(3, reverse, &options) != 1 ||
+      !options.list_all || cai_cli_parse_options(2, alone, &options) != -1 ||
+      cai_cli_parse_options(2, mixed, &options) != -1)
+    return 1;
+  return 0;
+}
+
 static int attachment_options(void) {
   cai_cli_options options;
   static char program[] = "cai", server[] = "--server", short_server[] = "-s";
@@ -860,7 +885,7 @@ int main(void) {
       cai_cli_parse_options(3, invalid_legacy_instructions, &options) != -1 ||
       cai_cli_parse_options(3, invalid_legacy_workspace, &options) != -1)
     return 1;
-  return headless_options() || attachment_options() ||
+  return headless_options() || terminate_options() || attachment_options() ||
          value_option_instructions() || config_option_precedence() ||
          background_options() || replay_options() || resume_alias_options() ||
          delete_options() || short_argument_options() ||

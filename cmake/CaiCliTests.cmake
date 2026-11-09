@@ -104,6 +104,10 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_headless_test.sh"
       "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_cli_headless_client_test>")
     set_tests_properties(cai_cli_headless PROPERTIES TIMEOUT 45)
+    add_test(NAME cai_cli_terminate_headless COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_terminate_headless_test.sh"
+      "$<TARGET_FILE:cai_cli>")
+    set_tests_properties(cai_cli_terminate_headless PROPERTIES TIMEOUT 45)
     add_test(NAME cai_cli_attach COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_attach_test.sh" "$<TARGET_FILE:cai_cli>"
       "$<TARGET_FILE:cai_cli_headless_client_test>" "$<TARGET_FILE:cai_app_terminal_host>")

@@ -40,18 +40,19 @@ int main(int argc, char **argv) {
   cai_error_init(&error);
   /* Only the exec launcher uses this descriptor handoff. Values passed as
    * instructions or elsewhere in argv cannot select the private mode. */
-  if (argc > 1 && strcmp(argv[1], "--_workspace-owner") == 0) {
+  if (argc > 2 && strcmp(argv[1], "-x") == 0 &&
+      strcmp(argv[2], "--_workspace-owner") == 0) {
     char *end = NULL;
     long descriptor;
-    if (argc < 4 || strcmp(argv[3], "--") != 0 || argv[2][0] < '0' ||
-        argv[2][0] > '9')
+    if (argc < 5 || strcmp(argv[4], "--") != 0 || argv[3][0] < '0' ||
+        argv[3][0] > '9')
       return 2;
     errno = 0;
-    descriptor = strtol(argv[2], &end, 10);
+    descriptor = strtol(argv[3], &end, 10);
     if (errno || *end || descriptor < 3 || descriptor > INT_MAX)
       return 2;
-    rc = cai_cli_owner_run(&config, (int)descriptor, argc - 4,
-                           (const char *const *)(argv + 4), &code, &error);
+    rc = cai_cli_owner_run(&config, (int)descriptor, argc - 5,
+                           (const char *const *)(argv + 5), &code, &error);
     cai_error_cleanup(&error);
     return rc == CAI_OK ? code : 1;
   }

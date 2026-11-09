@@ -38,9 +38,10 @@ static void child(int argc, char **argv) {
   cai_cli_bootstrap_message *message = calloc(1U, sizeof(*message));
   cai_wire_peer *peer;
   int ready;
-  assert(argc == 5 && message != NULL);
-  ready = strcmp(argv[4], "ready") == 0;
-  assert(cai_wire_peer_open(atoi(argv[2]), 16384U, ignore, NULL, &peer, NULL) ==
+  assert(argc == 7 && message != NULL && strcmp(argv[1], "-x") == 0 &&
+         strcmp(argv[5], "--no-persist") == 0);
+  ready = strcmp(argv[6], "ready") == 0;
+  assert(cai_wire_peer_open(atoi(argv[3]), 16384U, ignore, NULL, &peer, NULL) ==
          CAI_OK);
   if (ready) {
     message->ready = 1;
@@ -51,7 +52,7 @@ static void child(int argc, char **argv) {
   } else {
     message->exit_code = 1;
     message->code =
-        strcmp(argv[4], "conflict") == 0 ? CAI_ERR_LIMIT : CAI_ERR_INVALID;
+        strcmp(argv[6], "conflict") == 0 ? CAI_ERR_LIMIT : CAI_ERR_INVALID;
     strcpy(message->message, "fixture startup failure");
   }
   assert(cai_cli_bootstrap_write(peer, message, NULL) == CAI_OK);
@@ -226,12 +227,15 @@ static void cases(const char *self, const char *runtime, const char *workspace,
   cai_cli_attach_boot_close(boot);
   no_attachment(server);
   cai_workspace_server_close(server);
+  rc = cai_cli_attach_boot_open(&options, self, 65536, conflict, &boot, NULL);
+  assert(rc == CAI_ERR_INVALID && boot == NULL);
   rc = cai_cli_attach_boot_open(NULL, NULL, 0, NULL, &boot, NULL);
   assert(rc == CAI_ERR_INVALID && boot == NULL);
 }
 int main(int argc, char **argv) {
   char *self;
-  if (argc > 1 && strcmp(argv[1], "--_workspace-owner") == 0) {
+  if (argc > 2 && strcmp(argv[1], "-x") == 0 &&
+      strcmp(argv[2], "--_workspace-owner") == 0) {
     child(argc, argv);
     return 0;
   }

@@ -12,11 +12,17 @@
 #include "stores.h"
 #include "theme.h"
 #include <cai/chrome.h>
+#include <cai/workspace.h>
+#include <cai/workspace_client.h>
+#include <cai/workspace_registry.h>
+#include <errno.h>
 #include <libmdf/mdf.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 /** Utility resources have the invocation's lifetime. Large path aggregates
@@ -90,12 +96,201 @@ static int native_host(int argc, char **argv) {
   return argc > 1 && (strncmp(argv[1], "chrome-extension://", 19U) == 0 ||
                       strcmp(argv[1], "--chrome-native-host") == 0);
 }
+
+static uint64_t control_time(void) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+    return 0U;
+  return (uint64_t)now.tv_sec * 1000U + (uint64_t)now.tv_nsec / 1000000U;
+}
+
+/** EOF alone could also mean a rejected/stale control request. Confirm the
+ * original endpoint was removed, without signalling or inspecting any PID. */
+static int await_endpoint(cai_workspace_endpoint *target,
+                          const struct stat *original, uint64_t until,
+                          cai_error *error) {
+  struct stat current;
+  for (;;) {
+    if (lstat(cai_workspace_endpoint_socket(target), &current) != 0) {
+      if (errno == ENOENT)
+        return CAI_OK;
+      return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                           "inspect stopped workspace endpoint");
+    }
+    if (current.st_dev != original->st_dev ||
+        current.st_ino != original->st_ino)
+      return CAI_OK;
+    if (control_time() >= until)
+      return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                           "workspace endpoint did not close after shutdown");
+    if (poll(NULL, 0U, 20) < 0 && errno != EINTR)
+      return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                           "wait for workspace endpoint cleanup");
+  }
+}
+
+/** Administrative stop uses only the verified socket client. Taking control
+ * is explicit in -X; no conversation, transcript or inference is opened. */
+static int terminate_one(utility_run *u, const char *workspace,
+                         const unsigned char *instance, int *stopped) {
+  cai_workspace_client_config config;
+  cai_workspace_client *client = NULL;
+  cai_workspace_endpoint *target = NULL;
+  cai_workspace_client_state state;
+  struct stat original;
+  struct pollfd interest;
+  uint64_t deadline, now = control_time(), until = now + 30000U;
+  int rc, stage = 0;
+  *stopped = 0;
+  cai_workspace_client_config_init(&config);
+  config.runtime_directory = u->options.runtime_dir;
+  config.workspace = workspace;
+  config.expected_instance = instance;
+  config.handshake_timeout_ms = 10000U;
+  rc = cai_workspace_endpoint_open(config.runtime_directory, workspace, &target,
+                                   &u->error);
+  if (rc == CAI_OK)
+    rc = cai_workspace_client_open(&config, now, &client, &u->error);
+  while (rc == CAI_OK) {
+    rc = cai_workspace_client_get_state(client, &state, &u->error);
+    if (rc != CAI_OK)
+      break;
+    if (state.phase == CAI_WORKSPACE_DISCONNECTED) {
+      if (stage == 2) {
+        rc = await_endpoint(target, &original, until, &u->error);
+        *stopped = rc == CAI_OK;
+      } else
+        rc = cai_cli_error(&u->error, CAI_ERR_TRANSPORT,
+                           "workspace disconnected before shutdown was sent");
+      break;
+    }
+    if (state.phase == CAI_WORKSPACE_CONNECTED && stage != 2) {
+      if (stage == 0 &&
+          lstat(cai_workspace_endpoint_socket(target), &original) != 0) {
+        rc = cai_cli_error(&u->error, CAI_ERR_TRANSPORT,
+                           "workspace endpoint disappeared before shutdown");
+        break;
+      }
+      if (state.controller == state.attachment) {
+        rc = cai_workspace_client_shutdown(client, 2U, state.generation,
+                                           &u->error);
+        stage = 2;
+      } else if (stage == 0) {
+        rc = cai_workspace_client_takeover(client, 1U, state.generation,
+                                           &u->error);
+        stage = 1;
+      }
+      if (rc != CAI_OK)
+        break;
+    }
+    now = control_time();
+    if (now >= until) {
+      rc = cai_cli_error(&u->error, CAI_ERR_TRANSPORT,
+                         "workspace server shutdown timed out");
+      break;
+    }
+    rc = cai_workspace_client_prepare(client, &interest, &deadline, &u->error);
+    if (rc != CAI_OK)
+      break;
+    if (!deadline || deadline > until)
+      deadline = until;
+    if (poll(&interest, 1U, deadline > now ? (int)(deadline - now) : 0) < 0 &&
+        errno != EINTR) {
+      rc = cai_cli_error(&u->error, CAI_ERR_TRANSPORT,
+                         "wait for workspace shutdown");
+      break;
+    }
+    rc = cai_workspace_client_pump(client, control_time(), &u->error);
+  }
+  cai_workspace_client_close(client);
+  cai_workspace_endpoint_close(target);
+  return rc;
+}
+
+static int terminate_servers(utility_run *u) {
+  cai_workspace_registry *registry = NULL;
+  const cai_workspace_record *record;
+  cai_workspace_endpoint *endpoint = NULL;
+  struct stat status;
+  size_t count = 0U;
+  int stopped, rc, failures = 0;
+  u->operation = "terminate workspace server";
+  if (!u->options.all) {
+    rc = terminate_one(u, u->workspace, NULL, &stopped);
+    if (rc == CAI_OK)
+      puts("Workspace server stopped.");
+    return rc;
+  }
+  if (lstat(u->options.runtime_dir, &status) != 0 && errno == ENOENT) {
+    puts("Workspace servers stopped: 0.");
+    return CAI_OK;
+  }
+  rc =
+      cai_workspace_registry_open(u->options.runtime_dir, &registry, &u->error);
+  while (rc == CAI_OK) {
+    rc = cai_workspace_registry_next(registry, &record, &u->error);
+    if (rc == CAI_ERR_INVALID || rc == CAI_ERR_PROTOCOL) {
+      ++failures;
+      cai_cli_log_error(u->log->logger, u->operation, &u->error);
+      cai_error_cleanup(&u->error);
+      cai_error_init(&u->error);
+      rc = CAI_OK;
+      continue;
+    }
+    if (rc != CAI_OK || record == NULL)
+      break;
+    /* Ignore vanished crash hints, but never signal a PID or unlink sockets.
+     * Pin the instance so a replacement owner is not stopped by a stale hint.
+     */
+    rc = cai_workspace_endpoint_open(u->options.runtime_dir, record->workspace,
+                                     &endpoint, &u->error);
+    if (rc == CAI_OK &&
+        lstat(cai_workspace_endpoint_socket(endpoint), &status) != 0 &&
+        errno == ENOENT) {
+      cai_workspace_endpoint_close(endpoint);
+      endpoint = NULL;
+      continue;
+    }
+    cai_workspace_endpoint_close(endpoint);
+    endpoint = NULL;
+    if (rc == CAI_OK)
+      rc = terminate_one(u, record->workspace, record->instance, &stopped);
+    if (rc == CAI_ERR_TRANSPORT &&
+        cai_workspace_registry_prune(registry, NULL) == CAI_OK) {
+      /* A crashed owner can leave both a hint and a refused socket. Pruning
+       * requires its released lifetime lock and unchanged record inode. */
+      cai_error_cleanup(&u->error);
+      cai_error_init(&u->error);
+      rc = CAI_OK;
+      continue;
+    }
+    if (rc == CAI_OK && stopped)
+      ++count;
+    if (rc != CAI_OK) {
+      ++failures;
+      cai_cli_log_error(u->log->logger, u->operation, &u->error);
+      cai_error_cleanup(&u->error);
+      cai_error_init(&u->error);
+      rc = CAI_OK;
+    }
+  }
+  cai_workspace_registry_close(registry);
+  if (rc == CAI_OK)
+    printf("Workspace servers stopped: %lu.\n", (unsigned long)count);
+  if (rc == CAI_OK && failures)
+    rc = cai_cli_error(
+        &u->error, CAI_ERR_TRANSPORT,
+        "some workspace servers could not be stopped; see preceding errors");
+  return rc;
+}
 static int dispatch(utility_run *u) {
   cai_cli_options selected;
   cai_sink *destination = NULL;
   char id[CAI_AGENT_SESSION_ID_MAX];
   const char *store;
   int rc;
+  if (u->options.terminate_headless)
+    return terminate_servers(u);
   if (u->options.install_skill != NULL)
     return cai_cli_install_skill(&u->options, u->log->logger);
   if (u->options.chrome_setup || u->options.chrome_remove) {

@@ -103,7 +103,7 @@ int cai_cli_spawn_open(const char *program, int argc, const char *const *argv,
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "workspace executable is not accessible");
   s = calloc(1U, sizeof(*s));
-  arguments = calloc((size_t)argc + 5U, sizeof(*arguments));
+  arguments = calloc((size_t)argc + 6U, sizeof(*arguments));
   if (s == NULL || arguments == NULL) {
     free(s);
     free(arguments);
@@ -116,7 +116,7 @@ int cai_cli_spawn_open(const char *program, int argc, const char *const *argv,
     if (argv[i] == NULL)
       rc = cai_cli_error(error, CAI_ERR_INVALID,
                          "null workspace startup argument");
-    else if ((arguments[i + 4] = strdup(argv[i])) == NULL)
+    else if ((arguments[i + 5] = strdup(argv[i])) == NULL)
       rc = cai_cli_error(error, CAI_ERR_NOMEM,
                          "copy workspace startup argument");
   if (rc == CAI_OK && socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0)
@@ -146,10 +146,11 @@ int cai_cli_spawn_open(const char *program, int argc, const char *const *argv,
   if (rc == CAI_OK) {
     snprintf(descriptor, sizeof(descriptor), "%d", pair[1]);
     arguments[0] = strdup(program);
-    arguments[1] = strdup("--_workspace-owner");
-    arguments[2] = strdup(descriptor);
-    arguments[3] = strdup("--");
-    for (i = 0; i < 4; i++)
+    arguments[1] = strdup("-x");
+    arguments[2] = strdup("--_workspace-owner");
+    arguments[3] = strdup(descriptor);
+    arguments[4] = strdup("--");
+    for (i = 0; i < 5; i++)
       if (arguments[i] == NULL)
         rc = cai_cli_error(error, CAI_ERR_NOMEM,
                            "copy workspace executable arguments");
@@ -188,7 +189,7 @@ int cai_cli_spawn_open(const char *program, int argc, const char *const *argv,
     close(pair[0]);
   if (pair[1] >= 0)
     close(pair[1]);
-  for (i = 0; i < argc + 4; i++)
+  for (i = 0; i < argc + 5; i++)
     free(arguments[i]);
   free(arguments);
   if (rc != CAI_OK) {

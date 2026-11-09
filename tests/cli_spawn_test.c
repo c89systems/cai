@@ -110,11 +110,11 @@ static int ignore_record(void *context, const cai_wire_event *e,
   return CAI_OK;
 }
 static void fake_child(int argc, char **argv) {
-  int fd = atoi(argv[2]);
-  const char *mode = argv[4];
+  int fd = atoi(argv[3]);
+  const char *mode = argv[5];
   cai_wire_peer *peer;
   cai_cli_bootstrap_message *v = calloc(1U, sizeof(*v));
-  assert(argc == 5 && v);
+  assert(argc == 6 && strcmp(argv[1], "-x") == 0 && v);
   if (strcmp(mode, "early-exit") == 0)
     _exit(23);
   if (strcmp(mode, "truncated") == 0) {
@@ -357,7 +357,8 @@ int main(int argc, char **argv) {
   const cai_cli_spawn_state *state;
   const char *mode = getenv("CAI_TEST_SPAWN_MODE");
   int persistent, admitted_receipt = 0;
-  if (argc > 1 && strcmp(argv[1], "--_workspace-owner") == 0) {
+  if (argc > 2 && strcmp(argv[1], "-x") == 0 &&
+      strcmp(argv[2], "--_workspace-owner") == 0) {
     fake_child(argc, argv);
     return 0;
   }

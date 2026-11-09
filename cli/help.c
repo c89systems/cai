@@ -3,6 +3,10 @@
 #include <string.h>
 
 static const cai_app_option options[] = {
+    {"--terminate-headless", 'X', CAI_APP_FLAG, NULL,
+     "Stop this directory's workspace server through its socket", 0, 0},
+    {"--all", '\0', CAI_APP_FLAG, NULL,
+     "All conversations with --list; all workspace servers with -X", 0, 0},
     {"--headless", 'x', CAI_APP_FLAG, NULL,
      "Run a persistent workspace server in the foreground (executable mode)", 0,
      0},

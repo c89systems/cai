@@ -14,13 +14,13 @@ startup after workspace discovery.
 
 Workspace discovery and startup create no frontend worker threads. After nonblocking
 discovery, it may launch its own absolute program path on that single frontend
-thread through a private `--_workspace-owner FD -- ...` entry point. The editor
+thread by executing `cai -x --_workspace-owner FD -- ...`. The editor
 can already be open; this launcher must remain outside threaded library hosts.
 The child becomes a session leader, restores normal child signal dispositions
 and masks, redirects standard input/output/error to `/dev/null`, and execs.
 Only the explicit Unix socket is deliberately retained across that exec; the
 child protects it with CLOEXEC before creating the owner or running tools.
-The private entry point is recognized only as the first argument, with a
+The private bootstrap entry point is recognized only immediately after `-x`, with a
 strict decimal descriptor of at least 3 and an explicit separator. A connected
 same-user Unix stream is required. It is not a public startup flag.
 
@@ -32,6 +32,24 @@ explicit headless true default, and explicit overrides. Starting an owner
 does not itself create an attachment or a producer. Frontend prompts must
 eventually be submitted once through the bound producer, not forwarded as
 both backend startup instructions and frontend input.
+
+Automatic launches pass the resolved `--no-persist`/`--persist` policy to the
+headless process. The normal default exits after its last client disconnects;
+explicit `cai -x` defaults to persistent. Both use the same native server lifecycle.
+
+`cai -X` (`--terminate-headless`) stops the current directory's server through
+the Unix socket, including persistent servers and servers with attached clients.
+It takes controller authority explicitly, requests shutdown and waits for the
+connection and original endpoint to close. It never launches a server or opens conversation storage.
+The endpoint is `ws-<hash-of-canonical-workspace>.sock` in the configured runtime
+directory, so resolving the current directory (including symlink aliases) is
+sufficient; no conversation ID or process scan is involved.
+
+`cai -X --all` visits the configured runtime directory's workspace registry and
+stops its owners after verifying their identities. Vanished hints are ignored;
+instance checks prevent a stale record from targeting a replacement owner.
+`--all` also modifies `--list`: `cai --list --all` is equivalent to `cai -L`.
+Other uses of `--all` are rejected.
 
 An explicit local shell/pager action is a separate terminal operation, available
 to native embedding too. Softline relays its PTY while native owner connections
