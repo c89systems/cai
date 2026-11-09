@@ -1,5 +1,4 @@
 #define _POSIX_C_SOURCE 200809L
-#include "worker_stack.h"
 #include <cai/app.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -40,7 +39,7 @@ int main(int argc, char **argv) {
   invocation.argc = argc;
   invocation.argv = argv;
   invocation.code = 1;
-  if (test_worker_start(&thread, run_application, &invocation) != 0)
+  if (pthread_create(&thread, NULL, run_application, &invocation) != 0)
     return 2;
   if (pthread_join(thread, NULL) != 0)
     return 2;

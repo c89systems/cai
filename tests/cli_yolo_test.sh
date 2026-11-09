@@ -18,6 +18,7 @@ for mode in false true; do
   policy=--no-yolo; [[ "$mode" == false ]] || policy=--yolo
   before=$(requests)
   run -Nni 'Check execution policy' "$policy"; ok
+  logs
   [[ $(stdout_text) == 'YOLO FINISHED' ]]
   tail -1 "$root/peer/requests.jsonl" >"$root/request"
   contains "$root/request" "HOME=$HOME"
@@ -27,12 +28,12 @@ for mode in false true; do
     contains "$root/request" 'SECRET=YOLO_ENV_ALLOWED'
     contains "$root/request" 'YOLO_OUTSIDE_FILE'
     [[ $(cat "$root/created") == YOLO_CREATED ]]
-    contains "$root/stderr" 'YOLO enabled'
+    contains "$root/logs.jsonl" 'YOLO enabled'
   else
     contains "$root/request" 'SECRET=unset'
     absent "$root/request" 'YOLO_OUTSIDE_FILE'
     [[ ! -e "$root/created" ]]
-    contains "$root/stderr" 'Sandbox restrictions enabled'
+    contains "$root/logs.jsonl" 'Sandbox restrictions enabled'
   fi
 done
 # Runtime-created reviewer and the manual review child inherit the same policy.

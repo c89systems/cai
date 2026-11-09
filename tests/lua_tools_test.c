@@ -1,6 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
-#include "worker_stack.h"
 #include <assert.h>
 #include <cai/lua_tools.h>
 #include <lauxlib.h>
@@ -359,7 +358,7 @@ static void *test_worker(void *context) {
 int main(int argc, char **argv) {
   pthread_t worker;
   assert(argc == 2);
-  assert(test_worker_start(&worker, test_worker, argv[1]) == 0);
+  assert(pthread_create(&worker, NULL, test_worker, argv[1]) == 0);
   assert(pthread_join(worker, NULL) == 0);
   return 0;
 }

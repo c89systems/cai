@@ -1,4 +1,11 @@
+#ifdef CAI_TEST_THREAD_DEFAULTS
+#define _GNU_SOURCE
+#endif
 #include "cai_internal.h"
+
+#ifdef CAI_TEST_THREAD_DEFAULTS
+#include "../tests/debug_thread_startup.inc"
+#endif
 
 #include <stdlib.h>
 #include <string.h>

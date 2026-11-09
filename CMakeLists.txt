@@ -593,6 +593,8 @@ if(CAI_BUILD_LUA_RUNNER)
 
 endif()
 
+include(cmake/CaiDebugThreads.cmake)
+
 function(cai_configure_c_target target)
   get_target_property(_cai_target_type ${target} TYPE)
   set_target_properties(${target} PROPERTIES
@@ -640,6 +642,7 @@ function(cai_configure_c_target target)
     endif()
   endif()
   if(_cai_target_type STREQUAL "EXECUTABLE")
+    cai_configure_test_threads(${target})
     cai_configure_local_runtime(${target})
   endif()
 endfunction()
@@ -834,6 +837,9 @@ endif()
 
 foreach(_cai_target IN ITEMS cai_static cai_shared)
   if(TARGET ${_cai_target})
+    if(CAI_TEST_GLIBC_THREADS)
+      target_compile_definitions(${_cai_target} PRIVATE CAI_TEST_THREAD_DEFAULTS)
+    endif()
     target_include_directories(${_cai_target}
       PUBLIC
         $<BUILD_INTERFACE:${CAI_PUBLIC_INCLUDE_DIR}>

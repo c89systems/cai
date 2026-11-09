@@ -11,7 +11,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #ifdef __linux__
-#include "worker_stack.h"
+#include <pthread.h>
 #include <sys/resource.h>
 
 typedef struct removal {
@@ -48,12 +48,12 @@ static void deep_cleanup(const char *directory) {
   limited = original;
   limited.rlim_cur = 64U;
   assert(setrlimit(RLIMIT_NOFILE, &limited) == 0);
-  assert(test_worker_start(&worker, remove_worker, &request) == 0);
+  assert(pthread_create(&worker, NULL, remove_worker, &request) == 0);
   assert(pthread_join(worker, NULL) == 0);
   assert(request.code == -1 && request.system_error == EMFILE);
   assert(setrlimit(RLIMIT_NOFILE, &original) == 0);
   /* Retry proves failure unwinds its descriptors as well as heap frames. */
-  assert(test_worker_start(&worker, remove_worker, &request) == 0);
+  assert(pthread_create(&worker, NULL, remove_worker, &request) == 0);
   assert(pthread_join(worker, NULL) == 0 && request.code == 0);
   assert(faccessat(request.parent, "deep-cleanup", F_OK, 0) == -1 &&
          errno == ENOENT);

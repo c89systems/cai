@@ -204,14 +204,7 @@ static void *exercise(void *context) {
 int main(int argc, char **argv) {
   worker w;
   pthread_t thread;
-  const pthread_attr_t *attr = NULL;
   char *binary;
-#ifdef __GLIBC__
-  pthread_attr_t bounded;
-  assert(pthread_attr_init(&bounded) == 0 &&
-         pthread_attr_setstacksize(&bounded, 128U * 1024U) == 0);
-  attr = &bounded;
-#endif
   if (argc == 3 && strcmp(argv[1], "--child") == 0)
     return child(argv[2]);
   assert(argc == 2);
@@ -219,11 +212,8 @@ int main(int argc, char **argv) {
   assert(binary != NULL);
   w.build = argv[1];
   w.binary = binary;
-  assert(pthread_create(&thread, attr, exercise, &w) == 0);
+  assert(pthread_create(&thread, NULL, exercise, &w) == 0);
   assert(pthread_join(thread, NULL) == 0);
   free(binary);
-#ifdef __GLIBC__
-  pthread_attr_destroy(&bounded);
-#endif
   return 0;
 }

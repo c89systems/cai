@@ -1,10 +1,10 @@
 #define _POSIX_C_SOURCE 200809L
-#include "worker_stack.h"
 #include <assert.h>
 #include <cai/cai.h>
 #include <cai/tools/exec.h>
 #include <cai/tools/read.h>
 #include <lonejson.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
   args.mode = argv[1];
   args.root = argv[2];
   args.sandbox = argv[3];
-  assert(test_worker_start(&worker, run, &args) == 0);
+  assert(pthread_create(&worker, NULL, run, &args) == 0);
   assert(pthread_join(worker, NULL) == 0);
   return 0;
 }

@@ -26,7 +26,15 @@ Do not edit source or reconfigure that tree while its build/tests run.
 Production C sources reject variable-length arrays, `alloca`, and frames larger than 8 KiB at compile time.
 This is a per-frame guard, not a call-chain budget: large scratch storage and input-dependent traversal state belong on the heap.
 Keep headroom for callbacks and dependencies on musl's default 128 KiB worker stack; never enlarge it to make a test pass.
-`cai_core_worker_stack`, `cai_app_worker_stack`, `cai_app_skill_stack`, and `cai_lua_tools` exercise that contract (native glibc fixtures emulate the same budget).
+
+glibc Debug builds with tests enabled set process-wide pthread defaults to 128 KiB in applications, fixtures and the core library's embedding hosts.
+CTest disables glibc's stack cache through `GLIBC_TUNABLES=glibc.pthread.stack_cache_size=0`, preserving other configured tunables; this prevents larger completed stacks from being reused for smaller workers.
+Set that tunable before startup when invoking a Debug test executable directly as well.
+Debug test subprocesses also receive that cache setting after environment filtering; other variables still follow the normal execution policy.
+Main-thread limits, explicit thread attributes, build-tool worker defaults, Release builds and musl defaults are unchanged.
+
+`cai_debug_thread_*` checks actual default/nested workers, child applications, explicit size/guard requests and guard-access faults.
+`cai_core_worker_stack`, `cai_app_worker_stack`, `cai_app_skill_stack`, and `cai_lua_tools` exercise real runtime operations using default worker attributes, including native musl verification.
 
 ## Static Linux CLI
 

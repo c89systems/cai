@@ -1,6 +1,40 @@
 
 if(CAI_BUILD_TESTS)
   enable_testing()
+  if(CAI_TEST_GLIBC_THREADS)
+    add_executable(cai_debug_thread_stack_test tests/debug_thread_stack_test.c)
+    cai_configure_c_target(cai_debug_thread_stack_test)
+    target_compile_options(cai_debug_thread_stack_test PRIVATE -UNDEBUG)
+    add_test(NAME cai_debug_thread_stack COMMAND cai_debug_thread_stack_test)
+    set_tests_properties(cai_debug_thread_stack PROPERTIES LABELS "unit;local;offline" TIMEOUT 10)
+    # These hosts deliberately bypass executable startup instrumentation.
+    # The control models an unrelated tool; embedding hosts rely on libcai.
+    foreach(kind IN ITEMS control static shared)
+      if(kind STREQUAL "control" OR TARGET cai_${kind})
+        add_executable(cai_debug_thread_${kind}_test tests/debug_thread_stack_test.c)
+        target_compile_options(cai_debug_thread_${kind}_test PRIVATE
+          -std=c89 -Wall -Wextra -Werror -Wpedantic -Wno-long-long -UNDEBUG)
+        target_link_libraries(cai_debug_thread_${kind}_test PRIVATE Threads::Threads)
+        if(kind STREQUAL "control")
+          target_compile_definitions(cai_debug_thread_${kind}_test PRIVATE CAI_STACK_CONTROL)
+        else()
+          target_compile_definitions(cai_debug_thread_${kind}_test PRIVATE CAI_STACK_EMBEDDED)
+          target_link_libraries(cai_debug_thread_${kind}_test PRIVATE cai_${kind})
+          if(kind STREQUAL "static")
+            target_compile_definitions(cai_debug_thread_${kind}_test PRIVATE CAI_STACK_FILTERED)
+          endif()
+        endif()
+        cai_configure_local_runtime(cai_debug_thread_${kind}_test)
+        add_test(NAME cai_debug_thread_${kind} COMMAND cai_debug_thread_${kind}_test)
+        set_tests_properties(cai_debug_thread_${kind} PROPERTIES LABELS "unit;local;offline" TIMEOUT 10)
+      endif()
+    endforeach()
+  endif()
+  add_test(NAME cai_debug_thread_environment COMMAND "${CMAKE_COMMAND}"
+    "-DCAI_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+    "-DCAI_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/debug_thread_environment_test.cmake")
+  set_tests_properties(cai_debug_thread_environment PROPERTIES LABELS "unit;local;offline" TIMEOUT 10)
   # Compile the extractable DTG units without libcai or its dependencies.
   add_executable(cai_dtg_test tests/dtg_test.c src/cai_dtg.c src/cai_dtg_time.c)
   target_include_directories(cai_dtg_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")

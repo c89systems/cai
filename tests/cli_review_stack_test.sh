@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/cli_test_common.sh"
 peer_start
-export CAI_TEST_SMALL_STACK=1
 git -C "$work" init -q -b feature/review
 git -C "$work" config core.hooksPath /dev/null
 printf 'seed\n' >"$work/tracked.txt"
