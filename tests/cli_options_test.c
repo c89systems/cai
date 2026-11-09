@@ -416,6 +416,7 @@ static int messaging_options(void) {
   char off[] = "--no-messaging", on[] = "--autoqueue";
   char valid[] = "7", invalid[] = "86400001";
   char queue_flag[] = "--message-queue", queue[] = "custom-mailbox";
+  char delay_flag[] = "--message-delay-seconds", delay_value[32];
   char *args[7];
   args[0] = first;
   args[1] = off;
@@ -425,7 +426,9 @@ static int messaging_options(void) {
   args[5] = queue_flag;
   args[6] = queue;
   if (cai_cli_parse_options(1, args, &options) != 1 || options.messaging ||
-      options.enable_auto_enqueue || options.message_ack_timeout_ms != 300000L)
+      options.enable_auto_enqueue ||
+      options.message_ack_timeout_ms != 300000L ||
+      options.message_delay_seconds != 0L)
     return 1;
   if (cai_cli_parse_options(5, args, &options) != 1 || options.messaging ||
       !options.enable_auto_enqueue || options.message_ack_timeout_ms != 7L)
@@ -439,6 +442,28 @@ static int messaging_options(void) {
       strstr(options.diagnostic, "1..86400000") == NULL ||
       cai_cli_parse_options(4, args, &options) != -1 ||
       strstr(options.diagnostic, "requires") == NULL)
+    return 1;
+  args[3] = delay_flag;
+  args[4] = delay_value;
+  strcpy(delay_value, "60");
+  if (cai_cli_parse_options(5, args, &options) != 1 ||
+      options.message_delay_seconds != 60L)
+    return 1;
+  strcpy(delay_value, "0");
+  if (cai_cli_parse_options(5, args, &options) != 1 ||
+      options.message_delay_seconds != 0L)
+    return 1;
+  {
+    const char *bad[] = {"-1", "1.5", "", "30s", "9223372036854775808"};
+    size_t i;
+    for (i = 0U; i < sizeof(bad) / sizeof(bad[0]); i++) {
+      snprintf(delay_value, sizeof(delay_value), "%s", bad[i]);
+      if (cai_cli_parse_options(5, args, &options) != -1 ||
+          strstr(options.diagnostic, "nonnegative seconds") == NULL)
+        return 1;
+    }
+  }
+  if (cai_cli_parse_options(4, args, &options) != -1)
     return 1;
   return 0;
 }

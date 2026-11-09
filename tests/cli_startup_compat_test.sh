@@ -56,6 +56,7 @@ reject paths.export_dir --export-dir "$root/other-exports"
 reject agent.shell_context_max_lines --shell-context-max-lines 19
 reject agent.shell_context_max_bytes --shell-context-max-bytes 4096
 reject messaging.ack_timeout_ms --message-ack-timeout-ms 17
+reject messaging.delay_seconds --message-delay-seconds 17
 [[ ! -e "$root/other-clipboard" && ! -e "$root/other-exports" ]]
 printf '[ui]\ntheme=gruvbox\n' >"$root/other.ini"
 reject paths.config_file --config "$root/other.ini"

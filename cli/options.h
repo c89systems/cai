@@ -79,6 +79,7 @@ typedef struct cai_cli_options {
   const char *send_queue, *message;
   int enable_auto_enqueue;
   long message_ack_timeout_ms;
+  long message_delay_seconds;
   long replay_turns;
   int prompt_history_limit;
   long conversation_retention_days;

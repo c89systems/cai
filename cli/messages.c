@@ -5,6 +5,7 @@
 #include "message_names.h"
 #include "session_commands.h"
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,13 +58,17 @@ LONEJSON_MAP_DEFINE(message_map, message_doc, message_fields);
 typedef struct send_args {
   char operation[16], recipient[129];
   char *text;
+  lonejson_int64 delay_seconds;
+  int has_delay_seconds;
 } send_args;
 static const lonejson_field argument_fields[] = {
     LONEJSON_FIELD_STRING_FIXED_REQ(send_args, operation, "operation",
                                     LONEJSON_OVERFLOW_FAIL),
     LONEJSON_FIELD_STRING_FIXED(send_args, recipient, "recipient",
                                 LONEJSON_OVERFLOW_FAIL),
-    LONEJSON_FIELD_STRING_ALLOC_OMIT_NULL(send_args, text, "text")};
+    LONEJSON_FIELD_STRING_ALLOC_OMIT_NULL(send_args, text, "text"),
+    LONEJSON_FIELD_I64_PRESENT(send_args, delay_seconds, has_delay_seconds,
+                               "delay_seconds")};
 LONEJSON_MAP_DEFINE(arguments_map, send_args, argument_fields);
 typedef struct message_link {
   struct message_link *next;
@@ -78,6 +83,7 @@ struct cai_cli_messages {
   int fd, stopping, dirty, receipt, claimed, lost;
   unsigned long long cancel_sequence;
   long timeout_ms;
+  long delay_seconds;
   char session[129], queue[129], instance[LC_XID_STRING_SIZE], receipts[160],
       workspace[PATH_MAX], waiting[LC_XID_STRING_SIZE], waiting_recipient[129];
   char hostname[256], host_id[33];
@@ -376,6 +382,7 @@ static int save_doc(cai_cli_messages *m, message_doc *doc, cai_error *error) {
   return rc;
 }
 static int enqueue(cai_cli_pouch *pouch, const message_doc *doc,
+                   long delay_seconds, lc_unix_seconds *available_at,
                    cai_error *error) {
   cai_source *source = NULL;
   lc_source *wire = NULL;
@@ -390,6 +397,7 @@ static int enqueue(cai_cli_pouch *pouch, const message_doc *doc,
   memset(&res, 0, sizeof(res));
   req.ns = pouch->messages_namespace;
   req.queue = queue;
+  req.delay_seconds = delay_seconds;
   req.content_type = "application/json";
   req.visibility_timeout_seconds = 30;
   req.max_attempts = 3;
@@ -406,11 +414,33 @@ static int enqueue(cai_cli_pouch *pouch, const message_doc *doc,
   if (rc == CAI_OK &&
       lc_enqueue(pouch->sessions, &req, wire, &res, &local) != LC_OK)
     rc = fail_lc(error, &local);
+  if (rc == CAI_OK && available_at != NULL)
+    *available_at = res.not_visible_until_unix;
   lc_source_close(wire);
   cai_source_close(source);
   lc_enqueue_res_cleanup(&res);
   lc_error_cleanup(&local);
   return rc;
+}
+/* Report scheduling only after storage accepts it. The availability timestamp
+ * comes from the backend clock; it is eligibility, not an execution promise. */
+static int send_result(cai_sink *sink, const message_doc *doc,
+                       const char *status, lc_unix_seconds available_at,
+                       cai_error *error) {
+  char response[384];
+  int length;
+  if (strcmp(status, "scheduled") == 0)
+    length = snprintf(
+        response, sizeof(response),
+        "{\"message_id\":\"%s\",\"status\":\"scheduled\",\"recipient\":\"%s\","
+        "\"not_visible_until_unix\":%lld}",
+        doc->id, doc->recipient, (long long)available_at);
+  else
+    length = snprintf(
+        response, sizeof(response),
+        "{\"message_id\":\"%s\",\"status\":\"%s\",\"recipient\":\"%s\"}",
+        doc->id, status, doc->recipient);
+  return cai_sink_write(sink, response, (size_t)length, error);
 }
 typedef struct message_reader {
   lc_source *source;
@@ -554,7 +584,7 @@ static int consume_with_scratch(void *context, lc_consumer_message *delivery,
    */
   /* An absent return address means enqueue-only delivery, with no receipt. */
   rc = scratch->doc.instance[0] != '\0'
-           ? enqueue(m->pouch, &scratch->receipt, &local)
+           ? enqueue(m->pouch, &scratch->receipt, 0L, NULL, &local)
            : CAI_OK;
   if (rc != CAI_OK) {
     rc = lc_error_set(error, LC_ERR_TRANSPORT, 0,
@@ -611,7 +641,7 @@ static int service_error(void *context, const lc_consumer_error *event,
                            fields, 2U);
   return LC_OK;
 }
-int cai_cli_messages_new(cai_cli_pouch *pouch, long timeout,
+int cai_cli_messages_new(cai_cli_pouch *pouch, long timeout, long delay_seconds,
                          cai_cli_messages **out, cai_error *error) {
   cai_cli_messages *m;
   *out = NULL;
@@ -619,6 +649,9 @@ int cai_cli_messages_new(cai_cli_pouch *pouch, long timeout,
     return cai_cli_error(
         error, CAI_ERR_INVALID,
         "message_ack_timeout_ms must be between 1 and 86400000");
+  if (delay_seconds < 0L)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "message_delay_seconds must be nonnegative");
   m = calloc(1U, sizeof(*m));
   if (m == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "allocate messaging service");
@@ -642,6 +675,7 @@ int cai_cli_messages_new(cai_cli_pouch *pouch, long timeout,
   }
   m->pouch = pouch;
   m->timeout_ms = timeout;
+  m->delay_seconds = delay_seconds;
   m->dirty = 1;
   *out = m;
   return CAI_OK;
@@ -1556,7 +1590,8 @@ static int send_tool(void *context, const char *arguments, cai_sink *output,
   lc_error local;
   lc_lease *binding = NULL;
   struct timespec deadline;
-  char response[256];
+  long delay_seconds;
+  lc_unix_seconds available_at = 0;
   unsigned long long sequence;
   int rc, wait_result = 0;
   /* Snapshot before parsing or acquiring leases. Cancellation advances this
@@ -1590,6 +1625,14 @@ static int send_tool(void *context, const char *arguments, cai_sink *output,
         "queue name, and 1..65536 text bytes (no terminal controls)");
     goto done;
   }
+  if (args.has_delay_seconds &&
+      (args.delay_seconds < 0 || args.delay_seconds > LONG_MAX)) {
+    rc = cai_cli_error(error, CAI_ERR_INVALID,
+                       "delay_seconds must be nonnegative and fit in long");
+    goto done;
+  }
+  delay_seconds =
+      args.has_delay_seconds ? (long)args.delay_seconds : m->delay_seconds;
   if (send_cancelled(m, sequence)) {
     rc = cai_cli_error(error, CAI_ERR_CANCELLED,
                        "agent message delivery cancelled");
@@ -1610,10 +1653,14 @@ static int send_tool(void *context, const char *arguments, cai_sink *output,
   strcpy(doc.kind, "message");
   strcpy(doc.sender, m->queue);
   strcpy(doc.sender_session, m->session);
-  strcpy(doc.instance, m->instance);
-  strcpy(doc.reply_queue, m->receipts);
   doc.text = args.text;
-  doc.deadline_ms = realtime_ms() + m->timeout_ms;
+  /* Scheduled sends outlive this sender and never request a receipt. Their
+   * initial invisibility must not consume an immediate-send ACK deadline. */
+  if (delay_seconds == 0L) {
+    strcpy(doc.instance, m->instance);
+    strcpy(doc.reply_queue, m->receipts);
+    doc.deadline_ms = realtime_ms() + m->timeout_ms;
+  }
   deadline.tv_sec = (time_t)(doc.deadline_ms / 1000);
   deadline.tv_nsec = (long)(doc.deadline_ms % 1000) * 1000000L;
   pthread_mutex_lock(&m->lock);
@@ -1629,16 +1676,23 @@ static int send_tool(void *context, const char *arguments, cai_sink *output,
                        "message sender is already waiting for a delivery");
     goto done;
   }
-  strcpy(m->waiting, doc.id);
-  strcpy(m->waiting_recipient, doc.recipient);
-  m->receipt = 0;
+  if (delay_seconds == 0L) {
+    strcpy(m->waiting, doc.id);
+    strcpy(m->waiting_recipient, doc.recipient);
+    m->receipt = 0;
+  }
   pthread_mutex_unlock(&m->lock);
-  rc = enqueue(m->pouch, &doc, error);
+  rc = enqueue(m->pouch, &doc, delay_seconds, &available_at, error);
   if (binding != NULL) {
     int released = lease_finish(binding, LC_OK, &local);
     binding = NULL;
     if (released != LC_OK && rc == CAI_OK)
       rc = fail_lc(error, &local);
+  }
+  if (delay_seconds > 0L) {
+    if (rc == CAI_OK)
+      rc = send_result(output, &doc, "scheduled", available_at, error);
+    goto done;
   }
   pthread_mutex_lock(&m->lock);
   while (rc == CAI_OK && !m->receipt && !m->stopping &&
@@ -1655,13 +1709,8 @@ static int send_tool(void *context, const char *arguments, cai_sink *output,
                              "before the delivery deadline");
   m->waiting[0] = '\0';
   pthread_mutex_unlock(&m->lock);
-  if (rc == CAI_OK) {
-    snprintf(
-        response, sizeof(response),
-        "{\"message_id\":\"%s\",\"status\":\"delivered\",\"recipient\":\"%s\"}",
-        doc.id, doc.recipient);
-    rc = cai_sink_write(output, response, strlen(response), error);
-  }
+  if (rc == CAI_OK)
+    rc = send_result(output, &doc, "delivered", 0, error);
 done:
   if (binding != NULL)
     (void)lease_finish(binding, LC_OK, &local);
@@ -1671,13 +1720,16 @@ done:
   return rc;
 }
 int cai_cli_messages_send_once(cai_cli_pouch *pouch, const char *recipient,
-                               const char *text, cai_sink *result,
-                               cai_error *error) {
+                               const char *text, long delay_seconds,
+                               cai_sink *result, cai_error *error) {
   message_doc doc;
   lc_error local;
-  char response[256];
+  lc_unix_seconds available_at = 0;
   int rc;
   memset(&doc, 0, sizeof(doc));
+  if (delay_seconds < 0L)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "message_delay_seconds must be nonnegative");
   if (recipient == NULL || text == NULL ||
       !queue_name(recipient, doc.recipient) || !valid_text(text))
     return cai_cli_error(error, CAI_ERR_INVALID,
@@ -1693,18 +1745,14 @@ int cai_cli_messages_send_once(cai_cli_pouch *pouch, const char *recipient,
     /* No return address or delivery deadline: the receiver may be offline. */
     doc.text = strdup(text);
     rc = doc.text != NULL
-             ? enqueue(pouch, &doc, error)
+             ? enqueue(pouch, &doc, delay_seconds, &available_at, error)
              : cai_cli_error(error, CAI_ERR_NOMEM, "copy standalone message");
   } else {
     rc = fail_lc(error, &local);
   }
-  if (rc == CAI_OK) {
-    snprintf(
-        response, sizeof(response),
-        "{\"message_id\":\"%s\",\"status\":\"queued\",\"recipient\":\"%s\"}",
-        doc.id, doc.recipient);
-    rc = cai_sink_write(result, response, strlen(response), error);
-  }
+  if (rc == CAI_OK)
+    rc = send_result(result, &doc, delay_seconds > 0L ? "scheduled" : "queued",
+                     available_at, error);
   free(doc.text);
   lc_error_cleanup(&local);
   return rc;
@@ -1714,17 +1762,18 @@ int cai_cli_messages_register(void *context, cai_agent *agent,
                               cai_error *error) {
   return cai_agent_register_raw_tool(
       agent, "agent_message",
-      "Use operation=list to discover named workspace mailboxes on this "
-      "backend (queue name, directory, last-bound conversation; a listing is "
-      "not an online guarantee). Use operation=send with recipient queue name "
-      "and text to "
-      "send a message. Waits for durable delivery acknowledgement, not human "
-      "approval or completion; a missing ACK fails after the configured "
-      "deadline (default five minutes). Messages become ordinary next-turn "
-      "input after approval. Never use this to send steering instructions.",
+      "operation=list discovers workspace mailboxes, not online status. "
+      "operation=send takes recipient queue name and text. Optional "
+      "delay_seconds overrides the configured delay (default 0). Zero waits "
+      "for durable delivery ACK, not approval or execution; missing ACK fails "
+      "at the configured deadline. Positive delay returns scheduled after "
+      "enqueue, without ACK or expiry. not_visible_until_unix is earliest "
+      "delivery, not execution time. Messages require next-turn approval; "
+      "never use for steering.",
       "{\"type\":\"object\",\"properties\":{\"operation\":{\"type\":\"string\","
       "\"enum\":[\"send\",\"list\"]},\"recipient\":{\"type\":\"string\"},"
-      "\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":65536}},"
+      "\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":65536},"
+      "\"delay_seconds\":{\"type\":\"integer\",\"minimum\":0}},"
       "\"required\":[\"operation\"],\"additionalProperties\":false}",
       0, send_tool, context, error);
 }

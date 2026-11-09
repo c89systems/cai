@@ -70,9 +70,15 @@ static void standalone_failure(cai_cli_pouch *pouch) {
   cai_error_init(&error);
   client.enqueue = reject_enqueue;
   selected.sessions = &client;
-  assert(cai_cli_messages_send_once(&selected, "offline", "hello", sink,
+  assert(cai_cli_messages_send_once(&selected, "offline", "hello", 0L, sink,
                                     &error) == CAI_ERR_TRANSPORT);
   assert(strstr(error.message, "injected standalone enqueue failure") != NULL);
+  assert(output.used == 0U);
+  assert(cai_cli_messages_send_once(&selected, "offline", "hello", 2L, sink,
+                                    &error) == CAI_ERR_TRANSPORT);
+  assert(output.used == 0U);
+  assert(cai_cli_messages_send_once(&selected, "offline", "hello", -1L, sink,
+                                    &error) == CAI_ERR_INVALID);
   assert(output.used == 0U);
   cai_sink_close(sink);
   cai_error_cleanup(&error);
@@ -374,7 +380,7 @@ static void cancel_startup(cai_cli_pouch *pouch, const char *workspace) {
   proxy.new_consumer_service = startup_consumer;
   selected.sessions = &proxy;
   cai_error_init(&error);
-  assert(cai_cli_messages_new(&selected, 5L, &startup_sender, &error) ==
+  assert(cai_cli_messages_new(&selected, 5L, 0L, &startup_sender, &error) ==
          CAI_OK);
   assert(cai_cli_messages_start(startup_sender, "startup-sender", workspace,
                                 "startup-sender", &error) == CAI_OK);
@@ -558,10 +564,10 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
   assert(queue_name("Friendly-Name", alias) &&
          strcmp(alias, "friendly-name") == 0);
   assert(!queue_name("../bad", alias) && !queue_name("", alias));
-  assert(cai_cli_messages_new(pouch, 2000L, &sender, &error) == CAI_OK);
+  assert(cai_cli_messages_new(pouch, 2000L, 0L, &sender, &error) == CAI_OK);
   assert(cai_cli_messages_start(sender, "naming-sender", root, "test-sender",
                                 &error) == CAI_OK);
-  assert(cai_cli_messages_new(pouch, 2000L, &old, &error) == CAI_OK);
+  assert(cai_cli_messages_new(pouch, 2000L, 0L, &old, &error) == CAI_OK);
   assert(cai_cli_messages_start(old, "old-conversation", link, NULL, &error) ==
          CAI_OK);
   assert(strcmp(cai_cli_messages_name(old), name) == 0);
@@ -569,7 +575,7 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
   send_named(sender, name, "Held in old conversation");
   assert(cai_cli_messages_sync(old, old_sl, &error) == CAI_OK);
   assert(pending_count(old_sl) == 1U);
-  assert(cai_cli_messages_new(pouch, 2000L, &new_owner, &error) == CAI_OK);
+  assert(cai_cli_messages_new(pouch, 2000L, 0L, &new_owner, &error) == CAI_OK);
   assert(cai_cli_messages_start(new_owner, "new-conversation", one, NULL,
                                 &error) == CAI_OK);
   assert(strcmp(cai_cli_messages_name(new_owner), name) == 0);
@@ -609,7 +615,7 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
   assert(lease_finish(guard, LC_OK, &local) == LC_OK);
   guard = NULL;
   send_named(sender, name, "New owner survives the old owner exiting");
-  assert(cai_cli_messages_new(pouch, 2000L, &other, &error) == CAI_OK);
+  assert(cai_cli_messages_new(pouch, 2000L, 0L, &other, &error) == CAI_OK);
   assert(cai_cli_messages_start(other, "other-project", two, NULL, &error) ==
          CAI_OK);
   assert(strcmp(other->queue, "cai.two.project") == 0);
@@ -627,7 +633,7 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
   new_owner = NULL;
   cai_input_queue_close(new_sl);
   /* Resuming the original conversation restores its own undecided message. */
-  assert(cai_cli_messages_new(pouch, 2000L, &old, &error) == CAI_OK);
+  assert(cai_cli_messages_new(pouch, 2000L, 0L, &old, &error) == CAI_OK);
   assert(cai_cli_messages_start(old, "old-conversation", one, NULL, &error) ==
          CAI_OK);
   old_sl = message_editor();
@@ -640,10 +646,10 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
   other = NULL;
   /* An explicit takeover reserves the former automatic name. Reallocation
    * must use real distinguishing components, without taking it back. */
-  assert(cai_cli_messages_new(pouch, 2000L, &other, &error) == CAI_OK);
+  assert(cai_cli_messages_new(pouch, 2000L, 0L, &other, &error) == CAI_OK);
   assert(cai_cli_messages_start(other, "explicit-owner", two, name, &error) ==
          CAI_OK);
-  assert(cai_cli_messages_new(pouch, 2000L, &collision, &error) == CAI_OK);
+  assert(cai_cli_messages_new(pouch, 2000L, 0L, &collision, &error) == CAI_OK);
   assert(cai_cli_messages_start(collision, "collision", one, NULL, &error) ==
          CAI_OK);
   assert(strcmp(collision->queue, "cai.one.project") == 0);
@@ -668,7 +674,7 @@ static cai_cli_messages *name_claimant(cai_cli_pouch *pouch,
   lc_error local;
   cai_error_init(&error);
   lc_error_init(&local);
-  assert(cai_cli_messages_new(pouch, 2000L, &m, &error) == CAI_OK);
+  assert(cai_cli_messages_new(pouch, 2000L, 0L, &m, &error) == CAI_OK);
   strcpy(m->workspace, workspace);
   strcpy(m->hostname, hostname);
   strcpy(m->host_id, id);
@@ -795,10 +801,10 @@ static void queue_overrides(cai_cli_pouch *pouch, const char *workspace) {
   cai_input_entry held;
   char too_long[130];
   cai_error_init(&error);
-  assert(cai_cli_messages_new(pouch, 2000L, &sender, &error) == CAI_OK);
+  assert(cai_cli_messages_new(pouch, 2000L, 0L, &sender, &error) == CAI_OK);
   assert(cai_cli_messages_start(sender, "override-sender", workspace,
                                 "override-sender", &error) == CAI_OK);
-  assert(cai_cli_messages_new(pouch, 2000L, &receiver, &error) == CAI_OK);
+  assert(cai_cli_messages_new(pouch, 2000L, 0L, &receiver, &error) == CAI_OK);
   assert(cai_cli_messages_start(receiver, "override-receiver", workspace,
                                 "before-rename", &error) == CAI_OK);
   send_named(sender, "before-rename", "Keep this pending approval");
@@ -844,7 +850,7 @@ static void queue_overrides(cai_cli_pouch *pouch, const char *workspace) {
   assert(run_send(receiver, "{\"operation\":\"list\"}", &output, &error) ==
          CAI_OK);
   assert(strstr(output.text, "Current queue: full-name") != NULL);
-  assert(cai_cli_messages_new(pouch, 2000L, &other, &error) == CAI_OK);
+  assert(cai_cli_messages_new(pouch, 2000L, 0L, &other, &error) == CAI_OK);
   assert(cai_cli_messages_start(other, "takes-over", workspace, "full-name",
                                 &error) == CAI_OK);
   /* Selecting the same name explicitly reclaims it after a takeover. */
@@ -856,7 +862,8 @@ static void queue_overrides(cai_cli_pouch *pouch, const char *workspace) {
   fake_pouch = *pouch;
   fake_pouch.sessions = &fake_client;
   fake_client.new_consumer_service = fail_consumer;
-  assert(cai_cli_messages_new(&fake_pouch, 2000L, &failed, &error) == CAI_OK);
+  assert(cai_cli_messages_new(&fake_pouch, 2000L, 0L, &failed, &error) ==
+         CAI_OK);
   strcpy(failed->queue, "unchanged-on-error");
   assert(cai_cli_messages_set_queue(failed, "new-name", &error) != CAI_OK);
   assert(strstr(error.message, "listener preparation unavailable") != NULL);
@@ -927,6 +934,130 @@ static void delete_conversation_inbox(cai_cli_pouch *pouch) {
   cai_error_cleanup(&error);
 }
 
+/* Exercise native storage visibility and the receipt-free envelope after the
+ * sending app has closed. Storage's long poll supplies the due-time barrier. */
+static void scheduled_messages(cai_cli_pouch *pouch, const char *workspace) {
+  static const char *const invalid[] = {"-1",
+                                        "1.5",
+                                        "null",
+                                        "\"2\"",
+                                        "9223372036854775808",
+                                        "9223372036854775807"};
+  typedef struct scheduled_scratch {
+    capture output;
+    message_doc doc;
+  } scheduled_scratch;
+  scheduled_scratch *s = calloc(1U, sizeof(*s));
+  cai_cli_messages *sender = NULL, *receiver = NULL;
+  cai_input_queue *input = message_editor();
+  cai_error error;
+  lc_error local;
+  lc_dequeue_req request;
+  lc_message *message = NULL;
+  message_reader reader;
+  lonejson *json;
+  lonejson_error parse_error;
+  long long available_at;
+  char arguments[256];
+  size_t i;
+  assert(s != NULL && input != NULL);
+  cai_error_init(&error);
+  lc_error_init(&local);
+  assert(cai_cli_messages_new(pouch, 1L, -1L, &sender, &error) ==
+         CAI_ERR_INVALID);
+  assert(sender == NULL);
+  assert(cai_cli_messages_new(pouch, 1L, 2L, &sender, &error) == CAI_OK);
+  assert(cai_cli_messages_start(sender, "scheduled-sender", workspace,
+                                "scheduled-sender", &error) == CAI_OK);
+  for (i = 0U; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+    snprintf(arguments, sizeof(arguments),
+             "{\"operation\":\"send\",\"recipient\":\"scheduled-offline\","
+             "\"text\":\"invalid\",\"delay_seconds\":%s}",
+             invalid[i]);
+    assert(run_send(sender, arguments, &s->output, &error) != CAI_OK);
+    assert(s->output.used == 0U && sender->waiting[0] == '\0');
+    cai_error_cleanup(&error);
+    cai_error_init(&error);
+  }
+  assert(run_send(sender,
+                  "{\"operation\":\"send\",\"recipient\":\"scheduled-offline\","
+                  "\"text\":\"Survives sender exit\"}",
+                  &s->output, &error) == CAI_OK);
+  assert(strstr(s->output.text, "\"status\":\"scheduled\"") != NULL);
+  assert(strstr(s->output.text, "\"recipient\":\"scheduled-offline\"") != NULL);
+  assert(sscanf(strstr(s->output.text, "\"not_visible_until_unix\":"),
+                "\"not_visible_until_unix\":%lld", &available_at) == 1);
+  assert(sender->waiting[0] == '\0' && available_at > realtime_ms() / 1000);
+  lc_dequeue_req_init(&request);
+  request.ns = pouch->messages_namespace;
+  request.queue = "scheduled-offline";
+  request.owner = "scheduled-test";
+  assert(lc_dequeue(pouch->sessions, &request, &message, &local) == LC_OK);
+  assert(message == NULL);
+  cai_cli_messages_close(sender);
+  sender = NULL;
+  request.wait_seconds = 3L;
+  assert(lc_dequeue(pouch->sessions, &request, &message, &local) == LC_OK);
+  assert(message != NULL && realtime_ms() / 1000 >= available_at);
+  memset(&reader, 0, sizeof(reader));
+  lc_error_init(&reader.error);
+  reader.source = message->payload_reader(message);
+  json = lonejson_new(NULL, &parse_error);
+  assert(json != NULL);
+  assert(lonejson_parse_reader(json, &message_map, &s->doc, read_message,
+                               &reader, &parse_error) == LONEJSON_STATUS_OK);
+  lonejson_free(json);
+  lc_error_cleanup(&reader.error);
+  assert(s->doc.deadline_ms == 0 && s->doc.reply_queue[0] == '\0' &&
+         s->doc.instance[0] == '\0');
+  assert(strcmp(s->doc.text, "Survives sender exit") == 0);
+  assert(strcmp(s->doc.sender_session, "scheduled-sender") == 0);
+  assert(lc_message_ack(message, &local) == LC_OK);
+  message = NULL; /* Successful ACK closes this non-batch handle. */
+  assert(cai_cli_messages_new(pouch, 2000L, 60L, &receiver, &error) == CAI_OK);
+  assert(cai_cli_messages_start(receiver, "scheduled-receiver", workspace,
+                                "scheduled-offline", &error) == CAI_OK);
+  assert(deliver_direct(receiver, &s->doc) == LC_OK);
+  assert(cai_cli_messages_sync(receiver, input, &error) == CAI_OK);
+  assert(pending_count(input) == 1U);
+  assert(deliver_direct(receiver, &s->doc) == LC_OK);
+  assert(cai_cli_messages_sync(receiver, input, &error) == CAI_OK);
+  assert(pending_count(input) == 1U);
+  /* Explicit zero bypasses the configured delay and really waits for ACK.
+   * The receiver's outgoing delay must never delay that delivery receipt. */
+  assert(cai_cli_messages_new(pouch, 2000L, 60L, &sender, &error) == CAI_OK);
+  assert(cai_cli_messages_start(sender, "scheduled-sender-again", workspace,
+                                "scheduled-sender", &error) == CAI_OK);
+  assert(run_send(sender,
+                  "{\"operation\":\"send\",\"recipient\":\"scheduled-offline\","
+                  "\"text\":\"Immediate override\",\"delay_seconds\":0}",
+                  &s->output, &error) == CAI_OK);
+  assert(strstr(s->output.text, "\"status\":\"delivered\"") != NULL);
+  assert(strstr(s->output.text, "not_visible_until_unix") == NULL);
+  assert(cai_cli_messages_sync(receiver, input, &error) == CAI_OK);
+  assert(pending_count(input) == 2U);
+  /* A positive per-call override is honored even when the default is zero. */
+  sender->delay_seconds = 0L;
+  assert(
+      run_send(sender,
+               "{\"operation\":\"send\",\"recipient\":\"scheduled-override\","
+               "\"text\":\"Override\",\"delay_seconds\":60}",
+               &s->output, &error) == CAI_OK);
+  assert(strstr(s->output.text, "\"status\":\"scheduled\"") != NULL);
+  request.queue = "scheduled-override";
+  request.wait_seconds = 0L;
+  message = NULL;
+  assert(lc_dequeue(pouch->sessions, &request, &message, &local) == LC_OK);
+  assert(message == NULL);
+  cai_cli_messages_close(sender);
+  cai_cli_messages_close(receiver);
+  cai_input_queue_close(input);
+  lonejson_cleanup(&message_map, &s->doc);
+  free(s);
+  lc_error_cleanup(&local);
+  cai_error_cleanup(&error);
+}
+
 int main(int argc, char **argv) {
   cai_cli_pouch a, b;
   cai_cli_messages *sender = NULL, *receiver = NULL;
@@ -952,8 +1083,8 @@ int main(int argc, char **argv) {
   assert(cai_cli_pouch_open(&b, NULL, NULL, NULL, &error) == CAI_OK);
   strcpy(b.program_name, "smith");
   strcpy(b.queue_prefix, "smith");
-  assert(cai_cli_messages_new(&a, 2000L, &sender, &error) == CAI_OK);
-  assert(cai_cli_messages_new(&b, 2000L, &receiver, &error) == CAI_OK);
+  assert(cai_cli_messages_new(&a, 2000L, 0L, &sender, &error) == CAI_OK);
+  assert(cai_cli_messages_new(&b, 2000L, 0L, &receiver, &error) == CAI_OK);
   assert(cai_cli_messages_start(sender, "sender", argv[1], "sender", &error) ==
          CAI_OK);
   assert(cai_cli_messages_start(receiver, "receiver", argv[1], "receiver",
@@ -970,6 +1101,7 @@ int main(int argc, char **argv) {
   }
   host_hook(sender, argv[1]);
   standalone_failure(&a);
+  scheduled_messages(&a, argv[1]);
   /* No UI approval or model turn is required for durable delivery ACK. */
   assert(run_send(sender,
                   "{\"operation\":\"send\",\"recipient\":\"receiver\",\"text\":"
@@ -1032,7 +1164,7 @@ int main(int argc, char **argv) {
   cai_input_queue_close(sl);
   cai_cli_messages_close(receiver);
   receiver = NULL;
-  assert(cai_cli_messages_new(&b, 2000L, &receiver, &error) == CAI_OK);
+  assert(cai_cli_messages_new(&b, 2000L, 0L, &receiver, &error) == CAI_OK);
   assert(cai_cli_messages_start(receiver, "receiver", argv[1], "receiver",
                                 &error) == CAI_OK);
   sl = message_editor_limit(1U);

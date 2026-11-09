@@ -4,15 +4,17 @@
 #include <cai/input_queue.h>
 
 typedef struct cai_cli_messages cai_cli_messages;
-/* Enqueue once without a delivery deadline, receipt listener or session. */
+/* Enqueue once without a delivery deadline, receipt listener or session.
+ * Positive delay schedules delivery through the storage queue. */
 int cai_cli_messages_send_once(cai_cli_pouch *pouch, const char *recipient,
-                               const char *text, cai_sink *result,
-                               cai_error *error);
+                               const char *text, long delay_seconds,
+                               cai_sink *result, cai_error *error);
 /* All UI methods are owner-thread-only. Service callbacks never touch softline.
  * The pouch/client/logger are borrowed until close, after the runtime closes.
  */
 int cai_cli_messages_new(cai_cli_pouch *pouch, long ack_timeout_ms,
-                         cai_cli_messages **out, cai_error *error);
+                         long delay_seconds, cai_cli_messages **out,
+                         cai_error *error);
 int cai_cli_messages_register(void *context, cai_agent *agent,
                               cai_error *error);
 int cai_cli_messages_start(cai_cli_messages *messages, const char *session_id,

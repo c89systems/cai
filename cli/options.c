@@ -362,6 +362,24 @@ static int cli_read_options(int argc, char *const *argv,
       options->replay_turns = number;
       continue;
     }
+    if (strcmp(flag, "--message-delay-seconds") == 0) {
+      char *end;
+      long delay;
+      if (++i >= argc) {
+        cai_cli_option_error(options, "%s requires nonnegative seconds", flag);
+        return -1;
+      }
+      errno = 0;
+      delay = strtol(argv[i], &end, 10);
+      if (errno != 0 || end == argv[i] || *end != '\0' || delay < 0L) {
+        cai_cli_option_error(options, "%s requires nonnegative seconds", flag);
+        return -1;
+      }
+      options->message_delay_seconds = delay;
+      cai_cli_options_mark_owner(
+          options, offsetof(cai_cli_options, message_delay_seconds));
+      continue;
+    }
     if (strcmp(flag, "--message-ack-timeout-ms") == 0) {
       char *end;
       long timeout;

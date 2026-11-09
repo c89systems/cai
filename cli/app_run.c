@@ -1439,6 +1439,7 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     if (messaging == NULL)
       return error->code;
     rc = cai_cli_messages_new(messaging, state->options.message_ack_timeout_ms,
+                              state->options.message_delay_seconds,
                               &state->messages, error);
     if (rc != CAI_OK)
       return rc;

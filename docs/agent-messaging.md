@@ -34,6 +34,23 @@ Conversation IDs are internal history/ownership metadata, not destinations.
 Discovery lists known mailboxes, including offline ones; delivery ACK confirms
 acceptance. An idle application listens too.
 
+To defer delivery, add `"delay_seconds": 60` to a send. Omitting it uses
+`[messaging] delay_seconds`, which defaults to `0`; an explicit `0` overrides
+that default and sends immediately. Positive delays use liblockdc's native
+queue visibility, including Pouch persistence, without sleeping in the tool.
+The tool returns `status: "scheduled"`, the message ID, recipient and the
+backend's `not_visible_until_unix` timestamp after enqueue succeeds. It does
+not wait for a delivery ACK, and the message has no delivery deadline or queue
+expiry. The timestamp is the earliest eligible delivery time, not a guarantee
+of execution then: the recipient must be listening, and approval still applies.
+Scheduled messages survive the sender exiting and storage reopening.
+
+Standalone sends use the same default and `--message-delay-seconds SECONDS`.
+For example, `cai -q destination -M 'Check the build' --message-delay-seconds 60`
+returns `scheduled` instead of `queued`. Immediate standalone sends retain their
+enqueue-only behavior; they do not wait for ACK either. Only outgoing messages
+use this delay; delivery receipts remain immediate.
+
 The first workspace with a given basename normally receives `cai.<basename>`.
 When that name is occupied, CAI selects the fewest real ancestor components
 needed to distinguish the workspace from registered workspaces with that
@@ -118,7 +135,7 @@ Private `cai.receipts.<instance-id>` channels deliver ACKs to the exact sending
 app instance, independently of mailbox takeover. They are internal return
 channels and are excluded from destination discovery.
 
-The agent tool's `send` waits for that receipt, with a five-minute deadline measured from sending.
+The agent tool's immediate `send` waits for that receipt, with a five-minute deadline measured from sending.
 An offline recipient or absent receipt returns a tool error. Expired messages
 that have not been accepted cannot later start turns. Approval and model
 execution are independent of ACK: a held or subsequently rejected message is
@@ -173,6 +190,7 @@ The generated `config.ini` contains these commented defaults:
 # queue_name = ""
 # enable_auto_enqueue = false
 # ack_timeout_ms = 300000
+# delay_seconds = 0
 ```
 
 | INI key | Environment | Command line |
@@ -181,9 +199,12 @@ The generated `config.ini` contains these commented defaults:
 | `messaging.queue_name` | `CAI_MESSAGE_QUEUE` | `--message-queue NAME` |
 | `messaging.enable_auto_enqueue` | `CAI_ENABLE_AUTO_ENQUEUE` | `--autoqueue` / `--no-autoqueue` |
 | `messaging.ack_timeout_ms` | `CAI_MESSAGE_ACK_TIMEOUT_MS` | `--message-ack-timeout-ms MS` |
+| `messaging.delay_seconds` | `CAI_MESSAGE_DELAY_SECONDS` | `--message-delay-seconds SECONDS` |
 
 CLI overrides environment, which overrides INI defaults, with the existing
-`[env]` precedence rule. The deadline range is 1–86400000 ms. `/autoqueue`
+`[env]` precedence rule. The deadline range is 1–86400000 ms. Delays must be
+nonnegative integer seconds representable by the backend's Unix timestamp;
+overflow is rejected without scheduling a message. `/autoqueue`
 changes the live TUI setting; it does not rewrite configuration.
 `libcai_app` C settings and Lua `settings.messaging` accept these same keys.
 Isolated reviews do not register the messaging tool or start a listener.

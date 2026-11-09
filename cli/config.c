@@ -142,6 +142,11 @@ static const cli_field fields[] = {
      NULL,
      "Delivery ACK deadline in milliseconds, independent of human approval. "
      "Default 300000 (five minutes); range 1..86400000."},
+    {"messaging", "delay_seconds",
+     offsetof(cai_cli_options, message_delay_seconds), CAI_CONFIG_INTEGER, 0U,
+     NULL,
+     "Default outgoing message delay in seconds. Zero sends immediately; "
+     "positive schedules without waiting for delivery ACK. Default 0."},
     S("paths", "directory", directory, CAI_CONFIG_PATH,
       "Empty uses the current working directory on each invocation; explicit "
       "-C wins."),
@@ -905,6 +910,11 @@ static int tool_environment(cai_config *cfg, const char *prefix,
                      app_environment(cfg, prefix, "MESSAGE_ACK_TIMEOUT_MS"),
                      error) != CAI_OK)
     return environment_error(prefix, "MESSAGE_ACK_TIMEOUT_MS", error);
+  if (app_environment(cfg, prefix, "MESSAGE_DELAY_SECONDS") != NULL &&
+      cai_config_set(cfg, "messaging", "delay_seconds",
+                     app_environment(cfg, prefix, "MESSAGE_DELAY_SECONDS"),
+                     error) != CAI_OK)
+    return environment_error(prefix, "MESSAGE_DELAY_SECONDS", error);
   if (app_environment(cfg, prefix, "MCP") != NULL &&
       cai_config_set(cfg, "agent", "mcp", app_environment(cfg, prefix, "MCP"),
                      error) != CAI_OK)
@@ -1298,6 +1308,15 @@ static int cai_cli_configure_at_with_scratch(
       return fail(error, NULL,
                   "messaging.ack_timeout_ms must be between 1 and 86400000");
     scratch->defaults.message_ack_timeout_ms = (long)timeout;
+  }
+  {
+    long long delay =
+        cai_config_get_integer(cfg, "messaging", "delay_seconds", 0LL);
+    if (delay < 0 || delay > LONG_MAX)
+      return fail(
+          error, NULL,
+          "messaging.delay_seconds must be nonnegative and fit in long");
+    scratch->defaults.message_delay_seconds = (long)delay;
   }
   scratch->defaults.searxng =
       cai_config_get_bool(cfg, "agent", "searxng", scratch->defaults.searxng);

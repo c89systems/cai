@@ -162,10 +162,12 @@ int cai_cli_tool_result_open(const cai_agent_runtime_event *e,
       r->verb = "Queued";
       r->label = "review-and-fix goal";
     } else if (same(e->tool_name, "agent_message")) {
-      if (!same(r->doc.status, "delivered") || r->doc.recipient == NULL ||
-          r->doc.recipient[0] == '\0')
+      if ((!same(r->doc.status, "delivered") &&
+           !same(r->doc.status, "scheduled")) ||
+          r->doc.recipient == NULL || r->doc.recipient[0] == '\0')
         goto unrecognized;
-      r->verb = "Delivered message to";
+      r->verb = same(r->doc.status, "scheduled") ? "Scheduled message to"
+                                                 : "Delivered message to";
       r->label = r->doc.recipient;
     } else if (same(e->tool_name, "todo_kanban")) {
       op = r->doc.operation;

@@ -243,6 +243,13 @@ int main(void) {
                 "id\":\"id\"}"));
   assert(strstr(c.text, "Delivered message to ") && strstr(c.text, "cai.y"));
   assert(!strstr(c.text, "message_id") && !strstr(c.text, "{\""));
+  assert(
+      result(&c, "agent_message",
+             "{\"status\":\"scheduled\",\"recipient\":\"cai.y\","
+             "\"message_id\":\"id\",\"not_visible_until_unix\":1900000000}"));
+  assert(strstr(c.text, "Scheduled message to ") && strstr(c.text, "cai.y"));
+  assert(!strstr(c.text, "Delivered") && !strstr(c.text, "not_visible_until") &&
+         !strstr(c.text, "{\""));
   assert(result(&c, "run_review_and_fix", "{\"status\":\"queued\"}"));
   assert(strstr(c.text, "Queued ") && strstr(c.text, "review-and-fix goal"));
   assert(!strstr(c.text, "{\"status\""));

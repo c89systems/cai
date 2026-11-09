@@ -921,6 +921,10 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_send_message_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")
     set_tests_properties(cai_cli_send_message PROPERTIES TIMEOUT 10)
+    add_test(NAME cai_cli_messages_scheduled COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_messages_scheduled_test.sh"
+      "$<TARGET_FILE:cai_cli_mock_fixture>")
+    set_tests_properties(cai_cli_messages_scheduled PROPERTIES TIMEOUT 20)
     foreach(_reasoning_protocol responses chat_completions)
       foreach(_reasoning_case persistence unsupported interactive)
         add_test(NAME cai_cli_reasoning_tool_${_reasoning_protocol}_${_reasoning_case}

@@ -130,9 +130,9 @@ static int dispatch(utility_run *u) {
     u->operation = "send message";
     rc = cai_sink_stdout(&destination, &u->error);
     if (rc == CAI_OK)
-      rc = cai_cli_messages_send_once(&u->pouch, u->options.send_queue,
-                                      u->options.message, destination,
-                                      &u->error);
+      rc = cai_cli_messages_send_once(
+          &u->pouch, u->options.send_queue, u->options.message,
+          u->options.message_delay_seconds, destination, &u->error);
     if (rc == CAI_OK)
       rc = cai_sink_write(destination, "\n", 1U, &u->error);
   } else if (u->options.list || u->options.list_all || u->options.resume_list ||

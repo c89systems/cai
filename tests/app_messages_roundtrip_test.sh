@@ -108,7 +108,10 @@ plan "$(jq -n --arg queue "$c_queue" '{plan:[{tool:"agent_message",arguments:{op
 prompt 'send a message before takeover' 'BEFORE TAKEOVER DELIVERED'
 select_app 0
 expect 'HELD BEFORE TAKEOVER'
-base=("$lua_host" "${common[@]}" -C "$work")
+# Deliberately start an independent owner against the shared messaging root.
+# Workspace discovery otherwise attaches to/refuses the existing server rather
+# than exercising mailbox takeover between two independent applications.
+base=("$lua_host" "${common[@]}" -C "$work" --runtime-dir "$root/takeover")
 terminal_start -N
 app_pids+=("$terminal_pid") app_terms+=("$term") app_events+=("$terminal_event_fd")
 send '/status\r'; expect "$c_queue"

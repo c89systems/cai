@@ -29,6 +29,7 @@
   X("messaging", "queue_prefix", queue_prefix, 's') \
   X("messaging", "queue_name", message_queue, 's') \
   X("messaging", "ack_timeout_ms", message_ack_timeout_ms, 'l') \
+  X("messaging", "delay_seconds", message_delay_seconds, 'l') \
   X("agent", "shell_context_max_lines", shell_context_max_lines, 'z') \
   X("agent", "shell_context_max_bytes", shell_context_max_bytes, 'z') \
   X("client", "provider", provider, 's') \
