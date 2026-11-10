@@ -42,18 +42,17 @@ static int test_ids(void) {
       cai_cli_status_ids_markdown(&ids, ids_write, &out) == 0 &&
           strstr(out.bytes, "| Session ID | session\\_1 |") != NULL &&
           strstr(out.bytes, "| Last response ID | Not available |") != NULL &&
-          strstr(out.bytes, "Provider conversation ID") == NULL,
+          strstr(out.bytes, "Provider session ID") == NULL,
       "identifier rows distinguish local and missing provider IDs");
   memset(&out, 0, sizeof(out));
   ids.response_id = "resp|`*\n\033_1";
   ids.conversation_id = "conv_1";
-  failures +=
-      check(cai_cli_status_ids_markdown(&ids, ids_write, &out) == 0 &&
-                strstr(out.bytes, "resp\\|\\`\\*  \\_1") != NULL &&
-                strstr(out.bytes, "| Provider conversation ID | conv\\_1 |") !=
-                    NULL &&
-                strchr(out.bytes, '\033') == NULL,
-            "provider identifiers are literal sanitized table cells");
+  failures += check(
+      cai_cli_status_ids_markdown(&ids, ids_write, &out) == 0 &&
+          strstr(out.bytes, "resp\\|\\`\\*  \\_1") != NULL &&
+          strstr(out.bytes, "| Provider session ID | conv\\_1 |") != NULL &&
+          strchr(out.bytes, '\033') == NULL,
+      "provider identifiers are literal sanitized table cells");
   memset(&out, 0, sizeof(out));
   memset(long_id, 'x', sizeof(long_id) - 1U);
   long_id[sizeof(long_id) - 1U] = '\0';

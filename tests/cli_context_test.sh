@@ -17,7 +17,7 @@ created_session=$(current_session_id)
 jq -se '.[0] as $r | all(["context_create","context_set","context_query","context_get","context_upload","context_download","context_delete","context_replace"][]; . as $n | any($r.tools[]; (.name // .function.name) == $n))' "$root/peer/requests.jsonl" >/dev/null
 id=$(jq -sr '[.[] | (.input[]? | select(.type == "custom_tool_call_output") | .output | fromjson? | .id), (.messages[]? | select(.role == "tool") | .content | fromjson? | .id)] | map(select(. != null)) | last' "$root/peer/requests.jsonl")
 [[ "$id" != null && ${#id} == 20 ]] || fail 'Missing context XID receipt'
-# A different workspace/conversation can retrieve it through the same store.
+# A different workspace or session can retrieve it through the same store.
 mkdir -p "$root/other"
 : >"$root/peer/requests.jsonl"
 plan "$(jq -n --argjson chat "$chat" --arg id "$id" '{chat:$chat,plan:[{tool:"context_get",arguments:{id:$id}},"SHARED_CONTEXT_FOUND"]}')"

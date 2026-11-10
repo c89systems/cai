@@ -25,11 +25,10 @@ static int session_select(cai_cli_pouch *pouch, const char *workspace,
   int rc;
   if (choice == NULL || choice[0] == '\0')
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "select a conversation ID or list number");
+                         "select a session ID or list number");
   if (strspn(choice, "0123456789") != strlen(choice)) {
     if (strlen(choice) >= CAI_AGENT_SESSION_ID_MAX)
-      return cai_cli_error(error, CAI_ERR_INVALID,
-                           "conversation ID is too long");
+      return cai_cli_error(error, CAI_ERR_INVALID, "session ID is too long");
     strcpy(out, choice);
     return CAI_OK;
   }
@@ -52,8 +51,8 @@ static int session_select(cai_cli_pouch *pouch, const char *workspace,
   number = strtoull(choice, &end, 10);
   if (errno != 0 || *end != '\0' || number == 0U || number > count)
     rc = cai_cli_error(error, CAI_ERR_INVALID,
-                       "No conversation with that number in this directory. "
-                       "List conversations with --resume or --delete.");
+                       "No session with that number in this directory. "
+                       "List sessions with --resume or --delete.");
   else
     strcpy(out, sessions[(size_t)number - 1U].id);
 done:
@@ -219,7 +218,8 @@ static int cai_cli_sessions_print_with_scratch(
   if (width <= 0)
     width = 80;
   if (count == 0U &&
-      cai_sink_write(destination, "No conversations.\n", 18U, error) != CAI_OK)
+      cai_sink_write(destination, "No sessions.\n",
+                     sizeof("No sessions.\n") - 1U, error) != CAI_OK)
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "write session list");
   locale = row_locale();
   for (i = 0U; i < count; i++) {
@@ -285,9 +285,8 @@ static int export_path(const cai_cli_pouch *pouch, char *path, size_t capacity,
     else {
       base = getenv("HOME");
       if (base == NULL || base[0] != '/')
-        return cai_cli_error(
-            error, CAI_ERR_INVALID,
-            "set HOME or XDG_DATA_HOME for conversation exports");
+        return cai_cli_error(error, CAI_ERR_INVALID,
+                             "set HOME or XDG_DATA_HOME for session exports");
       n = snprintf(path, capacity, "%s/.local/share/%s/exports/%s", base,
                    pouch->program_name, id);
     }
@@ -554,7 +553,7 @@ int cai_cli_export_prepare(cai_cli_pouch *pouch, const char *id,
 static int export_cancelled(cai_cli_export *e, cai_error *error) {
   return e->cancelled != NULL && e->cancelled(e->cancel_context)
              ? cai_cli_error(error, CAI_ERR_CANCELLED,
-                             "conversation export cancelled")
+                             "session export cancelled")
              : CAI_OK;
 }
 static int export_write(void *context, const void *bytes, size_t count,
@@ -562,7 +561,7 @@ static int export_write(void *context, const void *bytes, size_t count,
   cai_cli_export *e = context;
   int rc = export_cancelled(e, error);
   if (rc == CAI_OK && fwrite(bytes, 1U, count, e->file) != count)
-    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "write conversation export");
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "write session export");
   return rc;
 }
 int cai_cli_export_run(cai_cli_export *e, const cai_handover_config *active,
@@ -601,11 +600,9 @@ int cai_cli_export_run(cai_cli_export *e, const cai_handover_config *active,
       rc = cai_cli_journal_view_jsonl(e->view, &sink, error);
     if (e->file != NULL) {
       if (rc == CAI_OK && (fflush(e->file) != 0 || fsync(fileno(e->file)) != 0))
-        rc =
-            cai_cli_error(error, CAI_ERR_TRANSPORT, "sync conversation export");
+        rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "sync session export");
       if (fclose(e->file) != 0 && rc == CAI_OK)
-        rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
-                           "close conversation export");
+        rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "close session export");
       e->file = NULL;
     }
   }
@@ -616,8 +613,7 @@ int cai_cli_export_run(cai_cli_export *e, const cai_handover_config *active,
     rc = export_cancelled(e, error);
   for (i = 0U; rc == CAI_OK && i < 2U; i++)
     if (e->paths[i][0] != '\0' && rename(e->temporary[i], e->paths[i]) != 0)
-      rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
-                         "publish conversation export");
+      rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "publish session export");
   for (i = 0U; i < 2U; i++)
     if (e->temporary[i][0] != '\0') {
       unlink(e->temporary[i]);
@@ -662,7 +658,7 @@ static int remove_session_child(const char *directory, const char *name,
   char message[PATH_MAX + 256];
   if (directory == NULL)
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "conversation cleanup directory is not configured");
+                         "session cleanup directory is not configured");
   fd = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
   if (fd < 0 && errno == ENOENT)
     return CAI_OK;
@@ -678,8 +674,8 @@ static int remove_session_child(const char *directory, const char *name,
   }
   if (rc == 0)
     return CAI_OK;
-  snprintf(message, sizeof(message), "remove conversation data %s/%s: %s",
-           directory, name, strerror(errno));
+  snprintf(message, sizeof(message), "remove session data %s/%s: %s", directory,
+           name, strerror(errno));
   return cai_cli_error(error, CAI_ERR_TRANSPORT, message);
 }
 static int cleanup_session_files(void *context, const char *id,
@@ -688,7 +684,7 @@ static int cleanup_session_files(void *context, const char *id,
   char name[CAI_AGENT_SESSION_ID_MAX + 8U], exports[PATH_MAX], *slash;
   int rc;
   if (!session_file_id(id))
-    return cai_cli_error(error, CAI_ERR_INVALID, "unsafe conversation file ID");
+    return cai_cli_error(error, CAI_ERR_INVALID, "unsafe session file ID");
   rc = cai_cli_messages_delete_session(cleanup->messaging, id, error);
   if (rc == CAI_OK) {
     snprintf(name, sizeof(name), "%s.log", id);

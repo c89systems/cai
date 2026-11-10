@@ -1066,7 +1066,7 @@ static int cli_publish_status(cli_state *state, cai_agent_runtime *runtime,
   view.effective = status->effective;
   view.pending = status->pending;
   view.metrics = status->metrics;
-  /* Context, usage and identity belong to the conversation. Turn timing
+  /* Context, usage and identity belong to the session. Turn timing
    * belongs to its foreground work, including an isolated manual reviewer.
    * Publish final child timing too; frontends must not invent a local clock
    * or need a parent inference turn merely to show that a review finished. */
@@ -1702,7 +1702,7 @@ static int cli_close_runtime(cli_state *state, cai_error *error) {
   state->review_block = 0;
   cai_cli_messages_close(state->messages);
   state->messages = NULL;
-  /* Close the conversation-owned recall collection before releasing its
+  /* Close the session-owned recall collection before releasing its
    * session use guard. Frontends persist entries through the host channel. */
   cai_cli_pouch_prompt_close(&state->pouch);
   cai_cli_pouch_end_use(&state->pouch);
@@ -1752,7 +1752,8 @@ static int cli_export_result(cli_state *state, cai_cli_export_result *result,
   outcome = result->status;
   if (outcome == CAI_OK) {
     state->list_line_start = 1;
-    if (cli_text(state, "## Conversation export\n\n", 24U) != 0)
+    if (cli_text(state, "## Session export\n\n",
+                 sizeof("## Session export\n\n") - 1U) != 0)
       outcome = CAI_ERR_TRANSPORT;
     if (outcome == CAI_OK)
       outcome =
@@ -1789,7 +1790,7 @@ static int cli_list_sessions(cli_state *state, cai_error *error) {
   if (rc != CAI_OK)
     return rc;
   state->list_line_start = 1;
-  if (cli_text(state, "## Conversations\n\n", 18U) != 0)
+  if (cli_text(state, "## Sessions\n\n", sizeof("## Sessions\n\n") - 1U) != 0)
     return CAI_ERR_TRANSPORT;
   memset(&callbacks, 0, sizeof(callbacks));
   callbacks.context = state;
@@ -1953,7 +1954,7 @@ static int cli_set_messaging(cli_state *state, int enabled, cai_error *error) {
   }
   /* Tool registration is immutable while a runtime exists. Reopen this same
    * durable session with the updated catalog, without replaying it to the UI
-   * or host observers. No model request or new conversation is created. */
+   * or host observers. No model request or new session is created. */
   rc = cai_cli_messages_flush_decisions(state->messages, state->input, error);
   if (rc != CAI_OK) {
     free(id);
@@ -1980,7 +1981,7 @@ static int cli_set_messaging(cli_state *state, int enabled, cai_error *error) {
     state->options.messaging = !enabled;
     if (cli_open_runtime(state, id, 0, &recovery) != CAI_OK) {
       state->exit_requested = 1;
-      cli_print_error(state, "restore conversation after messaging change",
+      cli_print_error(state, "restore session after messaging change",
                       &recovery);
     }
     cai_error_cleanup(&recovery);
@@ -1999,7 +2000,7 @@ static int cli_switch_session(cli_state *state, const char *id, int new_session,
    * producers or reopen SDK services merely to select that same context. */
   if (!new_session && id != NULL &&
       strcmp(id, cai_agent_runtime_session_id(state->runtime)) == 0)
-    return cli_markdown(state, "Conversation already active.\n") == 0
+    return cli_markdown(state, "Session already active.\n") == 0
                ? CAI_OK
                : CAI_ERR_TRANSPORT;
   rc = cai_agent_runtime_state(state->runtime, &run_state, error);
@@ -2061,8 +2062,7 @@ static int cli_session_destination(cli_state *state, const char *selector,
     return rc;
   destination = malloc(sizeof(*destination));
   if (destination == NULL)
-    return cai_cli_error(error, CAI_ERR_NOMEM,
-                         "validate conversation selection");
+    return cai_cli_error(error, CAI_ERR_NOMEM, "validate session selection");
   rc = cai_cli_pouch_session(&state->pouch, id, destination, error);
   if (rc == CAI_OK && strcmp(destination->workspace, state->workspace) != 0)
     rc = cai_cli_error(error, CAI_ERR_INVALID,
@@ -2071,7 +2071,7 @@ static int cli_session_destination(cli_state *state, const char *selector,
   return rc;
 }
 /** Resolve selectors before closing the current runtime. Startup selection is
- * connection setup, so selecting the current conversation emits no command
+ * connection setup, so selecting the current session emits no command
  * receipt or transcript text and does not reopen its store/context. */
 static int cli_select_startup(void *context, const char *selector,
                               cai_error *error) {
@@ -3300,9 +3300,8 @@ static int cli_retention_command(cli_state *state, const char *arg, int history,
         value > (history ? INT_MAX : LONG_MAX / 86400L))
       return cai_cli_error(
           error, CAI_ERR_INVALID,
-          history
-              ? "use /history COUNT (nonnegative entry count)"
-              : "use /retention DAYS; 0 or off keeps the conversation forever");
+          history ? "use /history COUNT (nonnegative entry count)"
+                  : "use /retention DAYS; 0 or off keeps the session forever");
     if (history) {
       int previous = state->options.prompt_history_limit;
       state->options.prompt_history_limit = (int)value;
@@ -3331,12 +3330,11 @@ static int cli_retention_command(cli_state *state, const char *arg, int history,
     if (rc != CAI_OK)
       return rc;
     if (value == 0L)
-      snprintf(message, sizeof(message),
-               "Conversation retention: **forever**.");
+      snprintf(message, sizeof(message), "Session retention: **forever**.");
     else
       snprintf(
           message, sizeof(message),
-          "Conversation retention: **%ld days from last update**.\n\n"
+          "Session retention: **%ld days from last update**.\n\n"
           "Liblockdc maintenance removes the whole collection after expiry.",
           value);
   }
@@ -3470,7 +3468,7 @@ static int cli_handle_command(cli_state *state, const char *line,
       strcpy(message, cai_cli_messages_name(state->messages));
       rc = cai_cli_messages_set_queue(state->messages, name, error);
       /* A selected name survives /new and /resume in this app, never in
-       * config.ini or the conversation commit. */
+       * config.ini or the session commit. */
       if (rc == CAI_OK ||
           strcmp(cai_cli_messages_name(state->messages), message) != 0) {
         strcpy(state->message_queue_override,
@@ -3767,7 +3765,8 @@ static int cli_handle_command(cli_state *state, const char *line,
     memcpy(basename, arg, length);
     basename[length] = '\0';
     state->list_line_start = 1;
-    if (cli_text(state, "## Exporting conversation\n\n", 27U) != 0 ||
+    if (cli_text(state, "## Exporting session\n\n",
+                 sizeof("## Exporting session\n\n") - 1U) != 0 ||
         cli_finish_response(state) != 0)
       return CAI_ERR_TRANSPORT;
     rc = cai_agent_runtime_prepare_handover(state->runtime, &capture, error);
@@ -4544,7 +4543,7 @@ cleanup:
     cai_error close_error;
     cai_error_init(&close_error);
     if (cli_close_runtime(state, &close_error) != CAI_OK) {
-      cli_print_error(state, "close conversation", &close_error);
+      cli_print_error(state, "close session", &close_error);
       result = 1;
     }
     cai_error_cleanup(&close_error);

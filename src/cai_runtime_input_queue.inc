@@ -1,4 +1,4 @@
-/** Included after journal primitives. Pending edits live in the conversation
+/** Included after journal primitives. Pending edits live in the session
  * journal; claimed model work uses an idempotent delivery receipt. A child
  * collection cannot be committed atomically with its parent's collection. */
 static int cai_runtime_enqueue_input_origin(cai_agent_runtime *, const char *,
@@ -248,7 +248,7 @@ static int cai_runtime_input_checkpoint_chunk(void *context, const void *bytes,
   return rc;
 }
 
-/** These receipts remain for the lifetime of the destination conversation.
+/** These receipts remain for the lifetime of the destination session.
  * They prevent a lost parent acknowledgement from duplicating child input. */
 static int cai_runtime_origin_seen_locked(cai_agent_runtime *runtime,
                                           const char *session,
@@ -473,7 +473,7 @@ next_delivery:
       pthread_mutex_unlock(&runtime->lock);
       return cai_set_error(error, CAI_ERR_TRANSPORT,
                            "input delivery outcome is unknown; reopen the "
-                           "conversation to recover");
+                           "session to recover");
     }
     if (entry->inflight) {
       pthread_mutex_unlock(&runtime->lock);

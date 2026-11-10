@@ -12,16 +12,15 @@ static int deletion_add(session_deletion *plan, const cai_cli_session *item,
   cai_cli_session *grown;
   size_t i;
   if (!session_component(item->id))
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "unsafe child conversation ID");
+    return cai_cli_error(error, CAI_ERR_INVALID, "unsafe child session ID");
   for (i = 0U; i < plan->count; i++)
     if (strcmp(plan->items[i].id, item->id) == 0)
       return CAI_OK;
   if (plan->count == (size_t)-1 / sizeof(*grown))
-    return cai_cli_error(error, CAI_ERR_LIMIT, "too many child conversations");
+    return cai_cli_error(error, CAI_ERR_LIMIT, "too many child sessions");
   grown = realloc(plan->items, (plan->count + 1U) * sizeof(*grown));
   if (grown == NULL)
-    return cai_cli_error(error, CAI_ERR_NOMEM, "collect child conversations");
+    return cai_cli_error(error, CAI_ERR_NOMEM, "collect child sessions");
   plan->items = grown;
   plan->items[plan->count++] = *item;
   return CAI_OK;
@@ -35,7 +34,7 @@ static int deletion_review(void *context, const cai_agent_session_event *event,
       !session_component(event->data) ||
       strlen(event->data) >= sizeof(child.id))
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "invalid review conversation reference");
+                         "invalid review session reference");
   rc = session_read(plan->pouch, event->data, &child, &exists, error);
   if (rc == CAI_OK && !exists) {
     memset(&child, 0, sizeof(child));
@@ -212,13 +211,13 @@ int cai_cli_pouch_delete(cai_cli_pouch *pouch, const char *id,
     rc = cai_cli_pouch_session(pouch, id, root, error);
   if (rc == CAI_OK && strcmp(root->id, id) != 0)
     rc = cai_cli_error(error, CAI_ERR_INVALID,
-                       "conversation metadata identity does not match its key");
+                       "session metadata identity does not match its key");
   if (rc == CAI_OK)
     rc = deletion_add(&plan, root, error);
   for (i = 0U; rc == CAI_OK && i < plan.count; i++)
     rc = deletion_children(&plan, i, error);
   /* Local cleanup fails before any collection is dropped. Metadata stays
-   * available until each conversation's collections have been removed, so
+   * available until each session's collections have been removed, so
    * interrupted cleanup can be retried by ID. */
   for (i = 0U; rc == CAI_OK && i < plan.count; i++)
     if (cleanup != NULL)
@@ -226,8 +225,7 @@ int cai_cli_pouch_delete(cai_cli_pouch *pouch, const char *id,
   for (i = plan.count; rc == CAI_OK && i > 0U; i--)
     rc = deletion_one(pouch, &plan.items[i - 1U], error);
   if (rc == CAI_OK && unlinkat(guard->directory, id, 0) != 0 && errno != ENOENT)
-    rc =
-        cai_cli_error(error, CAI_ERR_TRANSPORT, "remove conversation use lock");
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "remove session use lock");
   free(plan.items);
   free(root);
   session_guard_close(guard);

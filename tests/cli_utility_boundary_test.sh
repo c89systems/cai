@@ -45,7 +45,7 @@ run --config "$root/view.ini" --list; ok
 mkdir "$work/logs"
 printf 'config_env_has_precedence = true\n[env]\nLOG_OUTPUT = logs/utility.jsonl\nLOG_LEVEL = error\n' >"$root/log.ini"
 run --config "$root/log.ini" --export missing; bad
-contains "$work/logs/utility.jsonl" 'export conversation'
+contains "$work/logs/utility.jsonl" 'export session'
 # Registration uses the captured configured home without exporting it globally.
 printf 'config_env_has_precedence = true\n[env]\nCHROME_CONFIG_HOME = %s\n' "$root/browser-config" >"$root/browser.ini"
 run --config "$root/browser.ini" --chrome-setup; ok

@@ -23,7 +23,7 @@ void cai_input_record_cleanup(cai_input_record *);
 /** Incremental restoration candidate; not a second active input queue. */
 typedef struct cai_input_checkpoint_restore cai_input_checkpoint_restore;
 /** Atomic context cuts retain bounded pending state, streamed item by item.
- * Ordinary conversation commits never write a queue checkpoint. */
+ * Ordinary session commits never write a queue checkpoint. */
 int cai_input_checkpoint_source(cai_input_queue *, unsigned long long,
                                 cai_source **, cai_error *);
 /** Open an unpublished checkpoint decoder using the supplied queue policy. */

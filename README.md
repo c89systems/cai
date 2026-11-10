@@ -5,7 +5,7 @@ It supports OpenAI Responses, OpenAI-compatible Chat Completions, ChatGPT subscr
 
 | Product | Use it for |
 |---|---|
-| `cai` | Interactive or batch coding work, goals, reviews and saved conversations. |
+| `cai` | Interactive or batch coding work, goals, reviews and saved sessions. |
 | `libcai` | Embed the client, agent runtime, tools and MCP in your own host loop. |
 | `libcai_app_server` | Run the application backend without a terminal frontend. |
 | `libcai_app_client` | Attach a frontend to a workspace owner over Unix sockets. |
@@ -42,9 +42,9 @@ Approval is saved for the directory and its descendants; `-k` bypasses approval 
 Approval does not enable YOLO mode. Read [execution policy](docs/configuration.md#execution-policy) before changing restrictions.
 
 ```sh
-cai                        # Resume this directory's newest conversation.
-cai -N                     # Start a new conversation.
-cai -R                     # List conversations available to resume.
+cai                        # Resume this directory's newest session.
+cai -N                     # Start a new session.
+cai -R                     # List sessions available to resume.
 cai -n -i 'Explain the failing tests'
 cai --provider openai -m MODEL -n -i 'Summarize this project'
 ```
@@ -74,7 +74,7 @@ See [configuration and storage locations](docs/configuration.md) and [provider a
 | Task | Guide |
 |---|---|
 | Use the agent, commands and editor | [Terminal](docs/terminal.md) |
-| Resume, trim, compact, export or delete a conversation | [Conversations](docs/conversations.md) |
+| Resume, trim, compact, export or delete a session | [Sessions](docs/sessions.md) |
 | Add MCP apps, skills or custom tools | [MCP](docs/mcp.md), [skills](docs/skills.md), [dynamic tools](docs/plugins.md) |
 | Share searchable documents and files across agents | [Context](docs/context.md) |
 | Embed the SDK in C or Lua | [C SDK](docs/c-sdk.md), [Lua](docs/lua.md), [runtime](docs/runtime.md) |

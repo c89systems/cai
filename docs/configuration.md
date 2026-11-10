@@ -12,7 +12,7 @@ Existing files are never rewritten.
 `--config-dir DIR` also selects `DIR/config.ini`.
 Startup configuration is read from these files and CLI/environment inputs, not from pouch storage.
 Restart CAI after editing the configuration.
-Global instruction files are loaded again when a conversation runtime opens, including on replay; saved conversation state does not replace those files.
+Global instruction files are loaded again when a session runtime opens, including on replay; saved session state does not replace those files.
 Resuming restores the saved model and reasoning settings unless explicitly overridden by startup flags.
 Paths accept `~/` and are relative to the configuration file.
 The `[env]` section accepts literal environment assignments.
@@ -63,7 +63,7 @@ An embedding app named `smith` uses `SMITH_HOME` and the same directory layout, 
 
 ## Named stores
 
-Named stores separate conversation, authentication, and messaging backends:
+Named stores separate session, authentication, and messaging backends:
 
 ```ini
 [store.default]
@@ -92,19 +92,19 @@ Store handles remain open for the app run, including turns, `/new`, `/resume`, m
 Pouch roots are identified by their filesystem identity: aliases share one process client, references keep it alive, and the final owning context closes it.
 Conflicting keys or endpoint options for the same open root are rejected.
 Reconnection remains liblockdc's responsibility.
-`--temp` substitutes only the conversation store; configured auth and messaging stores remain available, including communication with normal runs.
-Its kanban data stays with the private conversation store.
+`--temp` substitutes only the session store; configured auth and messaging stores remain available, including communication with normal runs.
+Its kanban data stays with the private session store.
 
-Conversation history requires a Pouch store.
+Session history requires a Pouch store.
 Remote stores can still serve supported authentication and messaging roles.
 See [session journals](journal.md#pouch-storage-and-ownership) for encryption, compression, ownership and compatibility.
 
 ## Workspace approval
 
 Agent startup requires workspace approval.
-On first use, run `cai -y` (`--yes` or `--force`) to approve the current directory and its descendants for this and future conversations.
-Approval is recorded in the conversation journal and in a small authorization record in the configured session store.
-It survives conversation expiry/deletion; clearing the store removes it.
+On first use, run `cai -y` (`--yes` or `--force`) to approve the current directory and its descendants for this and future sessions.
+Approval is recorded in the session journal and in a small authorization record in the configured session store.
+It survives session expiry/deletion; clearing the store removes it.
 Imports and model output cannot grant approval.
 Help, listing, export, login, and standalone message delivery do not require approval.
 
@@ -115,7 +115,7 @@ This setting does not change TLS verification or the execution sandbox.
 Approval follows canonical directory ancestry: siblings and symlinks resolving outside the approved tree do not inherit it.
 Repository instructions above the authorized root are excluded.
 Global instruction files keep their existing settings.
-An old conversation does not implicitly approve its workspace.
+An old session does not implicitly approve its workspace.
 
 ## Execution policy
 
@@ -125,7 +125,7 @@ Precedence is CLI, environment, configuration, then the built-in default `false`
 Embedded apps use their configured environment prefix (for example, `SMITH_YOLO`).
 In the TUI, `/yolo` reports the current policy and `/yolo on` or `/yolo off` changes it once active turns, subagents and terminal commands finish.
 Pending changes remain editable in Softline and appear in `/status`.
-This does not write configuration or save the policy in conversation history.
+This does not write configuration or save the policy in session history.
 
 YOLO commands inherit the host environment and ordinary user filesystem permissions; managed commands still force `PAGER`, `GIT_PAGER`, and `GH_PAGER` to `cat`.
 Local read/list/patch/image tools may access paths outside the workspace, and reviewers/subagents inherit the selected mode.
@@ -137,8 +137,8 @@ Startup warns about the effective policy and `/status` reports it.
 
 ## Temporary workspaces
 
-`cai --temp -k` starts a new conversation in a unique `cache_dir/temp/chat-XXXXXX/workspace` directory.
-Its sibling `private/` contains the encrypted conversation pouch and key, prompt history, clipboard, exports, and app-owned logs.
+`cai --temp -k` starts a new session in a unique `cache_dir/temp/chat-XXXXXX/workspace` directory.
+Its sibling `private/` contains the encrypted session pouch and key, prompt history, clipboard, exports, and app-owned logs.
 Interactive runs use the common owner/socket frontend, with a separate private `t-XXXXXX` discovery directory under `runtime_dir`; that short-lived directory and its socket/locks are also removed.
 Temporary owners never persist after their frontend quits, including with `--persist`.
 The normal global or explicit `--config` file is loaded unchanged; path isolation is applied only in memory.
@@ -161,7 +161,7 @@ Files are private (0600), with a private cai cache directory (0700).
 Startup records are transferred to the selected session's log; failed startup records remain in a `startup-*` file.
 The UI surfaces readable warning and error notices, including their explanations and available request context (HTTP status, endpoint, provider code, and request ID).
 Full pslog records remain in the file; truncated notices direct you to the session log.
-Normal conversation rendering continues through softline and libmdf.
+Normal session rendering continues through softline and libmdf.
 
 With `-n`, `--review`, or `--review-and-fix`, the default log sink is stderr.
 Stdout contains only the latest top-level assistant response of the entire invocation, including when a later turn fails without producing a response.
@@ -177,7 +177,7 @@ Login URLs, callback guidance, and successful login results are normal stdout ou
 Color defaults to automatic terminal detection for stdout/stderr logs; redirected output and interactive log files stay uncolored.
 Native pslog environment settings apply, including `LOG_MODE`, `LOG_LEVEL`, `LOG_NO_COLOR`, `LOG_FORCE_COLOR`, `LOG_PALETTE`, `LOG_VERBOSE_FIELDS`, `LOG_DISABLE_TIMESTAMP`, `LOG_TIME_FORMAT`, `LOG_UTC`, `LOG_OUTPUT`, and `LOG_OUTPUT_FILE_MODE`.
 `LOG_OUTPUT` explicitly overrides the default sink; `default+PATH` adds a second file while retaining the default sink and its UI warning notices.
-`LOG_LEVEL=warn` filters out ordinary conversation records.
+`LOG_LEVEL=warn` filters out ordinary session records.
 
 See [troubleshooting](troubleshooting.md) for log inspection and export.
 

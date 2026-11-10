@@ -452,7 +452,7 @@ int cai_cli_presenter_introduction(cai_cli_presenter *state,
       renderer->finish_document(renderer) == MDF_OK)
     rc = 0;
   renderer->destroy(renderer);
-  /* Separate the completed introduction block from conversation or editor
+  /* Separate the completed introduction block from session or editor
    * content, just as other feed blocks do. The raw banner is never changed. */
   while (rc == 0 && state->feed_breaks < 2)
     if (cai_cli_presenter_sink(state, "\n", 1U) != 0)

@@ -1045,7 +1045,7 @@ static void catalog_tests(const char *runtime, const char *workspace) {
       assert(exchange(f) == CAI_OK);
       row.phase = CAI_APP_CATALOG_ERROR;
       row.code = CAI_ERR_CANCELLED;
-      row.text = "Conversation closed";
+      row.text = "Session closed";
       catalog_send(f, &row);
       assert(exchange(f) == CAI_OK);
       row.phase = CAI_APP_CATALOG_BEGIN;

@@ -17,11 +17,11 @@ trap selection_cleanup EXIT
 
 terminal_start -N
 plan '{"plan":["FirstConversationOnly"]}'
-prompt 'first conversation' FirstConversationOnly
+prompt 'first session' FirstConversationOnly
 first=$(current_session_id)
 send '/new\r'; expect 'New session'; expect 'ID:'
 plan '{"plan":["SecondConversationOnly"]}'
-prompt 'second conversation' SecondConversationOnly
+prompt 'second session' SecondConversationOnly
 second=$(current_session_id)
 [[ "$first" != "$second" ]]
 terminal_close
@@ -33,7 +33,7 @@ assert_selected() {
   contains "$term/feed" "$1"
   absent "$term/feed" "$2"
   absent "$term/feed" '$ /resume'
-  absent "$term/feed" 'Conversation already active.'
+  absent "$term/feed" 'Session already active.'
 }
 close_eof() {
   send '\004'
@@ -73,7 +73,7 @@ terminal_start --resume "$second"
 assert_selected SecondConversationOnly FirstConversationOnly
 terminal_close
 
-# Selecting the already active conversation by number is silent too.
+# Selecting the already active session by number is silent too.
 terminal_start -R "$(row_for "$second")"
 assert_selected SecondConversationOnly FirstConversationOnly
 terminal_close
@@ -91,8 +91,8 @@ terminal_start -R "$second"
 terminal_close
 
 # Invalid selectors fail before any transcript is replayed. The owner keeps
-# its selected conversation and can accept a subsequent valid attachment.
-for choice in missing-conversation 0 999999 "$foreign"; do
+# its selected session and can accept a subsequent valid attachment.
+for choice in missing-session 0 999999 "$foreign"; do
   terminal_launch -R "$choice"
   wait_for test -s "$term/status"
   wait "$terminal_pid" || true
@@ -112,7 +112,7 @@ terminal_close
 [[ $(requests) == "$before" ]]
 
 # Noninteractive attachment uses the same upfront selection, even while the
-# headless owner currently has another conversation selected.
+# headless owner currently has another session selected.
 plan '{"plan":["BatchSelectedConversationOnly"]}'
 run -n --resume "$first" -i 'batch selection'
 ok

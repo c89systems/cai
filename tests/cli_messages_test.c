@@ -572,7 +572,7 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
          CAI_OK);
   assert(strcmp(cai_cli_messages_name(old), name) == 0);
   old_sl = message_editor();
-  send_named(sender, name, "Held in old conversation");
+  send_named(sender, name, "Held in old session");
   assert(cai_cli_messages_sync(old, old_sl, &error) == CAI_OK);
   assert(pending_count(old_sl) == 1U);
   assert(cai_cli_messages_new(pouch, 2000L, 0L, &new_owner, &error) == CAI_OK);
@@ -600,7 +600,7 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
   assert(deliver_direct(old, &doc) == LC_OK);
   assert(deferred_count == rc + 1 && old->lost);
   assert(lc_consumer_service_wait(old->service, &local) == LC_OK);
-  send_named(sender, name, "Only the new conversation receives this");
+  send_named(sender, name, "Only the new session receives this");
   assert(cai_cli_messages_sync(new_owner, new_sl, &error) == CAI_OK);
   assert(pending_count(new_sl) == 1U);
   assert(strcmp(new_owner->links->doc.pending_for, "new-conversation") == 0);
@@ -632,14 +632,14 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
   cai_cli_messages_close(new_owner);
   new_owner = NULL;
   cai_input_queue_close(new_sl);
-  /* Resuming the original conversation restores its own undecided message. */
+  /* Resuming the original session restores its own undecided message. */
   assert(cai_cli_messages_new(pouch, 2000L, 0L, &old, &error) == CAI_OK);
   assert(cai_cli_messages_start(old, "old-conversation", one, NULL, &error) ==
          CAI_OK);
   old_sl = message_editor();
   assert(cai_cli_messages_sync(old, old_sl, &error) == CAI_OK);
   assert(pending_count(old_sl) == 1U);
-  assert(strcmp(old->links->doc.text, "Held in old conversation") == 0);
+  assert(strcmp(old->links->doc.text, "Held in old session") == 0);
   cai_cli_messages_close(old);
   cai_input_queue_close(old_sl);
   cai_cli_messages_close(other);

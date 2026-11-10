@@ -79,7 +79,7 @@ send '/todo layout board\r'; expect 'DOING'
 [[ $(requests) == "$before" ]]
 terminal_close
 # Startup config, environment and argv choose the initial presentation; slash
-# commands do not persist a UI preference in the conversation or INI file.
+# commands do not persist a UI preference in the session or INI file.
 printf '[todo]\ndefault_board = configured\n[ui]\ntodo_layout = list\n' >"$root/config/cai/config.ini"
 terminal_start --board default
 send '/todo\r'; expect 'Title'; expect FINAL_TITLE_SUFFIX

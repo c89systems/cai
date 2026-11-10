@@ -1710,7 +1710,7 @@ end
 assert_ok(dummy_session:set_previous_response_id("resp_lua_test"))
 assert_ok(dummy_session:set_conversation_id("conv_lua_test"))
 assert_not_ok(dummy_session:set_conversation_id(""),
-  "empty Lua session conversation id must fail")
+  "empty Lua provider session ID must fail")
 assert_ok(dummy_session:add_user_text("hello"))
 assert_ok(dummy_session:add_user_text_spooled(spool_text("spooled hello", 3)))
 assert_ok(dummy_session:add_user_file_data_spooled(
@@ -1750,7 +1750,7 @@ assert_not_ok(dummy_session:add_user_text_spooled(bad_spool_read_error()),
 assert_not_ok(dummy_session:add_user_text_spooled(bad_spool_empty_forever()),
   "spooled reader with unbounded empty chunks must fail")
 local ids = dummy_session:ids()
-assert_eq(ids.conversation_id, "conv_lua_test", "session conversation id")
+assert_eq(ids.conversation_id, "conv_lua_test", "provider session ID")
 local state_chunks = {}
 assert_ok(dummy_session:export_state(function(chunk)
   state_chunks[#state_chunks + 1] = chunk
@@ -1997,7 +1997,7 @@ assert_ok(params:set_max_tool_calls(3))
 assert_not_ok(params:set_max_tool_calls(-1),
   "negative Lua max tool calls must fail")
 assert_not_ok(params:set_conversation_id(""),
-  "empty Lua params conversation id must fail")
+  "empty Lua params session id must fail")
 assert_not_ok(params:set_previous_response_id(""),
   "empty Lua params previous response id must fail")
 assert_ok(params:set_parallel_tool_calls(true))
@@ -2071,9 +2071,9 @@ assert_not_ok(params:add_text_spooled("user", bad_spool_read_error()),
   "response params spooled read error must fail")
 params:close()
 
-local conversation = assert_ok(cai.conversation_from_id("conv_lua_test"))
-assert_eq(conversation:id(), "conv_lua_test", "conversation id")
-conversation:close()
+local session = assert_ok(cai.conversation_from_id("conv_lua_test"))
+assert_eq(session:id(), "conv_lua_test", "session id")
+session:close()
 
 local conv_params = assert_ok(cai.conversation_items_params())
 assert_ok(conv_params:add_text("user", "hello"))
@@ -2090,7 +2090,7 @@ assert_ok(conv_params:add_file_data_spooled(
   "user", "conv.txt", spool_text("conv file data", 3)))
 assert_ok(conv_params:add_file_url("user", "https://example.com/f.txt"))
 assert_not_ok(conv_params:add_text_spooled("user", bad_spool_rewind_false()),
-  "conversation params spooled rewind error must fail")
+  "session params spooled rewind error must fail")
 conv_params:close()
 
 local schema = assert_ok(cai.tool_schema())

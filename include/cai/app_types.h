@@ -99,7 +99,7 @@ typedef struct cai_app_option {
  * CAI defaults < INI/environment < settings < forwarded arguments.
  * [env] retains its normal config_env_has_precedence policy.
  * Runtime defaults match cai; startup text is empty unless the host sets it.
- * Conversation history requires Pouch collections. Remote lockd stores remain
+ * Session history requires Pouch collections. Remote lockd stores remain
  * available for separately selected authentication, messaging and kanban.
  * ui.prompt_history_limit defaults to 200 recall entries; storage pruning is
  * deferred. storage.conversation_retention_days defaults to 30 days since the
@@ -149,7 +149,7 @@ typedef struct cai_app_config {
   const char *introduction_markdown;
   /** Independent libmdf introduction margins, in columns. Both default to zero
    * and must be nonnegative, leaving at least three content columns at runtime.
-   * These do not change conversation rendering. */
+   * These do not change session rendering. */
   int introduction_margin_left;
   int introduction_margin_right;
   const char *config_file;

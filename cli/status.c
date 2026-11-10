@@ -576,9 +576,8 @@ int cai_cli_status_log_markdown(const char *path, int table,
 int cai_cli_status_ids_markdown(const cai_agent_runtime_ids *ids,
                                 int (*write)(void *, const char *, size_t),
                                 void *context) {
-  static const char *const labels[] = {"| Session ID | ",
-                                       "| Last response ID | ",
-                                       "| Provider conversation ID | "};
+  static const char *const labels[] = {
+      "| Session ID | ", "| Last response ID | ", "| Provider session ID | "};
   const char *values[3];
   const unsigned char *p;
   char buffer[256];

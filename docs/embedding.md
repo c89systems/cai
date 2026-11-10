@@ -9,7 +9,7 @@
 - [Native custom tools](#native-custom-tools)
 - [Observations and controls](#observing-and-controlling-a-run)
 - [Lua 5.5](#lua-55)
-- [Messaging](#conversation-messaging)
+- [Messaging](#session-messaging)
 - [Darwin assessment](#darwin-port-assessment)
 - [Kanban and HTTP routes](#shared-kanban-and-http-routes)
 
@@ -47,7 +47,7 @@ structure layouts. Enable `CAI_BUILD_APP_SERVER=ON` independently of the UI.
 An agent invocation fails before provider access when its canonical workspace
 has no saved approval. Pass `-y` / `--yes` / `--force` to approve that directory
 and its descendants, or `-k` / `--insecure` for an invocation-only bypass.
-Saved approval applies to other conversations in that tree. Utility modes remain
+Saved approval applies to other sessions in that tree. Utility modes remain
 available without approval. The same argv parser is used by C and Lua hosts.
 Hosts may configure the bypass through the `agent.insecure` application setting;
 its default is false. Environment aliases follow `program_name`, such as
@@ -56,7 +56,7 @@ its default is false. Environment aliases follow `program_name`, such as
 The explicit approval is durably journaled before its small authorization record
 is published in the configured scopes namespace. It is not stored in the derived
 latest-session index and requires no journal scan to look up. Records survive
-conversation deletion/expiry. Imported journal events are audit data and never
+session deletion/expiry. Imported journal events are audit data and never
 grant authorization. Failed approval publication fails startup; bypass runs
 never save approval.
 
@@ -124,17 +124,17 @@ use `disable_capacity_retry` in the core C/Lua runtime config. This does not
 retry unrelated errors or standalone compaction requests.
 
 The C and Lua receivers accept `-D` / `--delete` through the same argument
-parser. With no value it lists eligible conversations in the selected workspace;
-`--all` lists eligible conversations across the history store. An ID deletes
-that conversation regardless of the working directory; a list number selects
-from the current workspace. Deletion removes the conversation and its owned
-child history, prompt recall, logs, exports and delivered inbox messages. An open conversation
+parser. With no value it lists eligible sessions in the selected workspace;
+`--all` lists eligible sessions across the history store. An ID deletes
+that session regardless of the working directory; a list number selects
+from the current workspace. Deletion removes the session and its owned
+child history, prompt recall, logs, exports and delivered inbox messages. An open session
 is omitted and cannot be deleted. Shared stores and workspace files remain.
-Prompt recall is per-conversation, so switching sessions also switches recall.
+Prompt recall is per-session, so switching sessions also switches recall.
 
 Core hosts can use `<cai/input_queue.h>` and `<cai/input_controller.h>` without
 linking Softline or libcai_app. `cai_agent_runtime_pending_input` borrows the
-conversation's queue on its owner thread. Its incremental acceptance, edits,
+session's queue on its owner thread. Its incremental acceptance, edits,
 stop/approval decisions and model claims use the existing session journal;
 ordinary commits do not serialize a queue snapshot. Atomic trim and portable
 export include a streamed pending-state baseline because earlier queue events
@@ -148,7 +148,7 @@ handoff before queued parent turns run.
 Frontend `connect`, `request` and `poll` use copied data and wakeup descriptors;
 the host schedules bounded `pump` on the queue owner. Submission success means
 handoff, not acceptance: consume the explicit accepted/rejected/unknown result.
-Selection changes reject unadmitted requests for the old conversation. Accepted
+Selection changes reject unadmitted requests for the old session. Accepted
 entries remain in the old queue. Slow observers disconnect from deltas and
 resynchronize without removing work. Deselect before closing the runtime;
 detach frontend connections before freeing their callback contexts. No worker
@@ -168,7 +168,7 @@ still preserving accepted work and producer-ID allocation.
 
 For a shared frontend server, supply `cai_input_controller_config.authorize`
 and a fixed authenticated attachment identity on each connection. Every copied
-handoff carries `cai_input_scope` (conversation epoch and original control
+handoff carries `cai_input_scope` (session epoch and original control
 generation). Admission checks that generation on the owner thread, immediately
 before queue mutation; a takeover cannot be bypassed by an earlier socket read.
 Synchronization and receipt reconciliation are read-only. A NULL configuration
@@ -249,7 +249,7 @@ its known fields, and split large/unknown-length values into chunk records.
 
 `<cai/workspace.h>` derives a canonical workspace identity and private endpoint,
 owns its native listener lock, validates peer credentials and reclaims stale
-sockets after a crash. Discovery never opens conversation storage. These are
+sockets after a crash. Discovery never opens session storage. These are
 transport primitives used by the implemented attach/autostart CLI. Foreground
 `cai -x` uses the native controller described below. Lifecycle, roles and persistence are described in
 [workspace-server.md](workspace-server.md).
@@ -407,7 +407,7 @@ publishing readiness remain host responsibilities. Closing a Lua attachment
 keeps accepted work; closing its runtime disables all further queue operations.
 
 `/compact` uses the agent worker, leaving the application event loop responsive.
-It stays in the conversation's queue, editable through Softline, until the parent has
+It stays in the session's queue, editable through Softline, until the parent has
 no active turn, reviewer, pending control, or shell execution. Application event
 observers receive the normal run and compaction lifecycle events; manual
 compaction's `RUN_STARTED` has a NULL prompt payload. Escape or host cancellation
@@ -532,7 +532,7 @@ entries asynchronously, without a foreground scan or per-append deletion.
 Zero disables recall/recording and clears the cap without deleting saved prompts.
 `storage.conversation_retention_days` defaults to 30 days since the latest
 journal append; zero disables expiry. `/retention` shows that policy and
-persists an override for the active conversation (0/off means forever).
+persists an override for the active session (0/off means forever).
 Liblockdc maintenance removes the whole journal collection and its session
 metadata. Individual journal records never expire separately. Both defaults
 are available through C/Lua `settings`, prefixed environment variables and
@@ -630,7 +630,7 @@ the current table to row streaming at 64 KiB or 1024 retained rows, emitting
 buffered rows once before continuing. Descriptions are retained in full, and
 small tables preserve widths calculated from the complete table. The ordinary
 Markdown feed and sink remain unchanged. Command rendering errors are
-reported inline so subsequent commands and conversation turns remain usable.
+reported inline so subsequent commands and session turns remain usable.
 
 `<cai/dtg.h>` provides an allocation-free parser/formatter independent of
 runtime objects. `cai_dtg_parse` returns calendar fields with a two-digit year
@@ -657,7 +657,7 @@ lists both libraries' themes before configuration, authentication or storage
 startup. See the [pairing table](appearance.md#themes) for aliases. `plain:ascii`
 disables Markdown ANSI styling while preserving UTF-8. `NO_COLOR` overrides
 the selection with the plain prompt and escape-free Markdown. Themes apply
-to the Markdown introduction, conversation feed and tool headings; raw banners stay verbatim
+to the Markdown introduction, session feed and tool headings; raw banners stay verbatim
 and logger configuration remains independent.
 The same TUI provides `/theme` to show the active pair and both libraries'
 themes, and `/theme NAME` or `/theme SOFTLINE:LIBMDF` to change the selection.
@@ -704,7 +704,7 @@ runtime hosts use `enable_review_and_fix = true`. Application hosts set
 `--review-and-fix-tool` / `CAI_REVIEW_AND_FIX_TOOL`. It requires reviewer and
 goal tools. A user must explicitly authorize repeated review/fix work; normal
 review requests and follow-up fixes do not grant that permission. The tool
-replaces the current conversation's goal and returns after queueing it.
+replaces the current session's goal and returns after queueing it.
 `cai_agent_review_and_fix_objective` and Lua's
 `cai.review_and_fix_objective(workspace, request)` expose the shared objective
 builder without starting an agent. The request accepts default, base and
@@ -735,7 +735,7 @@ with `\n\n` to separate the introduction. The optional Markdown introduction
 has independent `introduction_margin_left` and `introduction_margin_right`
 fields in both C and Lua, passed directly to its own libmdf renderer. Both
 default to zero and must be nonnegative, leaving at least three content columns
-at the current terminal width. Interactive conversation text retains its normal
+at the current terminal width. Interactive session text retains its normal
 margin and a blank line before content starts. Non-interactive final responses
 have no added left margin. The introduction goes through
 libmdf's output feed before the first session opens or replays; it is
@@ -803,12 +803,12 @@ user permissions, disabled tools, output retention, timeouts and cancellation
 still apply.
 
 `/yolo` inspects the live policy; `/yolo on` and `/yolo off` change it without
-reopening the conversation or writing config.ini. `/status` shows the effective
+reopening the session or writing config.ini. `/status` shows the effective
 mode and any queued change. Changes remain editable in Softline until the
 runtime is idle: the active turn, child runtimes, shell capture and managed
-terminal processes must finish first. Esc preserves the conversation's stopped queue.
+terminal processes must finish first. Esc preserves the session's stopped queue.
 The selected mode applies to later tools and new children; it is not stored in
-the conversation commit. Restarting the application uses startup settings.
+the session commit. Restarting the application uses startup settings.
 
 C hosts use the owner-thread `cai_agent_runtime_get_yolo(runtime, &enabled,
 &can_change, error)` and `cai_agent_runtime_try_set_yolo(runtime, enabled,
@@ -849,7 +849,7 @@ enables it; `/background` (`/bg`) restores the libcai 10000 ms default if yieldi
 was disabled, otherwise preserving the current positive interval.
 `--background` has the same startup behavior. `/yield_time_ms` queries the
 effective policy and `/yield_time_ms N` changes it at a request boundary.
-These are host settings, not model input or persistent conversation settings.
+These are host settings, not model input or persistent session settings.
 The model-facing argument `yield_time_ms=0` still means immediate yielding when
 the host has not forced foreground execution.
 
@@ -893,7 +893,7 @@ client, worker or tool execution is created in this projection.
 `cai_agent_runtime_export_execution_markdown(runtime, sink, error)` streams the
 stored timeline at an idle boundary; Lua exposes
 `runtime:export_execution_markdown(sink)`. The application combines this with
-the existing conversation exporter in its human-facing `/export` and
+the existing session exporter in its human-facing `/export` and
 `--export` Markdown file. Core `export_markdown` and `export_markdown_file`
 remain agent-handover projections and exclude execution records.
 
@@ -1032,7 +1032,7 @@ Hosts receive `CAI_AGENT_EVENT_REASONING_TOOL_RESULT` with a user-facing receipt
 identifying the requested mode, mapped effort, previous effort and actual result.
 Unchanged settings include a reason. These receipts also appear in replay and
 exports as `reasoning.receipt` execution records; they never enter model context.
-Mappings and tool enablement come from configuration, not conversation storage;
+Mappings and tool enablement come from configuration, not session storage;
 manual `-r` and `/reasoning` remain independent of the normal mapping.
 `/reasoning-tool [on|off|normal LEVEL|high LEVEL]` configures the current app
 between turns, including subsequent `/new` or `/resume`, without editing INI.
@@ -1176,7 +1176,7 @@ embedding executable that offers `--chrome-setup` must also dispatch Chrome's
 extension-origin invocation to CAI's run entrypoint, or directly to the public
 `cai_chrome_native_host_run` API, rather than its normal host option parser.
 
-## Conversation messaging
+## Session messaging
 
 The application includes optional shared-Pouch messaging (default off) with user approval through
 softline's normal prompt hook. Configure it through C app settings or Lua
@@ -1185,9 +1185,9 @@ ack_timeout_ms = 300000, queue_name = "smith"}}`. Omit `queue_name` to derive
 a stable name allocated from the basename and the fewest distinguishing
 ancestor components, with the actual hostname as a leading component.
 The newest app start owns the
-named mailbox; old delivered messages stay in their original conversation.
+named mailbox; old delivered messages stay in their original session.
 `/queue on` and `/queue off` enable or disable messaging between turns in the
-same conversation. `/queue NAME` overrides the full name; `/queue` shows it.
+same session. `/queue NAME` overrides the full name; `/queue` shows it.
 `/status` includes the queue and approval mode. These live settings survive
 `/new` and `/resume`, without changing config.ini.
 `storage.messaging_store` selects a named `store.NAME` backend independently
@@ -1208,7 +1208,7 @@ context's sink until that client closes; supply the same host logger when
 independent contexts need a common destination. Liblockdc owns reconnect behavior.
 
 `--temp` (or `settings = {ui = {temporary = true}}` in Lua) creates a private
-cache workspace and conversation store without rewriting the normal config.
+cache workspace and session store without rewriting the normal config.
 Relative forwarded input paths resolve against the original selected workspace
 before entering the temporary workspace; INI paths remain relative to the
 configuration file.
@@ -1258,4 +1258,4 @@ Use `cai_app_kanban_open` to open CAI's encrypted shared board engine independen
 of the terminal. It returns the core `cai_todo` receiver; `handle_http` serves an
 embedded read-only page, assets and live snapshots. The equivalent Lua helper is
 `require('cai.app').kanban`. See [shared kanban](kanban.md) for C/Lua ownership,
-routing, streaming, configuration and per-conversation selection.
+routing, streaming, configuration and per-session selection.

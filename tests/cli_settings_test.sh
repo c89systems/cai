@@ -28,7 +28,7 @@ selection() {
   settings_plan '[]'; terminal_start -N
   send '/help\r'; expect manual.; contains "$term/text" /reasoning; contains "$term/text" /model
   send '/r\r'; expect max; expect 'Provider-advertised choices'
-  settings_plan '["INITIAL settings response"]'; offset=$(wc -c <"$term/text"); send 'original settings conversation\r'; expect_turn "$offset" 'INITIAL settings response'; selection gpt-6-luna medium
+  settings_plan '["INITIAL settings response"]'; offset=$(wc -c <"$term/text"); send 'original settings session\r'; expect_turn "$offset" 'INITIAL settings response'; selection gpt-6-luna medium
   send '/model gpt-6.1-sol high\r'; expect 'Model changed to gpt-6.1-sol'
   send '/reasoning\r'; expect ultra
   send '/reasoning xhigh\r'; expect 'Reasoning effort changed to xhigh'
@@ -60,7 +60,7 @@ selection() {
   terminal_start; send '/model\r'; expect 'Reasoning effort: ultra'
   settings_plan '["RESUMED settings response"]'
   offset=$(wc -c <"$term/text"); send 'after resume\r'; expect_turn "$offset" 'RESUMED settings response'; selection gpt-6.1-sol ultra
-  contains "$root/request" 'original settings conversation'
+  contains "$root/request" 'original settings session'
   send '/new\r'; expect 'New session'; expect 'ID:'; expect 'Workspace:'; expect '$ /new'
   absent "$term/feed" '--- session ---'
   send '/model\r'; expect 'Reasoning effort: medium'

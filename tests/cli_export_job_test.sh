@@ -19,7 +19,7 @@ prompt 'ExportSeedPrompt' ExportSeedReply
 before=$(requests)
 send '/export first\r'
 wait_for test -f "$root/gate/entered"
-expect 'Exporting conversation'
+expect 'Exporting session'
 # This persists observations too. It must finish while the read stays gated.
 send '/status\r'; expect 'Session ID'
 [[ ! -e "$work/first.md" && ! -e "$work/first.jsonl" ]]
@@ -27,7 +27,7 @@ set_plan AfterExportReply
 send 'AfterExportPrompt\r'; expect 'Q 1. AfterExportPrompt'
 [[ $(requests) == "$before" ]]
 printf r >"$root/gate/release"
-expect 'Conversation export'
+expect 'Session export'
 expect_assistant AfterExportReply
 [[ -s "$work/first.md" && -s "$work/first.jsonl" ]]
 for file in "$work/first.md" "$work/first.jsonl"; do
@@ -64,7 +64,7 @@ rm "$root/gate/entered"
 send '/export recovered.jsonl\r'
 wait_for test -f "$root/gate/entered"
 printf r >"$root/gate/release"
-expect 'Conversation export'
+expect 'Session export'
 [[ -s "$work/recovered.jsonl" ]]
 
 # Cancellation must also preserve already-existing sibling destinations.
@@ -89,7 +89,7 @@ wait_for no_candidates
 unset CAI_TEST_EXPORT_GATE CAI_TEST_EXPORT_GATE_PASS CAI_TEST_EXPORT_ACTIVE_GOAL
 # Noninteractive command settlement waits for the real asynchronous result.
 run -ni '/export batch.md'; ok
-contains "$root/stdout" 'Conversation export'
+contains "$root/stdout" 'Session export'
 [[ -s "$work/batch.md" && $(requests) == $((before+1)) ]]
 run -ni '/status'; ok
 contains "$root/stdout" 'Session ID'

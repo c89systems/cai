@@ -1,5 +1,5 @@
 /** Included after the journal append primitive. All persistence uses the same
- * runtime sequence and store as conversation events. No logger is involved. */
+ * runtime sequence and store as session events. No logger is involved. */
 typedef struct cai_runtime_execution_stream {
   cai_agent_runtime *runtime;
   cai_execution_record record;

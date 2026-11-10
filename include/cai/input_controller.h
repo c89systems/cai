@@ -50,17 +50,17 @@ typedef struct cai_input_observation {
   cai_input_observation_type type;
   unsigned long long conversation;
   /** Bound logical producer and its processed high watermark. Present on
-   * snapshots/changes and current-conversation results. Keep the larger of
+   * snapshots/changes and current-session results. Keep the larger of
    * last_request and the frontend's own last-issued ID on reconnect. */
   unsigned long long producer, last_request;
   cai_input_state state;
   cai_input_change change;
   cai_input_result result;
   /** Snapshot items arrive individually between BEGIN and END, with a common
-   * conversation/view revision. No complete snapshot is built by the producer.
-   * DISCONNECTED invalidates an unfinished baseline; a later BEGIN restarts
-   * it. A consumer publishes only after END. Its bounded frontend mirror is
-   * explicit consumer state, not a transport accumulator. */
+   * session epoch and view revision. No complete snapshot is built by the
+   * producer. DISCONNECTED invalidates an unfinished baseline; a later BEGIN
+   * restarts it. A consumer publishes only after END. Its bounded frontend
+   * mirror is explicit consumer state, not a transport accumulator. */
   cai_input_entry entry;
   size_t index;
 } cai_input_observation;
@@ -72,14 +72,14 @@ int cai_input_controller_open(const cai_input_controller_config *config,
  * Existing connections receive disconnect and retain outstanding results.
  * Connections may outlive close and must still be closed by their callers. */
 void cai_input_controller_close(cai_input_controller *controller);
-/** Owner-only: bind a conversation's queue, or NULL while changing context.
- * Never moves accepted work between conversations. Changing selection rejects
+/** Owner-only: bind a session's queue, or NULL while changing context.
+ * Never moves accepted work between sessions. Changing selection rejects
  * still-unadmitted old-context requests; it cannot redirect them to the new
  * queue. Selection retains allocation, not journal authority; closing its
  * runtime still disables admission immediately. Deselect before shutdown. */
 int cai_input_controller_select(cai_input_controller *controller,
                                 cai_input_queue *queue, cai_error *error);
-/** Copy the selected conversation epoch without reserving a producer.
+/** Copy the selected session epoch without reserving a producer.
  * Thread-safe; unavailable while deselected or closed. */
 int cai_input_controller_conversation(cai_input_controller *,
                                       unsigned long long *out, cai_error *);
@@ -87,8 +87,8 @@ int cai_input_controller_conversation(cai_input_controller *,
 int cai_input_controller_connect(cai_input_controller *controller,
                                  uint64_t attachment,
                                  cai_input_connection **out, cai_error *error);
-/** Thread-safe reconnect to a retained producer in the current conversation.
- * No new producer is reserved. conversation must be the verified epoch from
+/** Thread-safe reconnect to a retained producer in the current session.
+ * No new producer is reserved. The session epoch must match the value from
  * this controller instance; after a server restart the host first verifies
  * the persistent session identity and obtains its new epoch. Producer lookup
  * happens on owner dispatch. An unavailable/already-attached producer emits
@@ -135,8 +135,8 @@ int cai_input_controller_producer_ready(cai_input_controller *,
                                         unsigned long long producer,
                                         int *settled, cai_error *);
 /** Copy and signal only. Success means transport handoff, not acceptance.
- * scope is copied from the frontend's latest snapshot/role. Conversation zero
- * is valid only for initial SYNCHRONIZE. Request IDs never repeat on one
+ * scope is copied from the frontend's latest snapshot/role. A zero session
+ * epoch is valid only for initial SYNCHRONIZE. Request IDs never repeat on one
  * connection. Generation is validated at dispatch, even after a takeover and
  * return of control to the same attachment. A trusted local caller uses zero.
  * Full admission is bounded to 16 requests plus SYNC/RESOLVE/STOP reserves. */

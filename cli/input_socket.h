@@ -33,7 +33,7 @@ cai_cli_input_adapter *cai_cli_input_socket_adapter(cai_cli_input_socket *);
  * must identify that same session/producer, including after a server restart.
  * Opaque item/revision tokens stay stable while this editor is retained;
  * fresh requests still use the verified connection's live epoch/generation.
- * A different conversation view needs its own editor binding. */
+ * A different session view needs its own editor binding. */
 int cai_cli_input_socket_observe(cai_cli_input_socket *,
                                  const cai_app_client_event *, cai_error *);
 /* Abandon frontend routing to the current transport, mark outcomes unknown,
@@ -43,7 +43,7 @@ int cai_cli_input_socket_disconnect(cai_cli_input_socket *, cai_error *);
 /** Pause editor observations while continuing to pump the borrowed client.
  * Pending outcomes become unknown; no observations are buffered or reapplied.
  * Keep the original client alive. Resume accepts only that same connection,
- * bound to the original conversation epoch/session/producer. Follow resume
+ * bound to the original session ID, epoch and producer. Follow resume
  * with SYNCHRONIZE and native receipt RESOLVE; never repeat uncertain offers.
  * A changed scope must instead disconnect and bind the appropriate view. */
 int cai_cli_input_socket_pause(cai_cli_input_socket *, cai_error *);

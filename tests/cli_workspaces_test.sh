@@ -54,12 +54,12 @@ send '/workspace workspace-a\rDRAFT_B'; expect_prompt DRAFT_A
 send '\025'
 prompt 'continue the first workspace' 'FIRST continued answer'
 send '/workspace workspace-b\r'; expect_prompt DRAFT_B
-send '\025/workspace ../work\r'; expect 'Conversation resumed'
+send '\025/workspace ../work\r'; expect 'Session resumed'
 send '/workspace workspace-a\r'; expect 'Already viewing this workspace'
 plan '{"plan":[{"pause":true,"pause_text":"OLD workspace still working. ","text":"OLD workspace done."},"QUEUED A answer"]}'
 send 'work in the first workspace while I am away\r'; expect 'OLD workspace still working.'
 send 'queued only in workspace A\r'; expect 'Q 1.'
-send '/workspace workspace-b\r'; expect 'Conversation attached'
+send '/workspace workspace-b\r'; expect 'Session ready'
 release
 wait_for has "$root/a.log" 'QUEUED A answer'
 if has_since "$send_offset" 'OLD workspace done.' "$send_feed_offset"; then
@@ -68,7 +68,7 @@ fi
 send '/workspace workspace-a\r'; expect 'OLD workspace done.'; expect 'QUEUED A answer'
 plan '{"plan":[{"tool":"exec_command","arguments":{"cmd":"read line; printf TOOL_AFTER_CURSOR","tty":true,"yield_time_ms":1}},{"pause":true,"pause_text":"Tool yielded before switch. ","tool":"write_stdin","arguments":{"session_id":"terminal-1","chars":"ok\n","yield_time_ms":1000}},"TOOL GAP FINISHED"]}'
 send 'finish a yielded command while I view the other workspace\r'; expect 'Tool yielded before switch.'
-send '/workspace workspace-b\r'; expect 'Conversation attached'
+send '/workspace workspace-b\r'; expect 'Session ready'
 release
 wait_for has "$root/a.log" 'TOOL GAP FINISHED'
 send '/workspace workspace-a\r'; expect TOOL_AFTER_CURSOR

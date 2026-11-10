@@ -162,7 +162,7 @@ int main(void) {
   }
 
   /* Each retained editor owns its animation; switching back must not reset
-   * an already busy editor, even after displaying an idle conversation. */
+   * an already busy editor, even after displaying an idle session. */
   fixture_view.metrics.turn_active = 1;
   expect_status(f, 1, ++calls);
   other->ui.sl = sl_create();

@@ -25,7 +25,7 @@ int cai_cli_workspace_host_ready(cai_cli_workspace_host *, cai_error *);
 void cai_cli_workspace_host_cancel(cai_cli_workspace_host *,
                                    int (*)(void *, cai_error *), void *);
 /** Select before producer binding, outside the socket decoder callback.
- * NULL selector means a new conversation. Borrow callback/context to close. */
+ * NULL selector means a new session. Borrow callback/context to close. */
 void cai_cli_workspace_host_selection(cai_cli_workspace_host *,
                                       int (*)(void *, const char *,
                                               cai_error *),

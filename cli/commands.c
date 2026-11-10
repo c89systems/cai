@@ -6,7 +6,7 @@ int cai_cli_manual_review_call(const char *call) {
 }
 /* One policy inventory for the complete slash-command surface. Bare queries
  * can differ from mutations; neither Enter nor Alt-Enter changes the boundary
- * required by a command. Ordinary conversation input keeps its native intent.
+ * required by a command. Ordinary session input keeps its native intent.
  */
 static const struct cli_command_definition {
   const char *name;

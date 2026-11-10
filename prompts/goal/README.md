@@ -3,6 +3,7 @@
 `codex-continuation.md` is the upstream continuation prompt from OpenAI Codex
 commit `0c329ad2c9`, `codex-rs/ext/goal/templates/goals/continuation.md`
 (Apache-2.0). Keep it intact as the comparison baseline.
+The upstream phrase "thread goal" refers to the active session's goal in CAI.
 
 `continuation.md` is the embedded CAI template. It preserves the continuation,
 objective, budget, evidence, fidelity, completion and blocked audits. CAI omits

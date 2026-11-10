@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Commands use the same native editable queue as conversation prompts.
+# Commands use the same native editable queue as session prompts.
 source "$(dirname "$0")/cli_test_common.sh"
 protocol=${1:-responses}
 peer_start

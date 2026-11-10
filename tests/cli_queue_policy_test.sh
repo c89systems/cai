@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Commands use the same native editable queue as conversation prompts.
+# Commands use the same native editable queue as session prompts.
 source "$(dirname "$0")/cli_test_common.sh"
 protocol=${1:-responses}
 peer_start
@@ -48,13 +48,13 @@ absent "$term/feed" '$ /output full'
 send '/status\r'; expect 'Use /tools for the full inventory.'
 send '\033\r'; expect 'applies from the next tool call'
 expect 'Q 1. STOPPED_ORDINARY_PROMPT'
-# Context changes leave accepted, stopped entries in their own conversation.
+# Context changes leave accepted, stopped entries in their own session.
 # Switching back restores the queue rather than moving it into the new one.
 original=$(current_session_id)
 send '/new\r'; expect 'ID:'
 send '/status\r'; expect 'Metric'
 absent "$term/message" STOPPED_ORDINARY_PROMPT
-send '/resume 2\r'; expect 'Conversation resumed.'; expect 'Q 1. STOPPED_ORDINARY_PROMPT'
+send '/resume 2\r'; expect 'Session resumed.'; expect 'Q 1. STOPPED_ORDINARY_PROMPT'
 absent "$term/feed" '> STOPPED_ORDINARY_PROMPT'
 send "/export $root/pending.jsonl\r"; expect "$root/pending.jsonl"
 # The command echo acknowledges submission, not asynchronous export completion.
@@ -67,7 +67,7 @@ expect 'Q 1. STOPPED_ORDINARY_PROMPT'
 terminal_close
 # A portable export seeds the current queue once. Historic queue deltas must
 # neither resurrect consumed commands nor misidentify local delivery receipts
-# as foreign child receipts when the conversation receives a new ID.
+# as foreign child receipts when the session receives a new ID.
 run --import "$root/pending.jsonl"; ok
 imported=$(stdout_text)
 [[ -n "$imported" && "$imported" != "$original" ]]

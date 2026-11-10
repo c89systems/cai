@@ -33,7 +33,7 @@ for final in '""' '{"reasoning":["Reasoning-only tool continuation"]}'; do
   contains "$root/stderr" 'STALE TOOL PREAMBLE'
 done
 
-# The conversation margin belongs to interactive output only.
+# The session margin belongs to interactive output only.
 plan "{\"chat\":$chat,\"plan\":[\"Interactive paragraph.\"]}"
 terminal_start -N
 prompt 'Print one paragraph' 'Interactive paragraph.'

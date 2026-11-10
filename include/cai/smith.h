@@ -245,7 +245,7 @@ void cai_agent_instructions_close(cai_agent_instructions *instructions);
  * a client, agent, tools or model context. Uses the same template compiler,
  * model capability policy, global/approved workspace files and skill catalog
  * as cai_client_new_preset_agent. Current files are read; these are not
- * recorded conversation instructions. No tools execute and no integrations are
+ * recorded session instructions. No tools execute and no integrations are
  * opened.
  *
  * The configuration and sink are borrowed for this synchronous call. Rendered

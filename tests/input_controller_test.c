@@ -383,7 +383,7 @@ int main(void) {
   assert(cai_input_controller_pump(controller, 8U, NULL) == CAI_OK);
   drain(&b);
   assert(b.result.outcome == CAI_INPUT_ACCEPTED);
-  /* A queued handoff remains bound to the original conversation. */
+  /* A queued handoff remains bound to the original session. */
   old_conversation = b.conversation;
   b.item = b.revision = b.token = 0U;
   assert(send(&b, CAI_INPUT_OFFER, "late request to old context") == CAI_OK);
@@ -445,7 +445,7 @@ int main(void) {
   /* Explicit controller shutdown rejects unadmitted handoffs, with a result
    * retained for frontends that outlive the owner. It does not execute them. */
   assert(send(&b, CAI_INPUT_OFFER, "not accepted during shutdown") == CAI_OK);
-  /* Controller teardown never clears either conversation's pending work. */
+  /* Controller teardown never clears either session's pending work. */
   cai_input_controller_close(controller);
   assert(cai_input_queue_get_state(first, &state, NULL) == CAI_OK &&
          state.count == 1U);

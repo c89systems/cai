@@ -10,7 +10,7 @@ typedef struct cai_cli_transcript_frame {
   char call_id[257], terminal_id[257];
   unsigned char data[CAI_CLI_TRANSCRIPT_CHUNK];
 } cai_cli_transcript_frame;
-/* One replay worker for the conversation, sharing its existing SDK client.
+/* One replay worker for the session, sharing its existing SDK client.
  * Construct on the owner after restoration; close before runtime/store close.
  * No thread per frontend, read window or event. Idle waits have no polling. */
 int cai_cli_transcript_feed_open(cai_cli_pouch *, const char *workspace,

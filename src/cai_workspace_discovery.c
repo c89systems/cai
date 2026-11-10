@@ -7,7 +7,7 @@
 
 /** Incremental selector resolution owned by its opening thread.
  * Retains one candidate/probe at a time and verifies identity before returning
- * a match. Discovery itself acquires no attachment or conversation lease. */
+ * a match. Discovery itself acquires no attachment or session lease. */
 struct cai_workspace_discovery {
   cai_workspace_discovery_config config;
   cai_workspace_discovery_state state;

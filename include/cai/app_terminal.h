@@ -10,7 +10,7 @@ extern "C" {
 #endif
 /** Run the terminal adapter on the calling thread. Requires a terminal on
  * standard input/output and exclusive ownership of that terminal until return.
- * Opens no runtime, SDK client, authentication store or conversation writer;
+ * Opens no runtime, SDK client, authentication store or session writer;
  * never starts a server. Explicit user shell/pager actions start a local
  * foreground program through Softline's PTY adapter, without changing host
  * cwd/environment. The libmdf fallback pager temporarily owns and restores

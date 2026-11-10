@@ -26,7 +26,7 @@ run -L; ok; cmp "$root/stdout" "$root/list-all"
 run -C "$root/unrelated" -X; bad
 kill -0 "$first_pid"; kill -0 "$second_pid"
 # Canonical-directory derivation works through symlinks and does not need a
-# matching conversation store or provider credentials in the control client.
+# matching session store or provider credentials in the control client.
 workspace_id=$(printf '%s' "$work" | sha256sum | cut -c 1-32)
 [[ -S "$runtime_root/ws-$workspace_id.sock" ]]
 cp "$runtime_root/ws-$workspace_id.info" "$root/stale.info"

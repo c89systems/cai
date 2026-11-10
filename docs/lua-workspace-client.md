@@ -1,5 +1,7 @@
 # Lua workspace attachment
 
+The Lua field `conversation` carries the session epoch, while `session` carries the saved session ID. Both are distinct from the attachment identity.
+
 `require("cai.app").client(config)` wraps the public `cai_app_client` API.
 It connects to an existing workspace owner. It never starts a process, opens
 an SDK/store/runtime, creates a terminal or invokes Lua on a worker thread.

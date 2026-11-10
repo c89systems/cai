@@ -141,7 +141,7 @@ int main(void) {
          loaded != NULL);
   cai_source_close(loaded);
   loaded = NULL;
-  /* Sharing a client does not grant a second writer for an owned conversation.
+  /* Sharing a client does not grant a second writer for an owned session.
    * Namespace visibility is inspected through the public committed reader. */
   assert(shared.store.load_latest(&shared, "/workspace", id, sizeof(id),
                                   &loaded, &sequence,

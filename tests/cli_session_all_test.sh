@@ -2,8 +2,8 @@
 source "$(dirname "$0")/cli_test_common.sh"
 peer_start
 mkdir -p "$root/other" "$root/empty"
-run -R --all; ok; contains "$root/stdout" 'No conversations.'
-run -D --all; ok; contains "$root/stdout" 'No conversations.'
+run -R --all; ok; contains "$root/stdout" 'No sessions.'
+run -D --all; ok; contains "$root/stdout" 'No sessions.'
 terminal_start -N
 first=$(current_session_id)
 terminal_close
@@ -28,9 +28,9 @@ done
 run -R; ok
 contains "$root/stdout" "1  $second"
 absent "$root/stdout" "$third"
-run -C "$root/empty" -D; ok; contains "$root/stdout" 'No conversations.'
+run -C "$root/empty" -D; ok; contains "$root/stdout" 'No sessions.'
 # --all widens the eligible listing without bypassing the open-use guard or
-# mutating either conversation. An explicit ID is global even without --all.
+# mutating either session. An explicit ID is global even without --all.
 for args in '-D --all' '--all --delete'; do
   read -r -a listing <<<"$args"
   run -C "$root/empty" "${listing[@]}"; ok
@@ -47,7 +47,7 @@ run --export "$first"; ok
 exports="$root/data/cai/exports/$first"
 [[ -s "$exports/$first.md" && -s "$root/cache/cai/$first.log" ]]
 run -C "$root/empty" -D "$first"; ok
-contains "$root/stdout" "Deleted conversation $first."
+contains "$root/stdout" "Deleted session $first."
 [[ ! -e "$exports" && ! -e "$root/cache/cai/$first.log" ]]
 run -R; ok; contains "$root/stdout" "1  $second"; absent "$root/stdout" "$first"
 run -C "$root/empty" -D 1; bad
@@ -59,7 +59,7 @@ terminal_close
 run -R --all; ok; cp "$root/stdout" "$root/remaining"
 run -D --all; ok; cmp "$root/stdout" "$root/remaining"
 run -C "$root/empty" -D "$second" --all; ok
-run -R; ok; contains "$root/stdout" 'No conversations.'
+run -R; ok; contains "$root/stdout" 'No sessions.'
 terminal_start -C "$root/other" -R "$third"
 send '/status\r'; expect "$third"
 terminal_close

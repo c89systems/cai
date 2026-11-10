@@ -1,4 +1,4 @@
-/* Stable append receivers and descriptor hints for one app conversation and
+/* Stable append receivers and descriptor hints for one app session and
  * its children. The caller holds journal_lock through use. No metadata lease
  * remains held while sampling; public descriptor reads remain available. */
 static int journal_context_open(cai_cli_pouch *pouch, const char *scope,
@@ -100,9 +100,8 @@ static int journal_prune_missing_hint(cai_cli_pouch *pouch,
         fields[1] = pslog_str("detail", guarded.message != NULL
                                             ? guarded.message
                                             : "metadata unavailable");
-        pouch->logger->warn(pouch->logger,
-                            "Stale conversation lookup cleanup deferred",
-                            fields, 2U);
+        pouch->logger->warn(
+            pouch->logger, "Stale session lookup cleanup deferred", fields, 2U);
       }
       cai_error_cleanup(&guarded);
       lc_error_cleanup(&local);
@@ -123,7 +122,7 @@ static int journal_prune_missing_hint(cai_cli_pouch *pouch,
     if (rc == CAI_OK && unlinkat(guard->directory, session->id, 0) != 0 &&
         errno != ENOENT)
       rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
-                         "remove expired conversation registry entry");
+                         "remove expired session registry entry");
   }
   collection_owner_remove(pouch, prompts);
   lc_collection_close(collection);

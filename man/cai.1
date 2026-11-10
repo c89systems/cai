@@ -26,6 +26,10 @@ Sessions are scoped to the canonical workspace directory.
 Use
 .B \-N
 to start a new session.
+.PP
+A workspace is the canonical directory. A session holds the saved agent
+history, queue and goal. An attachment is a live frontend connection to the
+workspace backend. The backend selects one active session.
 .SH OPTIONS
 .TP
 .BR \-x , " " \-\-headless
@@ -95,12 +99,12 @@ Limit console replay to the newest N whole turns or standalone shell entries
 (default 10). Steering and tools do not count separately. Zero suppresses
 console replay; -1 shows all history. Also CAI_REPLAY_TURNS or [ui] replay_turns.
 Applies to startup and /resume. A notice indicates omitted earlier turns.
-The complete retained conversation still loads into the agent; exports, logs
+The complete retained session still loads into the agent; exports, logs
 and host replay callbacks are unaffected.
 .TP
 .B \-\-temp
-Start a new conversation in cache_dir/temp/chat-XXXXXX/workspace. Private
-conversation storage, key, prompt history, clipboard, exports and managed logs
+Start a new session in cache_dir/temp/chat-XXXXXX/workspace. Private
+session storage, key, prompt history, clipboard, exports and managed logs
 live in the sibling private directory and are deleted during normal teardown.
 Reads the normal config.ini or explicit --config without rewriting it. Auth
 and messaging retain their configured stores. After softline closes, asks
@@ -138,7 +142,7 @@ For example, -t synthwave selects its pair, while -t riced:iosvkem mixes themes.
 Also configurable through CAI_THEME or [ui] theme in config.ini.
 The ascii selection is escape-free UTF-8 Markdown, not a color theme.
 NO_COLOR selects the plain prompt and disables Markdown ANSI styling.
-Themes apply to the introduction and conversation feed; host-supplied raw
+Themes apply to the introduction and session feed; host-supplied raw
 banners stay verbatim and LOG_ settings remain independent.
 .TP
 .BR \-\-theme-offset " N, " \-\-subagent-theme-offset " N, " \-\-review-theme-offset " N"
@@ -157,9 +161,9 @@ CAI_CACHE_DIR and CAI_DATA_DIR; INI keys are in [paths].
 .BR \-\-clipboard-dir " DIR, " \-\-log-dir " DIR"
 Override pasted images or interactive logs independently.
 Defaults follow cache_dir/clipboard and cache_dir respectively. Prompt recall
-is encrypted in a separate per-conversation collection in the session store,
+is encrypted in a separate per-session collection in the session store,
 uses the same client and key, and loads the newest 200 entries by default. It is not
-model context or exported conversation data.
+model context or exported session data.
 .TP
 .BI \-\-pouch-key-file " FILE"
 Override the encryption-key filename (default state_dir/pouch.key). Sharing an
@@ -173,7 +177,7 @@ through C/Lua settings. Storage maintenance prunes oldest excess entries
 asynchronously; appends do not trim synchronously. This does not set age expiry.
 .TP
 .BI \-\-conversation-retention-days " DAYS"
-Whole conversation collection retention since its last append, default 30 days.
+Whole session collection retention since its last append, default 30 days.
 Zero disables expiry. CAI_CONVERSATION_RETENTION_DAYS and
 [storage] conversation_retention_days configure the same default through C/Lua
 settings as well. Individual journal entries never expire separately.
@@ -222,16 +226,16 @@ truncated. List retains full titles. Also CAI_TODO_LAYOUT or [ui] todo_layout.
 .BI \-\-board " NAME"
 Initial kanban board (CAI_BOARD or [todo] default_board; default "default").
 The flag selects or creates a board and overrides the resumed selection once.
-It does not enable the optional todo tool. Each conversation saves its selection.
+It does not enable the optional todo tool. Each session saves its selection.
 .TP
 .BR \-\-messaging " / " \-\-no-messaging
-Enable/disable shared-Pouch conversation messaging (default off). Each active
+Enable/disable shared-Pouch session messaging (default off). Each active
 workspace listens on an allocated name in namespace cai.messages using managed
 consumer services. Names start with cai.<basename>; collisions add the fewest
 distinguishing real ancestor components, skipping shared directories. The actual
 hostname is a leading component for distinguishing hosts. Character length is
 not an optimization objective. Registered names stay stable across restarts and
-new conversations. Automatic naming uses the host machine-id and canonical path
+new sessions. Automatic naming uses the host machine-id and canonical path
 as workspace identity; duplicate hostnames with identical paths on distinct
 hosts require an explicit name. Names that cannot fit the backend's lowercase
 ASCII alphabet and 128-byte limit unchanged also require an explicit name.
@@ -244,7 +248,7 @@ Override the derived workspace mailbox name. Also CAI_MESSAGE_QUEUE or
 [messaging] queue_name. Names are lowercased, allow ASCII letters, digits,
 dot, underscore and hyphen, and have at most 128 characters. Empty keeps
 automatic naming. /status shows the name. The newest app start claims new
-deliveries; already delivered messages stay in their original conversation.
+deliveries; already delivered messages stay in their original session.
 Exiting an older instance cannot release a newer owner's binding.
 Unrepresentable or indistinguishable workspace names require an explicit
 override. Destination discovery includes offline mailboxes;
@@ -255,7 +259,7 @@ Destination mailbox for a standalone CLI message. Requires --message.
 .TP
 .BR \-M , " " \-\-message " " TEXT
 Send text to --queue and exit. No provider credentials, model request,
-conversation creation or workspace mailbox takeover occurs. Uses the session
+session creation or workspace mailbox takeover occurs. Uses the session
 storage endpoint without a receipt listener. Writes JSON with status queued,
 message_id and recipient to stdout after liblockdc accepts the enqueue.
 Errors use pslog on stderr and return nonzero. Does not wait for delivery,
@@ -339,7 +343,7 @@ from the terminal. Requires at least one
 or a review mode.
 .TP
 .BR \-R , " " \-\-resume " [ID|NUMBER]"
-With no ID, list numbered conversations for the current directory and exit.
+With no ID, list numbered sessions for the current directory and exit.
 With an ID, resume that saved session in the current directory.
 With a number, select that row from the current directory's numbered listing.
 An exact numeric ID takes precedence over interpreting it as a row number.
@@ -347,11 +351,11 @@ Cannot be combined with
 .BR \-\-new .
 .TP
 .BR \-D , " " \-\-delete " [ID|NUMBER]"
-List numbered conversations eligible for deletion in the current directory,
+List numbered sessions eligible for deletion in the current directory,
 or delete the selected ID/number from that deletion list. Exact numeric IDs take
-precedence over row numbers. Open conversations are omitted and cannot be
-deleted until closed. Removes conversation and child/review collections,
-metadata, session logs, per-conversation prompt history, managed exports and
+precedence over row numbers. Open sessions are omitted and cannot be
+deleted until closed. Removes session and child/review collections,
+metadata, session logs, per-session prompt history, managed exports and
 delivered inbox messages, including when messaging uses a separate store.
 Shared authentication, boards, queues and workspace files are separate.
 Pouch collection removal is logical; physical reclamation occurs in maintenance.
@@ -367,7 +371,7 @@ from that directory. The default is the current directory.
 .BR \-i , " " \-\-instruction " " TEXT
 Submit
 .I TEXT
-as a prompt after saved conversation replay. Repeat to queue ordered turns;
+as a prompt after saved session replay. Repeat to queue ordered turns;
 each prompt starts after the previous turn or goal ends.
 .TP
 .BR \-g , " " \-\-goal " " TEXT
@@ -435,13 +439,13 @@ cai's lockd store, and exit. Cannot be combined with
 .BR \-\-auth-json .
 .TP
 .BR \-l , " " \-\-list
-List all conversations across directories and exit. Rows show the ID,
+List all sessions across directories and exit. Rows show the ID,
 directory, and first prompt, truncated to terminal width or 80 columns.
 .TP
 .BI \-\-lockd " ENDPOINT"
 Select an absolute pouch:///path/to/root or remote http:// or https:// lockd
 endpoint. Default: the Pouch root under cai's XDG state directory.
-Conversation history requires Pouch collections. Remote lockd stores remain
+Session history requires Pouch collections. Remote lockd stores remain
 available for separately selected authentication, messaging and kanban storage.
 Selected Pouch roots use cai's key, durable sync, indexing, and shared writer
 settings. Remote encryption and access policy are managed by the server.
@@ -457,7 +461,7 @@ cause a warning and adoption of the stored mode. Also configured with CAI_DISABL
 [storage] disable_compression in config.ini. Remote lockd is unaffected.
 .TP
 .BI \-\-export " ID"
-Export resumable JSONL and Markdown for a conversation and exit. Markdown uses
+Export resumable JSONL and Markdown for a session and exit. Markdown uses
 libcai's existing exporter, including instructions and runtime/goal metadata.
 No model requests or tools run during export. Files are plaintext, mode 0600.
 .TP
@@ -471,11 +475,11 @@ Existing output files are replaced after the selected streams are written.
 .BI \-\-export-dir " DIR"
 Override the export root. Default: $XDG_DATA_HOME/cai/exports, falling back to
 ~/.local/share/cai/exports.
-Each conversation writes ID/ID.jsonl and ID/ID.md beneath this root.
+Each session writes ID/ID.jsonl and ID/ID.md beneath this root.
 .TP
 .BI \-\-import " FILE"
 Validate a JSONL export, assign a new ID in the current directory, and exit.
-Failed imports are not published in conversation lists.
+Failed imports are not published in session lists.
 .TP
 .B \-\-no-shell-context
 Keep future !COMMAND results out of model context.
@@ -563,7 +567,7 @@ Enable the model's set_reasoning tool (default off). It accepts only normal
 and high modes and is instructed to raise effort unless explicitly told to
 return to normal. It never automatically lowers a higher current effort when
 requesting high. Changes apply at the next durable tool boundary and the
-selected actual effort is restored on conversation resume.
+selected actual effort is restored on session resume.
 The interactive receipt identifies the requested mode, mapped effort and
 actual before/after result, including unchanged settings. This user-facing
 receipt is retained for replay and export, but never sent to the model.
@@ -640,7 +644,7 @@ Add developer instructions before automatic capability and discovery additions.
 .BR \-z , " " \-\-developer-instructions " " FILE
 Replace the initial agent's base developer instructions with literal file
 contents. With --review, replaces the initially started reviewer. Does not
-propagate to subagents or subsequent conversation selections. Automatic tools,
+propagate to subagents or subsequent session selections. Automatic tools,
 skills and discovery additions remain enabled. Files must be regular, NUL-free
 text of at most 1 MiB. Relative CLI paths use the selected original workspace.
 Reusable defaults are [agent] developer_instructions_file and [review]
@@ -667,7 +671,7 @@ after cai's global AGENTS.md, then discover ancestor AGENTS.md files from the
 repository root to the workspace.
 Each loaded source is identified as current user-provided AGENTS.md instructions
 and working context, including any stated user role or preferences. Complete
-file contents and loading order are preserved when resuming a conversation.
+file contents and loading order are preserved when resuming a session.
 .TP
 .B \-\-no-image-generation
 Disable hosted image generation.
@@ -684,7 +688,7 @@ CAI_REVIEW_AND_FIX_TOOL and [agent] review_and_fix_tool configure the same
 setting. Requires reviewer and goal tools. Call only when the user explicitly
 requests or permits a review/fix loop. An ordinary review request, even
 followed by a request to fix findings, does not authorize a loop. The tool
-replaces the current conversation's goal and queues the same repeated
+replaces the current session's goal and queues the same repeated
 review/fix/verification as /review-and-fix; it does not launch a fixing subagent.
 .TP
 .B \-\-no-subagent-steering
@@ -739,7 +743,7 @@ Show the version.
 .SH PROMPT COMMANDS
 .TP
 .B /compact
-Compact conversation context between turns. While busy, the command stays in
+Compact session context between turns. While busy, the command stays in
 the native editable Softline queue. Alt-Enter becomes Q and does not waive the
 whole-turn execution hold or steer the model. Escape cancels.
 Responses providers use streamed V2 compaction; Chat Completions providers use
@@ -752,12 +756,12 @@ request is not automatically retried on restart.
 Run an isolated reviewer between turns and render Markdown findings. With no
 argument, compare against the Git default branch. Explicit uncommitted, base,
 commit, or custom text selects that scope. Findings become context in the
-current conversation. Escape or Ctrl-C cancels; normal prompts entered during
-the review queue for the parent conversation.
+current session. Escape or Ctrl-C cancels; normal prompts entered during
+the review queue for the parent session.
 .TP
 .BR "/review-and-fix" " [uncommitted|base REF]"
 Replace the current goal with the review, fix, and verification loop in this
-conversation. With no argument, compare against the Git default branch.
+session. With no argument, compare against the Git default branch.
 There is no default iteration limit. Requires goal tools and the review subagent;
 finish any isolated review or shell first. The TUI stays open when pursuit
 completes or stops. Use /goal pause or /goal clear to control pursuit.
@@ -772,7 +776,7 @@ The default board layout groups cards into TODO, DOING and DONE columns.
 the board. /todo layout reports the current setting. Layout changes apply only
 to future output in this invocation, including across /new and /resume, without
 changing stored cards or past output. Layout changes are allowed during turns.
-The selected board is included in /status and restored with the conversation.
+The selected board is included in /status and restored with the session.
 /todo see ID displays a task from the selected board, including completed tasks.
 Its heading contains the canonical ID and status, followed by the full title and
 the Markdown description. Descriptions are omitted from board and list layouts.
@@ -831,11 +835,11 @@ Load the numbered session from that list and replay saved user prompts and
 assistant text without repeating tool side effects.
 .TP
 .BI /export " [BASENAME]"
-Export the active conversation. Without a basename, write paired ID.jsonl and
+Export the active session. Without a basename, write paired ID.jsonl and
 ID.md files in the default export directory. A basename ending in .md or .jsonl
 writes only that format at exactly the supplied path. Otherwise append both
-suffixes: output/conversation produces output/conversation.md and
-output/conversation.jsonl; something.else produces something.else.md and
+suffixes: output/session produces output/session.md and
+output/session.jsonl; something.else produces something.else.md and
 something.else.jsonl. Relative names use the workspace. Missing parent
 directories are created without changing existing directory permissions.
 The entire argument is a literal path, including embedded spaces.
@@ -846,14 +850,14 @@ as a Markdown summary after creation succeeds. Include the active message queue
 when messaging is enabled.
 .TP
 .BI /autoqueue " [on|off]"
-Toggle automatic approval of incoming conversation messages. Explicit on
+Toggle automatic approval of incoming session messages. Explicit on
 also approves waiting messages; off leaves existing approvals intact.
 The setting affects this live TUI and does not rewrite config.ini.
 .TP
 .BI /queue " [on|off|NAME]"
 Show the current message queue, enable or disable messaging and its tool with
 on or off, or override its full name. Changes apply between turns and retain
-the active conversation and saved model settings without replaying its text.
+the active session and saved model settings without replaying its text.
 Approve or reject queued incoming prompts before disabling, preserving edits.
 Deliveries still in storage remain available when enabling again.
 Automatic approval is controlled separately
@@ -862,12 +866,12 @@ No prefix or hash is appended to an explicit name; names are
 lowercased. The override lasts for this app, including /new and /resume,
 without changing config.ini or session settings. A new owner takes over new
 deliveries; previously delivered messages and approvals stay in their original
-conversation. The old destination has no listener from this app after renaming.
+session. The old destination has no listener from this app after renaming.
 .TP
 .BI /model " [MODEL [EFFORT]]"
 Alias /m accepts the same arguments.
 Show current and pending settings and the provider catalog, or select MODEL
-and optional reasoning EFFORT in the same conversation. A lone known effort
+and optional reasoning EFFORT in the same session. A lone known effort
 (such as /model high) changes only effort. A model without an effort keeps
 the current effort. ChatGPT lists every model returned by the signed-in account
 catalog without local filtering, including unfamiliar IDs. OpenRouter skips
@@ -891,7 +895,7 @@ account/model access. Changes apply at the next safe model/tool boundary and
 survive resume. Explicit unsupported advertised choices fail unchanged.
 Enter and Alt-Enter both apply tier changes before the next request, including
 during an active turn. The native command entry stays editable until applied.
-The request already in flight retains its tier. Queued conversation prompts do
+The request already in flight retains its tier. Queued session prompts do
 not delay these routing preferences.
 .TP
 .B /fast
@@ -900,7 +904,7 @@ to enable it. This is a convenience over /tier; it does not change the model.
 .TP
 .BI /reasoning-tool " [on|off|normal LEVEL|high LEVEL]"
 Inspect or configure the optional reasoning tool between turns. Applies to
-this app, including new/resumed conversations; does not modify config.ini.
+this app, including new/resumed sessions; does not modify config.ini.
 .TP
 .BI /reasoning " [EFFORT]"
 Alias /r accepts the same arguments.
@@ -920,11 +924,11 @@ Show or change live local execution policy. Changes wait until active turns,
 child runtimes, shell capture and managed terminal commands finish. Pending
 changes remain editable in Softline; Esc pauses ordinary queue delivery.
 /status shows the effective and pending policy. Does not reopen the session
-or modify config.ini. Restart uses startup settings; conversation checkpoints
+or modify config.ini. Restart uses startup settings; session checkpoints
 do not restore this policy.
 .TP
 .BR /trim " [COUNT]"
-Without COUNT, list the newest 20 whole conversation entries, newest first.
+Without COUNT, list the newest 20 whole session entries, newest first.
 Row 0 means keep current history. COUNT removes exactly that many newest entries;
 0 removes nothing and an excessive count fails unchanged. Use
 .B /trim list LIMIT
@@ -934,7 +938,7 @@ A turn includes its reasoning, steering, tool calls and results. Standalone
 recorded shell executions are entries; executions started during a model turn
 belong to that turn. Compacted context is one indivisible entry, never expanded
 into earlier turns. Boundaries are recovered from the active session's own
-journal when needed; no other conversation is inspected or changed.
+journal when needed; no other session is inspected or changed.
 Requires an idle runtime with no pending work or open shell. The cut is durable
 for model context, restart replay and exports; checkpoint failure restores the
 original history. External effects, settings, goals and incurred usage remain.
@@ -1027,7 +1031,7 @@ limits still apply.
 .TP
 .B /goal clear
 Remove goal tracking without cancelling the current user turn. Repeating clear
-is harmless. Goal state is persisted with the conversation. Unknown commands
+is harmless. Goal state is persisted with the session. Unknown commands
 and missing new objectives are errors, never implicit goal instructions.
 .TP
 .BI /output " [compact|full]"
@@ -1071,7 +1075,7 @@ Exit the agent.
 .SH STATUS LINE
 Before the first turn, the thinking line shows
 .RB \(lq "Welcome to cai. Send /help for usage." \(rq,
-including after replaying a resumed conversation.
+including after replaying a resumed session.
 The status line shows model and reasoning effort, context used as a percentage,
 the workspace, available ChatGPT subscription quota and credits or API cost estimate,
 the Git branch when available, and goal status with elapsed active time such
@@ -1122,7 +1126,7 @@ tools, output retention, timeouts and cancellation still apply. Smith's PTY runn
 has no OS sandbox; restricted mode scopes local tools/workdirs and filters the
 environment. Startup warns about this policy; /status shows the selected mode.
 .SH EXECUTION HISTORY
-Conversation exports include a structured execution timeline: tool inputs,
+Session exports include a structured execution timeline: tool inputs,
 outputs, partial output and complete errors, together with agent/harness
 outcomes. JSONL preserves all recorded fields independently of the pslog file.
 Replay never executes these observations or adds them to model context.
@@ -1133,7 +1137,7 @@ shows concise summaries and failures. Internal debug logs remain separate.
 All diagnostics and runtime activity use libpslog with the
 .B LOG_
 environment prefix and JSON output by default. Ordinary prompts, assistant
-messages, and reasoning summaries use info level. Conversation records carry
+messages, and reasoning summaries use info level. Session records carry
 role and prompt_kind fields to distinguish normal prompts, queued turns,
 steering, developer instructions, and reasoning summaries. No app field is added.
 .PP
@@ -1149,14 +1153,14 @@ refer to that file. Startup records are moved into the
 selected session log; failed startup logs remain in a startup-* file.
 .PP
 Provider errors with code cyber_policy or cyber_notice trigger one automatic
-explanation-only prompt in the same conversation, using the selected model.
+explanation-only prompt in the same session, using the selected model.
 Only enabled workspace-scoped read_file and list_files tools are available,
 with at most eight sequential tool rounds. Commands, edits, MCP, hosted tools,
 and goal actions are unavailable. The prompt asks for a bug-report summary, possible
 triggers, and an assessment of the visible security context, distinguishing
 facts from hypotheses. The model cannot determine the provider's internal
 trigger or certify a false positive. The prompt and response are recorded
-in the conversation and logs. The original error still fails the run;
+in the session and logs. The original error still fails the run;
 the interrupted task is not automatically continued. Goal state remains
 unchanged. In interactive mode, an explicit next user prompt runs normally
 with the configured tools; diagnostic restrictions do not persist into it.
@@ -1191,24 +1195,24 @@ LOG_FORCE_COLOR, LOG_PALETTE, LOG_VERBOSE_FIELDS, LOG_DISABLE_TIMESTAMP,
 LOG_TIME_FORMAT, LOG_UTC, LOG_OUTPUT, and LOG_OUTPUT_FILE_MODE.
 LOG_OUTPUT overrides the default sink; default+PATH retains the default sink
 and its UI warning notices while adding a file. LOG_LEVEL=warn filters out
-ordinary conversation messages.
+ordinary session messages.
 .SH PROMPT HISTORY
 Interactive recall uses Softline's custom load/append hooks with encrypted
 prompts.<session-id> collections in the configured sessions namespace. It uses
-the same Pouch client, root and key as conversation storage. Recall loads the
+the same Pouch client, root and key as session storage. Recall loads the
 newest 200 prompts and commands by default through a bounded ordered range.
 Use --prompt-history-limit, CAI_PROMPT_HISTORY_LIMIT or [ui] prompt_history_limit
 to change recall and the native stored-entry cap. Zero disables recall and
 recording and clears the cap without deleting saved prompts. Accepted input
 appends immediately, including steering; replay and Ctrl-R selection do not
-append. /new starts fresh recall; /resume restores the selected conversation's
+append. /new starts fresh recall; /resume restores the selected session's
 recall. Existing file-backed prompt history is not imported. Ctrl-R Enter selects a match for editing;
 a subsequent Enter submits it.
 .PP
 /history shows the current limit; /history COUNT changes recall and the stored
 collection cap. Existing storage maintenance lazily removes oldest excess
-entries, independently of conversation retention. Raising the limit cannot
-recover removed prompts. Conversation journals have no count cap.
+entries, independently of session retention. Raising the limit cannot
+recover removed prompts. Session journals have no count cap.
 .PP
 Alt-Q saves the active draft as the newest prompt-history entry and exits
 without submitting it. Restart in the same directory and press Up to recall it.
@@ -1218,18 +1222,18 @@ fails, CAI remains open with the draft intact and reports the error.
 Each prompt appends synchronously, without rewriting earlier entries, using
 the configured Pouch compression and durability. There are no separate
 plaintext history files or history-directory settings. Prompt recall is not
-model context and is excluded from conversation export. Conversation deletion
+model context and is excluded from session export. Session deletion
 also drops its prompt collection. Temporary chats keep recall in their private
 session store. Persistence failures stop acceptance and report the error.
-.SH CONVERSATION RETENTION
-Liblockdc owns asynchronous expiry of each whole conversation collection and
+.SH SESSION RETENTION
+Liblockdc owns asynchronous expiry of each whole session collection and
 its session metadata, default 30 days from the latest append. Reads never renew
 the deadline; individual journal records have no separate expiry. Maintenance
 can delete eligible data after the deadline; deletion is not guaranteed at its
 exact time. There is no CAI expiry timer or foreground age-based deletion.
 .PP
-/retention shows the active conversation's policy. /retention DAYS saves a
-conversation-specific override; /retention 0 and /retention off keep it forever.
+/retention shows the active session's policy. /retention DAYS saves a
+session-specific override; /retention 0 and /retention off keep it forever.
 Changes use the normal Softline queue and wait for a whole-turn boundary.
 Overrides survive resume and take precedence over application defaults.
 Unavailable journals are omitted from lists and auto-resume; explicit resume
@@ -1248,8 +1252,8 @@ Encrypted default Pouch root containing cai.sessions and cai.auth namespaces,
 plus a derived cai.scopes index for newest-session lookup. Missing or interrupted
 directory indexes are rebuilt from session identities and journal headers.
 Incremental state commits and observation events share one ordered collection
-per conversation. Normal commits append only new context; trim retains a prefix,
-and compaction replaces context once. No recurring full conversation snapshots
+per session. Normal commits append only new context; trim retains a prefix,
+and compaction replaces context once. No recurring full session snapshots
 are written. Old snapshot/attachment stores are unsupported; use a fresh root.
 No automatic migration is performed. Pouch compression defaults to zlib.
 Uses ~/.local/state/cai/pouch when XDG_STATE_HOME is unset.
@@ -1261,13 +1265,13 @@ replacement for an existing root. Uses ~/.local/state/cai/pouch.key when
 XDG_STATE_HOME is unset. The cai state directory must be private (mode 0700).
 .TP
 .I $XDG_DATA_HOME/cai/exports/ID/ID.jsonl
-Default resumable conversation export: visible journal events and one
+Default resumable session export: visible journal events and one
 initialization commit of retained context. Trimmed content is excluded.
 Uses ~/.local/share/cai/exports/ID/ID.jsonl when XDG_DATA_HOME is unset, empty,
 or relative.
 .TP
 .I $XDG_DATA_HOME/cai/exports/ID/ID.md
-Default Markdown conversation export. Exports are plaintext private files;
+Default Markdown session export. Exports are plaintext private files;
 the authentication namespace is excluded.
 .TP
 .I $XDG_CACHE_HOME/cai/SESSIONID.log

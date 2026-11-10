@@ -41,13 +41,13 @@ Command results include `output_offset` before `output`; the terminal merges the
 Replay and export read only the durable results and therefore retain the full command presentation.
 
 SUBSCRIBE uses a fresh, strictly increasing, nonzero request ID per attachment
-and stream zero. It names the active persistent session explicitly; conversation
-zero resolves that session's current epoch. An initial read may leave the
+and stream zero. It names the active persistent session explicitly. A
+zero epoch resolves to the current epoch for that session. An initial read may leave the
 expected collection empty. Resuming from a position requires the original
 collection identity and last accepted event sequence. Input/control request IDs
 have separate scopes. Every response uses the subscription ID as both request
-and stream, with its resolved conversation epoch. Rejected requests may report
-conversation zero. UNSUBSCRIBE uses the original request/stream; repeating an
+and stream, with its resolved session epoch. Rejected requests may report
+a zero session epoch. UNSUBSCRIBE uses the original request/stream; repeating an
 old cancellation never cancels a newer subscription. A stale subscribe request
 also cannot cancel a newer stream. A fresh replacement abandons the old stream,
 even if that replacement is refused; it never falls back to the old selection.
@@ -90,7 +90,7 @@ when publication succeeded but its durable acknowledgement was lost. Dropped,
 expired or replaced collections fail explicitly; readers do not silently bind
 to a replacement with the same name.
 
-The publisher retains one default-stack replay worker per conversation and one
+The publisher retains one default-stack replay worker per session and one
 public collection receiver using the existing SDK client. Native reads yield
 between windows of 32 stored records, rotating ready subscribers. There is no
 worker per frontend, read window or event. This worker is separate from context
@@ -124,7 +124,7 @@ framing or a rejecting consumer instead terminates the receiving attachment.
 The terminal continues an acknowledged HISTORY_CHANGED notification from its last
 accepted native cursor. Other subscription failures remain inline and do not
 trigger an automatic replay-from-zero retry loop; reattach or explicitly resume
-the conversation to select a new view.
+the session to select a new view.
 
 `cai/app_client.h` exposes borrowed spans through its independent transcript
 callback and fixed cursor metadata through `get_state`. It creates no SDK

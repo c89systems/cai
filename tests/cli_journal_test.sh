@@ -31,7 +31,7 @@ jq -se 'any(.[]; .record_type=="commit") and all(.[];
 # Export creates neither another journal nor another prompt-history collection.
 [[ $(find "$root/state/cai/pouch/namespaces/cai.sessions/collections/names" -type f | wc -l) == "$collections_before" ]]
 # A real encrypted second root, with compression explicitly disabled, imports
-# and resumes the exact same conversation. Only the storage mode differs.
+# and resumes the exact same session. Only the storage mode differs.
 run --disable-compression --state-dir "$root/uncompressed" --import "$exported"; ok
 imported=$(stdout_text)
 grep -qx 'compression=none' "$root/uncompressed/pouch/manifest"
@@ -61,7 +61,7 @@ grep -qx 'compression=none' "$root/ini-state/pouch/manifest"
 run --config "$root/storage.ini" --no-disable-compression --state-dir "$root/cli-state" --list; ok
 grep -qx 'compression=zlib' "$root/cli-state/pouch/manifest"
 run --dump-config; ok; contains "$root/stdout" '# disable_compression = false'
-# Bad imports cannot become resumable/listable conversations.
+# Bad imports cannot become resumable/listable sessions.
 run --list-all; ok; cp "$root/stdout" "$root/list-before"
 for variant in truncated duplicate revision object_data; do
   if [[ "$variant" == truncated ]]; then

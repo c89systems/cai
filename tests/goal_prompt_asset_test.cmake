@@ -4,6 +4,10 @@ if(NOT _baseline_hash STREQUAL "764b9c26b36013a21b687d74597e303be9bbf13776c359ec
 endif()
 file(READ "${CAI_SOURCE_DIR}/prompts/goal/codex-continuation.md" _baseline)
 file(READ "${CAI_SOURCE_DIR}/prompts/goal/continuation.md" _template)
+# Keep the upstream snapshot exact and compare the audit with CAI terminology.
+string(REPLACE "active thread goal" "active session goal" _baseline "${_baseline}")
+string(REPLACE "Previous conversation context" "Previous session context" _baseline "${_baseline}")
+string(REPLACE "Conversation, intent" "Session history, intent" _baseline "${_baseline}")
 string(FIND "${_baseline}" "Progress visibility:\n" _plan_begin)
 string(FIND "${_baseline}" "Fidelity:\n" _plan_end)
 string(SUBSTRING "${_baseline}" 0 ${_plan_begin} _prefix)

@@ -81,7 +81,7 @@ release
 expect 'AFTER STEER'
 jq -se 'any(.[]; (.input | tostring | contains("apply this steer at the request boundary")))' "$root/peer/requests.jsonl" >/dev/null
 plan '{"plan":[{"pause":true,"pause_text":"Draft switch boundary. ","text":"Draft turn finished."}]}'
-send 'prepare a conversation switch\r'; expect 'Draft switch boundary.'
+send 'prepare a session switch\r'; expect 'Draft switch boundary.'
 send '/new\rRETAINED_DRAFT'; expect_prompt RETAINED_DRAFT
 release
 expect 'New session'

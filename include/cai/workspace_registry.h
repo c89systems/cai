@@ -13,7 +13,7 @@ typedef struct cai_workspace_record {
   unsigned char instance[CAI_WORKSPACE_INSTANCE_BYTES];
 } cai_workspace_record;
 /** Open an existing private, owned absolute runtime directory. Single-owner
- * handle. Does not connect, acquire authority or open conversation storage. */
+ * handle. Does not connect, acquire authority or open session storage. */
 int cai_workspace_registry_open(const char *runtime_directory,
                                 cai_workspace_registry **out, cai_error *);
 /** Read one bounded record at a time. Borrowed until the next call/close.

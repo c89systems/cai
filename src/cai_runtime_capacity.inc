@@ -1,4 +1,4 @@
-/* Capacity is a provider availability error, not a new conversation turn.
+/* Capacity is a provider availability error, not a new session turn.
  * Keep all waiting on the worker; the owner continues pumping input/events. */
 #ifdef CAI_TESTING
 static int (*cai_capacity_wait_test)(cai_agent_runtime *, long, cai_error *);

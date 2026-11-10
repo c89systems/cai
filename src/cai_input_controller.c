@@ -19,8 +19,8 @@ typedef struct input_message {
   size_t bytes;
   int reservation;
 } input_message;
-/** Copied asynchronous request retaining its original conversation/generation.
- */
+/** Copied asynchronous request retaining its session epoch and control
+ * generation. */
 typedef struct input_submission {
   struct input_submission *next;
   cai_input_scope scope;
@@ -371,7 +371,7 @@ int cai_input_controller_select(cai_input_controller *controller,
     return rc;
   if (controller->conversation == ~(unsigned long long)0)
     return cai_set_error(error, CAI_ERR_LIMIT,
-                         "input conversation identities exhausted");
+                         "input session identities exhausted");
   if (queue != NULL &&
       cai_input_queue_get_state(queue, &state, error) != CAI_OK)
     return CAI_ERR_INVALID;
@@ -410,7 +410,7 @@ int cai_input_controller_select(cai_input_controller *controller,
     if ((connection->resume_producer != 0U || connection->detached) &&
         !connection->binding_failed) {
       binding_failed(connection, CAI_ERR_INVALID,
-                     "conversation changed before input binding");
+                     "session changed before input binding");
     }
     connection->conversation = controller->conversation;
     connection->needs_snapshot = !connection->binding_failed;
@@ -457,9 +457,8 @@ static int connect_input(cai_input_controller *controller, uint64_t attachment,
   if (producer != 0U && conversation != controller->conversation) {
     pthread_mutex_unlock(&controller->lock);
     connection_free(connection);
-    return cai_set_error(
-        error, CAI_ERR_INVALID,
-        "conversation changed; producer resume was not accepted");
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "session changed; producer resume was not accepted");
   }
   connection->resume_producer = producer;
   connection->conversation = controller->conversation;
@@ -485,8 +484,7 @@ int cai_input_controller_conversation(cai_input_controller *controller,
   if (out != NULL)
     *out = 0U;
   if (controller == NULL || out == NULL)
-    return cai_set_error(error, CAI_ERR_INVALID,
-                         "conversation output required");
+    return cai_set_error(error, CAI_ERR_INVALID, "session output required");
   pthread_mutex_lock(&controller->lock);
   available = !controller->closed && controller->queue != NULL;
   if (available)
@@ -494,7 +492,7 @@ int cai_input_controller_conversation(cai_input_controller *controller,
   pthread_mutex_unlock(&controller->lock);
   return available ? CAI_OK
                    : cai_set_error(error, CAI_ERR_INVALID,
-                                   "no input conversation selected");
+                                   "no input session selected");
 }
 int cai_input_connection_release_edits(cai_input_connection *connection,
                                        cai_error *error) {
@@ -534,7 +532,7 @@ int cai_input_controller_resume(cai_input_controller *controller,
     *out = NULL;
   if (conversation == 0U || producer == 0U)
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "verified conversation and producer are required");
+                         "verified session and producer are required");
   return connect_input(controller, attachment, conversation, producer, out,
                        error);
 }
@@ -551,8 +549,7 @@ int cai_input_connection_manage_delivery(cai_input_connection *connection,
   if (connection->detached || connection->binding_failed ||
       scope->conversation != connection->conversation) {
     pthread_mutex_unlock(&connection->controller->lock);
-    return cai_set_error(error, CAI_ERR_INVALID,
-                         "producer conversation changed");
+    return cai_set_error(error, CAI_ERR_INVALID, "producer session changed");
   }
   /* A role update can follow an already-validated settlement in the same
    * transport pump. Rearm only a changed scope, preserving that notification.
@@ -829,7 +826,7 @@ int cai_input_controller_pump(cai_input_controller *controller,
         message->value.result.outcome = CAI_INPUT_REJECTED;
         message->value.result.code = CAI_ERR_INVALID;
         strcpy(message->value.result.reason,
-               "conversation changed; request was not accepted");
+               "session changed; request was not accepted");
       } else {
         input_admission admission;
         admission.connection = connection;

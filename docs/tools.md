@@ -15,7 +15,7 @@ See [Chrome setup, API, and compatibility](chrome.md).
 Tool policy uses CLI > environment > `config.ini` > built-in defaults.
 `[env]` is applied first with its documented environment precedence rule.
 All boolean environment settings accept the INI boolean syntax.
-The following controls apply at startup, including when resuming a conversation:
+The following controls apply at startup, including when resuming a session:
 
 | Tool | CLI (also `--no-NAME`) | Environment | INI | Default |
 | --- | --- | --- | --- | --- |
@@ -59,7 +59,7 @@ SDK hosts enabling kanban can supply its streaming store callbacks; without them
 Preset capability masks also gate search and browser access: `CAI_AGENT_PRESET_TOOL_WEB_SEARCH` and `CAI_AGENT_PRESET_TOOL_CHROME` are set by Smith; custom descriptors grant them explicitly.
 Runtime disable policies can narrow these grants.
 Global instruction load records include the source, resolved path and byte count in the session log, including after replay.
-Conversation state never supplies CAI startup configuration.
+Session state never supplies CAI startup configuration.
 
 ## Managed commands and yielding
 
@@ -194,4 +194,4 @@ assert(cai.patch_render(patch, {mode = "full", width = 80},
 - [Skills](skills.md)
 - [Chrome](chrome.md)
 - [Kanban](kanban.md)
-- [Conversation messaging](agent-messaging.md)
+- [Session messaging](agent-messaging.md)

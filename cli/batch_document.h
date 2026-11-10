@@ -4,7 +4,7 @@
 #include <cai/transcript_selection.h>
 /** Metadata for one correlated execution field. Data stays in the native
  * journal. Filters are copied so a following input cannot change the selected
- * document. Root commands may move across a deliberate conversation handoff. */
+ * document. Root commands may move across a deliberate session handoff. */
 typedef struct cai_cli_batch_document {
   cai_transcript_selection_result range;
   char kind[64], source[129], call[256], parent[256];

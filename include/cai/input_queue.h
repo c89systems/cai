@@ -9,7 +9,7 @@ extern "C" {
 typedef struct cai_input_queue cai_input_queue;
 typedef struct cai_input_queue_client cai_input_queue_client;
 
-/** One conversation's accepted pending work. No editor or transport owns it. */
+/** One session's accepted pending work. No editor or transport owns it. */
 typedef enum cai_input_intent {
   CAI_INPUT_QUEUED = 0,
   CAI_INPUT_STEERING = 1
@@ -143,7 +143,7 @@ typedef struct cai_input_queue_config {
   /** Zero selects 128 entries and 66048 bytes per input. */
   size_t max_entries, max_text_bytes;
   /** NULL explicitly selects volatile operation. A runtime binds its existing
-   * conversation journal here before admitting frontend work. */
+   * session journal here before admitting frontend work. */
   int (*persist)(void *context, const cai_input_record *record,
                  unsigned long long *position, cai_error *error);
   void *persist_context;
@@ -248,7 +248,7 @@ int cai_input_queue_claim(cai_input_queue *queue, unsigned long long id,
                           unsigned long long revision, cai_input_claim *out,
                           cai_error *error);
 void cai_input_claim_cleanup(cai_input_claim *claim);
-/** Replay one committed transition while restoring a conversation. Does no
+/** Replay one committed transition while restoring a session. Does no
  * I/O or notifications and never claims work or executes model/host actions. */
 int cai_input_queue_restore(cai_input_queue *queue,
                             const cai_input_record *record,

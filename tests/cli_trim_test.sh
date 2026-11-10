@@ -76,7 +76,7 @@ for chat in false true; do
   send '/trim 2\r'; expect 'Trimmed 2 newest history entries'
   send '/trim\r'; expect '1. KEEPRESPONSE'
   terminal_close
-  # The cut belongs solely to the active imported conversation.
+  # The cut belongs solely to the active imported session.
   run --export "$original_id"; ok
   contains "$journal" KEEP_SHELL
 done

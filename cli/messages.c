@@ -282,7 +282,7 @@ static int mailbox_claim_selected(cai_cli_messages *m, const char *name,
 }
 /* Hold this binding lease through durable inbox acceptance. A takeover and an
  * acceptance are ordered by the same lease, so a superseded process can never
- * accept a new delivery into its old conversation. */
+ * accept a new delivery into its old session. */
 static int mailbox_guard(cai_cli_messages *m, lc_lease **out, lc_error *error) {
   message_doc *doc;
   char key[160];
@@ -706,7 +706,7 @@ int cai_cli_messages_start(cai_cli_messages *m, const char *id,
   int rc;
   if (!safe_id(id))
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "conversation ID cannot be used as a messaging owner");
+                         "session ID cannot be used as a messaging owner");
   strcpy(m->session, id);
   if (realpath(workspace, m->workspace) == NULL)
     return cai_cli_error(error, CAI_ERR_INVALID,
@@ -1094,7 +1094,7 @@ static int list_mailboxes_with_scratch(cai_cli_messages *m, cai_sink *output,
     static const char columns[] =
         "\n\nKnown destinations; registration does not guarantee they are "
         "online."
-        "\n\n| Queue | Workspace | Conversation |\n| --- | --- | --- |\n";
+        "\n\n| Queue | Workspace | Session |\n| --- | --- | --- |\n";
     rc = cai_sink_write(output, heading, sizeof(heading) - 1U, error);
     if (rc == CAI_OK)
       rc = mailbox_cell(output, m->queue, error);
@@ -1409,7 +1409,7 @@ cai_cli_messages_sync_with_scratch(cai_cli_messages *m, cai_input_queue *queue,
       snprintf(text, capacity,
                strcmp(scratch->doc.sender_session, "cli") == 0
                    ? "[CLI message %s from %s (%s)]\n\n%s"
-                   : "[Agent message %s from %s (conversation %s)]\n\n%s",
+                   : "[Agent message %s from %s (session %s)]\n\n%s",
                scratch->doc.id, scratch->doc.sender,
                scratch->doc.sender_session,
                scratch->doc.text != NULL ? scratch->doc.text : "");
@@ -1486,8 +1486,7 @@ static int cai_cli_messages_delete_session_with_scratch(
   size_t i, count;
   int mode, rc = LC_OK;
   if (!safe_id(id))
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "unsafe conversation inbox ID");
+    return cai_cli_error(error, CAI_ERR_INVALID, "unsafe session inbox ID");
   memset(&scratch->owner, 0, sizeof(scratch->owner));
   scratch->owner.pouch = pouch;
   strcpy(scratch->owner.instance, "conversation-delete");

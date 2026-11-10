@@ -1,6 +1,6 @@
 # Shared context
 
-Context is a shared document store, independent of conversations and workspaces. CAI enables its tools by default. The agent stores or retrieves context when the user's task calls for it; starting or resuming a conversation does not search context automatically. Items have no expiry by default and survive conversation deletion, trimming and compaction.
+Context is a shared document store, independent of sessions and workspaces. CAI enables its tools by default. The agent stores or retrieves context when the user's task calls for it; starting or resuming a session does not search context automatically. Items have no expiry by default and survive session deletion, trimming and compaction.
 
 ## Tools
 
@@ -65,7 +65,7 @@ context_store =
 context_namespace =
 ```
 
-An empty store inherits the active conversation store and reuses its existing client. This also applies to `--temp`: its context is temporary unless an explicit named context store selects persistent shared storage. An empty namespace derives from the application's namespace prefix, normally `cai.context`. Agents with different application prefixes can share context by explicitly selecting the same namespace and store.
+An empty store inherits the active session store and reuses its existing client. This also applies to `--temp`: its context is temporary unless an explicit named context store selects persistent shared storage. An empty namespace derives from the application's namespace prefix, normally `cai.context`. Agents with different application prefixes can share context by explicitly selecting the same namespace and store.
 
 | Flag | Environment | Meaning |
 |---|---|---|

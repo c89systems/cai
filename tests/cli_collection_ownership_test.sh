@@ -17,8 +17,8 @@ else contains "$root/stderr" 'server owner'; fi
 # Ownership does not prevent another process from exporting the committed view.
 run --export "$id"; ok
 contains "$root/data/cai/exports/$id/$id.md" 'OWNER READY'
-# A second frontend cannot switch the controlling terminal's conversation.
-run -Nni 'independent conversation'; bad
+# A second frontend cannot switch the controlling terminal's session.
+run -Nni 'independent session'; bad
 if [[ "$mode" == socket ]]; then contains "$root/stderr" 'controller authority'
 else contains "$root/stderr" 'server owner'; fi
 [[ $(requests) == "$before" ]]
@@ -50,7 +50,7 @@ unset CAI_TEST_TERMINAL_EVENT_FD
 # Recovery is immediate; no wait for CAI's twenty-four-hour lease expiry.
 before=$(requests)
 terminal_start --resume "$id"
-expect 'Conversation resumed.'
+expect 'Session resumed.'
 contains "$term/text" 'OWNER READY'
 absent "$term/feed" 'INDEPENDENT READY'
 [[ $(requests) == "$before" ]]
@@ -59,6 +59,6 @@ prompt 'continue after recovery' 'AFTER CRASH'
 terminal_close
 # Normal shutdown releases ownership as well, permitting a further reopen.
 terminal_start --resume "$id"
-expect 'Conversation resumed.'
+expect 'Session resumed.'
 contains "$term/text" 'AFTER CRASH'
 terminal_close

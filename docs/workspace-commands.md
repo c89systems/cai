@@ -1,6 +1,6 @@
 # Workspace command execution
 
-Commands use the conversation's existing input queue, policy inventory and
+Commands use the session's existing input queue, policy inventory and
 handler. Admission, edit/cancel, claim and safe-boundary selection remain in
 the backend. A server never runs a second interpreter or creates a renderer.
 
@@ -13,7 +13,7 @@ The headless owner records replies as execution chunks outside model context:
 | `command.completed` | Synchronous handler succeeded. Asynchronous runtime controls still publish their own eventual status. |
 | `command.failed` | Handler failed: lifecycle/code/HTTP status, followed by message, detail, provider code and request ID fields when available. |
 | `command.frontend` | Hand off the original command to its originating frontend. |
-| `command.handoff` | Close output in a conversation that is being left. |
+| `command.handoff` | Close output in a session that is being left. |
 | `application.markdown` | Owner-generated operator notice outside command dispatch. |
 
 The call identity is `command:SOURCE_SESSION:PRODUCER:REQUEST:ITEM`.
@@ -44,7 +44,7 @@ and detaches it. Application callbacks do not run inside this flush. Normal
 Frontend-local theme/output preferences, quit, pager and terminal handoff are
 delegated instead of executed by the server. A frontend may act only on a live
 record addressed to its own producer, after verifying its current connection
-and conversation. Replay displays history and never repeats frontend actions.
+and session. Replay displays history and never repeats frontend actions.
 Other observers do not apply another terminal's theme or quit request. The
 Softline command consumer now applies live actions from its own producer.
 The terminal's delegation and verification are documented in [terminal attachment](terminal-attachment.md).
@@ -80,7 +80,7 @@ scenario in `cai_app_workspace_server` uses real Unix sockets and aborting
 renderer constructors. It verifies feed queries during a paused provider
 response, settings held until a request boundary, failures followed by
 successful commands, observer rejection, frontend delegation, shell and review
-completion, and a `/new` reply replayed from the new conversation. Store-client
+completion, and a `/new` reply replayed from the new session. Store-client
 open counts must remain constant through these operations.
 
 Backend bang commands publish [live-only output](workspace-live-output.md)

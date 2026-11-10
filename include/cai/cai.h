@@ -1,7 +1,7 @@
 /** @file cai/cai.h
  *  Public C89 API for Responses and compatible Chat Completions clients,
  *  sessions, streams,
- *  tool registration, hosted tools, sources, sinks, and conversations.
+ *  tool registration, hosted tools, sources, sinks, and provider sessions.
  */
 #ifndef CAI_CAI_H
 #define CAI_CAI_H
@@ -35,7 +35,7 @@ typedef struct cai_environment cai_environment;
 typedef struct cai_agent cai_agent;
 /** Stateful agent session using the client's selected wire protocol. */
 typedef struct cai_session cai_session;
-/** Conversation handle wrapping a server-side conversation id. */
+/** Provider session handle wrapping a provider session id. */
 typedef struct cai_conversation cai_conversation;
 /** Streaming byte input handle. */
 typedef struct cai_source cai_source;
@@ -52,11 +52,11 @@ typedef struct cai_output cai_output;
 typedef struct cai_response_create_params cai_response_create_params;
 /** Response handle; Chat Completions is normalized to this Responses shape. */
 typedef struct cai_response cai_response;
-/** List response for response/conversation input items. */
+/** List response for response or provider session input items. */
 typedef struct cai_input_item_list cai_input_item_list;
-/** Retrieved conversation item handle. */
+/** Retrieved provider session item handle. */
 typedef struct cai_conversation_item cai_conversation_item;
-/** Conversation items create parameter builder. */
+/** Provider session items create parameter builder. */
 typedef struct cai_conversation_items_params cai_conversation_items_params;
 /** Registry of callable local cai tools. */
 typedef struct cai_tool_registry cai_tool_registry;
@@ -672,7 +672,7 @@ struct cai_response {
   const char *(*status)(const cai_response *response);
   /** Return the response model id, or NULL. */
   const char *(*model)(const cai_response *response);
-  /** Return the response conversation id, or NULL. */
+  /** Return the response provider session id, or NULL. */
   const char *(*conversation_id)(const cai_response *response);
   /** Return response creation time as a Unix timestamp, or zero. */
   long long (*created_at)(const cai_response *response);
@@ -751,7 +751,7 @@ struct cai_response {
   char *status_value;
   /** Private parsed model storage. */
   char *model_value;
-  /** Private parsed conversation id storage. */
+  /** Private parsed provider session id storage. */
   char *conversation_id_value;
   /** Private materialized output text storage. */
   char *output_text_value;
@@ -822,7 +822,8 @@ typedef struct cai_input_item {
   char *role;
 } cai_input_item;
 
-/** List response for response/conversation input items with receiver methods.
+/** List response for response or provider session input items with receiver
+ * methods.
  */
 struct cai_input_item_list {
   /** Return item count in the list page. */
@@ -858,17 +859,17 @@ struct cai_input_item_list {
   size_t count_value;
 };
 
-/** Retrieved conversation item handle with receiver methods. */
+/** Retrieved provider session item handle with receiver methods. */
 struct cai_conversation_item {
-  /** Return a conversation item id, or NULL. */
+  /** Return a provider session item id, or NULL. */
   const char *(*id)(const cai_conversation_item *item);
-  /** Return a conversation item type, or NULL. */
+  /** Return a provider session item type, or NULL. */
   const char *(*type)(const cai_conversation_item *item);
-  /** Return a conversation item role, or NULL. */
+  /** Return a provider session item role, or NULL. */
   const char *(*role)(const cai_conversation_item *item);
-  /** Return raw conversation item JSON, or NULL. */
+  /** Return raw provider session item JSON, or NULL. */
   const char *(*raw_json)(const cai_conversation_item *item);
-  /** Close and destroy the conversation item. */
+  /** Close and destroy the provider session item. */
   void (*close)(cai_conversation_item *item);
 
   /** Private parsed storage. */
@@ -878,13 +879,13 @@ struct cai_conversation_item {
   char *raw_json_value;
 };
 
-/** Server-side conversation handle with receiver methods. */
+/** Server-side provider session handle with receiver methods. */
 struct cai_conversation {
-  /** Return a conversation id, or NULL. */
+  /** Return a provider session id, or NULL. */
   const char *(*id)(const cai_conversation *conversation);
-  /** Return a conversation object type, or NULL. */
+  /** Return a provider session object type, or NULL. */
   const char *(*object)(const cai_conversation *conversation);
-  /** Close and destroy the conversation handle. */
+  /** Close and destroy the provider session handle. */
   void (*close)(cai_conversation *conversation);
 
   /** Private parsed storage. */
@@ -892,37 +893,38 @@ struct cai_conversation {
   char *object_value;
 };
 
-/** Conversation-items create parameter builder with receiver methods. */
+/** Provider session-items create parameter builder with receiver methods. */
 struct cai_conversation_items_params {
-  /** Destroy this conversation-items parameter builder. */
+  /** Destroy this provider session-items parameter builder. */
   void (*close)(cai_conversation_items_params *params);
-  /** Add text to a conversation-items create request. */
+  /** Add text to a provider session-items create request. */
   int (*add_text)(cai_conversation_items_params *params, const char *role,
                   const char *text, cai_error *error);
-  /** Add spooled text to a conversation-items create request. */
+  /** Add spooled text to a provider session-items create request. */
   int (*add_text_spooled)(cai_conversation_items_params *params,
                           const char *role, struct lonejson_spooled *text,
                           cai_error *error);
-  /** Read a source into spooled text for a conversation-items create request.
+  /** Read a source into spooled text for a provider session-items create
+   * request.
    */
   int (*add_text_source)(cai_conversation_items_params *params,
                          const char *role, cai_source *source,
                          cai_error *error);
-  /** Add an image URL to a conversation-items create request. */
+  /** Add an image URL to a provider session-items create request. */
   int (*add_image_url)(cai_conversation_items_params *params, const char *role,
                        const char *url, const char *detail, cai_error *error);
-  /** Add an image file id to a conversation-items create request. */
+  /** Add an image file id to a provider session-items create request. */
   int (*add_image_file_id)(cai_conversation_items_params *params,
                            const char *role, const char *file_id,
                            const char *detail, cai_error *error);
-  /** Add a file id to a conversation-items create request. */
+  /** Add a file id to a provider session-items create request. */
   int (*add_file_id)(cai_conversation_items_params *params, const char *role,
                      const char *file_id, const char *detail, cai_error *error);
-  /** Add a file URL to a conversation-items create request. */
+  /** Add a file URL to a provider session-items create request. */
   int (*add_file_url)(cai_conversation_items_params *params, const char *role,
                       const char *file_url, const char *detail,
                       cai_error *error);
-  /** Add spooled file data to a conversation-items create request. */
+  /** Add spooled file data to a provider session-items create request. */
   int (*add_file_data_spooled)(cai_conversation_items_params *params,
                                const char *role, const char *filename,
                                struct lonejson_spooled *file_data,
@@ -1119,69 +1121,69 @@ struct cai_client {
   int (*list_response_input_items)(cai_client *client, const char *response_id,
                                    const cai_list_params *params,
                                    cai_input_item_list **out, cai_error *error);
-  /** Create a new server-side conversation. */
+  /** Create a new provider session. */
   int (*create_conversation)(cai_client *client, cai_conversation **out,
                              cai_error *error);
-  /** Retrieve a conversation by id. */
+  /** Retrieve a provider session by id. */
   int (*retrieve_conversation)(cai_client *client, const char *conversation_id,
                                cai_conversation **out, cai_error *error);
-  /** Retrieve a conversation by handle. */
+  /** Retrieve a provider session by handle. */
   int (*retrieve_conversation_handle)(cai_client *client,
                                       const cai_conversation *conversation,
                                       cai_conversation **out, cai_error *error);
-  /** Update conversation metadata by id. */
+  /** Update provider session metadata by id. */
   int (*update_conversation_metadata)(cai_client *client,
                                       const char *conversation_id,
                                       const char *metadata_json,
                                       cai_conversation **out, cai_error *error);
-  /** Update conversation metadata by handle. */
+  /** Update provider session metadata by handle. */
   int (*update_conversation_metadata_handle)(
       cai_client *client, const cai_conversation *conversation,
       const char *metadata_json, cai_conversation **out, cai_error *error);
-  /** Delete a conversation by id. */
+  /** Delete a provider session by id. */
   int (*delete_conversation)(cai_client *client, const char *conversation_id,
                              cai_error *error);
-  /** Delete a conversation by handle. */
+  /** Delete a provider session by handle. */
   int (*delete_conversation_handle)(cai_client *client,
                                     const cai_conversation *conversation,
                                     cai_error *error);
-  /** List conversation items by conversation id. */
+  /** List provider session items by provider session id. */
   int (*list_conversation_items)(cai_client *client,
                                  const char *conversation_id,
                                  const cai_list_params *params,
                                  cai_input_item_list **out, cai_error *error);
-  /** List conversation items by handle. */
+  /** List provider session items by handle. */
   int (*list_conversation_items_handle)(cai_client *client,
                                         const cai_conversation *conversation,
                                         const cai_list_params *params,
                                         cai_input_item_list **out,
                                         cai_error *error);
-  /** Delete one conversation item by ids. */
+  /** Delete one provider session item by ids. */
   int (*delete_conversation_item)(cai_client *client,
                                   const char *conversation_id,
                                   const char *item_id, cai_error *error);
-  /** Delete one conversation item by conversation handle. */
+  /** Delete one provider session item by provider session handle. */
   int (*delete_conversation_item_handle)(cai_client *client,
                                          const cai_conversation *conversation,
                                          const char *item_id, cai_error *error);
-  /** Retrieve one conversation item by ids. */
+  /** Retrieve one provider session item by ids. */
   int (*retrieve_conversation_item)(cai_client *client,
                                     const char *conversation_id,
                                     const char *item_id,
                                     cai_conversation_item **out,
                                     cai_error *error);
-  /** Retrieve one conversation item by conversation handle. */
+  /** Retrieve one provider session item by provider session handle. */
   int (*retrieve_conversation_item_handle)(cai_client *client,
                                            const cai_conversation *conversation,
                                            const char *item_id,
                                            cai_conversation_item **out,
                                            cai_error *error);
-  /** Create conversation items by conversation id. */
+  /** Create provider session items by provider session id. */
   int (*create_conversation_items)(cai_client *client,
                                    const char *conversation_id,
                                    const cai_conversation_items_params *params,
                                    cai_input_item_list **out, cai_error *error);
-  /** Create conversation items by conversation handle. */
+  /** Create provider session items by provider session handle. */
   int (*create_conversation_items_handle)(
       cai_client *client, const cai_conversation *conversation,
       const cai_conversation_items_params *params, cai_input_item_list **out,
@@ -1245,10 +1247,10 @@ struct cai_agent {
                              cai_error *error);
   /** Create an explicit session from this agent. */
   int (*new_session)(cai_agent *agent, cai_session **out, cai_error *error);
-  /** Create an explicit session with a new server-side conversation. */
+  /** Create an explicit session with a new provider session. */
   int (*new_conversation_session)(cai_agent *agent, cai_session **out,
                                   cai_error *error);
-  /** Create an explicit session bound to an existing conversation. */
+  /** Create an explicit session bound to an existing provider session. */
   int (*new_session_for_conversation)(cai_agent *agent,
                                       const cai_conversation *conversation,
                                       cai_session **out, cai_error *error);
@@ -1318,14 +1320,14 @@ struct cai_agent {
 
 /** Stateful session facade for Responses or compatible Chat Completions. */
 struct cai_session {
-  /** Bind the session to a server-side conversation id. */
+  /** Bind the session to a provider session id. */
   int (*set_conversation_id)(cai_session *session, const char *conversation_id,
                              cai_error *error);
-  /** Bind the session to a conversation handle. */
+  /** Bind the session to a provider session handle. */
   int (*set_conversation)(cai_session *session,
                           const cai_conversation *conversation,
                           cai_error *error);
-  /** Return the bound conversation id, or NULL. */
+  /** Return the bound provider session id, or NULL. */
   const char *(*conversation_id)(const cai_session *session);
   /** Set the previous response id used for server-side continuity. */
   int (*set_previous_response_id)(cai_session *session, const char *response_id,
@@ -1447,7 +1449,7 @@ struct cai_response_create_params {
   /** Set previous_response_id for server-side continuation. */
   int (*set_previous_response_id)(cai_response_create_params *params,
                                   const char *response_id, cai_error *error);
-  /** Set a conversation id for a Responses request. */
+  /** Set a provider session id for a Responses request. */
   int (*set_conversation_id)(cai_response_create_params *params,
                              const char *conversation_id, cai_error *error);
   /** Set a prompt cache key for a Responses request. */
@@ -1772,10 +1774,10 @@ int cai_agent_add_hosted_mcp_tool(cai_agent *agent,
 /** Create an explicit session from an agent. */
 int cai_agent_new_session(cai_agent *agent, cai_session **out,
                           cai_error *error);
-/** Create an explicit session with a new server-side conversation. */
+/** Create an explicit session with a new provider session. */
 int cai_agent_new_conversation_session(cai_agent *agent, cai_session **out,
                                        cai_error *error);
-/** Create a session bound to an existing conversation. */
+/** Create a session bound to an existing provider session. */
 int cai_agent_new_session_for_conversation(cai_agent *agent,
                                            const cai_conversation *conversation,
                                            cai_session **out, cai_error *error);
@@ -1784,15 +1786,15 @@ void cai_session_destroy(cai_session *session);
 /** Return cumulative usage while closing and destroying a session. */
 int cai_session_close_with_usage(cai_session *session,
                                  cai_usage_accounting *out, cai_error *error);
-/** Bind a session to a server-side conversation id. */
+/** Bind a session to a provider session id. */
 int cai_session_set_conversation_id(cai_session *session,
                                     const char *conversation_id,
                                     cai_error *error);
-/** Bind a session to a conversation handle. */
+/** Bind a session to a provider session handle. */
 int cai_session_set_conversation(cai_session *session,
                                  const cai_conversation *conversation,
                                  cai_error *error);
-/** Return the session conversation id, or NULL. */
+/** Return the bound provider session ID, or NULL. */
 const char *cai_session_conversation_id(const cai_session *session);
 /** Set the previous response id used for server-side continuity. */
 int cai_session_set_previous_response_id(cai_session *session,
@@ -2158,7 +2160,7 @@ int cai_response_create_params_set_instructions(
 int cai_response_create_params_set_previous_response_id(
     cai_response_create_params *params, const char *response_id,
     cai_error *error);
-/** Set a conversation id for a Responses request. */
+/** Set a provider session id for a Responses request. */
 int cai_response_create_params_set_conversation_id(
     cai_response_create_params *params, const char *conversation_id,
     cai_error *error);
@@ -2357,7 +2359,7 @@ const char *cai_response_id(const cai_response *response);
 const char *cai_response_status(const cai_response *response);
 /** Return the response model id, or NULL. */
 const char *cai_response_model(const cai_response *response);
-/** Return the response conversation id, or NULL. */
+/** Return the response provider session id, or NULL. */
 const char *cai_response_conversation_id(const cai_response *response);
 /** Return response creation time as a Unix timestamp, or zero. */
 long long cai_response_created_at(const cai_response *response);
@@ -2457,130 +2459,131 @@ const char *cai_input_item_role(const cai_input_item_list *list, size_t index);
 /** Destroy an input item list. */
 void cai_input_item_list_destroy(cai_input_item_list *list);
 
-/** Create a server-side conversation. */
+/** Create a provider session. */
 int cai_client_create_conversation(cai_client *client, cai_conversation **out,
                                    cai_error *error);
-/** Create a local conversation handle from an existing id. */
+/** Create a local provider session handle from an existing id. */
 int cai_conversation_from_id(const char *conversation_id,
                              cai_conversation **out, cai_error *error);
-/** Retrieve a conversation by id. */
+/** Retrieve a provider session by id. */
 int cai_client_retrieve_conversation(cai_client *client,
                                      const char *conversation_id,
                                      cai_conversation **out, cai_error *error);
-/** Retrieve a conversation by handle. */
+/** Retrieve a provider session by handle. */
 int cai_client_retrieve_conversation_handle(
     cai_client *client, const cai_conversation *conversation,
     cai_conversation **out, cai_error *error);
-/** Update conversation metadata by id. */
+/** Update provider session metadata by id. */
 int cai_client_update_conversation_metadata(cai_client *client,
                                             const char *conversation_id,
                                             const char *metadata_json,
                                             cai_conversation **out,
                                             cai_error *error);
-/** Update conversation metadata by handle. */
+/** Update provider session metadata by handle. */
 int cai_client_update_conversation_metadata_handle(
     cai_client *client, const cai_conversation *conversation,
     const char *metadata_json, cai_conversation **out, cai_error *error);
-/** Delete a conversation by id. */
+/** Delete a provider session by id. */
 int cai_client_delete_conversation(cai_client *client,
                                    const char *conversation_id,
                                    cai_error *error);
-/** Delete a conversation by handle. */
+/** Delete a provider session by handle. */
 int cai_client_delete_conversation_handle(cai_client *client,
                                           const cai_conversation *conversation,
                                           cai_error *error);
-/** List conversation items by conversation id. */
+/** List provider session items by provider session id. */
 int cai_client_list_conversation_items(cai_client *client,
                                        const char *conversation_id,
                                        const cai_list_params *params,
                                        cai_input_item_list **out,
                                        cai_error *error);
-/** List conversation items by conversation handle. */
+/** List provider session items by provider session handle. */
 int cai_client_list_conversation_items_handle(
     cai_client *client, const cai_conversation *conversation,
     const cai_list_params *params, cai_input_item_list **out, cai_error *error);
-/** Delete a conversation item by conversation id and item id. */
+/** Delete a provider session item by provider session id and item id. */
 int cai_client_delete_conversation_item(cai_client *client,
                                         const char *conversation_id,
                                         const char *item_id, cai_error *error);
-/** Delete a conversation item by conversation handle and item id. */
+/** Delete a provider session item by provider session handle and item id. */
 int cai_client_delete_conversation_item_handle(
     cai_client *client, const cai_conversation *conversation,
     const char *item_id, cai_error *error);
-/** Retrieve a conversation item by conversation id and item id. */
+/** Retrieve a provider session item by provider session id and item id. */
 int cai_client_retrieve_conversation_item(cai_client *client,
                                           const char *conversation_id,
                                           const char *item_id,
                                           cai_conversation_item **out,
                                           cai_error *error);
-/** Retrieve a conversation item by conversation handle and item id. */
+/** Retrieve a provider session item by provider session handle and item id. */
 int cai_client_retrieve_conversation_item_handle(
     cai_client *client, const cai_conversation *conversation,
     const char *item_id, cai_conversation_item **out, cai_error *error);
-/** Create a conversation-items parameter builder. */
+/** Create a provider session-items parameter builder. */
 int cai_conversation_items_params_new(cai_conversation_items_params **out,
                                       cai_error *error);
-/** Destroy a conversation-items parameter builder. */
+/** Destroy a provider session-items parameter builder. */
 void cai_conversation_items_params_destroy(
     cai_conversation_items_params *params);
-/** Add text to a conversation-items create request. */
+/** Add text to a provider session-items create request. */
 int cai_conversation_items_params_add_text(
     cai_conversation_items_params *params, const char *role, const char *text,
     cai_error *error);
-/** Add spooled text to a conversation-items create request. */
+/** Add spooled text to a provider session-items create request. */
 int cai_conversation_items_params_add_text_spooled(
     cai_conversation_items_params *params, const char *role,
     struct lonejson_spooled *text, cai_error *error);
-/** Read a source into spooled text for a conversation-items create request. */
+/** Read a source into spooled text for a provider session-items create request.
+ */
 int cai_conversation_items_params_add_text_source(
     cai_conversation_items_params *params, const char *role, cai_source *source,
     cai_error *error);
-/** Add an image URL to a conversation-items create request. */
+/** Add an image URL to a provider session-items create request. */
 int cai_conversation_items_params_add_image_url(
     cai_conversation_items_params *params, const char *role, const char *url,
     const char *detail, cai_error *error);
-/** Add an image file id to a conversation-items create request. */
+/** Add an image file id to a provider session-items create request. */
 int cai_conversation_items_params_add_image_file_id(
     cai_conversation_items_params *params, const char *role,
     const char *file_id, const char *detail, cai_error *error);
-/** Add a file id to a conversation-items create request. */
+/** Add a file id to a provider session-items create request. */
 int cai_conversation_items_params_add_file_id(
     cai_conversation_items_params *params, const char *role,
     const char *file_id, const char *detail, cai_error *error);
-/** Add a file URL to a conversation-items create request. */
+/** Add a file URL to a provider session-items create request. */
 int cai_conversation_items_params_add_file_url(
     cai_conversation_items_params *params, const char *role,
     const char *file_url, const char *detail, cai_error *error);
-/** Add spooled file data to a conversation-items create request. */
+/** Add spooled file data to a provider session-items create request. */
 int cai_conversation_items_params_add_file_data_spooled(
     cai_conversation_items_params *params, const char *role,
     const char *filename, struct lonejson_spooled *file_data,
     const char *detail, cai_error *error);
-/** Create conversation items by conversation id. */
+/** Create provider session items by provider session id. */
 int cai_client_create_conversation_items(
     cai_client *client, const char *conversation_id,
     const cai_conversation_items_params *params, cai_input_item_list **out,
     cai_error *error);
-/** Create conversation items by conversation handle. */
+/** Create provider session items by provider session handle. */
 int cai_client_create_conversation_items_handle(
     cai_client *client, const cai_conversation *conversation,
     const cai_conversation_items_params *params, cai_input_item_list **out,
     cai_error *error);
-/** Return a conversation id, or NULL. */
+/** Return a provider session id, or NULL. */
 const char *cai_conversation_id(const cai_conversation *conversation);
-/** Return a conversation object type, or NULL. */
+/** Return a provider session object type, or NULL. */
 const char *cai_conversation_object(const cai_conversation *conversation);
-/** Destroy a conversation handle. */
+/** Destroy a provider session handle. */
 void cai_conversation_destroy(cai_conversation *conversation);
-/** Return a conversation item id, or NULL. */
+/** Return a provider session item id, or NULL. */
 const char *cai_conversation_item_id(const cai_conversation_item *item);
-/** Return a conversation item type, or NULL. */
+/** Return a provider session item type, or NULL. */
 const char *cai_conversation_item_type(const cai_conversation_item *item);
-/** Return a conversation item role, or NULL. */
+/** Return a provider session item role, or NULL. */
 const char *cai_conversation_item_role(const cai_conversation_item *item);
-/** Return raw conversation item JSON, or NULL. */
+/** Return raw provider session item JSON, or NULL. */
 const char *cai_conversation_item_raw_json(const cai_conversation_item *item);
-/** Destroy a conversation item. */
+/** Destroy a provider session item. */
 void cai_conversation_item_destroy(cai_conversation_item *item);
 
 #ifdef __cplusplus

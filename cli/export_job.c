@@ -182,7 +182,7 @@ void cai_cli_export_job_close(cai_cli_export_job *job,
   if (job->current != NULL && !job->completed) {
     job->current->status = CAI_ERR_CANCELLED;
     cai_cli_error(&job->current->error, CAI_ERR_CANCELLED,
-                  "conversation export cancelled");
+                  "session export cancelled");
   }
   if (out != NULL)
     *out = job->current;

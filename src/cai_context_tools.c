@@ -72,7 +72,7 @@ static const context_tool tools[] = {
     {"context_set",
      "Change only supplied context metadata. Omitted fields are preserved; "
      "null clears an optional field. Never changes content. Shared across "
-     "conversations/workspaces; use only when the task calls for storing or "
+     "sessions and workspaces; use only when the task calls for storing or "
      "retrieving context. Use expected_version from get or the last receipt.",
      SCHEMA(
          ID_PROP
@@ -131,7 +131,7 @@ static const char create_description[] =
     "searchable content. Send only the text/Markdown, with no headers, "
     "delimiters or metadata envelope. Returns generated XID and version; "
     "optionally use context_set afterward for title, filename, tags or date. "
-    "Context persists independently of conversations. Store/retrieve only as "
+    "Context persists independently of sessions. Store/retrieve only as "
     "the user's task requires; no automatic startup retrieval.";
 static int tool_available(cai_context *context, const char *name) {
   return cai_context_files_available(context) ||

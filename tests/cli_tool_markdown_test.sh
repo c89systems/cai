@@ -37,7 +37,7 @@ id=$(current_session_id)
 terminal_close
 before=$(requests)
 terminal_start --resume "$id"
-expect 'Conversation resumed.'
+expect 'Session resumed.'
 contains "$term/text" '* Failed read_file'
 contains "$term/text" '* MCP mcp_5_alpha_echo'
 contains "$term/text" 'Rich MCP text'

@@ -9,21 +9,21 @@ Reference baseline: liblockdc 0.24.0 public collection and state-lease APIs.
 
 ## Problem and desired result
 
-Two CAI processes can currently resume the same conversation. Both restore the
+Two CAI processes can currently resume the same session. Both restore the
 same journal tail and independently choose subsequent event sequence numbers.
 When their records differ, an append fails with:
 
 > append ID is bound to different compact JSON bytes
 
 The append-identity check is doing its job. The missing application invariant is
-exclusive ownership of that conversation's collection before restoring its
+exclusive ownership of that session's collection before restoring its
 writable runtime.
 
 Collections already serialize individual storage mutations, but their public
 API permits concurrent appenders. Opening a receiver does not acquire an
 exclusive collection lease. Ordinary state leases cannot address collection
 entries. CAI's current shared session-use guard prevents deletion, not a second
-runtime opening the same conversation.
+runtime opening the same session.
 
 Add an actual lease on the collection itself, following the ordinary state
 lease model: acquire it once, own the collection while the lease is valid,
@@ -32,7 +32,7 @@ recovery without waiting for a crashed owner's long lease to expire.
 
 Lease ownership and rejection of operations from a replaced owner are distinct
 requirements. Both are needed; internal operation locks alone provide neither
-conversation ownership nor safe ownership takeover.
+session ownership nor safe ownership takeover.
 
 ## Required ownership semantics
 
@@ -52,7 +52,7 @@ conversation ownership nor safe ownership takeover.
 - Reading must retain the existing captured-boundary, ordering and streaming
   contracts. A writer lease is not an exclusive read lock.
 - Keep existing expiry and keepalive conventions where applicable. A long-lived
-  conversation can retain ownership through renewal rather than acquiring and
+  session can retain ownership through renewal rather than acquiring and
   releasing a lease for every event.
 - Local handle close and durable lease release must remain distinct, following
   the normal SDK ownership convention. Document failure and retry behavior.
@@ -67,7 +67,7 @@ The API spelling and receiver layout remain design choices.
 
 ## Append publication must remain independent of release
 
-This is the essential difference from treating the entire open conversation
+This is the essential difference from treating the entire open session
 as one staged state-object transaction.
 
 Each successful append must publish and persist its entry independently under
@@ -75,7 +75,7 @@ the configured durability policy, while the collection lease remains held.
 Public readers can observe that committed entry before the lease is released.
 
 Releasing, expiring or replacing the lease must not roll back committed
-entries. Do not accumulate the conversation in an implicit transaction that
+entries. Do not accumulate the session in an implicit transaction that
 only commits when the lease is released. A crash after an hour of appends must
 not discard that hour of successfully committed history.
 
@@ -194,7 +194,7 @@ compatibility and supported default thread-stack limits.
 
 CAI should acquire once before journal restoration, keep ownership for the
 context's lifetime, and release after its runtime and prompt-history writers
-have stopped. Children acquire their own conversation collections.
+have stopped. Children acquire their own session collections.
 
 Do not reintroduce the previously measured per-event acquire/load/renew/release
 cycle. Ownership checks belong in existing mutation authority; keepalive runs
@@ -243,7 +243,7 @@ Once the SDK is available, CAI can adopt native collection leases rather than
 adding a separate collection-writer lock protocol. Acquisition must precede
 restoring writable runtime state, and a new owner must restore the authoritative
 journal tail before allocating event IDs. Ownership takeover cannot merge or
-repair an already stale in-memory conversation.
+repair an already stale in-memory session.
 On ownership loss, CAI must stop further model/tool dispatch and report the
 loss. Taking over storage ownership does not kill the previous process or undo
 external tool side effects that have already occurred.

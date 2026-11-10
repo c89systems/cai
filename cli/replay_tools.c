@@ -348,7 +348,7 @@ static int tools_index(cai_cli_replay_tools **out,
           victim = link;
       }
       /* Completed metadata is a bounded correlation cache, not another
-       * conversation history. Never evict a live/yielded command or decoder. */
+       * session history. Never evict a live/yielded command or decoder. */
       if (count >= 256U) {
         replay_call *removed;
         if (victim == NULL)

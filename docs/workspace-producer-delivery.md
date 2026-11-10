@@ -1,6 +1,6 @@
 # Producer-settled delivery
 
-The controller owns each conversation's accepted pending input. The frontend
+The controller owns each session's accepted pending input. The frontend
 owns drafts, keystrokes, cursor/undo state and local editing. Reserving an
 already-queued entry for editing uses the queue's existing BEGIN_EDIT hold;
 only the final replacement is sent back. No intermediate draft is transmitted.
@@ -12,7 +12,7 @@ native key burst. Claiming the item between those operations loses the edit.
 A producer registers managed delivery when binding. Its connection starts
 gated, and each subsequent request closes its gate. Once acknowledgements and
 dependent requests settle, the producer sends INPUT_SETTLED with its original
-conversation/generation and observed processed request watermark. This is
+session epoch, control generation and observed processed request watermark. This is
 ephemeral queue availability: no request ID, receipt, journal event, draft or
 editor state is added. Unchanged notifications are coalesced.
 

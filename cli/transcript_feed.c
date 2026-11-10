@@ -230,7 +230,7 @@ static void observe(void *context, const char *session,
       continue;
     if (source == NULL) {
       failure(f, s, CAI_TRANSCRIPT_HISTORY_CHANGED, CAI_ERR_INVALID,
-              "Conversation history changed; resynchronize");
+              "Session history changed; resynchronize");
       continue;
     }
     if (!s->prepared || position <= s->watermark)

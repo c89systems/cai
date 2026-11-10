@@ -46,7 +46,7 @@ locale is installed. The optional upstream lookup-constructor request in
 `stash/cr-libpslog-captured-environment.md` would consolidate the logger overlay
 in libpslog; it no longer blocks utility isolation.
 
-`cai_cli_utility_boundary` seeds a conversation using a real local-provider
+`cai_cli_utility_boundary` seeds a session using a real local-provider
 runtime, then runs maintenance through an embedding host that permits only
 that Markdown restoration profile and rejects even client/runtime construction
 for JSONL-only export. It aborts if a runtime loop, workspace-server,

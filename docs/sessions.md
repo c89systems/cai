@@ -1,12 +1,12 @@
-# Conversations, history and exports
+# Sessions, history and exports
 
-## Find and resume a conversation
+## Find and resume a session
 
 Starting `cai` resumes the newest session for the canonical current directory.
 `-N`/`--new` starts fresh; `/new` does the same inside the prompt and confirms the new session ID and workspace in a Markdown summary after opening it successfully.
 When messaging is enabled, the summary includes its active queue.
-`-l`/`--list` shows a numbered conversation list for the current directory.
-`-L`/`--list-all` lists conversations across all directories in the configured session store.
+`-l`/`--list` shows a numbered session list for the current directory.
+`-L`/`--list-all` lists sessions across all directories in the configured session store.
 `-R`/`--resume` without an ID and `/resume` show the same numbered list for the current directory; `/resume <number-or-ID>` loads an entry.
 Rows show ID, directory, and a first-prompt preview, clipped to the terminal width or 80 columns without a terminal.
 `-R ID`/`--resume ID` addresses a saved session in the current directory directly.
@@ -16,7 +16,7 @@ Saved prompts, assistant text and concise execution summaries replay without rep
 
 ## Replay and prompt recall
 
-Interactive prompt recall uses Softline's custom backend hooks and encrypted `prompts.<session-id>` collections in the configured sessions namespace, beside the conversation journal.
+Interactive prompt recall uses Softline's custom backend hooks and encrypted `prompts.<session-id>` collections in the configured sessions namespace, beside the session journal.
 It shares the session store's Pouch client and key; there are no plaintext `.history` files or separate history-directory settings.
 Recall loads only the newest 200 entries by default, oldest first, through a bounded collection range.
 Configure recall and the native stored-entry cap with `--prompt-history-limit`, `CAI_PROMPT_HISTORY_LIMIT`, or `[ui] prompt_history_limit` (also accepted through C/Lua application settings).
@@ -25,11 +25,11 @@ Zero disables recall and recording and clears the stored count cap without delet
 Liblockdc's existing maintenance worker lazily removes the oldest entries beyond `max_entries`; appends never scan or trim prompts synchronously.
 The stored cap survives restarts and is updated when recall is configured.
 Raising it cannot recover prompts already removed by maintenance.
-Conversation journals are never subject to this count cap.
+Session journals are never subject to this count cap.
 Accepted prompts and local commands append immediately, including steering; replay and Ctrl-R selection do not append.
-`/new` starts fresh recall; `/resume` restores the selected conversation's recall.
+`/new` starts fresh recall; `/resume` restores the selected session's recall.
 Each entry appends synchronously without rewriting earlier entries, using the store's configured durability and compression.
-Recall is separate from model context and conversation export; deleting a conversation drops its prompt collection too.
+Recall is separate from model context and session export; deleting a session drops its prompt collection too.
 Temporary chats use their private session store for recall.
 Existing file-backed recall is not imported.
 Ctrl-R Enter selects a match for editing; Enter again sends. **Alt-Q** saves the active draft as the newest prompt-history entry and exits without submitting it.
@@ -44,22 +44,22 @@ This display limit does not remove model context or export data.
 
 ## Retention and deletion
 
-Conversation journals have a default **30-day inactivity retention**, enforced by liblockdc on the whole `events.<session-id>` collection and its session metadata.
+Session journals have a default **30-day inactivity retention**, enforced by liblockdc on the whole `events.<session-id>` collection and its session metadata.
 Every successful append renews the deadline; individual journal entries have no separate expiry.
 Configure the default through `--conversation-retention-days`, `CAI_CONVERSATION_RETENTION_DAYS`, or `[storage] conversation_retention_days` (also accepted through C/Lua settings).
 Zero disables expiry.
-`/retention` shows the active conversation's policy; `/retention DAYS` persists its override, and `/retention 0` or `/retention off` keeps it forever.
+`/retention` shows the active session's policy; `/retention DAYS` persists its override, and `/retention 0` or `/retention off` keeps it forever.
 Changing it waits for a whole-turn boundary through Softline.
 Expiry is eligibility for asynchronous SDK maintenance, not exact-time deletion.
 Reads do not renew it.
-After SDK cleanup, lists omit unavailable conversations and auto-resume selects an available conversation or starts fresh.
+After SDK cleanup, lists omit unavailable sessions and auto-resume selects an available session or starts fresh.
 Explicitly resuming a removed journal reports that it is unavailable.
-Prompt-history aging/pruning remains deferred; conversation retention does not silently expire individual prompt records, exports, or logs.
+Prompt-history aging/pruning remains deferred; session retention does not silently expire individual prompt records, exports, or logs.
 
-`-D` / `--delete` lists numbered conversations eligible for deletion in the current directory.
-`-D ID` or `-D NUMBER` deletes that conversation, its child and review collections, metadata, managed exports, prompt history, session logs and delivered inbox messages.
+`-D` / `--delete` lists numbered sessions eligible for deletion in the current directory.
+`-D ID` or `-D NUMBER` deletes that session, its child and review collections, metadata, managed exports, prompt history, session logs and delivered inbox messages.
 Numbers refer to the deletion list; exact numeric IDs take precedence.
-Open conversations are omitted and cannot be deleted until closed.
+Open sessions are omitted and cannot be deleted until closed.
 Filesystem locks on the shared Pouch root release automatically on process exit/crash.
 Shared authentication, boards, mailboxes and workspace files remain separate.
 Deletion is logical; Pouch reclaims dropped collection storage during maintenance.
@@ -82,10 +82,10 @@ Boundaries are persisted as incremental journal metadata; steering records remai
 Listing and removal require an idle runtime with no queued work, open shell, pending settings, or review handoff.
 Removal atomically deletes the selected events and dependent context commits, then appends an edit based on the retained commit prefix.
 A failure before publication restores the live history; an uncertain publication blocks writes until reopening.
-Restart, subsequent provider requests, and conversation exports exclude trimmed entries.
+Restart, subsequent provider requests, and session exports exclude trimmed entries.
 Diagnostic logs and external tool stores are not erased.
 Changes to files, tool stores, selected settings, goals, and incurred usage are not undone.
-CAI clears provider continuation handles so discarded context cannot return via an earlier response or conversation ID.
+CAI clears provider continuation handles so discarded context cannot return via an earlier response or session ID.
 
 ## Compact model context
 
@@ -107,15 +107,15 @@ An unfinished manual request is not automatically retried after a crash.
 `--export ID` and `/export` write paired `ID.jsonl` and `ID.md` files under `$XDG_DATA_HOME/cai/exports/ID` by default (falling back to `~/.local/share/cai/exports/ID`).
 `/export` selects the active session.
 `--export-dir DIR` overrides the export root.
-`/export BASENAME` exports the active conversation to the named path; `--export ID --export-out BASENAME` does the same for an explicit ID.
+`/export BASENAME` exports the active session to the named path; `--export ID --export-out BASENAME` does the same for an explicit ID.
 An exact `.md` or `.jsonl` suffix selects only that format.
-Otherwise both suffixes are appended, so `/export output/conversation` creates `output/conversation.md` and `output/conversation.jsonl`; `something.else` creates `something.else.md` and `something.else.jsonl`.
+Otherwise both suffixes are appended, so `/export output/session` creates `output/session.md` and `output/session.jsonl`; `something.else` creates `something.else.md` and `something.else.jsonl`.
 Relative paths use the workspace; missing parent directories are created without changing existing directory permissions.
 Existing files are replaced after the selected streams have been written.
 Omitting the basename (or leaving `--export-out` empty) retains the default export location.
-JSONL contains the complete resumable commit and journal; Markdown uses libcai's existing Markdown exporter, including its instructions, conversation, runtime, and goal sections, followed by a structured execution timeline.
+JSONL contains the complete resumable commit and journal; Markdown uses libcai's existing Markdown exporter, including its instructions, session, runtime, and goal sections, followed by a structured execution timeline.
 Export performs no model requests or tool execution.
-These exports are plaintext private files (mode 0600); exported state contains conversation and execution context, never the credential namespace.
+These exports are plaintext private files (mode 0600); exported state contains session and execution context, never the credential namespace.
 `--import FILE` validates a JSONL export, assigns a new session ID in the current directory, and exits.
 Failed imports never appear in the list.
 Existing cai JSONL files are not automatically migrated.
@@ -151,7 +151,7 @@ The duration and parentheses use the same dimmer color as `Ran`, while the comma
 `write_stdin` output stays attached to the original command and shares its preview limit.
 `--tool-output compact|full` controls replay just as it controls new calls.
 Saved patch previews retain confirmed line numbers and neighboring context; older records containing only submitted patches cannot recover missing context from files that have since changed.
-Startup policy notices precede replay; the idle message distinguishes a resumed conversation from a new conversation.
+Startup policy notices precede replay; the idle message distinguishes a resumed session from a new session.
 Previously unrecorded child output cannot be recreated by this change.
 
 Live command completions use the same elapsed-time heading, with seconds, minutes or hours as needed.

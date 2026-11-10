@@ -51,7 +51,7 @@ tail -1 "$root/peer/requests.jsonl" >"$root/request"
 contains "$root/request" 'Enabling a tool is not that authorization'
 contains "$root/request" 'A normal review request, even followed by a request to fix findings, is not permission'
 # A real patch, a second reviewer and automatic goal continuation all run in
-# the same conversation; the optional tool only starts that shared workflow.
+# the same session; the optional tool only starts that shared workflow.
 terminal_start -N --review-and-fix-tool
 patch=$'*** Begin Patch\n*** Update File: tracked.txt\n@@\n-before\n+after\n*** End Patch\n'
 items "$(jq -n --argjson chat "$chat" --arg report "$report" --arg clean "$clean" --arg patch "$patch" '[

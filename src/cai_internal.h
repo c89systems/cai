@@ -195,7 +195,7 @@ typedef struct cai_history_owned_event {
   long long sequence;
 } cai_history_owned_event;
 
-/** Conversation state behind cai_session::impl, borrowing its agent.
+/** Session state behind cai_session::impl, borrowing its agent.
  * Owns model context, pending inputs, usage/goals and incremental journal
  * bookkeeping. Runtime workers operate on it; owner-thread observers use
  * published runtime snapshots rather than reading mutable session pointers. */
@@ -638,10 +638,10 @@ int cai_response_output_items_json(const cai_response *response,
 /** Build a text-output object from a parsed response. */
 int cai_output_from_response(cai_response *response, cai_output **out,
                              cai_error *error);
-/** Parse an owned item-list response for the conversation/input-items API. */
+/** Parse an owned list of response or provider session input items. */
 int cai_input_item_list_parse_json(const char *json, cai_input_item_list **out,
                                    cai_error *error);
-/** Parse one owned conversation item from a complete JSON document. */
+/** Parse one owned provider session item from a complete JSON document. */
 int cai_conversation_item_parse_json(const char *json,
                                      cai_conversation_item **out,
                                      cai_error *error);
@@ -982,7 +982,7 @@ int cai_set_openai_error(cai_error *error, long http_status, const char *body,
  * handle. */
 void cai_configure_curl_tls(CURL *curl, int insecure_skip_verify,
                             const char *ca_bundle_path, const char *ca_path);
-/** Parse a conversation object into caller-owned storage. */
+/** Parse a session object into caller-owned storage. */
 int cai_conversation_parse_json(const char *json, cai_conversation **out,
                                 cai_error *error);
 /** Commit staged session inputs into retained model history before persistence.

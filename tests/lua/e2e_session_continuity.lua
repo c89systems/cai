@@ -54,7 +54,7 @@ local agent, agent_err = client:new_agent({
     "When asked to store the continuity secret, call lua_secret_lookup exactly once.",
     "The tool is the only source of the secret value.",
     "After the tool result, answer exactly: LUA_CONTINUITY_STORED <secret>.",
-    "On later turns, answer from conversation/session context without calling the tool unless explicitly asked.",
+    "On later turns, answer from session context without calling the tool unless explicitly asked.",
     "When asked to recall it, answer exactly: LUA_CONTINUITY_RECALL <secret>.",
   }, " "),
   reasoning_effort = cai.REASONING_EFFORT_MINIMAL,

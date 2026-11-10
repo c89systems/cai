@@ -20,7 +20,7 @@ typedef struct cai_cli_input_transport {
   void (*close)(void *);
   /* Opaque item/revision namespace, distinct from the live request epoch.
    * A retained socket editor keeps it stable across a verified producer
-   * reconnect; native context selection uses its conversation epoch. */
+   * reconnect; native context selection uses its session epoch. */
   unsigned long long (*identity)(void *, unsigned long long conversation);
 } cai_cli_input_transport;
 int cai_cli_input_adapter_open(const cai_cli_input_transport *,

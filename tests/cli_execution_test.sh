@@ -34,12 +34,12 @@ contains "$markdown" 'Tool failed'
 contains "$markdown" 'execution result'
 cp "$jsonl" "$root/original.jsonl"
 # Resume without a logfile, replay useful failures, and prove that execution
-# records do not leak into the next provider request as extra conversation input.
+# records do not leak into the next provider request as extra session input.
 rm -rf "$root/cache"
 terminal_start
 expect '* Failed read_file'
 before=$(requests)
-send '/export\r'; expect 'Conversation export'
+send '/export\r'; expect 'Session export'
 expect "$id.md"
 [[ $(requests) == "$before" ]]
 terminal_close

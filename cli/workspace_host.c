@@ -259,11 +259,11 @@ static int transcript_request(host_peer *peer, const cai_protocol_event *event,
                                                  &local)
              : cai_cli_error(
                    &local, CAI_ERR_INVALID,
-                   "active conversation and fresh history request required");
+                   "active session and fresh history request required");
     if (rc == CAI_OK && m->header.conversation != 0U &&
         m->header.conversation != epoch)
       rc = cai_cli_error(&local, CAI_ERR_INVALID,
-                         "prompt-history conversation changed");
+                         "prompt-history session changed");
     if (m->header.request > peer->stream_high)
       peer->stream_high = m->header.request;
     if (rc == CAI_OK)
@@ -293,15 +293,13 @@ static int transcript_request(host_peer *peer, const cai_protocol_event *event,
       peer->host->history != NULL && m->event.session != NULL &&
               strcmp(m->event.session, peer->host->session) == 0
           ? cai_input_controller_conversation(peer->host->input, &epoch, &local)
-          : cai_cli_error(
-                &local, CAI_ERR_INVALID,
-                "Active conversation and fresh subscription ID required");
+          : cai_cli_error(&local, CAI_ERR_INVALID,
+                          "Active session and fresh subscription ID required");
   if (m->header.request > peer->stream_high)
     peer->stream_high = m->header.request;
   if (rc == CAI_OK && m->header.conversation != 0U &&
       m->header.conversation != epoch)
-    rc = cai_cli_error(&local, CAI_ERR_INVALID,
-                       "Transcript conversation changed");
+    rc = cai_cli_error(&local, CAI_ERR_INVALID, "Transcript session changed");
   if (rc == CAI_OK)
     rc = cai_cli_transcript_feed_request(peer->host->history, peer->attachment,
                                          m->header.request, m->event.collection,
@@ -573,7 +571,7 @@ static int append_prompt(host_peer *peer, const cai_cli_input_wire_message *m,
                                "bound prompt-history context required");
     if (rc == CAI_OK && epoch != m->header.conversation)
       rc = cai_cli_error(&local, CAI_ERR_INVALID,
-                         "prompt-history conversation changed");
+                         "prompt-history session changed");
     if (rc == CAI_OK && (host->pouch == NULL || host->prompt_limit == 0U))
       rc = cai_cli_error(&local, CAI_ERR_INVALID, "prompt history is disabled");
     if (rc == CAI_OK) {
@@ -625,14 +623,14 @@ static int select_peer(host_peer *peer, cai_error *error) {
                          &local);
   if (rc == CAI_OK && peer->input != NULL)
     rc = cai_cli_error(&local, CAI_ERR_INVALID,
-                       "conversation selection requires an unbound producer");
+                       "session selection requires an unbound producer");
   if (rc == CAI_OK)
     rc = host->select != NULL
              ? host->select(host->select_context,
                             peer->selection[0] != '\0' ? peer->selection : NULL,
                             &local)
              : cai_cli_error(&local, CAI_ERR_INVALID,
-                             "conversation selection unavailable");
+                             "session selection unavailable");
   if (rc == CAI_OK)
     rc = cai_input_controller_conversation(host->input, &epoch, &local);
   if (rc == CAI_OK)
@@ -662,7 +660,7 @@ static int select_peer(host_peer *peer, cai_error *error) {
     snprintf(reply.observation.result.reason,
              sizeof(reply.observation.result.reason), "%s",
              local.message != NULL ? local.message
-                                   : "conversation selection failed");
+                                   : "session selection failed");
     rc = send_message(peer, &reply, error);
   }
   cai_error_cleanup(&local);
@@ -740,7 +738,7 @@ static int message(void *context, const cai_workspace_server_event *event,
                                 "foreground context unavailable");
       if (rc == CAI_OK && epoch != h->conversation)
         rc = cai_cli_error(&local, CAI_ERR_INVALID,
-                           "cancellation conversation changed");
+                           "cancellation session changed");
       if (rc == CAI_OK)
         rc = host->cancel != NULL
                  ? host->cancel(host->cancel_context, &local)
@@ -782,11 +780,11 @@ static int message(void *context, const cai_workspace_server_event *event,
     cai_error binding;
     if (peer->selecting)
       return cai_cli_error(error, CAI_ERR_PROTOCOL,
-                           "conversation selection is already pending");
+                           "session selection is already pending");
     if (m->select_session) {
       if (peer->input != NULL)
         return cai_cli_error(error, CAI_ERR_PROTOCOL,
-                             "duplicate conversation selection");
+                             "duplicate session selection");
       peer->selecting = 1;
       peer->selection_request = m->header.request;
       peer->selection_generation = m->header.generation;
@@ -798,8 +796,7 @@ static int message(void *context, const cai_workspace_server_event *event,
     cai_error_init(&binding);
     rc = host->input != NULL
              ? cai_input_controller_conversation(host->input, &epoch, &binding)
-             : cai_cli_error(&binding, CAI_ERR_INVALID,
-                             "no active conversation");
+             : cai_cli_error(&binding, CAI_ERR_INVALID, "no active session");
     if (rc == CAI_OK &&
         (peer->input != NULL ||
          (m->header.conversation != 0U && m->header.conversation != epoch) ||
@@ -807,7 +804,7 @@ static int message(void *context, const cai_workspace_server_event *event,
          (m->session != NULL && m->session[0] != '\0' &&
           strcmp(m->session, host->session) != 0)))
       rc = cai_cli_error(&binding, CAI_ERR_INVALID,
-                         "producer binding or conversation does not match");
+                         "producer binding or session does not match");
     if (rc == CAI_OK)
       rc = m->producer != 0U
                ? cai_input_controller_resume(host->input, peer->attachment,
@@ -963,7 +960,7 @@ int cai_cli_workspace_host_input(cai_cli_workspace_host *host,
     host_peer *peer = &host->peers[i];
     if (!peer->detached && host->catalog_runtime != NULL &&
         peer->catalog_revision == host->catalog_revision)
-      (void)send_catalog(peer, CAI_APP_CATALOG_ERROR, "Conversation closed",
+      (void)send_catalog(peer, CAI_APP_CATALOG_ERROR, "Session closed",
                          CAI_ERR_CANCELLED, NULL);
   }
   host->catalog_runtime = NULL;
@@ -971,14 +968,14 @@ int cai_cli_workspace_host_input(cai_cli_workspace_host *host,
     if (host->peers[i].stream != 0U) {
       (void)transcript_error(&host->peers[i], host->peers[i].stream,
                              CAI_TRANSCRIPT_CONTEXT_CLOSED, CAI_ERR_CANCELLED,
-                             "Conversation closed", NULL);
+                             "Session closed", NULL);
       host->peers[i].stream = 0U;
     }
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i)
     if (host->peers[i].prompt_stream != 0U) {
       (void)transcript_error(&host->peers[i], host->peers[i].prompt_stream,
                              CAI_TRANSCRIPT_CONTEXT_CLOSED, CAI_ERR_CANCELLED,
-                             "Conversation closed", NULL);
+                             "Session closed", NULL);
       host->peers[i].prompt_stream = 0U;
     }
   cai_cli_transcript_feed_close(host->history);
@@ -1017,7 +1014,7 @@ int cai_cli_workspace_host_history(cai_cli_workspace_host *host,
     return CAI_OK;
   if (host->history != NULL || host->input == NULL)
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "Open conversation required for transcript");
+                         "Open session required for transcript");
   rc = cai_input_controller_conversation(host->input, &epoch, error);
   if (rc == CAI_OK)
     rc = cai_cli_transcript_feed_open(

@@ -25,9 +25,9 @@ extern "C" {
 
 typedef struct cai_agent_runtime cai_agent_runtime;
 
-/** Borrow this conversation's editable input authority on its owner thread.
+/** Borrow this session's editable input authority on its owner thread.
  * Its incremental transitions use the session journal and are recovered with
- * the conversation. Claiming model input transfers it to idempotent runtime
+ * the session. Claiming model input transfers it to idempotent runtime
  * delivery; pump completes delivery, including active-child steering. Opaque
  * host actions are returned to the controller by cai_input_queue_claim().
  * Frontends must use a copied asynchronous mailbox, not call from UI threads.
@@ -40,7 +40,7 @@ int cai_agent_runtime_pending_input(cai_agent_runtime *runtime,
  * committed owner-thread change; tool selection is saved at turn seams. */
 cai_todo *cai_agent_runtime_todo(cai_agent_runtime *runtime);
 /** Between-turn board selection; create also creates a missing named board.
- * Selection is recorded with this conversation, independently of other agents.
+ * Selection is recorded with this session, independently of other agents.
  * New boards remain in the shared store if committing subsequently fails. */
 int cai_agent_runtime_select_board(cai_agent_runtime *runtime, const char *name,
                                    int create, cai_error *error);
@@ -868,7 +868,7 @@ typedef struct cai_agent_runtime_config {
    * are not inherited by children and are rejected by isolated review. */
   struct cai_plugins *plugins;
   /** Enable run_review_and_fix; default off. Requires goal tools and the
-   * built-in reviewer. The tool replaces the current conversation's goal and
+   * built-in reviewer. The tool replaces the current session's goal and
    * queues repeated review/fix/verification. Availability is not authorization:
    * the user must explicitly request or permit a loop. Not inherited by
    * children; unavailable to isolated reviewers. */
@@ -973,7 +973,7 @@ int cai_agent_runtime_set_reasoning_tool(
     cai_agent_runtime *runtime, const cai_reasoning_tool_config *config,
     cai_error *error);
 /** Owner-thread-only. Returned strings remain borrowed until reconfiguration
- * or close. This configuration is not restored from conversation storage. */
+ * or close. This configuration is not restored from session storage. */
 int cai_agent_runtime_get_reasoning_tool(cai_agent_runtime *runtime,
                                          cai_reasoning_tool_config *out,
                                          cai_error *error);
@@ -983,7 +983,7 @@ int cai_agent_runtime_get_reasoning_tool(cai_agent_runtime *runtime,
 int cai_agent_runtime_get_yolo(cai_agent_runtime *runtime, int *enabled,
                                int *can_change, cai_error *error);
 /** Try to change local execution policy atomically, without reopening the
- * conversation. enabled must be 0 or 1. Returns CAI_OK with *applied=0 when
+ * session. enabled must be 0 or 1. Returns CAI_OK with *applied=0 when
  * busy; the host retains the request and retries at a later idle boundary.
  * A no-op is immediately applied. On error the previous policy is retained.
  * Terminal handles/output and unrelated tools are preserved. New children
@@ -996,7 +996,7 @@ int cai_agent_runtime_try_set_yolo(cai_agent_runtime *runtime, int enabled,
  * the default yield interval (1..30000 ms). A model-requested shorter wait
  * remains possible in background mode. Setter affects subsequent waits,
  * including those in an active child; it never restarts a process or changes
- * an already-started wait. New children inherit it. Not saved in conversation
+ * an already-started wait. New children inherit it. Not saved in session
  * context. Both functions require the runtime owner thread. */
 int cai_agent_runtime_get_terminal_yield_time(cai_agent_runtime *runtime,
                                               long *milliseconds,
@@ -1267,7 +1267,7 @@ int cai_agent_runtime_get_metrics(cai_agent_runtime *runtime,
                                   cai_agent_runtime_metrics *out,
                                   cai_error *error);
 /** Session identifiers published at safe boundaries. response_id is the last
- * retained provider response ID; conversation_id is a provider conversation
+ * retained provider response ID; conversation_id is a provider session
  * when configured. Neither is the local session_id. Absent IDs are NULL. */
 typedef struct cai_agent_runtime_ids {
   const char *session_id;
@@ -1323,7 +1323,7 @@ int cai_agent_runtime_visit_skills(cai_agent_runtime *runtime,
 /** Copy the instruction-file status for the current agent on the owner
  * thread. Available while idle or running. This describes the captured
  * developer context, not current filesystem existence; restart/reopen reads
- * changed files. Never loaded from a saved conversation. */
+ * changed files. Never loaded from a saved session. */
 int cai_agent_runtime_get_instruction_status(cai_agent_runtime *runtime,
                                              cai_agent_instruction_status *out,
                                              cai_error *error);
@@ -1354,7 +1354,7 @@ void cai_agent_execution_close(cai_agent_execution *writer);
 /**
  * Stream the current agent handover projection as Markdown to sink.
  *
- * The versioned, non-resumable document includes durable conversation context,
+ * The versioned, non-resumable document includes durable session context,
  * active developer instructions, and current session/goal/runtime metadata.
  * Execution-history observations are excluded from this agent handover.
  * The caller retains sink ownership. Export is owner-thread-only and is

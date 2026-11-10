@@ -31,7 +31,7 @@ const char *cai_workspace_endpoint_socket(const cai_workspace_endpoint *);
 int cai_workspace_endpoint_listen(cai_workspace_endpoint *, cai_error *);
 /** Publish a discovery hint while this handle owns the listening endpoint.
  * Optional name is reserved with a native lifetime lock; duplicate live names
- * fail with CAI_ERR_LIMIT. Metadata is atomically replaced, not conversation
+ * fail with CAI_ERR_LIMIT. Metadata is atomically replaced, not session
  * storage. instance is the owner's 16-byte greeting identity. Call once after
  * listen; close removes only this publication and releases its name lock.
  */

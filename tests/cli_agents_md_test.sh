@@ -66,7 +66,7 @@ export CODEX_HOME="$root/custom-codex"
 turn -ni 'resume with custom Codex home'
 contains "$root/instructions" CODEX_CUSTOM_MARKER
 absent "$root/instructions" CODEX_UPDATED_MARKER
-# Disabling compatibility must also take effect on that same conversation.
+# Disabling compatibility must also take effect on that same session.
 write_config false
 turn -ni 'resume without Codex compatibility'
 absent "$root/instructions" CODEX_CUSTOM_MARKER
@@ -91,7 +91,7 @@ turn -ni 'restore the saved model and current instructions'
 json "$root/request" '.model == "gpt-6-astra"'
 contains "$root/instructions" CODEX_CUSTOM_MARKER
 # Every startup records resolved paths, rather than relying on a model's claim
-# that it saw an instruction. No configuration comes from the conversation.
+# that it saw an instruction. No configuration comes from the session.
 logs
 contains "$root/logs.jsonl" 'Global AGENTS.md loaded'
 contains "$root/logs.jsonl" "$root/custom-codex/AGENTS.md"

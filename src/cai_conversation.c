@@ -149,12 +149,12 @@ int cai_conversation_parse_json(const char *json, cai_conversation **out,
 
   if (out == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "conversation output pointer is required");
+                         "provider session output pointer is required");
   }
   *out = NULL;
   if (json == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "conversation JSON is required");
+                         "provider session JSON is required");
   }
   memset(&doc, 0, sizeof(doc));
   CAI_LJ->init(CAI_LJ, &cai_conversation_map, &doc);
@@ -163,19 +163,19 @@ int cai_conversation_parse_json(const char *json, cai_conversation **out,
   if (status != LONEJSON_STATUS_OK) {
     CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
-                                "failed to parse conversation JSON",
+                                "failed to parse provider session JSON",
                                 json_error.message);
   }
   if (doc.id == NULL || doc.object == NULL) {
     CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc);
     return cai_set_error(error, CAI_ERR_PROTOCOL,
-                         "conversation JSON is missing id or object");
+                         "provider session JSON is missing id or object");
   }
   conversation = (cai_conversation *)cai_alloc(NULL, sizeof(*conversation));
   if (conversation == NULL) {
     CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc);
     return cai_set_error(error, CAI_ERR_NOMEM,
-                         "failed to allocate conversation");
+                         "failed to allocate provider session");
   }
   memset(conversation, 0, sizeof(*conversation));
   cai_conversation_init_methods(conversation);
@@ -185,7 +185,7 @@ int cai_conversation_parse_json(const char *json, cai_conversation **out,
     cai_conversation_destroy(conversation);
     CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc);
     return cai_set_error(error, CAI_ERR_NOMEM,
-                         "failed to allocate parsed conversation");
+                         "failed to allocate parsed provider session");
   }
   CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc);
   *out = conversation;
@@ -198,16 +198,17 @@ int cai_conversation_from_id(const char *conversation_id,
 
   if (out == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "conversation output pointer is required");
+                         "provider session output pointer is required");
   }
   *out = NULL;
   if (conversation_id == NULL || conversation_id[0] == '\0') {
-    return cai_set_error(error, CAI_ERR_INVALID, "conversation id is required");
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "provider session id is required");
   }
   conversation = (cai_conversation *)cai_alloc(NULL, sizeof(*conversation));
   if (conversation == NULL) {
     return cai_set_error(error, CAI_ERR_NOMEM,
-                         "failed to allocate conversation");
+                         "failed to allocate provider session");
   }
   memset(conversation, 0, sizeof(*conversation));
   cai_conversation_init_methods(conversation);
@@ -216,7 +217,7 @@ int cai_conversation_from_id(const char *conversation_id,
   if (conversation->id_value == NULL || conversation->object_value == NULL) {
     cai_conversation_destroy(conversation);
     return cai_set_error(error, CAI_ERR_NOMEM,
-                         "failed to allocate conversation");
+                         "failed to allocate provider session");
   }
   *out = conversation;
   return CAI_OK;
@@ -237,7 +238,8 @@ static int cai_build_conversation_path(cai_client *client,
   }
   *out = NULL;
   if (conversation_id == NULL || conversation_id[0] == '\0') {
-    return cai_set_error(error, CAI_ERR_INVALID, "conversation id is required");
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "provider session id is required");
   }
   prefix_len = sizeof(prefix) - 1U;
   id_len = strlen(conversation_id);
@@ -247,7 +249,7 @@ static int cai_build_conversation_path(cai_client *client,
                            prefix_len + id_len + suffix_len + 1U);
   if (path == NULL) {
     return cai_set_error(error, CAI_ERR_NOMEM,
-                         "failed to allocate conversation path");
+                         "failed to allocate provider session path");
   }
   memcpy(path, prefix, prefix_len);
   memcpy(path + prefix_len, conversation_id, id_len);
@@ -279,7 +281,7 @@ static int cai_build_conversation_item_path(cai_client *client,
       prefix_len + id_len + 1U);
   if (suffix == NULL) {
     return cai_set_error(error, CAI_ERR_NOMEM,
-                         "failed to allocate conversation item path");
+                         "failed to allocate provider session item path");
   }
   memcpy(suffix, items_prefix, prefix_len);
   memcpy(suffix + prefix_len, item_id, id_len);
@@ -372,7 +374,8 @@ int cai_client_retrieve_conversation_handle(
     cai_client *client, const cai_conversation *conversation,
     cai_conversation **out, cai_error *error) {
   if (conversation == NULL) {
-    return cai_set_error(error, CAI_ERR_INVALID, "conversation is required");
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "provider session is required");
   }
   return cai_client_retrieve_conversation(client, conversation->id_value, out,
                                           error);
@@ -393,7 +396,7 @@ int cai_client_update_conversation_metadata(cai_client *client,
 
   if (out == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "conversation output pointer is required");
+                         "provider session output pointer is required");
   }
   *out = NULL;
   metadata = metadata_json != NULL ? metadata_json : "{}";
@@ -407,7 +410,7 @@ int cai_client_update_conversation_metadata(cai_client *client,
                                        strlen(metadata),
                                        &json_error) != LONEJSON_STATUS_OK) {
     rc = cai_set_error_detail(error, CAI_ERR_INVALID,
-                              "conversation metadata must be valid JSON",
+                              "provider session metadata must be valid JSON",
                               json_error.message);
   } else {
     rc = CAI_OK;
@@ -424,7 +427,7 @@ int cai_client_update_conversation_metadata(cai_client *client,
                                cai_conversation_spooled_sink, &body,
                                &json_error) != LONEJSON_STATUS_OK) {
       rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to serialize conversation metadata",
+                                "failed to serialize provider session metadata",
                                 json_error.message);
     }
   }
@@ -445,7 +448,8 @@ int cai_client_update_conversation_metadata_handle(
     cai_client *client, const cai_conversation *conversation,
     const char *metadata_json, cai_conversation **out, cai_error *error) {
   if (conversation == NULL) {
-    return cai_set_error(error, CAI_ERR_INVALID, "conversation is required");
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "provider session is required");
   }
   return cai_client_update_conversation_metadata(client, conversation->id_value,
                                                  metadata_json, out, error);
@@ -476,7 +480,8 @@ int cai_client_delete_conversation_handle(cai_client *client,
                                           const cai_conversation *conversation,
                                           cai_error *error) {
   if (conversation == NULL) {
-    return cai_set_error(error, CAI_ERR_INVALID, "conversation is required");
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "provider session is required");
   }
   return cai_client_delete_conversation(client, conversation->id_value, error);
 }
@@ -537,7 +542,8 @@ int cai_client_list_conversation_items_handle(
     const cai_list_params *params, cai_input_item_list **out,
     cai_error *error) {
   if (conversation == NULL) {
-    return cai_set_error(error, CAI_ERR_INVALID, "conversation is required");
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "provider session is required");
   }
   return cai_client_list_conversation_items(client, conversation->id_value,
                                             params, out, error);
@@ -569,7 +575,8 @@ int cai_client_delete_conversation_item_handle(
     cai_client *client, const cai_conversation *conversation,
     const char *item_id, cai_error *error) {
   if (conversation == NULL) {
-    return cai_set_error(error, CAI_ERR_INVALID, "conversation is required");
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "provider session is required");
   }
   return cai_client_delete_conversation_item(client, conversation->id_value,
                                              item_id, error);
@@ -588,7 +595,7 @@ int cai_client_retrieve_conversation_item(cai_client *client,
 
   if (out == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "conversation item output pointer is required");
+                         "provider session item output pointer is required");
   }
   *out = NULL;
   path = NULL;
@@ -622,7 +629,8 @@ int cai_client_retrieve_conversation_item_handle(
     cai_client *client, const cai_conversation *conversation,
     const char *item_id, cai_conversation_item **out, cai_error *error) {
   if (conversation == NULL) {
-    return cai_set_error(error, CAI_ERR_INVALID, "conversation is required");
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "provider session is required");
   }
   return cai_client_retrieve_conversation_item(client, conversation->id_value,
                                                item_id, out, error);
@@ -634,13 +642,13 @@ int cai_conversation_items_params_new(cai_conversation_items_params **out,
 
   if (out == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "conversation items params output is required");
+                         "provider session items params output is required");
   }
   *out = NULL;
   params = (cai_conversation_items_params *)cai_alloc(NULL, sizeof(*params));
   if (params == NULL) {
     return cai_set_error(error, CAI_ERR_NOMEM,
-                         "failed to allocate conversation items params");
+                         "failed to allocate provider session items params");
   }
   memset(params, 0, sizeof(*params));
   params->close = cai_conversation_items_params_destroy;
@@ -803,7 +811,7 @@ static int cai_conversation_source_to_spooled(cai_source *source,
     if (out->append(out, buffer, nread, &json_error) != LONEJSON_STATUS_OK) {
       out->cleanup(out);
       return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                  "failed to spool conversation text input",
+                                  "failed to spool provider session text input",
                                   json_error.message);
     }
   }
@@ -992,7 +1000,7 @@ static int cai_conversation_items_params_spool_json(
   }
   if (params == NULL || params->items.count == 0U) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "at least one conversation item is required");
+                         "at least one provider session item is required");
   }
   memset(&doc, 0, sizeof(doc));
   memset(&items, 0, sizeof(items));
@@ -1006,7 +1014,7 @@ static int cai_conversation_items_params_spool_json(
     if (reader_context.cursor.rewind(&reader_context.cursor, &json_error) !=
         LONEJSON_STATUS_OK) {
       rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to rewind conversation items JSON",
+                                "failed to rewind provider session items JSON",
                                 json_error.message);
     }
   }
@@ -1017,7 +1025,7 @@ static int cai_conversation_items_params_spool_json(
             &doc.items, cai_conversation_spooled_reader, &reader_context,
             &json_error) != LONEJSON_STATUS_OK) {
       rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to prepare conversation items JSON",
+                                "failed to prepare provider session items JSON",
                                 json_error.message);
     }
   }
@@ -1028,9 +1036,10 @@ static int cai_conversation_items_params_spool_json(
                                &doc, cai_conversation_spooled_sink, out,
                                &json_error) != LONEJSON_STATUS_OK) {
       out->cleanup(out);
-      rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to serialize conversation items JSON",
-                                json_error.message);
+      rc = cai_set_error_detail(
+          error, CAI_ERR_TRANSPORT,
+          "failed to serialize provider session items JSON",
+          json_error.message);
     }
   }
   if (rc != CAI_OK) {
@@ -1111,7 +1120,8 @@ int cai_client_create_conversation_items_handle(
     const cai_conversation_items_params *params, cai_input_item_list **out,
     cai_error *error) {
   if (conversation == NULL) {
-    return cai_set_error(error, CAI_ERR_INVALID, "conversation is required");
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "provider session is required");
   }
   return cai_client_create_conversation_items(client, conversation->id_value,
                                               params, out, error);

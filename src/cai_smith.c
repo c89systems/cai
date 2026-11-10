@@ -138,6 +138,12 @@ static int cai_smith_build_tool_contract(const cai_allocator *allocator,
       "use ordinary assistant messages and tool calls. Before a relevant tool "
       "call, send one brief visible progress preamble when the host renders "
       "output; make the final response self-contained.\n\n";
+  static const char *const terminology =
+      "Use CAI terminology in user-facing output. A workspace is the "
+      "canonical directory, a session is the saved agent interaction, and "
+      "an attachment is a live frontend connection to the workspace backend. "
+      "References to a conversation or chat thread in the base instructions "
+      "mean a session.\n\n";
   static const char *const environment_tools =
       "Use only the tools present in this request and follow their schemas. "
       "CAI dispatches calls serially, so do not request parallel calls. CAI "
@@ -195,7 +201,7 @@ static int cai_smith_build_tool_contract(const cai_allocator *allocator,
   static const char *const serial =
       "Tool calls are serial: complete and assess one call before issuing "
       "another.";
-  const char *parts[19];
+  const char *parts[20];
   size_t count;
   size_t length;
   size_t i;
@@ -206,6 +212,7 @@ static int cai_smith_build_tool_contract(const cai_allocator *allocator,
   count = 0U;
   parts[count++] = environment_heading;
   parts[count++] = environment_communication;
+  parts[count++] = terminology;
   parts[count++] = environment_tools;
   parts[count++] = environment_interfaces;
   parts[count++] = common;
@@ -484,7 +491,7 @@ static int cai_smith_frame_instruction_file(const cai_allocator *allocator,
     rc = cai_buffer_append_cstr(
         &builder,
         "\n\nThese are the current user's instructions and working context "
-        "for this conversation. Apply any stated user role and preferences "
+        "for this session. Apply any stated user role and preferences "
         "when interpreting their requests.\n\n<INSTRUCTIONS>\n",
         error);
   if (rc == CAI_OK)

@@ -1,7 +1,7 @@
 # Prompt recall over workspace sockets
 
 Prompt recall uses the context's existing encrypted `prompts` collection. It is
-independent of the conversation transcript and model context. The server owns
+independent of the session transcript and model context. The server owns
 its writer and configured count retention; terminal clients open no store,
 lease or SDK client. The context's existing transcript reader worker also
 services prompt reads, with a separate public collection receiver retained
@@ -13,7 +13,7 @@ until that context closes. There is no thread or receiver per entry/window.
 `[session, collection, position, sequence]` shape as SUBSCRIBE. For this operation
 collection is empty, position is the requested count (zero uses server policy),
 and sequence is zero. Envelope request is a fresh subscription ID; stream and
-sequence are zero, conversation is the expected epoch or zero to resolve the
+sequence are zero. The session epoch is either the expected epoch or zero to resolve the
 explicit session. Reads are allowed to observers and do not require a producer.
 The ordinary transcript and recall share the subscription ID namespace but have
 independent active streams and callbacks.
@@ -41,7 +41,7 @@ the history as a combined value. Softline owns the configured in-memory recall.
 ## Writes and draft exit
 
 HISTORY_APPEND has a definite `[text]` payload. Its envelope carries a nonzero
-connection-scoped request ID, original authority generation and conversation
+connection-scoped request ID, original authority generation and session epoch
 epoch, with sequence/stream zero. It requires a bound controlling attachment.
 The owner checks authorization immediately before append. The collection
 identity includes the verified server instance, attachment and save request;
@@ -73,7 +73,7 @@ auto-recording is temporarily disabled during initial import. New canonical
 inputs occupy a suffix bounded by the recall count and merge into Softline
 after the snapshot. Their committed positions exclude entries already included
 at that watermark, avoiding duplicates and inverted chronology. Returning to an
-already initialized conversation reuses its editor/history instead of loading
+already initialized session reuses its editor/history instead of loading
 it repeatedly. A live `/history COUNT` refreshes the current recall policy.
 
 Verification covers fragmented CBOR, maximum input size, multi-window loads,

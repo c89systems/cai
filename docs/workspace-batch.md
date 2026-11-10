@@ -13,7 +13,7 @@ runtime's existing execution records identify the originating claim with:
 
 `input:SESSION:PRODUCER:REQUEST:ITEM`
 
-SESSION is the source conversation ID; the three numeric fields are the queue
+SESSION is the source session ID; the three numeric fields are the queue
 entry's original producer, OFFER request and item IDs. These are backend-owned
 identities, not user-supplied labels. They fit a fixed 256-byte internal field.
 Clients know them from their accepted receipt and authenticated producer scope.
@@ -78,14 +78,14 @@ The runtime records which accepted goal input it already applied. Recovery
 after a preflight compaction commit consumes the pending prompt without
 resetting goal accounting or undoing later host goal controls. This marker
 belongs to the scope, session and accepted journal sequence; importing the
-state into a different conversation cannot suppress a new goal start.
+state into a different session cannot suppress a new goal start.
 The old batch/review loops and private final-response spool are removed.
 Plain redirected input without `-i` uses this producer with a bounded line
 reader and live shared presentation. Its complete input stream and responses
 are never collected: one admission receipt is settled before the next line is
 offered. The backend owns queued input and applies commands at their declared
 boundaries, including `/status` while inference is in flight and `/goal pause`
-at a request boundary. Only explicit conversation changes hold further source
+at a request boundary. Only explicit session changes hold further source
 admission until the new binding is ready.
 The last unterminated line is valid; NUL and oversized lines fail explicitly.
 EOF drains accepted work, `/quit` stops further admission, and terminal-only
@@ -111,7 +111,7 @@ An unsuccessful startup control prevents dependent prompts from being offered.
 Frontend-only actions fail explicitly in batch mode. Ordinary command output
 is selected by the exact admitted command identity; another producer's reply
 cannot replace it. Deliberate `/new` and `/resume` transitions carry that
-identity into their destination conversation.
+identity into their destination session.
 
 Manual reviews pass that identity as `parent_call_id` before starting the
 child. Launch acknowledgement does not finish the invocation. The owner

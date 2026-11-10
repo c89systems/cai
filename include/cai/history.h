@@ -1,5 +1,5 @@
 /** @file cai/history.h
- * Whole conversation entries used by runtime history inspection and trimming.
+ * Whole session entries used by runtime history inspection and trimming.
  */
 #ifndef CAI_HISTORY_H
 #define CAI_HISTORY_H
@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-/** Indivisible units of retained conversation history. */
+/** Indivisible units of retained session history. */
 typedef enum cai_agent_history_kind {
   CAI_AGENT_HISTORY_TURN = 1,
   CAI_AGENT_HISTORY_SHELL = 2,

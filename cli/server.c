@@ -165,7 +165,7 @@ int cai_app_server_resume_input(cai_app_server *self, uint64_t attachment,
     *out = NULL;
   if (conversation == 0U || producer == 0U)
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "verified conversation and producer required");
+                         "verified session and producer required");
   return cai_app_bridge_input(app != NULL ? app->bridge : NULL, attachment,
                               conversation, producer, out, error);
 }

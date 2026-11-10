@@ -203,7 +203,7 @@ static void *run(void *unused) {
     memset(&request, 0, sizeof(request));
     request.request_id = 1U;
     request.operation = CAI_INPUT_OFFER;
-    request.text = "must stay in the original conversation";
+    request.text = "must stay in the original session";
     assert(cai_input_connection_request(slow, &scope, &request, NULL) ==
            CAI_OK);
     cai_input_connection_close(slow);

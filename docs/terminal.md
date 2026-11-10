@@ -1,11 +1,11 @@
 # Using the terminal agent
 
 Start `cai` in a project directory.
-It resumes the newest conversation there; `cai -N` starts another.
-`cai -R ID` or `cai -R NUMBER` selects that conversation before replay, including when attaching to an existing workspace server.
-`cai -R --all` lists conversations across the history store; use `-C DIR -R ID` to resume one in its workspace.
-`cai -D --all` lists closed conversations eligible for deletion across that store. `cai -D ID` deletes one by its store-wide identity from any directory; numeric choices remain local.
-Startup selection does not submit a `/resume` command or replay a different conversation first.
+It resumes the newest session there; `cai -N` starts another.
+`cai -R ID` or `cai -R NUMBER` selects that session before replay, including when attaching to an existing workspace server.
+`cai -R --all` lists sessions across the history store; use `-C DIR -R ID` to resume one in its workspace.
+`cai -D --all` lists closed sessions eligible for deletion across that store. `cai -D ID` deletes one by its store-wide identity from any directory; numeric choices remain local.
+Startup selection does not submit a `/resume` command or replay a different session first.
 Ctrl-D on an empty draft follows the same goodbye and detach path as `/quit` and Alt-Q; with a nonempty draft it retains the editor's forward-delete behavior.
 First-time workspaces require `cai -y` to save approval for that directory and its descendants.
 `-k` bypasses approval for this invocation only.
@@ -34,9 +34,9 @@ cai -n -i 'Explain the failing tests'
 | `/reasoning`, `/r` | Inspect or change reasoning effort. |
 | `/theme`, `/t` | Inspect or change the Softline/libmdf theme pair. |
 | `/goal` | Inspect the goal; `new`, `pause`, `resume` and `clear` control it. |
-| `/new`, `/resume` | Start or select a conversation in this workspace. |
+| `/new`, `/resume` | Start or select a session in this workspace. |
 | `/tools`, `/skills`, `/mcp` | Inspect tools/skills and manage configured MCP connections. |
-| `/export [BASENAME]` | Export the active conversation; see [format selection](conversations.md#export-and-import). |
+| `/export [BASENAME]` | Export the active session; see [format selection](sessions.md#export-and-import). |
 | `/log`, `/log -p` | Show the log path or inspect the log in a pager. |
 | `/quit` | Detach this frontend; the last detach stops a nonpersistent owner. |
 
@@ -45,8 +45,8 @@ cai -n -i 'Explain the failing tests'
 Enter submits ordinary input: it starts work when idle and otherwise queues a later turn.
 Alt-Enter submits steering for the next response/tool boundary.
 Steering never interrupts a streamed assistant message.
-Accepted input belongs to the backend queue for that conversation; Softline provides its visible, editable view.
-`/new` and `/resume` switch queues along with conversations.
+Accepted input belongs to the backend queue for that session; Softline provides its visible, editable view.
+`/new` and `/resume` switch queues along with sessions.
 Read-only commands can run between feeds.
 Changes to model, reasoning, tier and theme wait for a safe response/tool boundary.
 Whole-turn operations such as `/review`, `/compact` and `/yolo on|off` wait until idle.
@@ -142,7 +142,7 @@ Complete diagnostic records stay in the session log.
 Changes apply at the next safe model/tool boundary and persist with the session.
 Enter and Alt-Enter both use this next-request boundary for tier changes, even during an active turn.
 The command remains editable in Softline until applied; the request already in flight keeps its original tier.
-Routing commands are independent of queued conversation prompts and do not submit model input.
+Routing commands are independent of queued session prompts and do not submit model input.
 `--service-tier NAME`, `CAI_SERVICE_TIER`, and `[agent] service_tier` provide startup overrides.
 An unset value restores saved routing, or leaves new-session routing to the provider.
 CAI never opts into a paid tier from a catalog default automatically.
@@ -173,16 +173,16 @@ The default `run_review` tool performs one isolated review.
 A request to review, or a later request to fix its findings, does not authorize repeated reviews or a review/fix goal.
 The optional `run_review_and_fix` tool requires both explicit opt-in and a user request or permission to run a loop.
 Enabling the tool alone does not grant that permission.
-It replaces the current conversation's goal and queues the same review/fix/verify workflow as the explicit command; it does not launch an isolated fixing agent.
+It replaces the current session's goal and queues the same review/fix/verify workflow as the explicit command; it does not launch an isolated fixing agent.
 It requires goal tools and the reviewer and is never inherited by subagents.
 Its optional `target` is `base` or `uncommitted`, with `base` required for `target=base`; no arguments use the Git default branch.
 The tool acknowledges the queued goal, rather than waiting for the loop to finish.
 No token budget is imposed.
-In the TUI, `/review` starts an isolated reviewer between turns and preserves the current conversation.
+In the TUI, `/review` starts an isolated reviewer between turns and preserves the current session.
 `/review uncommitted`, `/review base REF`, `/review commit SHA`, and `/review TEXT` select an explicit scope.
 Findings are rendered as Markdown and become context for subsequent prompts.
-Escape/Ctrl-C cancels the review; prompts sent while it runs queue for the parent conversation.
-`/review-and-fix` starts the same review/fix/verify goal in the active conversation, replacing its current goal without opening a new session.
+Escape/Ctrl-C cancels the review; prompts sent while it runs queue for the parent session.
+`/review-and-fix` starts the same review/fix/verify goal in the active session, replacing its current goal without opening a new session.
 It compares against the Git default branch; `/review-and-fix uncommitted` or `/review-and-fix base REF` selects another scope.
 It has no default iteration limit and leaves the TUI open when pursuit completes or stops.
 Goal and review tools must be enabled; `/goal pause` and `/goal clear` control pursuit.
@@ -248,7 +248,7 @@ Unshared results replay locally and remain in JSONL exports.
 ## Batch input
 
 `-C DIR`/`--directory DIR` changes directory before the agent opens its session.
-Repeat `-i TEXT`/`--instruction TEXT` to run prompts in order, after the saved conversation has replayed.
+Repeat `-i TEXT`/`--instruction TEXT` to run prompts in order, after the saved session has replayed.
 `-g TEXT`/`--goal TEXT` starts or replaces a durable goal; the agent keeps working until the goal completes or stops.
 `-n`/`--non-interactive` runs the supplied turns or goal and exits without reading terminal input.
 For example, `cai -Nni 'write a snake game in Lua' -i 'rewrite it in Go'` starts fresh, completes both turns, then exits.
@@ -270,7 +270,7 @@ See [batch attachment](workspace-batch.md) for host controls and settlement.
 Ordinary `cai` attaches to an existing owner or quietly starts a nonpersistent one.
 `cai -s NAME` attaches to an existing owner by name, workspace path or stable ID.
 `/workspace` lists running owners; `/workspace SELECTOR` switches the frontend.
-Drafts, accepted input and recall stay with their original workspace/conversation.
+Drafts, accepted input and recall stay with their original workspace and session.
 One attachment controls the owner; other attachments observe until explicit `/takeover`.
 `/shutdown` stops the selected server; `/quit` detaches all visited workspaces.
 A persistent server continues after the last detach.
@@ -278,7 +278,7 @@ See [terminal attachment](terminal-attachment.md) and [server architecture](work
 
 ## More guides
 
-- [Conversations, replay, retention and exports](conversations.md)
+- [Sessions, replay, retention and exports](sessions.md)
 - [Themes, status fields and timestamps](appearance.md)
 - [Configuration, workspace approval and temporary runs](configuration.md)
 - [Troubleshooting and logs](troubleshooting.md)

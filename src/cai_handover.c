@@ -279,7 +279,7 @@ static lonejson_status handover_object_begin(void *user,
   exporter = (handover_exporter *)user;
   if (exporter->depth >= HANDOVER_MAX_DEPTH) {
     exporter->rc = cai_set_error(exporter->error, CAI_ERR_LIMIT,
-                                 "conversation export nesting is too deep");
+                                 "session export nesting is too deep");
     return LONEJSON_STATUS_CALLBACK_FAILED;
   }
   parent = handover_top(exporter);
@@ -335,7 +335,7 @@ static lonejson_status handover_object_end(void *user, lonejson_error *error) {
   value = handover_top(exporter);
   if (value == NULL || value->kind != HANDOVER_OBJECT) {
     exporter->rc = cai_set_error(exporter->error, CAI_ERR_PROTOCOL,
-                                 "invalid conversation export structure");
+                                 "invalid session export structure");
     return LONEJSON_STATUS_CALLBACK_FAILED;
   }
   if (exporter->item_active && value->content_object &&
@@ -375,7 +375,7 @@ static lonejson_status handover_array_begin(void *user, lonejson_error *error) {
   exporter = (handover_exporter *)user;
   if (exporter->depth >= HANDOVER_MAX_DEPTH) {
     exporter->rc = cai_set_error(exporter->error, CAI_ERR_LIMIT,
-                                 "conversation export nesting is too deep");
+                                 "session export nesting is too deep");
     return LONEJSON_STATUS_CALLBACK_FAILED;
   }
   parent = handover_top(exporter);
@@ -403,7 +403,7 @@ static lonejson_status handover_array_end(void *user, lonejson_error *error) {
   value = handover_top(exporter);
   if (value == NULL || value->kind != HANDOVER_ARRAY) {
     exporter->rc = cai_set_error(exporter->error, CAI_ERR_PROTOCOL,
-                                 "invalid conversation export structure");
+                                 "invalid session export structure");
     return LONEJSON_STATUS_CALLBACK_FAILED;
   }
   exporter->depth--;
@@ -891,7 +891,7 @@ static int handover_document(const cai_handover_config *config,
   (void)handover_literal(
       exporter,
       "This is a non-resumable handover document, not a session commit. "
-      "It preserves durable conversation context and active developer "
+      "It preserves durable session context and active developer "
       "instructions available to this runtime.\n\n");
   (void)handover_literal(exporter, "## Runtime\n\n");
   (void)handover_write_metadata(exporter, "Preset", config->preset_name);
@@ -965,7 +965,7 @@ static int handover_document(const cai_handover_config *config,
       "queued host input is included.\n"
       "- Non-text attachments are represented as omission markers; raw binary "
       "attachment payloads are never embedded.\n"
-      "- Text already durable in the conversation or configured as developer "
+      "- Text already durable in the session or configured as developer "
       "instructions is intentionally preserved and is not automatically "
       "redacted.\n\n");
   return exporter->rc == CAI_OK ? handover_history(work, &config->history)

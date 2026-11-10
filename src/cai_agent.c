@@ -1298,7 +1298,7 @@ int cai_agent_new_session_for_conversation(cai_agent *agent,
   *out = NULL;
   if (agent == NULL || conversation == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "agent and conversation are required");
+                         "agent and provider session handle are required");
   }
   session = NULL;
   rc = cai_agent_new_session(agent, &session, error);
@@ -2760,12 +2760,12 @@ int cai_session_set_conversation_id(cai_session *session,
   if (conversation_id != NULL) {
     if (conversation_id[0] == '\0') {
       return cai_set_error(error, CAI_ERR_INVALID,
-                           "conversation id must not be empty");
+                           "provider session ID must not be empty");
     }
     copy = cai_strdup(allocator, conversation_id);
     if (copy == NULL) {
       return cai_set_error(error, CAI_ERR_NOMEM,
-                           "failed to allocate conversation id");
+                           "failed to allocate provider session ID");
     }
   }
   cai_free_mem(allocator, CAI_SESSION_IMPL(session)->conversation_id);
@@ -2781,7 +2781,8 @@ int cai_session_set_conversation(cai_session *session,
                                  const cai_conversation *conversation,
                                  cai_error *error) {
   if (conversation == NULL) {
-    return cai_set_error(error, CAI_ERR_INVALID, "conversation is required");
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "provider session handle is required");
   }
   return cai_session_set_conversation_id(session,
                                          conversation->id(conversation), error);
@@ -4978,7 +4979,7 @@ static int cai_chat_summarize_fragment(cai_session *session,
                                        const cai_stream_sinks *caller_sinks,
                                        cai_error *error) {
   static const char instructions[] =
-      "Summarize this coding-agent conversation for continuation. Preserve "
+      "Summarize this coding-agent session for continuation. Preserve "
       "objectives, constraints, decisions, paths, code state, pending work, "
       "and "
       "errors. Copy identifiers, exact values, markers needed for pending "

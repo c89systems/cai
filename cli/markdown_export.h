@@ -4,7 +4,7 @@
 #include "pouch.h"
 #include <cai/handover.h>
 /** Write an existing handover directly from retained native ranges. NULL
- * active prepares closed-conversation metadata/policy; otherwise the captured
+ * active prepares closed-session metadata/policy; otherwise the captured
  * live header, goal and instructions remain authoritative. No runtime calls
  * or context spool. All source callbacks and their contexts remain borrowed. */
 int cai_cli_markdown_export(cai_cli_journal_view *, cai_cli_pouch *,

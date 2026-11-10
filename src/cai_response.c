@@ -1623,7 +1623,7 @@ int cai_response_create_params_set_conversation_id(
   }
   if (conversation_id != NULL && conversation_id[0] == '\0') {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "conversation id must not be empty");
+                         "provider session ID must not be empty");
   }
   rc = cai_replace_string(&params->allocator, &params->conversation_id,
                           conversation_id, error);
@@ -4079,7 +4079,7 @@ static int cai_response_request_state_prepare(
   }
   if (params->previous_response_id != NULL && params->conversation_id != NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "previous response id and conversation id are "
+                         "previous response ID and provider session ID are "
                          "mutually exclusive");
   }
 

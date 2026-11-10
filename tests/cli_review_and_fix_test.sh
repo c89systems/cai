@@ -16,8 +16,8 @@ for args in base 'base HEAD extra' nonsense; do
 done
 [[ $(requests) == 0 ]]
 plan '{"plan":["ANCHOR CONTEXT"]}'
-prompt 'Remember this conversation anchor' 'ANCHOR CONTEXT'
-# The explicit command replaces the existing goal in this conversation.
+prompt 'Remember this session anchor' 'ANCHOR CONTEXT'
+# The explicit command replaces the existing goal in this session.
 plan '{"plan":[{"text":"OLD GOAL","pause":true}]}'
 send '/goal new Previous objective\r'; expect 'STREAM in flight'
 send '/goal pause\r'; release; expect paused
@@ -28,7 +28,7 @@ send '/review-and-fix\r'; expect_assistant 'FIX LOOP DONE'; expect 'Worked for'
 sed -n "$((before+2))p" "$root/peer/requests.jsonl" >"$root/reviewer"
 contains "$root/reviewer" "base branch 'refs/heads/main'"
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
-contains "$root/request" 'Remember this conversation anchor'
+contains "$root/request" 'Remember this session anchor'
 contains "$root/request" 'Previous objective'
 contains "$root/request" 'Review changes against base refs/heads/main'
 contains "$root/request" 'No actionable findings'
@@ -50,7 +50,7 @@ for scope in uncommitted 'base  HEAD  '; do
   fi
 done
 plan '{"plan":["AFTER FIX LOOP"]}'
-prompt 'Continue this conversation' 'AFTER FIX LOOP'
+prompt 'Continue this session' 'AFTER FIX LOOP'
 terminal_close
 for disabled in --no-review-subagent --no-goals; do
   terminal_start -N "$disabled"

@@ -24,8 +24,8 @@ lengths from those fields, with no preliminary serialization.
 | RESULT | `[category, producer, last_request, outcome, code, item, item_revision, edit_token, reason]` |
 
 `ENTRY...` is the fifteen QUEUE_ITEM fields after its index. Queue kinds carry
-the captured conversation epoch and view revision in envelope conversation and
-sequence. RESULT carries the original request ID/conversation; its sequence is
+the captured session epoch and view revision in envelope fields 2 and 4
+respectively. RESULT carries the original request ID and session epoch; its sequence is
 zero. Result categories are 0 for an input receipt, 1 for binding rejection, and
 2 for an input observation reset, 3 for a connection-control outcome, and 4
 for a [prompt-save result](workspace-wire-history.md).
@@ -36,24 +36,24 @@ FORGET_ORIGIN operation is unavailable on the wire. Intent and outcome values
 use their native enums. Frontends cannot provide provenance origins.
 
 SYNCHRONIZE with `select_session = false` binds an attachment to a logical queue producer. Producer zero
-explicitly opens a new producer in the active conversation. A nonzero producer
-must provide the exact persistent session identity. A nonzero conversation
+explicitly opens a new producer in the active session. A nonzero producer
+must provide the exact persistent session identity. A nonzero session
 epoch must also match; after verifying a changed server instance a client may
 use zero to resolve that session's new epoch. Failure must never silently
 reserve a replacement producer. Binding is read-only with respect to accepted
 inputs. A validated greeting alone neither binds nor submits anything.
 
-With `select_session = true`, producer and conversation must both be zero, and the attachment must be unbound and controlling the workspace at the supplied authority generation.
-The session field is a session ID or a workspace listing number; an empty session requests a new conversation.
+With `select_session = true`, producer and the session epoch must both be zero, and the attachment must be unbound and controlling the workspace at the supplied authority generation.
+The session field is a session ID or a workspace listing number; an empty session requests a new session.
 The owner resolves and selects it outside the socket decoder callback, then binds a new producer and returns the ordinary queue baseline.
-Failure returns BIND_REJECTED without subscribing to or replaying any conversation, and an invalid selector does not close the current runtime.
-Selecting the already active conversation is a silent no-op before binding, even if work is active; selecting another conversation rejects active work.
+Failure returns BIND_REJECTED without subscribing to or replaying any session, and an invalid selector does not close the current runtime.
+Selecting the already active session is a silent no-op before binding, even if work is active; selecting another session rejects active work.
 This is startup control, with no generated slash command, queue offer, prompt-history entry or command transcript record.
 The binding payload has changed; restart existing workspace owners when installing this build so clients and owners use the same schema.
 
 Managed producers start with delivery gated. Each handed-off queue request
 closes the gate again. INPUT_SETTLED has zero request/sequence/stream metadata,
-and the original conversation and authority generation. It is ephemeral
+and the original session epoch and authority generation. It is ephemeral
 availability, not a mutation or receipt: all pending requests and accepted
 receipts awaiting dependent requests must settle before it is sent.
 The controller permits delivery only after draining requests at exactly the
@@ -82,18 +82,18 @@ using bounded transport backlog and descriptor readiness, not polling or
 whole-snapshot buffering; accepted model work remains independent of it.
 This reset/restart also applies before the initial binding's first END; it is
 not a binding rejection. A reset with a nonzero error code terminates only
-that observation binding and permits an explicit rebind. A zero conversation
-reset means the host has unbound the old conversation. Neither case submits a
+that observation binding and permits an explicit rebind. A zero session epoch
+reset means the host has unbound the old session. Neither case submits a
 draft or selects a replacement producer automatically.
 
 Session switching unbinds old socket input connections before runtime
-destruction. Requests never move to a different conversation. Reattachment
+destruction. Requests never move to a different session. Reattachment
 reconciles original producers and receipts; it does not automatically resubmit
-uncertain text. Per-conversation queue ownership and the original generation
+uncertain text. Per-session queue ownership and the original generation
 rules remain unchanged.
 
 CANCEL carries a null payload, nonzero connection-scoped request identity, the
-original authority generation and active conversation epoch; sequence/stream
+original authority generation and active session epoch; sequence/stream
 are zero. The owner checks authority and epoch immediately before cancelling
 foreground work, outside the trusted host mailbox. The last identical request
 returns its cached outcome; changed or older identities are rejected. A replayed

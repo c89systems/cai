@@ -36,7 +36,7 @@ static void test_agent_runtime_goal_continuation(test_state *state) {
       "\"summary\"}}\n\n";
   static const char *compact_required[] = {"\"type\":\"compaction_trigger\""};
   static const char *required[] = {
-      "Continue working toward the active thread goal.",
+      "Continue working toward the active session goal.",
       "Completion audit:",
       "Blocked audit:",
       "No-progress check:",
@@ -184,7 +184,7 @@ static void test_agent_runtime_goal_continuation(test_state *state) {
         storage.replay_event_sequence = 1U;
         strcpy(storage.replay_event_type, "goal_continuation");
         strcpy(storage.replay_event_data,
-               "Continue working toward the active thread goal.");
+               "Continue working toward the active session goal.");
         memset(&events, 0, sizeof(events));
         events.owner = pthread_self();
         runtime = NULL;

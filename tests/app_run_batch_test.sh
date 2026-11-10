@@ -21,7 +21,7 @@ run -Nni 'use the native host tool in batch'; ok
 jq -e '.calls == 1 and .ready == 1 and .observations > 1' "$CAI_RUN_REPORT" >/dev/null
 [[ -z $(find "$runtime_root" -name 'ws-*.info' -print -quit) ]]
 plan '{"plan":["RESTORED NATIVE BATCH REPLY"]}'
-run -ni 'continue the native batch conversation'; ok
+run -ni 'continue the native batch session'; ok
 [[ $(cat "$root/stdout") == 'RESTORED NATIVE BATCH REPLY' && $(requests) == 3 ]]
 contains "$root/peer/requests.jsonl" 'NATIVE BATCH REPLY'
 

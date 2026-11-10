@@ -29,7 +29,7 @@ static void replay_native_ranges(cai_error *error) {
   lc_collection_read_opts_init(&options);
   event_position_window(pouch, "indexed", 1534U, 1537U, &options);
   assert(options.after == 769U && options.through == 1025U);
-  /* A new append, another conversation and unbounded recovery must never be
+  /* A new append, another session and unbounded recovery must never be
    * truncated to a previous startup's captured upper position. */
   for (i = 0U; i < 3U; i++) {
     lc_collection_read_opts_init(&options);

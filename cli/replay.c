@@ -46,7 +46,7 @@ static int child_feed(cai_cli_replay *r, const cai_agent_session_event *event,
   cai_execution_record_init(&record);
   cai_error_init(&ignored);
   /* Corrupt presentation records are diagnosed by the renderer, without
-   * preventing restoration of the rest of the conversation. */
+   * preventing restoration of the rest of the session. */
   if (cai_execution_record_parse(event->data, &record, &ignored) != CAI_OK ||
       record.subagent == NULL || strcmp(record.subagent, "review") != 0)
     goto done;

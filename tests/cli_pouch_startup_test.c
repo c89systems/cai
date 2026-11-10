@@ -599,7 +599,7 @@ int main(int argc, char **argv) {
   newest(&pouch, "/work/a", "second", &error);
   newest(&pouch, "/work/b", "elsewhere", &error);
   /* A persisted clean index avoids queries after reopening, even with many
-   * conversations in the same directory. */
+   * sessions in the same directory. */
   for (i = 0; i < 20; i++) {
     snprintf(id, sizeof(id), "history-%02d", i);
     save(&pouch, "/work/a", id, &error);
@@ -612,7 +612,7 @@ int main(int argc, char **argv) {
   query_calls = 0;
   newest(&pouch, "/work/a", "second", &error);
   assert(query_calls == 0);
-  /* Hidden imports cannot replace the newest published conversation. */
+  /* Hidden imports cannot replace the newest published session. */
   assert(cai_cli_pouch_publish(&pouch, "second", 0, &error) == CAI_OK);
   newest(&pouch, "/work/a", "history-19", &error);
   assert(cai_cli_pouch_publish(&pouch, "second", 1, &error) == CAI_OK);

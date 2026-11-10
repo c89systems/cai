@@ -55,8 +55,7 @@ static int cai_history_prefix_with_scratch(
   if (scratch->reader.cursor.rewind(&scratch->reader.cursor, &local) !=
       LONEJSON_STATUS_OK)
     return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "cannot read conversation history",
-                                local.message);
+                                "cannot read session history", local.message);
   for (;;) {
     rc =
         cai_history_read_record_length(&scratch->reader, &length, &have, error);
@@ -75,7 +74,7 @@ static int cai_history_prefix_with_scratch(
         if (cai_spooled_record_reader_next(&scratch->reader, &bytes[i],
                                            error) <= 0) {
           rc = cai_set_error(error, CAI_ERR_PROTOCOL,
-                             "truncated conversation history");
+                             "truncated session history");
           break;
         }
       }
@@ -134,7 +133,7 @@ static int cai_history_validate_metadata(cai_session *session,
         blocks[i].kind < CAI_AGENT_HISTORY_TURN ||
         blocks[i].kind > CAI_AGENT_HISTORY_COMPACTION)
       return cai_set_error(error, CAI_ERR_INVALID,
-                           "invalid conversation history entry boundary");
+                           "invalid session history entry boundary");
   }
   for (i = 0U; i < doc->history_hidden_events.count; i++)
     if (ranges[i].first < 1LL || ranges[i].last < ranges[i].first)
@@ -243,15 +242,14 @@ int cai_session_history_begin(cai_session *session, int kind,
       input_sequence > (unsigned long long)LLONG_MAX ||
       impl->history_items > (size_t)LLONG_MAX)
     return cai_set_error(error, CAI_ERR_LIMIT,
-                         "conversation history index exhausted");
+                         "session history index exhausted");
   count = impl->history_blocks.count;
   if (count >= ((size_t)-1 / sizeof(*blocks)) - 1U)
-    return cai_set_error(error, CAI_ERR_LIMIT, "too many conversation entries");
+    return cai_set_error(error, CAI_ERR_LIMIT, "too many session entries");
   blocks = cai_realloc_mem(NULL, impl->history_blocks.items,
                            (count + 1U) * sizeof(*blocks));
   if (blocks == NULL)
-    return cai_set_error(error, CAI_ERR_NOMEM,
-                         "cannot index conversation entry");
+    return cai_set_error(error, CAI_ERR_NOMEM, "cannot index session entry");
   impl->history_blocks.items = blocks;
   impl->history_blocks.count = count + 1U;
   impl->history_blocks.capacity = count + 1U;
@@ -343,7 +341,7 @@ int cai_session_history_trim(cai_session *session, size_t count,
                          "trim count exceeds retained history entries");
   if (through > (unsigned long long)LLONG_MAX)
     return cai_set_error(error, CAI_ERR_LIMIT,
-                         "conversation journal index exhausted");
+                         "session journal index exhausted");
   first = impl->history_blocks.count - count;
   blocks = impl->history_blocks.items;
   keep = (size_t)blocks[first].first_item;

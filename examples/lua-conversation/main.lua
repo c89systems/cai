@@ -9,15 +9,15 @@ local function assert_ok(value, err)
 end
 
 local client = assert_ok(cai.open(common.client_config(cai)))
-local conversation = assert_ok(client:create_conversation())
+local provider_session = assert_ok(client:create_conversation())
 local params = assert_ok(cai.conversation_items_params())
-assert_ok(params:add_text("user", "Remember that this conversation was created from Lua."))
-local items = assert_ok(client:create_conversation_items(conversation, params))
+assert_ok(params:add_text("user", "Remember that this session was created from Lua."))
+local items = assert_ok(client:create_conversation_items(provider_session, params))
 
-print("conversation_id=" .. tostring(conversation:id()))
+print("conversation_id=" .. tostring(provider_session:id()))
 print("items=" .. tostring(items:summary().count))
 
 items:close()
 params:close()
-conversation:close()
+provider_session:close()
 client:close()

@@ -2,8 +2,8 @@
 # Damage only a disposable store's derived index, never authoritative records.
 source "$(dirname "$0")/cli_test_common.sh"
 peer_start
-plan '{"plan":["DURABLE CONVERSATION ANSWER"]}'
-run -Nni 'durable conversation prompt'; ok
+plan '{"plan":["DURABLE SESSION ANSWER"]}'
+run -Nni 'durable session prompt'; ok
 run --list-all; ok
 cp "$root/stdout" "$root/list"
 id=$(awk 'NR == 1 {print $1}' "$root/list")
@@ -29,19 +29,19 @@ for mode in missing empty malformed; do
   absent "$root/stderr" cache.load.index.error
 done
 run --export "$id"; ok
-contains "$root/data/cai/exports/$id/$id.md" 'DURABLE CONVERSATION ANSWER'
-contains "$root/data/cai/exports/$id/$id.jsonl" 'durable conversation prompt'
+contains "$root/data/cai/exports/$id/$id.md" 'DURABLE SESSION ANSWER'
+contains "$root/data/cai/exports/$id/$id.jsonl" 'durable session prompt'
 plan '{"plan":["RESUMED AFTER INDEX RECOVERY"]}'
 run -ni 'continue after recovering the index'; ok
 contains "$root/stdout" 'RESUMED AFTER INDEX RECOVERY'
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
-contains "$root/request" 'durable conversation prompt'
-contains "$root/request" 'DURABLE CONVERSATION ANSWER'
+contains "$root/request" 'durable session prompt'
+contains "$root/request" 'DURABLE SESSION ANSWER'
 # Auto-resume followed immediately by /quit must complete recovery without
 # a user prompt, /resume listing, or a commit-producing model turn.
 count=$(requests)
 # An unusable derived-index path must report the repair failure without
-# preventing direct auto-resume of the intact conversation.
+# preventing direct auto-resume of the intact session.
 rm "$manifest"
 mkdir "$manifest"
 offset=$(wc -c <"$logfile")

@@ -76,7 +76,7 @@ terminal_close
 prompt_history_dump "$disabled" "$root/.local/state/cai" >"$root/prompts"
 [[ ! -s "$root/prompts" && $(requests) == "$count" ]]
 unset CAI_PROMPT_HISTORY_LIMIT
-# Slash commands render Markdown, persist the conversation override, and keep
+# Slash commands render Markdown, persist the session override, and keep
 # configure the native per-collection count limit alongside recall.
 terminal_start --resume "$disabled"
 send '/retention\r'; expect '30 days from last update'
@@ -100,7 +100,7 @@ send '/retention\r'; expect '7 days from last update'
 send '/retention 0\r'; expect 'forever'
 terminal_close
 [[ $("$history_reader" policy "$root/.local/state/cai" "$disabled") == 0 ]]
-# A removed conversation is omitted; auto-resume uses an available one.
+# A removed session is omitted; auto-resume uses an available one.
 "$history_reader" drop "$root/.local/state/cai" "$disabled"
 run -R; ok; absent "$root/stdout" "$disabled"
 terminal_start

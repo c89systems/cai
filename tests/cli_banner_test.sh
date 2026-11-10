@@ -10,7 +10,7 @@ run --not-a-real-option; bad
 absent "$root/stdout" 'Welcome to'
 terminal_start
 contains "$term/text" 'Welcome to cai.'
-awk '/Welcome to cai[.]/{welcome=NR} /Conversation (attached|resumed)[.]/{if (!welcome || welcome >= NR) exit 1; ready=1} END{if (!ready) exit 1}' "$term/text"
+awk '/Welcome to cai[.]/{welcome=NR} /Session (ready|resumed)[.]/{if (!welcome || welcome >= NR) exit 1; ready=1} END{if (!ready) exit 1}' "$term/text"
 terminal_close
 terminal_start --no-banner
 absent "$term/text" 'Welcome to'

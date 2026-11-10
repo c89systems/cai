@@ -37,7 +37,7 @@ commit and verification evidence.
   before their respective fixes. Existing Markdown export cases retain sink
   failure and record-order coverage.
 
-## BUG-073: Two runtimes can open the same conversation for writing
+## BUG-073: Two runtimes can open the same session for writing
 
 - **Status:** fixed using liblockdc 0.25.0 collection leases.
 - **Reported:** two CAI instances resumed one session. After one accepted a
@@ -45,8 +45,8 @@ commit and verification evidence.
   bytes". Their independent event counters had diverged.
 - **Cause:** CAI's shared session-use guard prevents deletion but permits
   multiple runtime owners. Collection operation locks serialize individual
-  appends; they do not provide a conversation-lifetime writer lease.
-- **Required behavior:** acquire exclusive conversation ownership before
+  appends; they do not provide a session-lifetime writer lease.
+- **Required behavior:** acquire exclusive session ownership before
   restoring a writable runtime; reject a second live owner. Preserve public
   reads and provide safe recovery after a crash without losing committed
   history or waiting for a long lease to expire.
@@ -57,19 +57,19 @@ commit and verification evidence.
   takeover of CAI's own abandoned lease without guessing from a PID/name.
   Live/foreign owners are rejected; renewal failure stops the restored context.
 - **Evidence:** focused native ownership/failure checks plus C and Lua app
-  duplicate-open, public export, independent conversation, SIGKILL recovery,
+  duplicate-open, public export, independent session, SIGKILL recovery,
   resumed inference and clean-reopen checks. See
   the integration notes (historical report preserved in Git history) and the original
   [change request](stash/liblockdc-collection-leases-cr.md).
 
-## BUG-072: Streamed events repeatedly transact on conversation lookup metadata
+## BUG-072: Streamed events repeatedly transact on session lookup metadata
 
 - **Status:** fixed in CAI's Pouch adapter.
-- **Cause:** each delta acquired, loaded, renewed and released the conversation
+- **Cause:** each delta acquired, loaded, renewed and released the session
   lookup object in addition to its native collection append. Native CPU sampling
   attributed about 60% of sampled CPU to append, dominated by those extra
   transactions rather than the collection write.
-- **Resolution:** retain append receivers for the conversation and its children.
+- **Resolution:** retain append receivers for the session and its children.
   The collection alone owns retention; derived lookup hints have no separate
   expiry and are removed when their backing collection is gone. Public reads
   remain available, and metadata leases cover logical changes only.
@@ -84,14 +84,14 @@ commit and verification evidence.
   SIGKILL and failed-release regressions on native and static musl. Twenty-five
   affected Debug C/Lua application checks passed.
   Production musl streaming/typing CPU fell from 1.60 s to 0.59 s.
-  The final real-conversation probe observed draft edits in 5 ms during
+  The final real-session probe observed draft edits in 5 ms during
   generation at about 5% of one CPU. See the
   [profile and measurement limits](docs/startup-responsiveness.md#follow-up-metadata-ownership-and-streaming-cpu).
 
-## BUG-071: Conversation startup repeats expensive journal reads
+## BUG-071: Session startup repeats expensive journal reads
 
 - **Status:** improved; combining recovery traversals remains open.
-- **Evidence:** the existing conversation `dbgtfervs68i52ohr8gg` took 4.38 s
+- **Evidence:** the existing session `dbgtfervs68i52ohr8gg` took 4.38 s
   to resume with compressed storage and console replay disabled, versus 3.58 s
   after converting a separate copy to uncompressed storage. Rendering the last
   ten turns took 6.35 s with compression. These are single warm-host samples,
@@ -383,7 +383,7 @@ commit and verification evidence.
 - **Resolution:** `/fast` and `/tier` routing changes declare independent native
   queue policies and become executable at the next runtime input boundary for
   either key. They remain editable/approval-controlled until consumed; the
-  in-flight request and ordinary conversation queue semantics are unchanged.
+  in-flight request and ordinary session queue semantics are unchanged.
 - **Verification:** focused Debug classification and local-provider wire checks
   cover Enter toggles, explicit Enter selections, Alt-Enter toggles, unchanged
   in-flight settings, continuation routing and session resume on both transports.
@@ -458,8 +458,8 @@ commit and verification evidence.
 ## BUG-051: Prompt recall remains in plaintext Softline files
 
 - **Status:** fixed.
-- **Cause:** the conversation journal cutover did not replace CAI's call to
-  Softline's native file backend. Per-conversation `.history` files remained
+- **Cause:** the session journal cutover did not replace CAI's call to
+  Softline's native file backend. Per-session `.history` files remained
   outside encrypted Pouch storage.
 - **Resolution:** custom Softline load/append hooks use a separate
   `prompts.<session-id>` collection on the existing session-store client and
@@ -467,7 +467,7 @@ commit and verification evidence.
   Session deletion drops the prompt collection, and temporary chats use their
   private session store. File-history paths and C/Lua configuration are removed;
   there is no migration or fallback backend.
-- **Retention:** whole conversation collections and their metadata use SDK
+- **Retention:** whole session collections and their metadata use SDK
   retention (default 30 days since update); `/retention` persists a per-session
   override. `/history` controls the 200-entry recall window and native
   `max_entries` cap. SDK maintenance prunes oldest excess prompts asynchronously;
@@ -493,7 +493,7 @@ commit and verification evidence.
   default-stack pthread. See
   the investigation (historical report preserved in Git history).
 
-## BUG-049: Review replay loses child output and obscures conversation text
+## BUG-049: Review replay loses child output and obscures session text
 
 - **Status:** fixed.
 - **Evidence:** the reported session retains 2,351 parent assistant text
@@ -506,7 +506,7 @@ commit and verification evidence.
   progress, reasoning summaries and validated Markdown findings without feeding
   them into parent model context. Label review/subagent boundaries, remove
   duplicate successful-tool start headings and place startup policy notices
-  before replay. Resumed conversations have an explicit resumed idle message.
+  before replay. Resumed sessions have an explicit resumed idle message.
 - **Completion race:** terminal state could become visible while a child was
   still persisting its final error. Publish terminal state only after final
   records/observations, notify the owner and drain remaining observations before
@@ -599,7 +599,7 @@ commit and verification evidence.
   executable passes the same shutdown scenarios. Real Chrome is not available
   in this environment.
 
-## BUG-044: Cancelled conversations fail to reopen on repeated input acknowledgements
+## BUG-044: Cancelled sessions fail to reopen on repeated input acknowledgements
 
 - **Evidence:** the supplied session log records cancellation followed by repeated
   `input-consumed journal event has no queued input` startup errors. A native
@@ -608,10 +608,10 @@ commit and verification evidence.
 - **Resolution:** covered acknowledgements are idempotent, matching shell-context
   acknowledgements. The checkpoint remains authoritative; duplicate markers do
   not inject input again or discard saved context. Malformed, zero and forward
-  references still fail validation. No stored conversation rewrite is required.
+  references still fail validation. No stored session rewrite is required.
 - **Verification:** native checks retain and export the saved question/answer,
   without starting inference. The terminal regression cancels, quits with Alt-Q,
-  reopens the Pouch-backed conversation and completes another mocked turn.
+  reopens the Pouch-backed session and completes another mocked turn.
 
 ## BUG-043: Goal continuations omit Codex's objective and completion audits
 
@@ -658,7 +658,7 @@ commit and verification evidence.
   CLI/Lua checks cover filtered/full environments, outside-workspace access,
   reviewer inheritance, configuration precedence and unavailable Bubblewrap.
 
-## BUG-040: Tool failures cannot be reproduced from conversation exports
+## BUG-040: Tool failures cannot be reproduced from session exports
 
 - **Evidence:** runtime tool-start notifications omitted arguments, failures
   kept only the short message, and the Markdown exporter used model context
@@ -675,7 +675,7 @@ commit and verification evidence.
 ## BUG-039: Steering disappears from Softline before its delivery boundary
 
 - **Reported:** pending steering does not remain in the native editable queue;
-  CAI overrides Softline behavior instead of using its conversation profile.
+  CAI overrides Softline behavior instead of using its session profile.
 - **Evidence:** a paused-stream regression fails against the previous static
   executable: the pending `S` entry is gone before the response finishes. The
   earlier BUG-038 checks proved feed order but missed pending queue ownership.
@@ -730,7 +730,7 @@ commit and verification evidence.
   review. Native Softline STEER entries are not drained by the application.
 - **Decision:** enable steering the foreground reviewer/subagent by default,
   with an explicit disable setting that leaves the input queued for the parent.
-  Apply and display steering only at safe conversation boundaries.
+  Apply and display steering only at safe session boundaries.
 - **Resolution:** parent admission forwards steering to its live foreground
   child. `--no-subagent-steering`, `CAI_SUBAGENT_STEERING=false`, or
   `[agent] subagent_steering=false` queues parent work instead. C and Lua
@@ -756,7 +756,7 @@ commit and verification evidence.
 
 ## BUG-033: CLI resume treats a listed number as a literal ID
 
-- **Reported:** `cai --resume` lists numbered conversations, but `--resume 2`
+- **Reported:** `cai --resume` lists numbered sessions, but `--resume 2`
   attempts to load ID `2` and reports an incomplete JSON document.
 - **Resolution:** resolve positive numeric selections against the current
   directory's numbered listing, retaining exact numeric-ID precedence. Missing
@@ -826,7 +826,7 @@ commit and verification evidence.
 - **Status:** fixed.
 - **Cause:** the literal shell renderer rejected single-byte controls but
   passed decoded U+0080–U+009F through to softline, which rejects them. The
-  same rendering path could then prevent a stored conversation from reopening.
+  same rendering path could then prevent a stored session from reopening.
 - **Resolution:** escape C1 controls byte-for-byte after UTF-8 decoding,
   retaining split-scalar state and preserving non-control Unicode. Stored
   events and model context are unchanged; live output and replay share the fix.
@@ -1227,7 +1227,7 @@ commit and verification evidence.
 ## BUG-007: Codex global instructions appear missing after session replay
 
 - **Priority:** high.
-- **Status:** reopened after another report on an older conversation. Request
+- **Status:** reopened after another report on an older session. Request
   capture tests include current files after resume, but the reported omission
   has not been reproduced. `/status` now reports CAI global, Codex global and
   repository files actually captured in the current agent instructions. This
@@ -1239,7 +1239,7 @@ commit and verification evidence.
   determine configuration; there must be no pouch-backed CAI configuration
   overriding them. Load CAI's global instructions, then
   `${CODEX_HOME:-$HOME/.codex}/AGENTS.md` when enabled, then ancestor/workspace
-  instructions. Resuming conversation state must not suppress current global
+  instructions. Resuming session state must not suppress current global
   instructions or restore a stale instruction snapshot over them.
 - **Verification:** capture actual provider requests for fresh and resumed
   sessions, enabling/disabling compatibility between invocations, changed
@@ -1248,7 +1248,7 @@ commit and verification evidence.
   whether configuration or old instructions are overriding current settings.
 - **Current evidence:** static musl request-capture tests pass for Responses
   and Chat Completions: enabling compatibility on an existing encrypted
-  conversation, edited instructions, explicit CODEX_HOME, and disabling it
+  session, edited instructions, explicit CODEX_HOME, and disabling it
   again all affect the actual outbound instructions. The reported real-session
   case was still unaccounted for at that stage; those passing probes alone
   did not close the report.
@@ -1281,10 +1281,10 @@ commit and verification evidence.
 - **Behavioral reproduction and resolution (2026-10-17):** the user's check
   was asking "Who am I?", expecting the production-executive role stated in
   the global file. Live `gpt-6-luna` with medium reasoning recognized that role
-  in a fresh CAI conversation, but answered generically after resuming a
-  conversation originally created with Codex instructions disabled. Logs still
+  in a fresh CAI session, but answered generically after resuming a
+  session originally created with Codex instructions disabled. Logs still
   showed the complete 13,961-byte file loaded. Codex 0.162.0-alpha.18 recognized
-  the role after adding the same file and resuming an equivalent conversation.
+  the role after adding the same file and resuming an equivalent session.
 - **Fix and evidence:** libcai now identifies each loaded source as AGENTS.md,
   frames its complete contents in an `INSTRUCTIONS` block, and explicitly
   identifies it as the current user's instructions and working context,
@@ -1298,7 +1298,7 @@ commit and verification evidence.
   Local live evidence is in `build/cai/agents-live-resume-probe.log`,
   `build/cai/codex-agents-live-probe.log`, and
   `build/cai/agents-framing-live-probe.log`. Auth copies and fixture state were
-  isolated; no user conversation or original credential file was changed.
+  isolated; no user session or original credential file was changed.
 - **Compaction hypothesis (2026-10-19):** not reproduced. A native wire-level
   regression loads real CAI global, Codex global and workspace AGENTS.md files,
   a skill catalog and a developer extension. Both Responses and Chat Completions
@@ -1307,7 +1307,7 @@ commit and verification evidence.
   agent sends the updated global file, without restoring its old contents.
   Runtime request assertions also preserve the active instruction extension
   during automatic compaction at a tool boundary and immediately after resume.
-  Compaction replaces conversation history, not the separately retained active
+  Compaction replaces session history, not the separately retained active
   instructions; it does not reload edited files from disk. These request checks
   establish delivery, not whether a model follows every supplied instruction.
   The latest user-reported behavioral discrepancy remains unaccounted for.
@@ -1413,7 +1413,7 @@ commit and verification evidence.
   diagnosis. A missing index and a corrupt index need separate coverage.
 - **Recovery evidence:** the actual CLI recovers missing, empty and malformed
   query-index manifests in an isolated encrypted store. Listings are unchanged,
-  export and resume preserve the conversation, and the encryption key remains
+  export and resume preserve the session, and the encryption key remains
   unchanged. A subsequent open no longer emits the warning. The diagnostic now
   explains that indexed queries will attempt recovery from stored records.
 - **Follow-up (2026-10-18):** with liblockdc 0.21.0, auto-resume followed by
@@ -1460,13 +1460,13 @@ commit and verification evidence.
   `cai_cli_pouch_compaction` on static musl. This regression crosses the real
   compaction byte threshold, observes a published encrypted session snapshot,
   checks an 8 MiB live payload and credential readback after reopening, compares
-  JSONL/Markdown exports byte for byte, and resumes the original conversation.
+  JSONL/Markdown exports byte for byte, and resumes the original session.
   Only the test executable shortens the worker's 30-minute wait; the real
   default-stack worker and packaged storage code run unchanged. Existing
   interrupted-writer, missing/empty/malformed-index and session tests also pass.
   The historical index warning's precise causal relationship remains unproven.
 
-## BUG-012: Capture PTY shell output for conversation context
+## BUG-012: Capture PTY shell output for session context
 
 - **Priority:** normal; feature backlog.
 - **Status:** superseded by BUG-015: terminal handoff output stays local.

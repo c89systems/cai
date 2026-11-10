@@ -85,8 +85,8 @@ static void collection_owner_failed(cai_cli_pouch *pouch,
   pthread_mutex_lock(&pouch->ownership_health_lock);
   pouch->ownership_failed = 1;
   snprintf(pouch->ownership_error, sizeof(pouch->ownership_error),
-           "Conversation collection ownership lost or renewal failed: %s. "
-           "Close this instance and reopen the conversation.",
+           "Session collection ownership lost or renewal failed: %s. "
+           "Close this instance and reopen the session.",
            error != NULL && error->message != NULL ? error->message
                                                    : "lease unavailable");
   pthread_mutex_unlock(&pouch->ownership_health_lock);
@@ -98,7 +98,7 @@ static void collection_owner_failed(cai_cli_pouch *pouch,
 }
 
 /* Called with ownership_lock; renewal never takes journal_lock or runs on the
- * UI thread. A failure is terminal for this restored conversation context. */
+ * UI thread. A failure is terminal for this restored session context. */
 static void collection_owners_renew(cai_cli_pouch *pouch) {
   cai_cli_collection_owner *entry;
   lc_collection_lease_info info;
@@ -239,7 +239,7 @@ static int collection_owner_open(cai_cli_pouch *pouch, const char *id,
   if (rc == CAI_ERR_INVALID && error != NULL && error->message != NULL &&
       strstr(error->message, "live CAI context") != NULL)
     rc = cai_cli_error(error, CAI_ERR_INVALID,
-                       "Conversation collection is owned by another live CAI "
+                       "Session collection is owned by another live CAI "
                        "context; close that instance before resuming");
   if (rc == CAI_OK)
     rc = collection_guard_owner(pouch, entry->guard, id, kind, owner, error);

@@ -166,12 +166,12 @@ int cai_conversation_item_parse_json(const char *json,
 
   if (out == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "conversation item output pointer is required");
+                         "session item output pointer is required");
   }
   *out = NULL;
   if (json == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "conversation item JSON is required");
+                         "session item JSON is required");
   }
   memset(&doc, 0, sizeof(doc));
   CAI_LJ->init(CAI_LJ, &cai_input_item_map, &doc);
@@ -180,14 +180,14 @@ int cai_conversation_item_parse_json(const char *json,
   if (status != LONEJSON_STATUS_OK) {
     CAI_LJ->cleanup(CAI_LJ, &cai_input_item_map, &doc);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
-                                "failed to parse conversation item JSON",
+                                "failed to parse session item JSON",
                                 json_error.message);
   }
   item = (cai_conversation_item *)cai_alloc(NULL, sizeof(*item));
   if (item == NULL) {
     CAI_LJ->cleanup(CAI_LJ, &cai_input_item_map, &doc);
     return cai_set_error(error, CAI_ERR_NOMEM,
-                         "failed to allocate conversation item");
+                         "failed to allocate session item");
   }
   memset(item, 0, sizeof(*item));
   cai_conversation_item_init_methods(item);
@@ -202,7 +202,7 @@ int cai_conversation_item_parse_json(const char *json,
     cai_conversation_item_destroy(item);
     CAI_LJ->cleanup(CAI_LJ, &cai_input_item_map, &doc);
     return cai_set_error(error, CAI_ERR_NOMEM,
-                         "failed to allocate conversation item fields");
+                         "failed to allocate session item fields");
   }
   CAI_LJ->cleanup(CAI_LJ, &cai_input_item_map, &doc);
   *out = item;

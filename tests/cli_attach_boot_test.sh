@@ -71,7 +71,7 @@ wait_for has "$first_term/text" 'Send /help for usage.'
 wait_for has "$second_term/text" 'Send /help for usage.'
 controlled() {
   ! has "$term/message" 'Observing workspace' &&
-    { has "$term/message" 'Worked for' || has "$term/message" 'Conversation attached' || has "$term/message" 'Ready.'; }
+    { has "$term/message" 'Worked for' || has "$term/message" 'Session ready' || has "$term/message" 'Ready.'; }
 }
 requested() {
   [[ -f "$root/peer/requests.jsonl" ]] &&

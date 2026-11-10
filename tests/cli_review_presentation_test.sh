@@ -145,7 +145,7 @@ expected_boundaries=$(grep -c '^  Review started$' "$term/feed")
 terminal_close
 before=$(requests)
 terminal_start --resume "$id" -t dracula --replay-turns -1
-expect 'Conversation resumed.'
+expect 'Session resumed.'
 contains "$term/text" 'Review subagent'
 grep -Eq $'\033\\[(0;)?38;5;108mRead' "$term/raw"
 grep -Eq $'\033\\[(0;)?1;38;5;143mreview.txt' "$term/raw"

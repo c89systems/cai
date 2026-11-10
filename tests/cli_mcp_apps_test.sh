@@ -107,7 +107,7 @@ send '/new\r'; expect 'New session'
 query '/mcp chatgpt'
 tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/connection"
 contains "$root/connection" disabled
-send '/resume 2\r'; expect 'Conversation resumed'
+send '/resume 2\r'; expect 'Session resumed'
 send '/status\r'; expect "$initial"
 query '/mcp chatgpt'
 tail -c +$((send_feed_offset+1)) "$term/feed" >"$root/connection"

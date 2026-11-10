@@ -80,12 +80,12 @@ send '\033[A'; expect_prompt '> '
 absent "$term/prompt" 'busy unsent draft'
 finish_alt_q
 [[ $(requests) == 2 ]]
-# Escape followed by Alt-Q must leave the conversation resumable. Duplicate
+# Escape followed by Alt-Q must leave the session resumable. Duplicate
 # acknowledgements themselves have a deterministic core regression test.
 base[${#base[@]}-1]="$work"
 plan '{"plan":[{"text":"CANCEL AND REOPEN","pause":true}]}'
 terminal_start -N
-send 'Keep this conversation after cancellation\r'; expect 'STREAM in flight'
+send 'Keep this session after cancellation\r'; expect 'STREAM in flight'
 send '\033'; expect 'WARN: Turn stopped.'
 finish_alt_q
 release
@@ -93,5 +93,5 @@ plan '{"plan":["RESUMED AFTER ESCAPE AND ALT-Q"]}'
 terminal_start
 send 'Continue after reopening\r'
 expect_turn "$send_offset" 'RESUMED AFTER ESCAPE AND ALT-Q'
-contains "$root/peer/requests.jsonl" 'Keep this conversation after cancellation'
+contains "$root/peer/requests.jsonl" 'Keep this session after cancellation'
 terminal_close

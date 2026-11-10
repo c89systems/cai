@@ -143,9 +143,9 @@ int cai_app_client_get_view(cai_app_client *, const cai_app_view **,
 int cai_app_client_bind(cai_app_client *, uint64_t request,
                         unsigned long long epoch, unsigned long long producer,
                         const char *session, cai_error *);
-/** Select the workspace conversation before creating a producer or subscribing
+/** Select the workspace session before creating a producer or subscribing
  * to its transcript. selector is a session ID or listing number; NULL creates
- * a new conversation. Requires the controlling attachment and an unbound
+ * a new session. Requires the controlling attachment and an unbound
  * client. Selection runs outside socket callbacks and rejects busy contexts.
  * Success arrives as the ordinary completed input baseline; failure is
  * BIND_REJECTED. No synthetic prompt, command or history entry is generated. */

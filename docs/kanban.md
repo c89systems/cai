@@ -3,7 +3,7 @@
 CAI's optional `todo_kanban` tool stores named boards in the same encrypted
 Pouch backend as sessions, under namespace `cai.todo`, document `kanban`.
 Independent CAI applications sharing the endpoint and encryption key see the
-same cards. Each conversation has its own selected board. Tool registration
+same cards. Each session has its own selected board. Tool registration
 remains off by default: enable `--todo`, `CAI_TODO=true`, or `[agent] todo=true`.
 
 ## Selection
@@ -11,8 +11,8 @@ remains off by default: enable `--todo`, `CAI_TODO=true`, or `[agent] todo=true`
 | Setting | Purpose |
 | --- | --- |
 | `--board NAME` | Select/create this board at startup, overriding the resumed selection once. Does not enable the tool. |
-| `CAI_BOARD` | Initial board for new conversations; overrides INI. |
-| `[todo] default_board` | Initial board for new conversations; defaults to `default`. |
+| `CAI_BOARD` | Initial board for new sessions; overrides INI. |
+| `[todo] default_board` | Initial board for new sessions; defaults to `default`. |
 | `/todo` | Show the selected board, including completed cards. |
 | `/todo list` | List the boards shared on this backend. |
 | `/todo see ID` | Read the complete task on the selected board, including done items. |
@@ -21,8 +21,8 @@ remains off by default: enable `--todo`, `CAI_TODO=true`, or `[agent] todo=true`
 | `/todo help` | Show command help. |
 
 The usual `[env]` precedence policy applies to `CAI_BOARD`. Explicit flags win.
-The selected board is committed with the conversation. Resume restores it;
-`/new` uses the configured initial board. Changing one conversation's selection
+The selected board is committed with the session. Resume restores it;
+`/new` uses the configured initial board. Changing one session's selection
 does not change another's. `/status` includes the selected board or `disabled`.
 Names are case-sensitive UTF-8, 1–256 bytes, without ASCII control characters.
 The board named `default` reserves key `DEF`; other boards derive distinct keys.
@@ -53,7 +53,7 @@ stored title remains complete. Libmdf wraps cells to fit the terminal.
 `/todo layout board` restores the board view. `/todo layout` reports the current
 setting. These settings affect future output in this application invocation,
 including after `/new` or `/resume`; they do not rewrite past output or save a
-conversation preference. Board selection still belongs to the conversation.
+session preference. Board selection still belongs to the session.
 `/todo list` continues to list boards, independently of card layout.
 
 `/todo see def-001` renders the canonical ID and lane in a heading, for example

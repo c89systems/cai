@@ -51,20 +51,20 @@ run --export "$id" --export-out "$root/absolute/conversation.jsonl"; ok
 check_files "$root/absolute/conversation.jsonl" jsonl
 
 terminal_start --resume "$id"
-for spec in 'myname.md|md' 'conversation.jsonl|jsonl' 'conversation|both' \
+for spec in 'myname.md|md' 'conversation.jsonl|jsonl' 'session|both' \
   'output/dir/conversation.md|md' 'output/json/conversation.jsonl|jsonl' \
   'output/pair/conversation|both' 'something.else|both' \
   'tui/path with spaces.md|md' "$root/tui-absolute/conversation.md|md" \
   "$id|both"; do
   name=${spec%|*} mode=${spec##*|}
-  send "/export $name\r"; expect 'Conversation export'
+  send "/export $name\r"; expect 'Session export'
   # A following local command proves the export and its path rendering finished.
   send '/goal\r'; expect 'No goal.'
   check_files "$name" "$mode"
 done
 # Overwrite only after successful generation; keep the new file private.
 printf 'OLD CONTENT\n' >"$work/overwrite.md"; chmod 644 "$work/overwrite.md"
-send '/export overwrite.md\r'; expect 'Conversation export'
+send '/export overwrite.md\r'; expect 'Session export'
 send '/goal\r'; expect 'No goal.'
 check_files overwrite.md md
 absent "$work/overwrite.md" 'OLD CONTENT'
@@ -81,13 +81,13 @@ for name in output/ . ..; do
 done
 long_name=$(printf '%0245d.md' 0)
 printf 'KEEP ORIGINAL\n' >"$work/$long_name"
-send "/export $long_name\r"; expect 'Conversation export'
+send "/export $long_name\r"; expect 'Session export'
 send '/goal\r'; expect 'No goal.'
 check_files "$long_name" md
 absent "$work/$long_name" 'KEEP ORIGINAL'
 [[ -z $(find "$work" \( -name '*.tmp.*' -o -name '.export-*' \) -print) ]]
 rm "$root/exports/$id/$id.jsonl" "$root/exports/$id/$id.md"
-send '/export   \r'; expect 'Conversation export'
+send '/export   \r'; expect 'Session export'
 send '/goal\r'; expect 'No goal.'
 [[ -s "$root/exports/$id/$id.jsonl" && -s "$root/exports/$id/$id.md" ]]
 [[ $(requests) == "$before" ]]

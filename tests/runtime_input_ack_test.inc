@@ -32,7 +32,7 @@ static void test_agent_runtime_input_ack(test_state *state) {
   preset.prompt_version = "fixture";
   preset.default_identity = "Fixture";
   preset.default_model = "gpt-5-nano";
-  preset.developer_instructions = "Keep saved conversation context.";
+  preset.developer_instructions = "Keep saved session context.";
   for (variant = 0; variant < 4U + 5U; variant++) {
     memset(&storage, 0, sizeof(storage));
     storage.commit_json =

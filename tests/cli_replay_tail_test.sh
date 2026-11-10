@@ -45,7 +45,7 @@ fi
 run --export "$original"; ok
 seed="$root/data/cai/exports/$original/$original.jsonl"
 # Real provider item templates, synthetic completed journal turns.
-# No inference loop or delays are needed to construct a long conversation.
+# No inference loop or delays are needed to construct a long session.
 jq -L "$support/fixtures" -cs '
   include "journal";
   ([.[] | select(.record_type == "commit")][-1]) as $commit |

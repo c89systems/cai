@@ -282,7 +282,7 @@ int cai_cli_todo_command(cai_agent_runtime *runtime, const char *arguments,
   if (strcmp(arguments, "help") == 0) {
     static const char *const help[] = {
         "## Kanban\n\n| Command | Action |\n| --- | --- |\n"
-        "| `/todo` | Show this conversation's selected board. |\n"
+        "| `/todo` | Show this session's selected board. |\n"
         "| `/todo list` | List boards shared on this backend. |\n"
         "| `/todo layout board` | Group cards by column (default). Bold ID, "
         "then an italic title capped at 28 characters. |\n"
@@ -292,7 +292,7 @@ int cai_cli_todo_command(cai_agent_runtime *runtime, const char *arguments,
         "description and status. |\n"
         "| `/todo use NAME` | Select an existing board between turns. |\n"
         "| `/todo new NAME` | Create or select a named board between turns. |\n"
-        "\nSelection is saved with this conversation; other conversations keep "
+        "\nSelection is saved with this session; other sessions keep "
         "their selection. Layout changes apply to future output in this "
         "invocation.\n"};
     for (i = 0U; i < sizeof(help) / sizeof(help[0]); i++)

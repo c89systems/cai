@@ -1,4 +1,4 @@
-# Conversation messaging
+# Session messaging
 
 CAI and `libcai_app` enable messaging only when explicitly configured with
 `--messaging`, `CAI_MESSAGING=true`, or `[messaging] enabled = true`. The
@@ -14,9 +14,9 @@ For a standalone send, use `cai --queue NAME --message TEXT` or
 the selected `storage.messaging_store` (`--messaging-store` or
 `CAI_MESSAGING_STORE`), without provider authentication or inference. The default
 is the `default` named store configured by `--lockd`; it can instead use a
-separate `[store.NAME] endpoint` and `key_file`. Temporary conversations retain
-this shared messaging selection while isolating their conversation history.
-It creates no conversation, mailbox claim or receipt listener. The sender is
+separate `[store.NAME] endpoint` and `key_file`. Temporary sessions retain
+this shared messaging selection while isolating their session history.
+It creates no session, mailbox claim or receipt listener. The sender is
 `cai.cli.<unique-id>`; incoming text is labelled as a CLI message.
 Success means liblockdc accepted the enqueue: stdout contains JSON with
 `status: "queued"`, the message ID and recipient, and the command exits zero.
@@ -28,9 +28,9 @@ Explicit sending works even when the agent messaging tool is disabled. The same
 flags work through the C or Lua `libcai_app` receiver's `run` method.
 
 Use `agent_message` with `{"operation":"list"}` to list named workspace
-mailboxes: queue name, canonical directory and last-bound conversation ID.
+mailboxes: queue name, canonical directory and last-bound session ID.
 Send with `{"operation":"send","recipient":"QUEUE_NAME","text":"..."}`.
-Conversation IDs are internal history/ownership metadata, not destinations.
+Session IDs are internal history/ownership metadata, not destinations.
 Discovery lists known mailboxes, including offline ones; delivery ACK confirms
 acceptance. An idle application listens too.
 
@@ -91,7 +91,7 @@ explicit name in another directory takes over that mailbox too.
 
 In the TUI, `/queue` shows the current mailbox (or how to enable it),
 `/queue on` enables messaging and its tool, and `/queue off` disables them.
-Enabling and disabling apply between turns, retaining the same conversation
+Enabling and disabling apply between turns, retaining the same session
 and saved model settings without replaying its text or making a model request.
 Approve or reject queued incoming prompts before disabling messaging; this
 protects any edits made in the prompt queue. Deliveries still in storage remain
@@ -101,25 +101,25 @@ automatic-approval setting and is retained across these changes and `/new`.
 rules. For example,
 `/queue Smith` selects `smith`. The override lasts for the running app,
 including `/new` and `/resume`; these commands do not rewrite `config.ini` or
-session settings. Delivered messages and their approvals remain in the conversation.
+session settings. Delivered messages and their approvals remain in the session.
 The former destination stays listed as a known mailbox but no longer has this
 app as its active listener. If starting the new listener fails, the error names
 the selected queue; retry with `/queue NAME`.
 
 ## Ownership and takeover
 
-A new app start claims the workspace mailbox for its active conversation,
-including after `/new` or resuming a different conversation. The address stays
+A new app start claims the workspace mailbox for its active session,
+including after `/new` or resuming a different session. The address stays
 the same. Binding updates and durable message acceptance use the same lockd
 lease, so a superseded process cannot accept new deliveries into its old
-conversation. A stale consumer defers the message without consuming its retry
+session. A stale consumer defers the message without consuming its retry
 budget and stops its mailbox service. It reports the ownership change through
 the normal logger. No application polling is used.
 
-Already delivered messages stay with their original conversation, including
+Already delivered messages stay with their original session, including
 held approval entries. They can still be approved there or recovered by resuming
-that conversation. They are never transferred just because another app starts.
-The old conversation can keep running, but new sends through its displaced
+that session. They are never transferred just because another app starts.
+The old session can keep running, but new sends through its displaced
 mailbox fail with an ownership error. Restart it to reclaim the mailbox, or
 choose a different name. Exiting the displaced app cannot clear the new binding;
 exiting the new owner does not automatically reactivate an older app.
@@ -129,7 +129,7 @@ notifications wake that service; the application does not periodically query
 the queue. The service saves an incoming message to a durable encrypted inbox
 before sending a delivery receipt when the sender requested one. An event
 descriptor then wakes the UI owner.
-Recovery queries use an indexed `pending_for` field scoped to the conversation
+Recovery queries use an indexed `pending_for` field scoped to the session
 that accepted the message. Bindings and pending records live in `cai.messages`.
 Private `cai.receipts.<instance-id>` channels deliver ACKs to the exact sending
 app instance, independently of mailbox takeover. They are internal return
@@ -144,7 +144,7 @@ an already delivered message.
 
 ## Approval and editing
 
-Incoming text is labelled with its message ID and sending conversation. It uses
+Incoming text is labelled with its message ID and sending session. It uses
 Softline's **normal prompt injection hook**, never the steering hook.
 Approval focus is available at an empty ordinary prompt. Alt-K can stash a
 draft first; Alt-J restores it afterward. With a nonempty ordinary draft,
@@ -170,7 +170,7 @@ Editor changes live in softline until submission; reopening an unsubmitted
 message restores the original delivered text.
 Escape cancels editing and restores the original queued message. Explicit
 discard, empty edit submission and focused rejection retire the durable inbox
-entry, so it does not reappear when the conversation resumes.
+entry, so it does not reappear when the session resumes.
 Unapproved messages survive restart in the inbox. Rejected and consumed IDs are
 retained without message bodies to suppress repeated queue delivery.
 
@@ -185,7 +185,7 @@ The generated `config.ini` contains these commented defaults:
 
 ```ini
 [messaging]
-## Shared conversation messaging.
+## Shared session messaging.
 # enabled = false
 # queue_name = ""
 # enable_auto_enqueue = false
@@ -241,7 +241,7 @@ The provider responses come from a local HTTP fixture; transport, storage,
 tools, approval and application instances use the production implementation.
 The same test starts another app on the original directory, confirms the same
 queue name routes new deliveries there, approves an older held message in the
-original conversation, and verifies that closing the displaced app leaves the
+original session, and verifies that closing the displaced app leaves the
 new owner's binding intact. Native tests additionally exercise symlink naming,
 equal basenames, explicit names, collision refusal and stale-consumer deferral.
 

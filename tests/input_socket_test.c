@@ -434,7 +434,7 @@ static void cases(fixture *f) {
     assert(strcmp(sl_buffer(a->editor), "independent local draft") == 0);
   }
   /* A replacement binding cannot silently redirect this editor to another
-   * producer, even in the same persistent conversation. */
+   * producer, even in the same persistent session. */
   assert(cai_cli_input_socket_disconnect(a->queue, NULL) == CAI_OK);
   cai_app_client_close(a->client);
   a->client = NULL;
@@ -670,7 +670,7 @@ static int select_conversation(void *context, const char *selector,
                                                         : CAI_ERR_INVALID;
 }
 /** Selection is setup, not an input offer. A failed/observer selection must
- * not bind a producer, fall back to the current conversation, or enqueue text.
+ * not bind a producer, fall back to the current session, or enqueue text.
  */
 static void selection_cases(fixture *f) {
   frontend *a = calloc(1U, sizeof(*a)), *b = calloc(1U, sizeof(*b));

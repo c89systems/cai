@@ -37,7 +37,7 @@ wait_for test -s "$work/persisted.jsonl"
 contains "$work/persisted.md" PersistSeedReply
 kill -0 "$server_pid"
 terminal_start
-contains "$term/text" 'Conversation export'
+contains "$term/text" 'Session export'
 [[ $(requests) == 1 ]]
 terminal_close
 # Batch admission must remain attached until the held export actually finishes.
@@ -46,11 +46,11 @@ rm "$root/gate/entered"
 wait_for test -f "$root/gate/entered"
 kill -0 "$batch_pid"
 [[ ! -e "$work/batch-persist.md" ]]
-absent "$root/batch.out" 'Conversation export'
+absent "$root/batch.out" 'Session export'
 timeout 2 bash -c 'printf r >"$1"' _ "$root/gate/release"
 wait "$batch_pid"
 batch_pid=
-contains "$root/batch.out" 'Conversation export'
+contains "$root/batch.out" 'Session export'
 contains "$work/batch-persist.md" PersistSeedReply
 [[ $(requests) == 1 ]]
 kill -TERM "$server_pid"

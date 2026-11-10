@@ -35,7 +35,7 @@ else
   terminal_close
 fi
 sed -n '3p' "$root/peer/requests.jsonl" >"$root/request"
-contains "$root/request" 'Continue working toward the active thread goal'
+contains "$root/request" 'Continue working toward the active session goal'
 contains "$root/request" 'Build the service and verify it'
 contains "$root/request" 'Completion audit:'
 contains "$root/request" 'Blocked audit:'

@@ -5,7 +5,7 @@
 
 /** Owner-thread role/lifetime state for one workspace's attachments.
  * Authority generations reject stale controls; this is separate from the
- * storage collection lease that owns the writable conversation. */
+ * storage collection lease that owns the writable session. */
 struct cai_attachment_controller {
   pthread_t owner;
   cai_attachment_state state;

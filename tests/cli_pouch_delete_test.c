@@ -116,7 +116,7 @@ static int cleanup(void *context, const char *id, cai_error *error) {
 }
 
 /* A valid JSON metadata document with an incorrect object identity must not
- * redirect deletion to a different conversation. */
+ * redirect deletion to a different session. */
 static const lonejson_field identity_fields[] = {
     LONEJSON_FIELD_STRING_FIXED(cai_cli_session, id, "id",
                                 LONEJSON_OVERFLOW_FAIL),

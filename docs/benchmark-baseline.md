@@ -62,7 +62,7 @@ Differences between these probes must not be attributed entirely to their metada
 
 Small messages amplify per-document and metadata work: the 64-byte typed transcript case measures 8.93 MiB/s, versus 368.06 MiB/s at 4096 bytes and 327.14 MiB/s at 32768 bytes.
 Each logical message completes an assistant document, so the small-message presentation case also repeats document finalization and timestamp overhead.
-This is a declared workload characteristic, not a model of every token feed in a real conversation.
+This is a declared workload characteristic, not a model of every token feed in a real session.
 
 The unverified byte-string codec-only probes do not traverse payload memory and must not be interpreted as memory-bandwidth measurements.
 The observed spread, particularly for the fast transport rounds, also argues against fixed timing thresholds on this shared host.

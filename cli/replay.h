@@ -3,7 +3,7 @@
 #include <cai/session_store.h>
 
 /* Console-only tail index. Retains sequence ranges and pending input IDs,
- * never conversation text. Feed only events visible to the runtime. */
+ * never session text. Feed only events visible to the runtime. */
 typedef struct cai_cli_replay cai_cli_replay;
 int cai_cli_replay_open(size_t limit, cai_cli_replay **out, cai_error *error);
 int cai_cli_replay_feed(cai_cli_replay *replay,
@@ -21,7 +21,7 @@ int cai_cli_replay_child_text_visible(const cai_cli_replay *replay,
                                       unsigned long long source_sequence);
 void cai_cli_replay_close(cai_cli_replay *replay);
 
-/** Conversation-lifetime sequence metadata for attached replay. No event
+/** Session-lifetime sequence metadata for attached replay. No event
  * bodies or child reports are retained/decoded. Feed at the existing recovery
  * and durable append seams; callers serialize access with the journal lock. */
 int cai_cli_replay_index_open(cai_cli_replay **, cai_error *);

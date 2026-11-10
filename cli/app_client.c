@@ -938,7 +938,7 @@ int cai_app_client_bind(cai_app_client *client, uint64_t request,
 int cai_app_client_select(cai_app_client *client, uint64_t request,
                           const char *selector, cai_error *error) {
   if (selector != NULL && selector[0] == '\0')
-    return cai_cli_error(error, CAI_ERR_INVALID, "empty conversation selector");
+    return cai_cli_error(error, CAI_ERR_INVALID, "empty session selector");
   return bind_client(client, request, 0U, 0U, selector, 1, error);
 }
 int cai_app_client_manage_delivery(cai_app_client *client, cai_error *error) {

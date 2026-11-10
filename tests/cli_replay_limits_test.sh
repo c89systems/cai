@@ -9,7 +9,7 @@ id=$(awk 'NR == 1 {print $1}' "$root/stdout")
 logfile="$root/cache/cai/$id.log"
 "$fixture" --oversized-replay-event "$id" "$work"
 # Oversized input and shell-result events are omitted, while the surrounding
-# conversation replays. Merely resuming must never submit the omitted input.
+# session replays. Merely resuming must never submit the omitted input.
 count=$(requests)
 for restart in 1 2; do
   offset=$(wc -c <"$logfile")

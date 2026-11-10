@@ -28,7 +28,7 @@ static int goal_input_queue_event(void *context,
   f->queued = 1;
   rc = cai_agent_runtime_start_goal(f->runtime, "Fresh objective",
                                     "Initial user task",
-                                    "command:conversation-A:7:8:9", error);
+                                    "command:session-A:7:8:9", error);
   if (rc != CAI_OK)
     return rc;
   cai_error_init(&rejected);
@@ -427,17 +427,16 @@ static void *goal_input_worker(void *context) {
     else
       GOAL_INPUT_REQUIRE(cai_agent_runtime_start_goal(
                              f->runtime, "Fresh objective", "Initial user task",
-                             "command:conversation-A:7:8:9",
-                             &f->error) == CAI_OK);
+                             "command:session-A:7:8:9", &f->error) == CAI_OK);
     GOAL_INPUT_REQUIRE(goal_input_wait(f, mode == 5 ? 2 : 1) == CAI_OK);
     if (mode == 5)
       GOAL_INPUT_REQUIRE(f->queued);
-    GOAL_INPUT_REQUIRE(
-        input_identity_count(&f->trace,
-                             mode == 2                ? "turn.cancelled"
-                             : mode == 1 || mode == 3 ? "turn.failed"
-                                                      : "turn.completed",
-                             "command:conversation-A:7:8:9") == 1);
+    GOAL_INPUT_REQUIRE(input_identity_count(&f->trace,
+                                            mode == 2 ? "turn.cancelled"
+                                            : mode == 1 || mode == 3
+                                                ? "turn.failed"
+                                                : "turn.completed",
+                                            "command:session-A:7:8:9") == 1);
     GOAL_INPUT_REQUIRE(
         cai_agent_runtime_get_goal(f->runtime, &f->goal, &f->error) == CAI_OK);
     if (mode != 3) {
@@ -468,9 +467,9 @@ static void *goal_input_worker(void *context) {
                                                 &f->error) == CAI_OK);
       if (mode == 4) {
         GOAL_INPUT_REQUIRE(goal_input_wait(f, 1) == CAI_OK);
-        GOAL_INPUT_REQUIRE(
-            input_identity_count(&f->trace, "turn.completed",
-                                 "command:conversation-A:7:8:9") == 1);
+        GOAL_INPUT_REQUIRE(input_identity_count(&f->trace, "turn.completed",
+                                                "command:session-A:7:8:9") ==
+                           1);
       } else {
         int quiet = 0;
         GOAL_INPUT_REQUIRE(cai_agent_runtime_is_quiescent(

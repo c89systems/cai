@@ -5,7 +5,7 @@ output to the controller's existing bounded-tail runtime capture. `/shell`,
 `!sh`, Alt-S and pagers send no output to this channel. Ordinary backend bang
 commands retain their separate execution path.
 
-`USER_SHELL` carries the authenticated conversation, original authority
+`USER_SHELL` carries the authenticated session epoch, original authority
 generation, nonzero request ID, and zero envelope sequence/stream fields.
 Its definite CBOR array is:
 

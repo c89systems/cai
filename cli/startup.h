@@ -3,7 +3,7 @@
 #include "options.h"
 #include <cai/cai.h>
 
-/** Ordered invocation inputs after conversation selection and binding. No
+/** Ordered invocation inputs after session selection and binding. No
  * transport, editor, runtime or configuration ownership belongs here. */
 typedef enum cai_cli_startup_stage {
   CAI_CLI_STARTUP_MODEL = 0,

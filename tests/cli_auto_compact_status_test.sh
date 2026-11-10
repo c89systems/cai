@@ -28,7 +28,7 @@ done
 terminal_close
 before=$(requests)
 terminal_start
-expect 'Conversation resumed.'
+expect 'SEED CONTEXT'
 [[ $(requests) == "$before" ]]
 terminal_close
 logs

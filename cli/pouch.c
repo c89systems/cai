@@ -178,7 +178,7 @@ static const lonejson_field session_fields[] = {
     LONEJSON_FIELD_I64(cai_cli_session, retention_days, "retention_days")};
 LONEJSON_MAP_DEFINE(session_map, cai_cli_session, session_fields);
 
-/* A derived directory index, kept separately from conversation documents.
+/* A derived directory index, kept separately from session documents.
  * Dirty is durable before a commit/publication changes; an interrupted
  * writer therefore causes reconstruction from authoritative session metadata.
  */
@@ -740,7 +740,7 @@ static int session_retention(cai_cli_pouch *pouch,
       session->retention_days < 0 ||
       session->retention_days > LONG_MAX / 86400L)
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "invalid stored conversation retention");
+                         "invalid stored session retention");
   *seconds = session->retention_override
                  ? (long)session->retention_days * 86400L
                  : pouch->conversation_retention_seconds;
@@ -852,7 +852,7 @@ static int session_read(cai_cli_pouch *pouch, const char *id,
   if (has_body == NULL && ((rc == CAI_OK && !found) ||
                            (rc != CAI_OK && error->http_status == 404))) {
     char message[256];
-    snprintf(message, sizeof(message), "Conversation '%s' was not found.", id);
+    snprintf(message, sizeof(message), "Session '%s' was not found.", id);
     rc = cai_cli_error(error, CAI_ERR_INVALID, message);
   }
   if (rc != CAI_OK) {
@@ -1020,14 +1020,13 @@ static int get_session(lc_lease *lease, const char *scope, const char *id,
     if (strcmp(session->history_backend, "collections") != 0)
       return cai_cli_error(error, CAI_ERR_INVALID,
                            "Session uses retired attachment-backed history; "
-                           "start a new conversation with --new");
+                           "start a new session with --new");
     if (scope != NULL && strcmp(session->workspace, scope) != 0)
       return cai_cli_error(error, CAI_ERR_INVALID,
                            "session belongs to another directory");
   } else {
     if (scope == NULL)
-      return cai_cli_error(error, CAI_ERR_INVALID,
-                           "conversation was not found");
+      return cai_cli_error(error, CAI_ERR_INVALID, "session was not found");
     memset(session, 0, sizeof(*session));
     if (strlen(scope) >= sizeof(session->workspace) ||
         strlen(id) >= sizeof(session->id))
@@ -1061,7 +1060,7 @@ int cai_cli_pouch_set_retention(cai_cli_pouch *pouch, const char *id, long days,
   int rc;
   if (days < 0L || days > LONG_MAX / 86400L)
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "conversation retention day count is out of range");
+                         "session retention day count is out of range");
   lc_error_init(&local);
   pthread_mutex_lock(&pouch->journal_lock);
   rc = journal_write_ready(pouch, error);
@@ -1309,14 +1308,14 @@ static int load_id_mode(void *context, const char *scope, const char *id,
   if (strcmp(session.history_backend, "collections") != 0)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "Session uses retired attachment-backed history; "
-                         "start a new conversation with --new");
+                         "start a new session with --new");
   rc = session_available(pouch, id, &available, error);
   if (rc != CAI_OK)
     return rc;
   if (!available)
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "Conversation journal is no longer available (it may "
-                         "have expired); start a new conversation");
+                         "Session journal is no longer available (it may "
+                         "have expired); start a new session");
   if (writable) {
     lc_collection *owned = NULL;
     rc = collection_owner_open(pouch, id, "events", 0, 0, &owned, error);
@@ -1476,9 +1475,8 @@ static int session_list(cai_cli_pouch *pouch, const char *scope, int visible,
           (scope != NULL && strcmp(scope, session.workspace) != 0))
         continue;
       if (strcmp(session.id, page->keys[i]) != 0) {
-        rc = cai_cli_error(
-            error, CAI_ERR_INVALID,
-            "conversation metadata identity does not match its key");
+        rc = cai_cli_error(error, CAI_ERR_INVALID,
+                           "session metadata identity does not match its key");
         break;
       }
       if (visible) {
@@ -2058,7 +2056,7 @@ collection_event_boundary(void *context,
     read->pouch->logger->warn(
         read->pouch->logger,
         "Skipped oversized session event during replay; stored record "
-        "preserved, continuing with the remaining conversation",
+        "preserved, continuing with the remaining session",
         fields, 2U);
   }
   if (read->rc == CAI_OK) {
@@ -2545,7 +2543,7 @@ static int ensure_parents(char *path, cai_error *error) {
 /* Auto-resume reads the directory cache and commit directly, so it need
  * not execute a query that repairs a retired/corrupt search index. The public
  * wait flush keeps a healthy index's trusted fast path and repairs derived
- * state when needed. Failure must not prevent direct conversation replay. */
+ * state when needed. Failure must not prevent direct session replay. */
 static void prepare_session_indexes(cai_cli_pouch *pouch) {
   lc_index_flush_req request;
   lc_index_flush_res result;
@@ -2628,7 +2626,7 @@ static int cai_cli_pouch_open_options_with_scratch(
   if (options->conversation_retention_days < 0L ||
       options->conversation_retention_days > LONG_MAX / 86400L)
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "conversation retention day count is out of range");
+                         "session retention day count is out of range");
   pouch->conversation_retention_seconds =
       options->conversation_retention_days * 86400L;
   if (options->config_dir != NULL) {

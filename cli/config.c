@@ -100,7 +100,7 @@ static const cli_field fields[] = {
     {"storage", "conversation_retention_days",
      offsetof(cai_cli_options, conversation_retention_days), CAI_CONFIG_INTEGER,
      0U, NULL,
-     "Whole conversation collection retention since last append, default 30 "
+     "Whole session collection retention since last append, default 30 "
      "days; 0 disables expiry. Liblockdc maintenance performs deletion, not a "
      "CAI timer. "
      "Individual journal entries never expire separately."},
@@ -129,7 +129,7 @@ static const cli_field fields[] = {
      "foreground mode: wait for exit or cancellation. /background restores "
      "the libcai default when yielding is disabled."},
     B("messaging", "enabled", messaging,
-      "Listen for and send conversation messages on the shared Pouch backend."),
+      "Listen for and send session messages on the shared Pouch backend."),
     S("messaging", "queue_name", message_queue, 0U,
       "Empty allocates queue_prefix.<directory-basename>, adding the fewest "
       "real "
@@ -137,11 +137,11 @@ static const cli_field fields[] = {
       "The actual hostname is a leading component. Assigned names persist. "
       "An explicit name overrides it. Newest app startup takes ownership of "
       "new deliveries; "
-      "already delivered messages stay in their original conversation."),
+      "already delivered messages stay in their original session."),
     B("messaging", "enable_auto_enqueue", enable_auto_enqueue,
       "Automatically approve incoming TUI next-turn prompts; /autoqueue "
       "toggles "
-      "this for the current conversation. Default false."),
+      "this for the current session. Default false."),
     {"messaging", "ack_timeout_ms",
      offsetof(cai_cli_options, message_ack_timeout_ms), CAI_CONFIG_INTEGER, 0U,
      NULL,
@@ -182,7 +182,7 @@ static const cli_field fields[] = {
       "state_dir/pouch; "
       "explicit values are lockd endpoint URLs."),
     S("storage", "sessions_store", sessions_store, 0U,
-      "Named store for conversations. --temp uses its own private store."),
+      "Named store for sessions. --temp uses its own private store."),
     B("storage", "disable_compression", disable_compression,
       "Disable streaming zlib compression for Pouch roots. Default false. "
       "Changing an existing root's mode converts it synchronously with "
@@ -193,7 +193,7 @@ static const cli_field fields[] = {
     S("storage", "messaging_store", messaging_store, 0U,
       "Named messaging store; retained in --temp runs."),
     S("storage", "context_store", context_store, 0U,
-      "Named context store; empty reuses the active conversation client. "
+      "Named context store; empty reuses the active session client. "
       "Context is temporary in --temp runs unless a named store is selected."),
     B("ui", "temporary", temporary,
       "Start in a unique cache workspace; histories are deleted on exit. "

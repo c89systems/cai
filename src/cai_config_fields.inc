@@ -129,12 +129,12 @@ F("agent", "preset", STR, RUNTIME, preset, 0, "smith|smith-review",
 F("agent", "identity", STR, RUNTIME, agent_identity, 0, NULL,
   "Agent identity; empty selects preset identity.")
 F("agent", "model", STR, RUNTIME, model, 0, NULL,
-  "New-conversation model; resume restores saved selection.")
+  "New-session model; resume restores saved selection.")
 F("agent", "reasoning_effort", STR, RUNTIME, reasoning_effort, 0,
   "none|minimal|low|medium|high|xhigh|max|ultra",
-  "New-conversation reasoning effort.")
+  "New-session reasoning effort.")
 F("agent", "reasoning_summary", STR, RUNTIME, reasoning_summary, 0,
-  "none|auto|concise|detailed", "New-conversation reasoning summary.")
+  "none|auto|concise|detailed", "New-session reasoning summary.")
 F("agent", "service_tier", STR, RUNTIME, service_tier, 0, NULL,
   "Provider service tier; empty restores the saved tier or leaves routing "
   "unset. Explicit default requests normal routing; priority requests Fast.")
@@ -220,7 +220,7 @@ F("chrome", "max_response_bytes", SIZE, RUNTIME,
   chrome_config.max_response_bytes, 0, NULL,
   "Buffered Chrome response limit; zero selects 16 MiB, maximum 64 MiB.")
 F("todo", "default_board", STR, RUNTIME, todo.default_board, 0, NULL,
-  "Initial board for new conversations; resumed selections are restored. "
+  "Initial board for new sessions; resumed selections are restored. "
   "--board overrides once.")
 F("todo", "max_title_bytes", SIZE, RUNTIME, todo.max_title_bytes, 0, NULL,
   "Task title bound; zero uses the tool default.")

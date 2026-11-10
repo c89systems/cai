@@ -153,11 +153,11 @@ int main(int argc, char **argv) {
          CAI_OK);
   cai_source_close(source);
   /* Keep a large live span in the candidate segments so the snapshot copies
-   * multiple chunks, alongside the real conversation's small live records. */
+   * multiple chunks, alongside the real session's small live records. */
   write_document(&pouch, "large-live", &error);
   /* Public settings do not expose the compaction byte threshold. Cross the
    * real 64 MiB threshold with bounded streamed input and small segments.
-   * The hidden fixture document leaves conversation listings unchanged. */
+   * The hidden fixture document leaves session listings unchanged. */
   for (i = 0; i < 10; i++)
     write_document(&pouch, "compaction-fixture", &error);
   wait_snapshot(&pouch);

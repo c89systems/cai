@@ -262,7 +262,7 @@ int main(void) {
   assert(strstr(c.text, "Loaded 1 MCP tool(s)"));
   assert(!strstr(c.text, "input_schema") && !strstr(c.text, "{\""));
   assert(result(&c, "agent_message",
-                "## Message queues\n\n| Queue | Workspace | Conversation |\n| "
+                "## Message queues\n\n| Queue | Workspace | Session |\n| "
                 "--- | --- | --- |\n| cai.y | /work | session |\n"));
   assert(strstr(c.text, "Listed ") &&
          strstr(c.text, "| cai.y | /work | session |"));

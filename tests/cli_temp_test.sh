@@ -135,7 +135,7 @@ for answer in n '' yes; do
 done
 
 # A normal receiver and a temporary sender use the explicitly selected shared
-# messaging store, independently of private and named conversation stores.
+# messaging store, independently of private and named session stores.
 plan '{"plan":[]}'
 terminal_start --messaging --message-queue cai.normal
 plan '{"plan":[{"tool":"agent_message","arguments":{"operation":"send","recipient":"cai.normal","text":"TEMP TO NORMAL"}},"MESSAGE SENT"]}'

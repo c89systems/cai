@@ -1587,8 +1587,8 @@ static void server_commands(int argc, char **argv) {
   typed_wait(a, &a->review_finished, 1U);
   typed_command(a, 28U, "/status", 1);
   failures = a->transcript_failures;
-  /* A conversation handoff closes the old reader. Its producer identity may
-   * not be silently reused for the next conversation. */
+  /* A session handoff closes the old reader. Its producer identity may
+   * not be silently reused for the next session. */
   {
     cai_input_scope scope;
     cai_input_request r;

@@ -16,7 +16,7 @@ Implemented:
 
 - OpenAI Responses create/retrieve/delete/cancel style HTTP APIs used by the
   SDK.
-- OpenAI Conversations endpoints and conversation-handle sessions.
+- OpenAI Conversations API for provider sessions.
 - HTTP/SSE streaming with semantic event parsing.
 - Responses WebSocket streaming for OpenAI API-key and ChatGPT subscription
   auth clients, sharing the same semantic Responses event parser as HTTP/SSE.
@@ -69,14 +69,14 @@ Implemented:
 - Example MCP server exposing reverse geocoding, todo/kanban, and Linux/X11
   clipboard when `xclip` is present.
 - Terminal chat, SearXNG, SMHI weather, Mike Mind, session-state,
-  history-export, conversation-handle, OpenRouter, streaming, and basic
+  history-export, session-handle, OpenRouter, streaming, and basic
   response examples.
 - Lua 5.5 binding with client/agent/session/response/output handles, streaming
   sinks, streamed tool output callbacks, function-call argument stream
   callbacks, raw and raw-spooled Lua callback tools, lonejson-style spooled
   large-value inputs, public tool presets, hosted-tool helpers, ChatGPT
   auth/login helpers, MCP handler exposure, low-level Responses and
-  Conversations handles, raw JSON `tool_choice`, input-token counting, model
+  Provider session handles, raw JSON `tool_choice`, input-token counting, model
   constants/metadata, offline tests, Lua examples, and local/release LuaRock
   build targets.
 - Release matrix packaging for Linux x86_64/aarch64/armhf with GNU and musl
@@ -146,12 +146,12 @@ of coverage, not proof that the current tree passed a release gate:
 
 ## Deferred: Native Prompt-History Retention
 
-Prompt recall now uses encrypted per-conversation collections and a configurable
+Prompt recall now uses encrypted per-session collections and a configurable
 200-entry recall window. `/history COUNT` is the configuration/control surface;
 it explicitly reports that stored-entry pruning is not yet enforced. Once
 liblockdc provides collection `max_entries`, pass that policy directly to the
 SDK rather than introducing CAI pruning or expiry timers. Prompt-entry and
-prompt-collection aging are deferred with that integration. Whole-conversation
+prompt-collection aging are deferred with that integration. Whole-session
 collection retention is already enforced through SDK metadata (default 30 days
 since the last append, configurable with `/retention`).
 
@@ -196,7 +196,7 @@ Before tagging a release:
 
 Track upstream Codex client/protocol changes during provider maintenance and
 before a release. The catalog compatibility baseline is maintained separately
-from CAI's release version and conversation compaction hashes.
+from CAI's release version and session compaction hashes.
 
 - Current baseline: `0.160.0` in `CAI_CODEX_CATALOG_CLIENT_VERSION`
   (`src/cai_model_catalog.c`). Last account-catalog verification: 2026-10-04;
@@ -284,20 +284,20 @@ Official OpenAI docs checked:
 - <https://developers.openai.com/api/docs/guides/websocket-mode>
 - <https://developers.openai.com/api/docs/guides/streaming-responses>
 
-## Supported: Agent Conversation Export
+## Supported: Agent Session Export
 
 Core libcai exposes `cai_agent_runtime_export_markdown` as a real incremental,
 sink-based handover projection of the active runtime. It includes instructions,
-conversation text, activity and goal metadata, without executing tools or
+session text, activity and goal metadata, without executing tools or
 embedding binary attachments. It is not a resumable session format.
 The optional file helper creates a new owner-only file without overwriting.
 
 The application implements `/export [BASENAME]` and `--export ID`, writing resumable
 JSONL plus this Markdown projection under the application data directory's
-`exports/ID/`. `--import FILE` imports JSONL into a new conversation.
+`exports/ID/`. `--import FILE` imports JSONL into a new session.
 Exports are explicit user/host actions, not a model tool. Desktop clipboard
 integration remains host-owned. See [the handover contract](docs/workspace-export.md)
-and [conversation/export usage](docs/conversations.md#export-and-import).
+and [session export usage](docs/sessions.md#export-and-import).
 
 ## Parked: Realtime WebSocket
 
@@ -401,20 +401,20 @@ Current OpenRouter boundary:
   `openai/gpt-5.6-luna`.
 - OpenRouter Responses beta is stateless for cai's tested behavior, so
   multi-turn OpenRouter sessions use client-side history replay.
-- Do not claim OpenRouter parity for OpenAI Conversations or server-side
+- Do not claim OpenRouter parity for OpenAI provider sessions or server-side
   compaction until those behaviors are documented or separately proven.
 - The long OpenRouter e2e is paced by `CAI_OPENROUTER_E2E_DELAY_SEC` because
   free models can have low per-minute request limits.
 
 ## Integration Boundaries
 
-- Shared-Pouch conversation messaging is implemented in libcai_app using
+- Shared-Pouch session messaging is implemented in libcai_app using
   managed LQ consumer services, stable workspace mailbox names, takeover fencing,
   durable delivery ACKs, and softline's
   normal approval queue. Core libcai offers generic tool-registration and
   next-turn hooks without depending on liblockdc. Remote lockd fanout remains
   deferred; see [messaging](docs/agent-messaging.md).
-- Shared kanban is implemented: per-conversation selection, `/todo`, C/Lua
+- Shared kanban is implemented: per-session selection, `/todo`, C/Lua
   receivers, and a read-only automatically updating browser handler. Board
   storage uses the application's encrypted `cai.todo` Pouch document. HTTP
   listeners, routing and access control remain host-owned; see

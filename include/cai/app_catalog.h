@@ -19,7 +19,7 @@ typedef enum cai_app_catalog_phase {
 /** One completed, borrowed catalog row. BEGIN replaces the previous candidate;
  * ITEM has a zero-based index; END's index is the accepted row count. Publish
  * a candidate only at END. ERROR discards it. Revision increases per owner;
- * conversation is the source epoch, never an authority grant. Text is literal
+ * session is the source epoch, never an authority grant. Text is literal
  * untrusted data: a name for ITEM, a diagnostic for ERROR, empty otherwise.
  * No descriptions, resource bodies or complete catalog are gathered by the
  * transport. A frontend may retain its explicit completion list. */

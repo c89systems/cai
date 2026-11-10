@@ -2702,7 +2702,7 @@ cai_runtime_build_subagent_instructions(const cai_agent_runtime *runtime,
     rc = cai_buffer_append_cstr(
         &builder,
         "- `run_review_and_fix`: only for an explicitly authorized "
-        "review/fix loop. It replaces this conversation's current goal, then "
+        "review/fix loop. It replaces this session's current goal, then "
         "repeats run_review, fixes and verification until clean. It does not "
         "run an isolated fixing agent. Do not use it for a normal review "
         "request or a later request to fix the findings.\n",
@@ -5830,7 +5830,7 @@ static void cai_runtime_policy_diagnostic(cai_agent_runtime *runtime,
       "The preceding turn was interrupted by a provider cybersecurity error. "
       "The original task and goal remain stopped. For a bug report, summarize "
       "the intended task and relevant preceding work visible in this "
-      "conversation. Describe what possibly triggered the notice and assess ";
+      "session. Describe what possibly triggered the notice and assess ";
   const char *assessment =
       "whether the visible context supports a cybersecurity concern or "
       "legitimate maintenance/security fixes. Separate observed facts from "
@@ -6714,13 +6714,13 @@ static int cai_runtime_handover_history(void *context, cai_sink *sink,
   lonejson_error_init(&local);
   if (cursor.rewind(&cursor, &local) != LONEJSON_STATUS_OK)
     return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to rewind conversation history",
+                                "failed to rewind session history",
                                 local.message);
   for (;;) {
     chunk = cursor.read(&cursor, bytes, sizeof(bytes));
     if (chunk.error_code != 0)
       return cai_set_error(error, CAI_ERR_TRANSPORT,
-                           "failed to read conversation history");
+                           "failed to read session history");
     if (chunk.bytes_read != 0U) {
       rc = cai_sink_write(sink, bytes, chunk.bytes_read, error);
       if (rc != CAI_OK)
@@ -6730,7 +6730,7 @@ static int cai_runtime_handover_history(void *context, cai_sink *sink,
       return CAI_OK;
     if (chunk.bytes_read == 0U)
       return cai_set_error(error, CAI_ERR_TRANSPORT,
-                           "conversation history reader made no progress");
+                           "session history reader made no progress");
   }
 }
 
@@ -6804,9 +6804,8 @@ static int cai_runtime_export_idle_locked(const cai_agent_runtime *runtime,
       runtime->input_dispatch != NULL ||
       runtime->input_history_pending != NULL ||
       runtime->shell_context_head != NULL || runtime->shell_context_applying) {
-    return cai_set_error(
-        error, CAI_ERR_INVALID,
-        "conversation export requires a stable runtime boundary");
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "session export requires a stable runtime boundary");
   }
   return CAI_OK;
 }
@@ -6967,7 +6966,7 @@ int cai_agent_runtime_trim_history(cai_agent_runtime *runtime, size_t count,
   old_watermark = runtime->commit_event_sequence;
   if (rc == CAI_OK && runtime->input_origins != NULL)
     rc = cai_set_error(error, CAI_ERR_INVALID,
-                       "trim the parent conversation while subagent input "
+                       "trim the parent session while subagent input "
                        "receipts are retained");
   through = runtime->next_event_sequence;
   journal_replace = CAI_SESSION_IMPL(runtime->session)->journal_replace;
@@ -7070,11 +7069,11 @@ int cai_agent_runtime_trim_history(cai_agent_runtime *runtime, size_t count,
     fields[2].as.string_value = message;
     fields[2].value_len = strlen(message);
     if (rc == CAI_OK && runtime->logger->info != NULL)
-      runtime->logger->info(runtime->logger, "Trimmed conversation history",
-                            fields, 3U);
+      runtime->logger->info(runtime->logger, "Trimmed session history", fields,
+                            3U);
     else if (rc != CAI_OK && runtime->logger->warn != NULL)
-      runtime->logger->warn(runtime->logger,
-                            "Could not trim conversation history", fields, 3U);
+      runtime->logger->warn(runtime->logger, "Could not trim session history",
+                            fields, 3U);
   }
   return rc;
 }
@@ -9329,7 +9328,7 @@ int cai_agent_runtime_continue_goal(cai_agent_runtime *runtime, int *started,
   if (started == NULL)
     return cai_set_error(error, CAI_ERR_INVALID, "started output is required");
   return cai_runtime_enqueue_input(
-      runtime, "Continue working toward the active thread goal.",
+      runtime, "Continue working toward the active session goal.",
       CAI_RUNTIME_INPUT_GOAL, started, error);
 }
 
@@ -11457,7 +11456,7 @@ static int cai_runtime_register_review_fix_tool(cai_agent_runtime *runtime,
         "Call once to start a review/fix loop ONLY when the user explicitly "
         "requests or authorizes repeated review/fix iterations. A normal "
         "review request, even followed by a request to fix findings, is not "
-        "permission. Replaces this conversation's current goal with repeated "
+        "permission. Replaces this session's current goal with repeated "
         "run_review, fixes and verification until clean. Returns after "
         "queueing the goal; the current agent performs the work. Use "
         "run_review for a single review. No implicit token budget.",
@@ -13254,7 +13253,7 @@ int cai_agent_runtime_export_markdown(cai_agent_runtime *runtime,
 
   if (sink == NULL) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "conversation export sink is required");
+                         "session export sink is required");
   }
   rc = cai_runtime_owner(runtime, error);
   if (rc != CAI_OK) {
@@ -13332,7 +13331,7 @@ int cai_agent_runtime_export_markdown_file(cai_agent_runtime *runtime,
   }
   if (out_path != NULL && out_path_capacity == 0U) {
     return cai_set_error(error, CAI_ERR_INVALID,
-                         "conversation export path capacity is required");
+                         "session export path capacity is required");
   }
   default_path = NULL;
   chosen_path = path;
@@ -13357,14 +13356,14 @@ int cai_agent_runtime_export_markdown_file(cai_agent_runtime *runtime,
       session_id_length = strlen(runtime->session_id);
       if (workspace_length > SIZE_MAX - app_length - session_id_length - 15U) {
         rc = cai_set_error(error, CAI_ERR_LIMIT,
-                           "conversation export path is too long");
+                           "session export path is too long");
       } else {
         path_length =
             workspace_length + 1U + app_length + 9U + session_id_length + 3U;
         default_path = (char *)cai_alloc(NULL, path_length + 1U);
         if (default_path == NULL) {
           rc = cai_set_error(error, CAI_ERR_NOMEM,
-                             "failed to allocate conversation export path");
+                             "failed to allocate session export path");
         } else {
           (void)snprintf(default_path, path_length + 1U, "%s/%s-session-%s.md",
                          runtime->workspace_directory, app_name,
@@ -13376,13 +13375,13 @@ int cai_agent_runtime_export_markdown_file(cai_agent_runtime *runtime,
   }
   if (rc == CAI_OK && (chosen_path == NULL || chosen_path[0] == '\0')) {
     rc = cai_set_error(error, CAI_ERR_INVALID,
-                       "conversation export path is required");
+                       "session export path is required");
   }
   path_length = chosen_path != NULL ? strlen(chosen_path) : 0U;
   if (rc == CAI_OK && out_path != NULL &&
       path_length + 1U > out_path_capacity) {
     rc = cai_set_error(error, CAI_ERR_LIMIT,
-                       "conversation export path buffer is too small");
+                       "session export path buffer is too small");
   }
   fd = -1;
   fp = NULL;
@@ -13391,13 +13390,13 @@ int cai_agent_runtime_export_markdown_file(cai_agent_runtime *runtime,
     fd = open(chosen_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (fd < 0) {
       rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to create conversation export file",
+                                "failed to create session export file",
                                 strerror(errno));
     } else {
       created = 1;
       if (fstat(fd, &created_stat) != 0) {
         rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                  "failed to inspect conversation export file",
+                                  "failed to inspect session export file",
                                   strerror(errno));
       } else {
         created_stat_valid = 1;
@@ -13408,7 +13407,7 @@ int cai_agent_runtime_export_markdown_file(cai_agent_runtime *runtime,
     fp = fdopen(fd, "wb");
     if (fp == NULL) {
       rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to open conversation export file",
+                                "failed to open session export file",
                                 strerror(errno));
       close(fd);
       fd = -1;
@@ -13427,7 +13426,7 @@ int cai_agent_runtime_export_markdown_file(cai_agent_runtime *runtime,
   if (sink != NULL) {
     if (rc == CAI_OK && fflush(fp) != 0) {
       rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to flush conversation export file",
+                                "failed to flush session export file",
                                 strerror(errno));
     }
     cai_sink_close(sink);
@@ -13436,7 +13435,7 @@ int cai_agent_runtime_export_markdown_file(cai_agent_runtime *runtime,
   if (fp != NULL) {
     if (fclose(fp) != 0 && rc == CAI_OK) {
       rc = cai_set_error_detail(error, CAI_ERR_TRANSPORT,
-                                "failed to close conversation export file",
+                                "failed to close session export file",
                                 strerror(errno));
     }
     fp = NULL;

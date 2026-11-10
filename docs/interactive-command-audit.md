@@ -1,7 +1,7 @@
 # Interactive command policies
 
 CAI uses Softline 0.17.0's native backend queue editor with core-owned per-
-conversation authority. Native keys submit copied requests; acknowledgements
+session authority. Native keys submit copied requests; acknowledgements
 and ordered observations update its mirror. The complete inventory is
 `cli_command_definitions` in `cli/commands.c`; argument-specific query forms are
 resolved by `cai_cli_command_delivery`. Admission, readiness, mode normalization and
@@ -21,11 +21,11 @@ are not aliases.
 | Feed | Execute between owner-thread feed writes. No provider input is submitted. |
 | Request | Execute at the next runtime `INPUT_BOUNDARY`, after the response/tool round and before the next request, or while idle. The in-flight request keeps its original settings. |
 | Turn | Wait until the turn, shell and foreground review finish. Normalize steering intent to visible `Q`; the original identity remains editable. |
-| Conversation prompt | Enter queues a new turn; Alt-Enter steers at a runtime input boundary. Native ordering and approval rules remain authoritative. |
+| Session prompt | Enter queues a new turn; Alt-Enter steers at a runtime input boundary. Native ordering and approval rules remain authoritative. |
 
 Feed and request commands are independent managed entries: unrelated
-queued conversation input cannot delay them, and an unready command does not
-block a later conversation steer. They remain approval-controlled, editable,
+queued session input cannot delay them, and an unready command does not
+block a later session steer. They remain approval-controlled, editable,
 cancellable and stopped when appropriate. Request readiness is false during
 streaming; submission never inserts command output into that response.
 
@@ -43,7 +43,7 @@ Attachment operations such as workspace selection and takeover have their own co
 | --- | --- | --- |
 | `/help` | Feed | Local help. |
 | `/status` | Feed | Runtime/status snapshots and tool inventory. |
-| `/log` | Feed | Active conversation's log file path, when configured. |
+| `/log` | Feed | Active session's log file path, when configured. |
 | `/tools` | Feed | Tool/MCP inventory. |
 | `/mcp`, `/mcp list`, `/mcp NAME`, `/mcp help` | Feed | Inspect configured connections without network work. |
 | `/mcp enable [NAME\|all]`, `/mcp disable [NAME\|all]`, `/mcp refresh [NAME\|all]` | Request | Update connection tools on the worker before subsequent inference; never change config.ini. |
@@ -78,13 +78,13 @@ Attachment operations such as workspace selection and takeover have their own co
 | `/todo`, `/todo list`, `/todo help`, `/todo see ID` | Feed | Read boards or a card. |
 | `/todo layout [board\|list]` | Feed | Inspect/change local layout and display the board. |
 | `/todo use NAME`, `/todo new NAME` | Turn | Commit the runtime's selected board. |
-| `/retention` | Feed | Inspect conversation retention. |
-| `/retention DAYS\|off` | Turn | Change conversation collection inactivity retention without racing commits. |
+| `/retention` | Feed | Inspect session retention. |
+| `/retention DAYS\|off` | Turn | Change session collection inactivity retention without racing commits. |
 | `/trim`, `/trim list [LIMIT]`, `/trim COUNT` | Turn | History APIs require a stable runtime. |
 | `/export [BASENAME]` | Turn | Export consistent retained history. |
-| `/resume` | Feed | List conversations. |
+| `/resume` | Feed | List sessions. |
 | `/resume NUMBER` | Turn | Switch the active runtime. |
-| `/new` | Turn | Create and switch conversations. |
+| `/new` | Turn | Create and switch sessions. |
 | `/review [SCOPE]` | Turn | Start an isolated foreground review. |
 | `/review-and-fix [SCOPE]` | Turn | Start goal-driven review/fix work. |
 | `/compact` | Turn | Start only when `can_compact` permits it. |
@@ -107,7 +107,7 @@ do not print a second copy. Failure to render the input prevents dispatch.
 
 ## Foreground reviews and subagents
 
-Conversation steers reach the active child when subagent steering is enabled;
+Session steers reach the active child when subagent steering is enabled;
 otherwise they become `Q`. Parent settings and goal controls wait for a parent
 input boundary; they do not retarget a review's configuration or goal. Themes
 are UI-local and may change at a child's completed response/tool seam. Queries
@@ -132,7 +132,7 @@ confirmed together with their final values. CAI retains only a notification
 field mask, never another command queue or a copy of requested values. Session
 changes discard outstanding notifications.
 
-Conversation steering that misses the final active seam can start at idle only
+Session steering that misses the final active seam can start at idle only
 when native delivery, approval, draft/search and stopped state permit it.
 Alt-S's draft-retaining shell handoff and Alt-Q's draft-saving exit are explicit
 editor actions. Trusted host controls, startup automation, batch input and the

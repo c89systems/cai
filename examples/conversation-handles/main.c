@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
   cai_agent_config_init(&agent_config);
   agent_config.model = example_model();
   agent_config.developer_instructions =
-      "Answer briefly. You are running inside a C SDK conversation example.";
+      "Answer briefly. You are running inside a C SDK session example.";
   client = NULL;
   agent = NULL;
   session = NULL;
@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
     rc = client->create_conversation(client, &conversation, &error);
   }
   if (rc != CAI_OK) {
-    exit_code = print_error("conversation handle setup", rc, &error);
+    exit_code = print_error("provider session handle setup", rc, &error);
     goto done;
   }
   rc = agent->new_session_for_conversation(agent, conversation, &session,
@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
   }
   rc = session->add_user_text(session,
                               "Say one short sentence about reusable "
-                              "conversation handles.",
+                              "provider session handles.",
                               &error);
   if (rc == CAI_OK) {
     rc = session->run_output(session, &output, &error);
@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
     exit_code = print_error("cai_session_run_output", rc, &error);
     goto done;
   }
-  printf("conversation: %s\n", conversation->id(conversation));
+  printf("provider session ID: %s\n", conversation->id(conversation));
   printf("response: %s\n",
          output->text(output) != NULL ? output->text(output) : "");
 

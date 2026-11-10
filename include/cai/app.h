@@ -150,7 +150,7 @@ int cai_app_status_fd(const cai_app *self);
  */
 int cai_app_observe_status(const cai_app *self, cai_app_status *out,
                            cai_error *error);
-/** Thread-safe attachment to the active conversation's backend queue. Does
+/** Thread-safe attachment to the active session's backend queue. Does
  * not open a runtime/store or wait for a snapshot. Use connection_fd/poll and
  * request from input_controller.h. Requires a ready controller or interactive
  * receiver; batch/review modes have no frontend queue. attachment is a fixed

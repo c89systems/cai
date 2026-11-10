@@ -80,15 +80,15 @@ override the model.
 OPENROUTER_API_KEY=... make -C examples run-openrouter-response
 ```
 
-## Conversation Handles
+## Provider Session Handles
 
-Create a conversation handle transparently and run a session against it:
+Create an OpenAI provider session handle and bind a CAI session to it.
 
 ```sh
 make -C examples run-conversation-handles
 ```
 
-Reuse an existing OpenAI conversation ID without threading IDs through every
+Reuse an existing OpenAI provider session ID without threading IDs through every
 call:
 
 ```sh
@@ -345,10 +345,10 @@ CAI_LUA_TODO_LOCK=/tmp/cai-lua-todo.lock \
 OPENAI_API_KEY=... make -C examples run-lua-terminal-chat CAI_TERMINAL_CHAT_API_KEY=1
 ```
 
-## Lua Conversation
+## Lua Provider Session
 
-Create a conversation handle and add items through the lower-level
-Conversations facade:
+Create a provider session handle and add items through the OpenAI
+Conversations API for provider sessions.
 
 ```sh
 OPENAI_API_KEY=... make -C examples run-lua-conversation

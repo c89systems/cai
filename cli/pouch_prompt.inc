@@ -1,4 +1,4 @@
-/* Prompt recall is independent of the conversation journal. Keep one receiver
+/* Prompt recall is independent of the session journal. Keep one receiver
  * open for the active session and use synchronous JSON generation/parsing on
  * the caller's thread. There is no file backend or per-entry stream bridge. */
 typedef struct prompt_record {
@@ -22,7 +22,7 @@ int cai_cli_pouch_prompt_open(cai_cli_pouch *pouch, const char *id,
   int rc;
   if (!session_component(id) || strlen(id) >= CAI_AGENT_SESSION_ID_MAX)
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "invalid prompt-history conversation ID");
+                         "invalid prompt-history session ID");
   rc = collection_owner_open(pouch, id, "prompts", 1, 0, &collection, error);
   if (rc == CAI_OK) {
     if (pouch->prompt_history != collection)
@@ -39,7 +39,7 @@ int cai_cli_pouch_prompt_open_read(cai_cli_pouch *pouch, const char *id,
   int rc;
   if (!session_component(id) || strlen(id) >= CAI_AGENT_SESSION_ID_MAX)
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "invalid prompt-history conversation ID");
+                         "invalid prompt-history session ID");
   rc = open_history_collection(pouch, id, "prompts", 0, 1, &collection, error);
   if (rc == CAI_OK) {
     cai_cli_pouch_prompt_close(pouch);
@@ -78,7 +78,7 @@ int cai_cli_pouch_prompt_configure(cai_cli_pouch *pouch, const char *id,
   int rc = CAI_OK;
   if (!session_component(id) || strlen(id) >= CAI_AGENT_SESSION_ID_MAX)
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "invalid prompt-history conversation ID");
+                         "invalid prompt-history session ID");
   if (pouch->prompt_history == NULL) {
     if (limit != 0U)
       rc = cai_cli_pouch_prompt_open(pouch, id, error);

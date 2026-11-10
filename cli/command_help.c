@@ -18,7 +18,7 @@ static const char *const help[] = {
     "| `/help` | Show this help inline. |\n"
     "| `/help -p`, `/help less` | Open rendered Markdown help in libmdf's "
     "pager. |\n",
-    "| `/retention [DAYS or off]` | Show or set this conversation's "
+    "| `/retention [DAYS or off]` | Show or set this session's "
     "inactivity retention. 0 or off keeps it forever. |\n"
     "| `/history [COUNT]` | Show or set prompt recall (default 200). "
     "Storage maintenance prunes oldest entries; zero disables recall "
@@ -39,7 +39,7 @@ static const char *const help[] = {
     "reviewer; no argument compares against the Git default branch. |\n",
     "| `/review-and-fix [uncommitted\\|base REF]` | Replace the current "
     "goal with review, fix, and verification until clean; stay in this "
-    "conversation. No argument uses the Git default branch. |\n",
+    "session. No argument uses the Git default branch. |\n",
     "| `/todo [COMMAND]` | Show the selected board; list, use NAME, "
     "new NAME, see ID, layout board/list, or help. Requires --todo. |\n",
     "| `/queue [on\\|off\\|NAME]` | Show the mailbox, enable/disable "
@@ -52,7 +52,7 @@ static const char *const help[] = {
     "newest entries; 0 removes nothing. |\n"
     "| `/trim list [LIMIT]` | List a different number of entries; "
     "compaction is indivisible. |\n"
-    "| `/compact` | Compact conversation context between turns; Escape "
+    "| `/compact` | Compact session context between turns; Escape "
     "cancels. The command remains editable in the queue until ready. |\n"
     "| `/goal [COMMAND]` | Show a goal; new TEXT replaces it, pause/resume "
     "control pursuit, clear removes it, help explains commands. Prefer "
@@ -70,7 +70,7 @@ static const char *const help[] = {
     "| `/model [MODEL [EFFORT]]`, `/m` | Show models or change "
     "model/effort at "
     "the next safe "
-    "model/tool boundary, keeping this conversation. |\n",
+    "model/tool boundary, keeping this session. |\n",
     "| `/reasoning [EFFORT]`, `/r` | Show model-specific reasoning choices "
     "or "
     "change effort at the next safe model/tool boundary. |\n",
@@ -97,7 +97,7 @@ static const char *const help[] = {
     "| `/status` | Show model, reasoning, context, and available cost or "
     "quota metrics and the tool summary. Refresh ChatGPT quota "
     "immediately. |\n"
-    "| `/log` | Show the full path of this conversation's log file, when "
+    "| `/log` | Show the full path of this session's log file, when "
     "configured. Also shown in `/status`. |\n"
     "| `/tools` | List installed tools, MCP servers, discovery errors and "
     "tool descriptions. |\n",
@@ -108,11 +108,11 @@ static const char *const help[] = {
     "package. |\n"
     "| `/tools unload NAME` | Retire a plugin before the next request. |\n"
     "| `/skills` | List loaded skill names and descriptions. |\n"
-    "| `/resume` | List conversations for the current directory. |\n",
-    "| `/resume NUMBER` | Resume a listed conversation and replay prompts "
+    "| `/resume` | List sessions for the current directory. |\n",
+    "| `/resume NUMBER` | Resume a listed session and replay prompts "
     "and assistant text. |\n"
-    "| `/new` | Start a fresh conversation in this directory. |\n"
-    "| `/export [BASENAME]` | Export this conversation. `.md` or `.jsonl` "
+    "| `/new` | Start a fresh session in this directory. |\n"
+    "| `/export [BASENAME]` | Export this session. `.md` or `.jsonl` "
     "selects one format; other names get both suffixes. No name uses the "
     "default export directory. |\n"
     "| `/quit`, `/exit` | Exit the application. |\n\n",
@@ -174,7 +174,7 @@ static const char *const help[] = {
     "the edit and restores the original entry.\n\n",
     "## History and terminal keys\n\n"
     "| Key | Action |\n| --- | --- |\n"
-    "| Up / Down | Navigate draft rows or conversation prompt history. |\n"
+    "| Up / Down | Navigate draft rows or session prompt history. |\n"
     "| Ctrl-P / Ctrl-N | Recall previous/next history entry directly. |\n"
     "| Ctrl-R | Search history; Enter selects for editing, Enter again "
     "sends. |\n"
@@ -203,7 +203,7 @@ int cai_cli_help_reader_open(const char *invocation, int attached,
   if (invocation == NULL || invocation[0] == '\0')
     invocation = "cai";
   snprintf(reader->example, sizeof(reader->example),
-           "```sh\n%s %-31s # new conversation\n%s %-31s # send a prompt at "
+           "```sh\n%s %-31s # new session\n%s %-31s # send a prompt at "
            "startup\n"
            "%s %-31s # run non-interactively\n%s %-31s # review against "
            "default branch\n```\n\n"

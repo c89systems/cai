@@ -211,7 +211,7 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
   if (rc == CAI_OK && session.commit_position == 0U)
     rc = cai_cli_error(error, CAI_ERR_INVALID,
                        "imported journal has no committed state");
-  /* An import is a new conversation now, even if its original journal is old.
+  /* An import is a new session now, even if its original journal is old.
    * Keep the original record timestamps intact for inspection. */
   if (rc == CAI_OK && clock_gettime(CLOCK_REALTIME, &now) != 0)
     rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "read import timestamp");

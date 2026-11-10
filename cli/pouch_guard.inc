@@ -1,7 +1,7 @@
 /* Pouch is currently the only history backend. Native shared/exclusive locks
  * coordinate app runtime use and deletion across processes on that root.
  * The namespace registry serializes lock-file creation/removal, preventing
- * stale-inode races without retaining per-conversation files after deletion.
+ * stale-inode races without retaining per-session files after deletion.
  * No lock is inherited by executed commands; process exit releases use. */
 typedef struct cai_cli_session_guard {
   int directory, registry, session;
@@ -59,17 +59,16 @@ static int session_guard_open(cai_cli_pouch *pouch, const char *id,
   if (busy != NULL)
     *busy = 0;
   if (!session_component(id) || strlen(id) >= CAI_AGENT_SESSION_ID_MAX)
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "unsafe conversation identity");
+    return cai_cli_error(error, CAI_ERR_INVALID, "unsafe session identity");
   if (pouch->root_directory[0] == '\0')
     return cai_cli_error(error, CAI_ERR_INVALID,
-                         "Conversation use and deletion require Pouch");
+                         "Session use and deletion require Pouch");
   rc = latest_key(pouch->sessions_namespace, namespace_key, error);
   if (rc != CAI_OK)
     return rc;
   guard = calloc(1U, sizeof(*guard));
   if (guard == NULL)
-    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate conversation lock");
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate session lock");
   guard->directory = guard->registry = guard->session = -1;
   strcpy(guard->id, id);
   root = open(pouch->root_directory,
@@ -86,21 +85,21 @@ static int session_guard_open(cai_cli_pouch *pouch, const char *id,
                              O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
   if (!session_private_fd(guard->registry, 0) ||
       flock(guard->registry, LOCK_EX) != 0)
-    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "lock conversation registry");
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "lock session registry");
   if (rc == CAI_OK) {
     guard->session = openat(guard->directory, id,
                             O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (!session_private_fd(guard->session, 0))
       rc = cai_cli_error(error, CAI_ERR_INVALID,
-                         "conversation lock must be a private regular file");
+                         "session lock must be a private regular file");
     else if (flock(guard->session, (exclusive ? LOCK_EX : LOCK_SH) | LOCK_NB) !=
              0) {
       int unavailable = errno == EWOULDBLOCK || errno == EAGAIN;
       if (busy != NULL)
         *busy = unavailable;
-      rc = cai_cli_error(
-          error, unavailable ? CAI_ERR_INVALID : CAI_ERR_TRANSPORT,
-          "Conversation is currently open; close it before deleting");
+      rc = cai_cli_error(error,
+                         unavailable ? CAI_ERR_INVALID : CAI_ERR_TRANSPORT,
+                         "Session is currently open; close it before deleting");
     }
   }
   if (rc == CAI_OK) {
@@ -154,7 +153,7 @@ int cai_cli_pouch_deletable(cai_cli_pouch *pouch, const char *id, int *eligible,
   else
     rc = cai_cli_error(error, rc,
                        local.message != NULL ? local.message
-                                             : "inspect conversation use");
+                                             : "inspect session use");
   session_guard_close(guard);
   cai_error_cleanup(&local);
   return rc;

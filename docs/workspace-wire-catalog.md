@@ -7,7 +7,7 @@ or execute a tool. `cai_app_client_config.catalog` receives completed borrowed
 rows on its opening thread. It must not reenter pump, detach or close.
 
 Each CATALOG frame has a definite `[kind, phase, code, text]` payload. The
-envelope has request zero, conversation equal to the source epoch, stream equal
+envelope has request zero, the source session epoch, and stream equal
 to a nonzero owner-local revision, and sequence equal to the row index. The
 transport supplies and authenticates attachment/generation normally. This uses
 the existing workspace envelope without a version negotiation or another

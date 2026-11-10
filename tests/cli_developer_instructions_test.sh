@@ -128,7 +128,7 @@ TMPDIR="$root" run --temp --force -ni 'temporary hello' -z root.md; ok
 tail -1 "$root/peer/requests.jsonl" | jq -r .instructions >"$root/temp-parent"
 contains "$root/temp-parent" 'ROOT ONLY'
 
-# Switching conversations restores configured defaults, rather than carrying
+# Switching sessions restores configured defaults, rather than carrying
 # an invocation-only override into the new parent. No synthetic startup input.
 terminal_start --config "$root/cfg/config.ini" -N -z root.md
 send '/m gpt-6-astra\r'; expect 'Model changed to gpt-6-astra.'

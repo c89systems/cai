@@ -61,7 +61,7 @@ Agent-session stores remain owned by the native host; CAI pins their Lua handle 
 No native-store callback enters a `lua_State`.
 Pure Lua continues to use `store_path` / `lock_path` for todo and may use the existing Lua callback table for MCP sessions.
 
-The Lua examples include a basic streaming agent, a terminal chatbot with SearXNG and todo/kanban tools, streamed tool output, low-level conversation handling, and session state save/restore.
+The Lua examples include a basic streaming agent, a terminal chatbot with SearXNG and todo/kanban tools, streamed tool output, low-level session handling, and session state save/restore.
 See [examples/README.md](https://github.com/c89systems/cai/blob/trunk/examples/README.md).
 
 ## Application integration

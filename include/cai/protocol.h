@@ -54,7 +54,7 @@ typedef enum cai_protocol_kind {
   CAI_PROTOCOL_TERMINAL_OUTPUT
 } cai_protocol_kind;
 /** Each record is a definite eight-pair map, with ascending integer keys:
- * 0 kind, 1 request, 2 conversation, 3 generation, 4 sequence, 5 stream,
+ * 0 kind, 1 request, 2 session epoch, 3 generation, 4 sequence, 5 stream,
  * 6 attachment, 7 payload. All seven metadata values are unsigned integers;
  * payload is one arbitrary CBOR item in the supported wire profile. Zero is
  * used for inapplicable metadata. Required keys, order and shape are exact;

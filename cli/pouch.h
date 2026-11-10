@@ -41,7 +41,7 @@ typedef struct cai_cli_pouch {
   long conversation_retention_seconds;
   pthread_mutex_t history_lock;
   int history_lock_initialized;
-  /* Write contexts live through the active conversation and its children.
+  /* Write contexts live through the active session and its children.
    * Collection appends never acquire a state-object lease per observation. */
   pthread_mutex_t journal_lock;
   int journal_lock_initialized;

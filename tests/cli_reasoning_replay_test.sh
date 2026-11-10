@@ -33,7 +33,7 @@ jq -se '[.[]|select(.record_type=="event" and .type=="reasoning_summary")|.data]
 before=$(requests)
 for limit in 1 -1 0; do
   terminal_start --resume "$id" --replay-turns "$limit"
-  expect 'Conversation resumed.'
+  expect 'Session resumed.'
   # Startup replay precedes Softline's live scroll region, so inspect the
   # terminal transcript rather than the peer's live-feed-only capture.
   if [[ "$limit" == 0 ]]; then

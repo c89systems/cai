@@ -16,7 +16,7 @@ currently viewed workspace. Lookup and the target handshake run through
 descriptor/deadline watches without blocking the editor. Missing, ambiguous or
 failed selections leave the current owner available. Like takeover and detach,
 this is a terminal connection operation, available to observers; it is never
-submitted as model work or moved into another conversation's queue.
+submitted as model work or moved into another session's queue.
 
 Visited workspaces keep their attachment, producer and native editors while
 this terminal remains open. This also keeps an ordinary nonpersistent owner
@@ -63,24 +63,24 @@ requests cancellation of the remote foreground operation. Cancellation IDs are
 separate from queue IDs. Exact duplicate cancellation acknowledgements do not
 cancel a later turn; stale generations and observers cannot cancel work.
 
-Each conversation retains its own complete editor and queue binding, including
+Each session retains its own complete editor and queue binding, including
 draft, undo state, provisional receipts and edit state. Switching parks that
 editor and unbinds its transport before selecting another. Returning resumes
-the original producer and recall without moving input between conversations.
+the original producer and recall without moving input between sessions.
 [Prompt recall](workspace-wire-history.md) loads through a separate bounded
 channel on the same reader worker. Alt-Q waits for a durable draft-save receipt;
 neither draft text nor stored recall enters model context. Explicit
 startup inputs pass through the same editor/backend queue; commands wait for
 application before subsequent inputs. A quietly launched owner resolves its
-configuration and selects the initial conversation, then defers invocation
+configuration and selects the initial session, then defers invocation
 actions to the attaching frontend. The frontend skips already-applied settings
-and conversation selection; goals and instructions receive ordinary queue
+and session selection; goals and instructions receive ordinary queue
 identities. An existing owner's explicit setting changes also use the queue.
 Explicit headless startup keeps owner-side automation.
 Attaching with `-R`/`--resume` or `-N`/`--new` selects through `cai_app_client_select` before producer binding and transcript subscription.
 The owner resolves session IDs and listing numbers at this setup boundary; no `/resume` or `/new` input is manufactured.
 An invalid selector leaves the current runtime open and returns a binding rejection before replay.
-An observer cannot change the shared conversation, and active work prevents selecting a different conversation.
+An observer cannot change the shared session, and active work prevents selecting a different session.
 The shared invocation compiler translates explicit model, effort,
 summary, service-tier, execution-yield, YOLO, reasoning-tool, shell-context,
 effort-tool mappings, prompt-history, retention, automatic-queue, Kanban
@@ -157,7 +157,7 @@ Seekable input lets it recover evicted pages without retaining the entire log.
 Its cooperative cancellation hook keeps owner connections progressing and exits if the active owner fails.
 No terminal callback reenters Softline queue/history/status APIs.
 After return, the original producer synchronizes receipts and resumes from its displayed journal position.
-Takeover or conversation changes during handoff retain their normal authority and context rules.
+Takeover or session changes during handoff retain their normal authority and context rules.
 A focused real-terminal fixture holds the native help pager open until a paused provider finishes, then verifies that the unseen response appears exactly once after the pager closes.
 Unshared shell bytes never enter model context.
 `/shellshare` and `!sh+` explicitly opt into bounded-tail capture through the
@@ -165,10 +165,10 @@ Unshared shell bytes never enter model context.
 PTY, with at most one 4 KiB chunk awaiting owner acknowledgement. Unshared
 shells send no output over the socket. Local PTY lifetime belongs to the
 frontend; the owner logs its accepted slash/bang commands.
-Returning from a handoff reconciles the current conversation before entering
+Returning from a handoff reconciles the current session before entering
 its editor again, including when a completed status update arrived before the
 old producer's reset. The old view retains its local draft and queue receipts;
-it cannot receive events belonging to the replacement conversation.
+it cannot receive events belonging to the replacement session.
 Completion notices are displayed after native queue synchronization, without
 blocking the editor on that synchronization. Transcript catch-up starts after
 the notice, preserving its seam. Feed restoration follows descriptor-mode
@@ -241,7 +241,7 @@ use the core structured execution renderer; their saved diagnostic fields do
 not disappear when only the socket frontend is attached.
 
 Verification uses real Unix sockets, a local HTTP provider and native PTYs.
-`cai_cli_attach` exercises named attach, observer rejection/takeover, conversation
+`cai_cli_attach` exercises named attach, observer rejection/takeover, session
 switching, invalid selections, draft restoration, startup input, cancellation,
 request-boundary steering, reconnect, formatted command output, quiet autostart
 and last-detach shutdown. Its public-header-only embedding host aborts on any

@@ -36,7 +36,7 @@ for limit in 20 -1; do
   expect 'Review subagent'; expect 'Inspecting the fixture'
   absent "$term/text" 'Tool called:'
   absent "$term/text" 'overall_correctness'
-  expect 'Conversation resumed.'
+  expect 'Session resumed.'
   # The policy notice belongs to startup, before any historical model output.
   first=$(grep -nFm1 'Sandbox restrictions enabled' "$term/text" | cut -d: -f1)
   second=$(grep -nFm1 'PARENT REPLY BEFORE REVIEW' "$term/text" | cut -d: -f1)

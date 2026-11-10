@@ -7457,7 +7457,7 @@ static void test_response_json(test_state *state) {
       test_fail(state, "params_serialize", "model missing from JSON");
     }
     if (strstr(json, "\"conversation\":\"conv_123\"") == NULL) {
-      test_fail(state, "params_serialize", "conversation missing from JSON");
+      test_fail(state, "params_serialize", "session missing from JSON");
     }
     if (strstr(json, "\"prompt_cache_key\":\"cai:test:params:v1\"") == NULL) {
       test_fail(state, "params_serialize",
@@ -8960,12 +8960,12 @@ static const char *mock_response_for_request(const char *request) {
       "{\"id\":\"resp_session_conv\",\"status\":\"completed\","
       "\"conversation\":{\"id\":\"conv_session\"},\"output\":[{"
       "\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":"
-      "\"conversation turn\"}]}]}";
+      "\"session turn\"}]}]}";
   static const char session_auto_conversation_body[] =
       "{\"id\":\"resp_session_auto_conv\",\"status\":\"completed\","
       "\"conversation\":{\"id\":\"conv_mock\"},\"output\":[{"
       "\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":"
-      "\"auto conversation turn\"}]}]}";
+      "\"auto session turn\"}]}]}";
   static const char compact_first_body[] =
       "{\"id\":\"resp_compact_1\",\"status\":\"completed\",\"output\":[{"
       "\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":"
@@ -9905,12 +9905,12 @@ static const char *mock_response_for_request(const char *request) {
             NULL) {
       return session_text_source_body;
     }
-    if (strstr(request, "conversation turn") != NULL &&
+    if (strstr(request, "session turn") != NULL &&
         strstr(request, "\"conversation\":\"conv_session\"") != NULL &&
         strstr(request, "previous_response_id") == NULL) {
       return session_conversation_body;
     }
-    if (strstr(request, "auto conversation turn") != NULL &&
+    if (strstr(request, "auto session turn") != NULL &&
         strstr(request, "\"conversation\":\"conv_mock\"") != NULL &&
         strstr(request, "previous_response_id") == NULL) {
       return session_auto_conversation_body;
@@ -9968,13 +9968,13 @@ static const char *mock_response_for_request(const char *request) {
   if (strstr(request, "POST /v1/conversations/conv_get/items HTTP/") != NULL &&
       strstr(request, "\"items\":[") != NULL &&
       strstr(request, "\"type\":\"input_text\"") != NULL &&
-      strstr(request, "\"text\":\"conversation item\"") != NULL &&
-      strstr(request, "\"text\":\"conversation spooled text\"") != NULL &&
-      strstr(request, "\"text\":\"conversation source text\"") != NULL &&
+      strstr(request, "\"text\":\"session item\"") != NULL &&
+      strstr(request, "\"text\":\"session spooled text\"") != NULL &&
+      strstr(request, "\"text\":\"session source text\"") != NULL &&
       strstr(request, "\"type\":\"input_image\"") != NULL &&
       strstr(request, "https://example.test/conv.png") != NULL &&
       strstr(request, "\"type\":\"input_file\"") != NULL &&
-      strstr(request, "\"file_data\":\"conversation file text\"") != NULL) {
+      strstr(request, "\"file_data\":\"session file text\"") != NULL) {
     return conversation_items_create_body;
   }
   if (strstr(request, "GET /v1/conversations/conv_get/items?") != NULL &&
@@ -24700,7 +24700,7 @@ static void test_conversations(test_state *state) {
   if (conversation == NULL || conversation->id == NULL ||
       conversation->object == NULL || conversation->close == NULL) {
     test_fail(state, "conversation_methods",
-              "conversation method facade not initialized");
+              "session method facade not initialized");
   }
   expect_str(state, "conversation_create_id", conversation->id(conversation),
              "conv_mock");
@@ -24764,24 +24764,23 @@ static void test_conversations(test_state *state) {
                           "still-owned-conversation-file");
   cai_error_cleanup(&error);
   cai_error_init(&error);
-  expect_int(
-      state, "conversation_items_add_text",
+  expect_int(state, "conversation_items_add_text",
 
-      item_params->add_text(item_params, "user", "conversation item", &error),
-      CAI_OK);
+             item_params->add_text(item_params, "user", "session item", &error),
+             CAI_OK);
   lonejson_error_init(&json_error);
   CAI_LJ->spooled_init(CAI_LJ, &conversation_text_data);
   expect_int(state, "conversation_items_text_append",
              conversation_text_data.append(
-                 &conversation_text_data, "conversation spooled text",
-                 strlen("conversation spooled text"), &json_error),
+                 &conversation_text_data, "session spooled text",
+                 strlen("session spooled text"), &json_error),
              LONEJSON_STATUS_OK);
   expect_int(state, "conversation_items_add_text_spooled",
 
              item_params->add_text_spooled(item_params, "user",
                                            &conversation_text_data, &error),
              CAI_OK);
-  source_state.text = "conversation source text";
+  source_state.text = "session source text";
   source_callbacks.read = test_read;
   source_callbacks.reset = test_reset;
   source_callbacks.close = test_read_close;
@@ -24806,8 +24805,8 @@ static void test_conversations(test_state *state) {
   CAI_LJ->spooled_init(CAI_LJ, &conversation_file_data);
   expect_int(state, "conversation_items_file_append",
              conversation_file_data.append(
-                 &conversation_file_data, "conversation file text",
-                 strlen("conversation file text"), &json_error),
+                 &conversation_file_data, "session file text",
+                 strlen("session file text"), &json_error),
              LONEJSON_STATUS_OK);
   expect_int(state, "conversation_items_add_file",
 
@@ -24846,7 +24845,7 @@ static void test_conversations(test_state *state) {
   if (item == NULL || item->id == NULL || item->type == NULL ||
       item->role == NULL || item->raw_json == NULL || item->close == NULL) {
     test_fail(state, "conversation_item_methods",
-              "conversation item method facade not initialized");
+              "session item method facade not initialized");
   }
   expect_str(state, "conversation_retrieve_item_id", item->id(item),
              "conv_msg_1");
@@ -25185,16 +25184,15 @@ static void test_agent_session(test_state *state) {
              session->set_conversation(session, conversation, &error), CAI_OK);
   expect_str(state, "agent_session_conversation_id",
              session->conversation_id(session), "conv_session");
-  expect_int(
-      state, "agent_conversation_turn",
-      session->send_text(session, "conversation turn", &response, &error),
-      CAI_OK);
+  expect_int(state, "agent_conversation_turn",
+             session->send_text(session, "session turn", &response, &error),
+             CAI_OK);
   expect_str(state, "agent_conversation_response_id", cai_response_id(response),
              "resp_session_conv");
   expect_str(state, "agent_conversation_response_conversation",
              cai_response_conversation_id(response), "conv_session");
   expect_str(state, "agent_conversation_text",
-             cai_response_output_text(response), "conversation turn");
+             cai_response_output_text(response), "session turn");
   cai_response_destroy(response);
   session->close(session);
   session = NULL;
@@ -25219,7 +25217,7 @@ static void test_agent_session(test_state *state) {
   expect_str(state, "agent_auto_conversation_id",
              session->conversation_id(session), "conv_mock");
   expect_int(state, "agent_auto_conversation_add_text",
-             session->add_user_text(session, "auto conversation turn", &error),
+             session->add_user_text(session, "auto session turn", &error),
              CAI_OK);
   expect_int(state, "agent_auto_conversation_turn",
              session->run_output(session, &output, &error), CAI_OK);
@@ -25229,7 +25227,7 @@ static void test_agent_session(test_state *state) {
   expect_str(state, "agent_auto_conversation_response_conversation",
              cai_response_conversation_id(output_response), "conv_mock");
   expect_str(state, "agent_auto_conversation_text", cai_output_text(output),
-             "auto conversation turn");
+             "auto session turn");
   cai_output_destroy(output);
   session->close(session);
   agent->close(agent);
@@ -51986,7 +51984,7 @@ static void test_session_resume_and_history_import(test_state *state) {
              cai_session_previous_response_id(session), "resp_saved_disk_1");
   if (cai_session_conversation_id(session) != NULL) {
     test_fail(state, "resume_previous_clears_conversation",
-              "conversation id was not cleared");
+              "session id was not cleared");
   }
 
   history_reader.text =
@@ -52201,7 +52199,7 @@ static void test_session_state_validation(test_state *state) {
         strstr(state_json, "previous_response_id") != NULL ||
         strstr(state_json, "history") != NULL) {
       test_fail(state, "state_validation_value",
-                "conversation state envelope had wrong fields");
+                "session state envelope had wrong fields");
     }
   }
   expect_int(state, "state_validation_reset", cai_source_reset(source, &error),

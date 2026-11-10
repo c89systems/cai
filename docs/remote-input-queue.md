@@ -3,7 +3,7 @@
 Status: implemented queue authority and socket input binding, 2026-11-04. Public core headers
 `input_queue.h` and `input_controller.h`, the Lua runtime attachment and
 `cli/input_adapter.c` implement the authority and Softline bridge described
-here. Each conversation journals its own queue. The terminal-free application
+here. Each session journals its own queue. The terminal-free application
 owner exposes in-process input connect/resume, owned observations and status
 wakeups. Workspace sockets now carry input requests and queue observations
 using the [wire payload contract](workspace-wire-queue.md). Command/status
@@ -105,7 +105,7 @@ One pending item contains:
 - Current lifecycle and admission/consumption identity. Readiness is a published
   backend fact, not a frontend assertion that the model is between tool calls.
 
-The application controller owns this receiver for its conversation and attaches
+The application controller owns this receiver for its session and attaches
 the same queue to the runtime. A standalone core runtime may create/own its
 default receiver. The model loop and application dispatcher claim from that
 one authority according to their respective responsibilities. A claimed model
@@ -114,7 +114,7 @@ pending entry. Host actions are claimed/dispatched on the owner thread after
 runtime pumping returns, not from a callback that forbids runtime reentry.
 
 Admission/changes/consumption persist through dependency-free journal callbacks
-and the existing conversation journal. The app binds those to its Pouch adapter.
+and the existing session journal. The app binds those to its Pouch adapter.
 Publish success only after the corresponding durable transition when storage
 is enabled. Direct core consumers can use their own store or explicitly volatile
 operation. Softline sees neither the storage implementation nor its credentials.
@@ -126,7 +126,7 @@ identity. Refactor the existing journal admission/consumption rules instead of
 creating a separate full-queue snapshot or a second execution log.
 
 Connections publish their logical producer and processed request watermark.
-Reconnect uses that producer within the verified conversation epoch, keeping
+Reconnect uses that producer within the verified session epoch, keeping
 the greater of the frontend's last-issued ID and the reported watermark.
 Missing/evicted/already-attached producers fail explicitly; they never silently
 reserve another identity. Result lookup precedes current authority checks, so

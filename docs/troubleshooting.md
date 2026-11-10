@@ -9,7 +9,7 @@
 Model work continues in the owner while the pager is open, and newly arrived output appears after it closes.
 Export with `/export incident.jsonl` to inspect tool arguments, results, failures and ordered harness events without the runtime log.
 These records are separate from model context.
-See [conversation export](conversations.md#export-and-import).
+See [session export](sessions.md#export-and-import).
 
 ## Authentication and workspace approval
 
@@ -25,7 +25,7 @@ Approval and YOLO are different policies; see [configuration](configuration.md).
 Back up the encrypted Pouch root and its original key together.
 A lost key cannot be regenerated to read the existing root.
 Do not delete roots as an index-cache repair.
-Only one writer may own a conversation.
+Only one writer may own a session.
 A second writer is refused; committed reads and exports remain available.
 CAI can conditionally reclaim its own crashed owner, but cannot steal another live writer merely because it appears idle.
 See [leases and recovery](journal.md#pouch-storage-and-ownership).

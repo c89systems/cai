@@ -40,7 +40,7 @@ receipt 'requested high (high): medium -> high'
 id=$(current_session_id)
 before=$(requests)
 terminal_start --resume "$id"
-expect 'Conversation resumed.'
+expect 'Session resumed.'
 contains "$term/text" '* Reasoning requested high (high): medium -> high'
 absent "$term/text" 'Accepted reasoning request'
 absent "$term/text" 'Completed set_reasoning'

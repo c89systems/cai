@@ -7,7 +7,7 @@ command-output value is created. The runtime still retains only its configured
 tail; live raw bytes are neither journaled nor logged.
 
 Two server-to-client CBOR records use the active presentation subscription's
-request/stream and conversation. Envelope sequence anchors the recording to its
+request/stream and session epoch. Envelope sequence anchors the recording to its
 durable `user_shell_started` entry. `SHELL_OUTPUT` has payload `[offset, bytes]`,
 with 1..4096 arbitrary bytes and consecutive raw-byte offsets starting at zero.
 `SHELL_OUTPUT_END` has payload `[offset]`, the final raw byte count. Both are

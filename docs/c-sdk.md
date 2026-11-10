@@ -49,12 +49,12 @@ client->close(client);
 ```
 
 The receiver form is the primary style for instantiated cai handles that expose method tables.
-`cai_client` includes the full client-owned Responses, streaming, input-token counting, response lifecycle, conversation, agent, and usage operations.
+`cai_client` includes the full client-owned Responses, streaming, input-token counting, response lifecycle, provider sessions, agent, and usage operations.
 `cai_agent`, `cai_session`, and `cai_tool_schema` follow the same convention.
 The matching `cai_*` free functions remain part of the public API for compatibility, callback wiring, and places where a value is still an opaque builder or result handle.
 
 Agent-level calls lazily create a default session and reuse it for follow-up turns, so simple chat and workflow drivers get Responses context continuity without manually carrying a `cai_session`.
-Explicit sessions remain available for multi-session, conversation-handle, and advanced workflows.
+Explicit sessions remain available for multi-session workflows and OpenAI provider session handles.
 
 Large user text can use `add_user_text_source` or `add_user_text_spooled` instead of building a temporary C string.
 Source inputs are consumed when added and stored as spooled pending input; request retries then clone that spool, so retry behavior is the same as for small string input.
@@ -84,7 +84,7 @@ Root instructions are OpenAI/model policy and are not API-settable.
 The Responses wire format still has low-level message roles, but normal cai users should set `developer_instructions` on the agent and add user input with `session->add_user_text` or `session->add_user_image_url`.
 
 `assistant` is not an instruction surface.
-In the Responses API it represents model-generated messages, and it is mainly useful when manually reconstructing conversation history. cai's default sessions use `previous_response_id`, and conversation sessions use OpenAI Conversations, so assistant turns are preserved through those handles instead of being manually appended by application code.
+In the Responses API it represents model-generated messages, and it is mainly useful when manually reconstructing session history. CAI default sessions use `previous_response_id`. Sessions bound to an OpenAI provider session use its handle, so assistant turns are preserved through those handles instead of being manually appended by application code.
 
 Structured output text can be decoded into a caller-owned lonejson struct with `cai_output_write_json`.
 The function parses `cai_output_text(output)` as JSON; it does not inspect arbitrary response metadata or raw response JSON.
@@ -279,7 +279,7 @@ For streamed auto-run tool calls, `cai_tool_event.arguments_json` remains a comp
   still count reported usage while retaining the original history and error.
 - Local spooled session history is opt-in with `enable_local_history`; default
   sessions rely on OpenAI server-side context through `previous_response_id` or
-  Conversations. When enabled, `cai_session_export_history_source` streams the
+  provider session IDs. When enabled, `cai_session_export_history_source` streams the
   captured history as a JSON array for `cai_session_compact`, export, or
   offline inspection, and `cai_session_import_history_source` can load that
   JSON array back into a local-history-enabled session.
@@ -309,7 +309,7 @@ Cancellation is debug-level; output cutoffs and compaction/continuation attempts
 Exhausted recovery attempts and failed compactions are warn-level.
 Runtime compaction completion is logged after commit/rollback handling.
 Model catalog source/cache selection is debug-level; failed refreshes and fallback to configured metadata are warn-level.
-These diagnostics exclude normal conversation content; cai's CLI separately logs conversation events as described above.
+These diagnostics exclude normal session content; cai's CLI separately logs session events as described above.
 
 ## Related guides
 

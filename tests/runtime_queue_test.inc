@@ -110,7 +110,7 @@ static void test_agent_runtime_pending_input(test_state *state) {
   attachment = NULL;
   cai_agent_runtime_close(runtime);
   runtime = NULL;
-  /* New conversations do not inherit A's accepted text or approval hold. */
+  /* New sessions do not inherit A's accepted text or approval hold. */
   config.session_id = "conversation-B";
   QUEUE_REQUIRE(
       cai_agent_runtime_open(mock.client, &config, &runtime, &error) == CAI_OK);

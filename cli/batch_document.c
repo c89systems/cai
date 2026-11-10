@@ -82,7 +82,7 @@ int cai_cli_batch_document_capture(cai_cli_batch_document *d,
            before->conversation != d->range.after.conversation ||
            strcmp(before->session, d->range.after.session) != 0 ||
            strcmp(before->collection, d->range.after.collection) != 0)
-    return failure(&d->failed, error, "document changed conversation");
+    return failure(&d->failed, error, "document changed session");
   d->range.text_bytes += n;
   d->range.through_position = end->position;
   d->range.through_sequence = end->sequence;

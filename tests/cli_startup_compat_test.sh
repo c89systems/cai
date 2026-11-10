@@ -38,7 +38,7 @@ reject() {
   [[ $(cat "$term/status") != 0 ]]
   has "$term/stderr" "$setting" || has "$term/text" "$setting" ||
     fail "Missing startup conflict: $setting"
-  absent "$term/text" 'Conversation attached'
+  absent "$term/text" 'Session ready'
   kill -0 "$owner_pid"
   [[ $(requests) == "$before_requests" ]]
   exec 7>&-

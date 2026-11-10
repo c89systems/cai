@@ -23,7 +23,7 @@ id=$(current_session_id)
 before=$(requests)
 for mode in compact full; do
   terminal_start --resume "$id" --tool-output "$mode"
-  expect 'Conversation resumed.'
+  expect 'Session resumed.'
   expect 'REPLAY FINAL ANSWER'
   contains "$term/text" 'REPLAY ORIGINAL PROMPT'
   contains "$term/text" 'REPLAY FINAL ANSWER'

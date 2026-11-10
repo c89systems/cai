@@ -18,7 +18,7 @@ run -Nni 'review and fix findings'; ok
 [[ $(stdout_text) == 'REVIEW SURVIVED' && $(requests) == 4 ]]
 contains "$root/stderr" 'cannot resolve an unambiguous Git default branch'
 id=$(current_session_id)
-# Reopen the conversation, then open another reviewer against populated
+# Reopen the session, then open another reviewer against populated
 # storage. Parent/child commit and replay paths must remain usable.
 plan "$(jq -nc --arg report "$report" '{plan:[
   {tool:"run_review",arguments:{target:"custom",instructions:"Inspect the fixture"}},
@@ -37,7 +37,7 @@ expect 'SECOND REVIEW SURVIVED'; expect 'Worked for'
 terminal_close
 before=$(requests)
 terminal_start --resume "$id"
-expect 'Conversation resumed.'
+expect 'Session resumed.'
 contains "$term/text" 'SECOND REVIEW SURVIVED'
 contains "$term/text" '# Review handoff'
 terminal_close

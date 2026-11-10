@@ -49,7 +49,7 @@ contains "$root/complete.jsonl" TAILLINES
 contains "$root/complete.jsonl" TAILLARGE
 before=$(requests)
 terminal_start --resume "$id"
-expect 'Conversation resumed.'
+expect 'Session resumed.'
 contains "$term/text" 'Output omitted'
 absent "$term/text" TAILLINES
 absent "$term/text" TAILLARGE

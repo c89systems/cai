@@ -21,7 +21,7 @@ common=(-p custom --endpoint "$endpoint" -m gpt-5.6-luna --no-terminal --no-imag
         --messaging --message-ack-timeout-ms 2000 --lockd "pouch://$root/state/cai/pouch")
 base=("$cli" "${common[@]}" -C "$work")
 plan '{"plan":["C READY"]}'
-run -Nni 'C conversation'; ok
+run -Nni 'C session'; ok
 run --resume; ok
 c_id=$(awk '$1 == "1" {print $2; exit}' "$root/stdout")
 [[ -n "$c_id" ]]
@@ -29,7 +29,7 @@ terminal_start --resume "$c_id"
 app_pids+=("$terminal_pid") app_terms+=("$term") app_events+=("$terminal_event_fd")
 base=("$lua_host" "${common[@]}" -C "$root/lua-work")
 plan '{"plan":["LUA READY"]}'
-run -Nni 'Lua conversation'; ok
+run -Nni 'Lua session'; ok
 run --resume; ok
 lua_id=$(awk '$1 == "1" {print $2; exit}' "$root/stdout")
 [[ -n "$lua_id" && "$lua_id" != "$c_id" ]]
@@ -43,7 +43,7 @@ select_app() {
   send_offset=0 send_feed_offset=0
   exec 7<>"$term/input"
 }
-# Discovery lists both conversations, independently of their directories.
+# Discovery lists both sessions, independently of their directories.
 select_app 0
 send '/status\r'; expect 'Message queue'
 wait_for grep -qE '│[[:space:]]+cai\.work[[:space:]]+│' "$term/feed"
@@ -78,7 +78,7 @@ select_app 1
 expect 'approval'
 contains "$term/text" 'PING FROM C'
 # Approve Lua's ordinary next turn, which sends a reply to the still-running C
-# conversation. C must ACK it without needing its own approval/model turn.
+# session. C must ACK it without needing its own approval/model turn.
 plan "$(jq -n --arg id "$c_queue" '{plan:[{tool:"agent_message",arguments:{operation:"send",recipient:$id,text:"PONG FROM LUA"}},"LUA REPLY DELIVERED"]}')"
 offset=$(wc -c <"$term/text")
 send '\033a\033y'; expect_turn "$offset" 'LUA REPLY DELIVERED'
@@ -101,8 +101,8 @@ contains "$root/request" 'PONG FROM LUA'
 [[ ! -s "${app_terms[0]}/status" && ! -s "${app_terms[1]}/status" ]]
 logs
 jq -se 'any(.[]; .event=="agent_message_received" and .role=="agent" and .msg=="PING FROM C") and any(.[]; .event=="agent_message_received" and .role=="agent" and .msg=="PONG FROM LUA")' "$root/logs.jsonl" >/dev/null
-# Keep an unapproved delivery in the original conversation, then start a new
-# conversation for the same directory. Its public queue name must stay stable.
+# Keep an unapproved delivery in the original session, then start a new
+# session for the same directory. Its public queue name must stay stable.
 select_app 1
 plan "$(jq -n --arg queue "$c_queue" '{plan:[{tool:"agent_message",arguments:{operation:"send",recipient:$queue,text:"HELD BEFORE TAKEOVER"}},"BEFORE TAKEOVER DELIVERED"]}')"
 prompt 'send a message before takeover' 'BEFORE TAKEOVER DELIVERED'

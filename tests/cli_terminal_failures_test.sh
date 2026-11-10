@@ -38,7 +38,7 @@ for mode in malformed truncated provider_error cyber_policy cyber_notice cancel 
   if [[ "$mode" == provider_error ]]; then expect 'fixture stream error'; fi
   if [[ "$mode" == cyber_policy || "$mode" == cyber_notice ]]; then
     # Socket frontends render the durable failure fields; runtime logger
-    # summaries are not a second source of conversation presentation.
+    # summaries are not a second source of session presentation.
     expect 'Request failed'
     expect 'Provider cybersecurity notice'
     expect "req_$mode"
@@ -76,7 +76,7 @@ expect 'Worked for'
 [[ $(requests) == $((before+2)) ]]
 printf 'MANUAL_READ_MARKER\n' >"$work/tracked.txt"
 # Settle the goal inside this turn, before an automatic continuation can start.
-# The following restart deliberately tests an idle, paused conversation.
+# The following restart deliberately tests an idle, paused session.
 plan '{"plan":["__read_file__",{"tool":"update_goal","arguments":{"status":"paused"}},"Manual followup finished"]}'
 send 'Please proceed with my next task\r'
 expect_assistant 'Manual followup finished'

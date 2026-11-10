@@ -20,7 +20,7 @@ See [model metadata](model-metadata.md) for the schema and precedence.
 
 Berget uses its OpenAI-compatible Chat Completions endpoint.
 The CLI streams text, image URLs, and function tools, including `apply_patch` and MCP tools, through libcai's normal agent and session runtime.
-It resumes conversations by sending local history as chat messages.
+It resumes sessions by sending local history as chat messages.
 The default Berget model accepts image input.
 Hosted image generation is disabled because Berget does not provide that API; file IDs and arbitrary file attachments return an explicit error.
 Berget API keys and session content are kept in the same locations as other `cai` providers; the key is read from `BERGET_API_KEY`.
@@ -72,7 +72,7 @@ Zero selects each field's default; the effective initial delay must not exceed t
 
 ## Provider policy diagnostics
 
-For `cyber_policy` or `cyber_notice` error codes, the runtime sends one automatic explanation-only prompt in the same conversation, using the selected model.
+For `cyber_policy` or `cyber_notice` error codes, the runtime sends one automatic explanation-only prompt in the same session, using the selected model.
 Only the enabled workspace-scoped `read_file` and `list_files` tools are available, with at most eight sequential tool rounds; execution, edits, MCP, hosted tools and goal actions remain unavailable.
 It asks for a bug-report summary of the preceding work, possible triggers, and a tentative assessment of the visible security context, separating facts from hypotheses.
 The model cannot know the provider's internal trigger or certify a false positive.

@@ -44,7 +44,7 @@ int main(void) {
   memset(&request, 0, sizeof(request));
   request.operation = SL_QUEUE_OFFER;
   request.mode = SL_PROMPT_QUEUE_MODE_STEER;
-  request.text = "steer owned by the conversation";
+  request.text = "steer owned by the session";
   assert(sl_queue_backend_request(editor, &request, &id) == SL_OK);
   assert(sl_queue_backend_pending(editor, 0U, &pending) == SL_OK &&
          pending.pending);

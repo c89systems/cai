@@ -41,7 +41,7 @@ jq -se '([.[]|select(.event=="terminal_command_started")][0].tool_call_id) as $o
   any(.[]; .event=="terminal_output" and (.msg|contains("PIPE_EOF")))' "$root/logs.jsonl" >/dev/null
 before=$(requests)
 terminal_start --resume "$id"
-expect 'Conversation resumed.'
+expect 'Session resumed.'
 contains "$term/text" '* Busy command not started'
 contains "$term/text" 'COMMAND_FINISHED:ok'
 absent "$term/text" '"accepted"'

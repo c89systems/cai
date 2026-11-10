@@ -1332,7 +1332,8 @@ static cai_lua_conversation *cai_lua_check_conversation(lua_State *L,
   cai_lua_conversation *self;
   self =
       (cai_lua_conversation *)luaL_checkudata(L, index, CAI_LUA_CONVERSATION);
-  luaL_argcheck(L, self->ptr != NULL, index, "closed cai conversation");
+  luaL_argcheck(L, self->ptr != NULL, index,
+                "closed CAI provider session handle");
   return self;
 }
 
@@ -1348,7 +1349,8 @@ static cai_lua_conversation_item *cai_lua_check_conversation_item(lua_State *L,
   cai_lua_conversation_item *self;
   self = (cai_lua_conversation_item *)luaL_checkudata(
       L, index, CAI_LUA_CONVERSATION_ITEM);
-  luaL_argcheck(L, self->ptr != NULL, index, "closed cai conversation item");
+  luaL_argcheck(L, self->ptr != NULL, index,
+                "closed CAI provider session item");
   return self;
 }
 
@@ -1358,7 +1360,7 @@ cai_lua_check_conversation_params(lua_State *L, int index) {
   self = (cai_lua_conversation_params *)luaL_checkudata(
       L, index, CAI_LUA_CONVERSATION_PARAMS);
   luaL_argcheck(L, self->ptr != NULL, index,
-                "closed cai conversation items params");
+                "closed CAI provider session items params");
   return self;
 }
 
@@ -5147,7 +5149,7 @@ static int cai_lua_agent_runtime_yield_time(lua_State *L) {
 }
 
 /* runtime:yolo() -> {enabled=boolean, can_change=boolean}.
- * Policy belongs to this runtime, not to persisted conversation settings. */
+ * Policy belongs to this runtime, not to persisted session settings. */
 static int cai_lua_agent_runtime_yolo(lua_State *L) {
   cai_lua_agent_runtime *self = cai_lua_check_agent_runtime(L, 1);
   cai_error error;

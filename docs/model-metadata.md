@@ -145,7 +145,7 @@ When considering an update:
 Model-preservation tests use fixture catalogs, including unfamiliar IDs and
 entries beyond row 50. Live account counts and entitlements can change, so they
 must not become universal offline assertions. The baseline is independent of
-CAI's release version and the `comp_hash` used for conversation switching.
+CAI's release version and the `comp_hash` used for session switching.
 
 ## Sources
 

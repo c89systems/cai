@@ -131,7 +131,7 @@ static int await_endpoint(cai_workspace_endpoint *target,
 }
 
 /** Administrative stop uses only the verified socket client. Taking control
- * is explicit in -X; no conversation, transcript or inference is opened. */
+ * is explicit in -X; no session, transcript or inference is opened. */
 static int terminate_one(utility_run *u, const char *workspace,
                          const unsigned char *instance, int *stopped) {
   cai_workspace_client_config config;
@@ -354,7 +354,7 @@ static int dispatch(utility_run *u) {
       rc = cai_sink_write(destination, "\n", 1U, &u->error);
   } else if (u->options.list || u->options.list_all || u->options.resume_list ||
              u->options.delete_list) {
-    u->operation = "list conversations";
+    u->operation = "list sessions";
     rc = cai_cli_pouch_list(
         &u->pouch,
         (u->options.list_all || u->options.all) ? NULL : u->workspace,
@@ -371,7 +371,7 @@ static int dispatch(utility_run *u) {
                                   &u->error);
   } else if (u->options.delete_id != NULL) {
     cai_cli_pouch *messaging = &u->pouch;
-    u->operation = "delete conversation";
+    u->operation = "delete session";
     /* Optional empty strings normalize to NULL. Resolve/validate before the
      * handle-name comparison, just as the agent owner's store cache does. */
     rc =
@@ -387,25 +387,24 @@ static int dispatch(utility_run *u) {
       rc = cai_cli_session_delete(&u->pouch, messaging, &u->options,
                                   u->workspace, u->options.delete_id, id,
                                   &u->error);
-    if (rc == CAI_OK &&
-        (fprintf(stdout, "Deleted conversation %s.\n", id) < 0 ||
-         fflush(stdout) != 0))
+    if (rc == CAI_OK && (fprintf(stdout, "Deleted session %s.\n", id) < 0 ||
+                         fflush(stdout) != 0))
       rc = cai_cli_error(&u->error, CAI_ERR_TRANSPORT,
-                         "write conversation deletion result");
+                         "write session deletion result");
   } else if (u->options.export_id != NULL) {
-    u->operation = "export conversation";
+    u->operation = "export session";
     rc = cai_sink_stdout(&destination, &u->error);
     if (rc == CAI_OK)
       rc = cai_cli_session_export(&u->pouch, u->options.export_id, u->workspace,
                                   u->options.export_dir, u->options.export_out,
                                   NULL, &u->options, destination, &u->error);
   } else if (u->options.import_file != NULL) {
-    u->operation = "import conversation";
+    u->operation = "import session";
     rc = cai_cli_pouch_import(&u->pouch, u->options.import_file, u->workspace,
                               id, sizeof(id), &u->error);
     if (rc == CAI_OK && puts(id) == EOF)
       rc = cai_cli_error(&u->error, CAI_ERR_TRANSPORT,
-                         "write conversation import result");
+                         "write session import result");
   } else
     rc = cai_cli_error(&u->error, CAI_ERR_INVALID,
                        "maintenance utility required");

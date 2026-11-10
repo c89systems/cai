@@ -870,13 +870,13 @@ int cai_cli_validate_options(cai_cli_options *options) {
       !options->list_all && !options->resume_list && !options->delete_list &&
       options->delete_id == NULL) {
     cai_cli_option_error(options,
-                         "--all requires a conversation listing, --delete ID "
+                         "--all requires a session listing, --delete ID "
                          "or --terminate-headless");
     return -1;
   }
   if (options->all && options->delete_id != NULL &&
       strspn(options->delete_id, "0123456789") == strlen(options->delete_id)) {
-    cai_cli_option_error(options, "global deletion requires a conversation ID; "
+    cai_cli_option_error(options, "global deletion requires a session ID; "
                                   "omit --all to select a local row number");
     return -1;
   }
@@ -950,7 +950,7 @@ int cai_cli_validate_options(cai_cli_options *options) {
        options->import_file != NULL || options->install_skill != NULL ||
        options->message != NULL)) {
     cai_cli_option_error(options, "%s",
-                         "--temp starts a new conversation; it cannot be "
+                         "--temp starts a new session; it cannot be "
                          "combined with resume or utility commands");
     return -1;
   }

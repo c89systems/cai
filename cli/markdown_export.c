@@ -1,5 +1,5 @@
 /** @file
- * Closed-conversation handover adapter. Reads final control metadata and
+ * Closed-session handover adapter. Reads final control metadata and
  * streams goals, retained provider history and execution chunks from one
  * native journal view. Instruction preparation shares the live Smith policy;
  * no provider client, tool runtime or model-context restoration is involved.

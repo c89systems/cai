@@ -63,13 +63,13 @@ contains "$root/goal.out" 'PIPE GOAL RESPONSE'
 wait_for no_owner
 
 # Context changes are actual admission barriers. Following input belongs to
-# the new conversation, never an in-flight request against the old binding.
+# the new session, never an in-flight request against the old binding.
 plan '{"plan":["NEW PIPE CONTEXT"]}'
-printf '/new\nnew pipe conversation\n/quit\n' | "${base[@]}" >"$root/stdout" 2>"$root/stderr"
+printf '/new\nnew pipe session\n/quit\n' | "${base[@]}" >"$root/stdout" 2>"$root/stderr"
 contains "$root/stdout" 'NEW PIPE CONTEXT'
 wait_for no_owner
 plan '{"plan":["RESUMED PIPE CONTEXT"]}'
-printf '/resume %s\nresumed pipe conversation\n/quit\n' "$first_session" | "${base[@]}" >"$root/stdout" 2>"$root/stderr"
+printf '/resume %s\nresumed pipe session\n/quit\n' "$first_session" | "${base[@]}" >"$root/stdout" 2>"$root/stderr"
 contains "$root/stdout" 'RESUMED PIPE CONTEXT'
 absent "$root/stdout" 'FIRST PIPE REPLY'
 absent "$root/stdout" 'PIPE GOAL RESPONSE'

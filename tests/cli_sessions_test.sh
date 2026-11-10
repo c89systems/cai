@@ -24,7 +24,7 @@ first=$(printf '/status\n/resume\n/quit\n' | "$cli" -p openai -N -C "$fixture/wo
 [[ "$first" == *"Status"* ]]
 table_contains /dev/stdin 1 Model <<<"$first"
 table_contains /dev/stdin 1 'Reasoning effort' <<<"$first"
-[[ "$first" == *"Conversations"* ]]
+[[ "$first" == *"Sessions"* ]]
 first_id=$(printf '%s\n' "$first" | sed -n 's/^[[:space:]]*1  \([^ ]*\).*/\1/p')
 [[ -n "$first_id" ]]
 [[ -f "$fixture/state/cai/pouch.key" && -d "$fixture/state/cai/pouch" ]]
@@ -63,14 +63,14 @@ done
 all=$("$cli" -L -C "$fixture/work-b")
 [[ "$all" == *"$first_id"* && "$all" == *"$second_id"* && "$all" == *"$imported_id"* ]]
 [[ "$("$cli" --list-all -C "$fixture/work-b")" == "$all" ]]
-[[ "$("$cli" -L --state-dir "$fixture/another-state" -C "$fixture/work-b")" == 'No conversations.' ]]
+[[ "$("$cli" -L --state-dir "$fixture/another-state" -C "$fixture/work-b")" == 'No sessions.' ]]
 numbered=$("$cli" --resume -C "$fixture/work-a")
 [[ "$("$cli" -l -C "$fixture/work-a")" == "$numbered" ]]
 [[ "$numbered" == *"1  $second_id"* && "$numbered" == *"2  $imported_id"* ]]
-[[ "$numbered" != *"Conversations"* ]]
+[[ "$numbered" != *"Sessions"* ]]
 slash_export=$(printf '/export\n/quit\n' | "$cli" -p openai -C "$fixture/work-b")
 [[ "$slash_export" == *".jsonl"* && "$slash_export" == *".md"* && "$slash_export" != *"error"* ]]
-[[ "$slash_export" == *"Conversation export"* ]]
+[[ "$slash_export" == *"Session export"* ]]
 if printf '/quit\n' | "$cli" -p openai --resume "$first_id" -C "$fixture/work-b" >"$fixture/out" 2>"$fixture/err"; then
   echo 'cross-directory resume was accepted' >&2
   exit 1
@@ -108,11 +108,11 @@ for choice in 0 999999999999999999999999999999999999 missing-session-id; do
   if [[ "$choice" == missing-session-id ]]; then
     grep -q 'was not found' "$fixture/error"
   else
-    grep -q 'No conversation with that number' "$fixture/error"
+    grep -q 'No session with that number' "$fixture/error"
   fi
   ! grep -q 'incomplete JSON document' "$fixture/error"
 done
 if printf '/quit\n' | "$cli" -p openai --resume 1 -C "$fixture/work-empty" >"$fixture/error" 2>&1; then
   echo 'numeric resume escaped its directory' >&2; exit 1
 fi
-grep -q 'No conversation with that number' "$fixture/error"
+grep -q 'No session with that number' "$fixture/error"

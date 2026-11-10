@@ -58,12 +58,12 @@ run --list; ok
 cp "$key" "$root/saved-key"; printf '%064d\n' 0 >"$key"
 run --list; bad; cmp "$key" <(printf '%064d\n' 0)
 mv "$root/saved-key" "$key"
-run --lockd "pouch://$root/other-store" --list; ok; contains "$root/stdout" 'No conversations.'
+run --lockd "pouch://$root/other-store" --list; ok; contains "$root/stdout" 'No sessions.'
 # The storage round trips above are complete. Remaining assertions concern
 # automation, review, stdout/stderr and errors, not session persistence.
 plan '{"plan":["working on goal","__complete_goal__","goal done"]}'
 run -Nng 'finish fixture'; ok; [[ $(stdout_text) == 'goal done' ]]; contains "$root/stderr" 'working on goal'
-contains "$root/peer/requests.jsonl" 'Continue working toward the active thread goal'
+contains "$root/peer/requests.jsonl" 'Continue working toward the active session goal'
 plan '{"plan":["__complete_goal__","review loop done"]}'
 run --review-and-fix; ok; [[ $(stdout_text) == 'review loop done' ]]
 contains "$root/peer/requests.jsonl" run_review; contains "$root/peer/requests.jsonl" 'no actionable findings'

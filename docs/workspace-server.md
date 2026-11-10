@@ -42,7 +42,7 @@ receive an explicit environment/cwd, and Chrome registration resolves defaults
 before calling core helpers.
 Native library controller startup never forks or installs signal handlers.
 
-Interactive conversation export uses one retained worker per workspace.
+Interactive session export uses one retained worker per workspace.
 The owner captures bounded header metadata and immutable instruction/goal references, then native journal ranges feed both output formats without runtime restoration or a context copy.
 Read-only commands and cancellation remain available; the original command settles on real completion.
 A persistent owner continues after detach, and shutdown cancels/joins before releasing its store.
@@ -106,7 +106,7 @@ required.
   do not introduce an ASN.1 package, external CBOR dependency or generated code.
 - One attachment controls the workspace. Other attachments observe until an
   explicit takeover. Enforce this in the server, including queue operations.
-- The server owns runtimes, stores, active conversation, integrations, accepted
+- The server owns runtimes, stores, active session, integrations, accepted
   input, commands, approvals and continuation. Softline/libmdf are a frontend.
 - Detach releases only that attachment. Servers default to `persist = false`:
   loss of the last attachment starts orderly server shutdown. `-x`/`--headless`
@@ -198,7 +198,7 @@ Hold the ownership descriptor until shutdown, CLOEXEC everywhere except an
 explicit readiness descriptor passed to the new executable.
 
 Registry entries contain workspace path, optional name and endpoint identity.
-They are discovery hints, not writable conversation state. Validate by
+They are discovery hints, not writable session state. Validate by
 connecting. Prune stale entries under the corresponding ownership lock.
 Names are application-local, unique and registered explicitly with
 `--workspace-name NAME`; ambiguous names fail with the available identities.
@@ -214,7 +214,7 @@ publishes it; readers never see an unfinished record. Its staging path is
 an interrupted private regular staging file, but rejects symlinks and other
 unsafe types. No directory scan or random temporary-file buildup is needed.
 This bounded metadata
-publication is separate from streamed transcripts and conversation storage.
+publication is separate from streamed transcripts and session storage.
 Paths are limited to 4095 bytes and names to 255 printable UTF-8 bytes without
 slash, C0/C1 controls, or the special names `.` and `..`. Empty means unnamed.
 Names may contain spaces and non-ASCII characters; escape them when displaying.
@@ -296,15 +296,15 @@ other backend settings constrain attachment through per-field fingerprints.
 | `cai -x`, `cai --headless` | Start this workspace server in the foreground, without a terminal frontend, with persistence enabled by default. Fail clearly if already served. Log JSON through libpslog to stdout/stderr with normal automatic color detection. |
 | `cai` | Discover and attach. If absent, launch a quiet server by exec of this executable, then attach after an explicit READY handshake. Server logs use the normal file policy, with no inherited terminal stdout/stderr. |
 | `cai -s SELECTOR` | Attach to an already-running workspace by name, path or stable ID. A name never invents a new directory or starts in the client's cwd. |
-| `cai -l`, `cai --list` | List saved conversations and session IDs for the selected current directory. Do not launch an agent server. |
-| `cai -L`, `cai --list-all` | List saved conversations across directories in the entire configured session store. Do not launch an agent server. |
+| `cai -l`, `cai --list` | List saved sessions and session IDs for the selected current directory. Do not launch an agent server. |
+| `cai -L`, `cai --list-all` | List saved sessions across directories in the entire configured session store. Do not launch an agent server. |
 | `--workspace-name NAME` | Assign the workspace discovery name when starting its server. |
 | `/workspace` | List available running workspaces and identify the current one. |
 | `/workspace SELECTOR` | Select an existing owner after verified discovery and handshake. Retain visited attachments until client quit; do not stop either owner or carry accepted inputs across workspaces. |
 | `/takeover` | Explicitly acquire control, revoking the previous controlling attachment. |
-| `/quit`, Alt-Q, terminal EOF | Detach; Alt-Q persists the local draft to this conversation's prompt history before detach. The last detach shuts down a nonpersistent server; a persistent server continues. |
+| `/quit`, Alt-Q, terminal EOF | Detach; Alt-Q persists the local draft to this session's prompt history before detach. The last detach shuts down a nonpersistent server; a persistent server continues. |
 | `/shutdown` | Controller-only orderly shutdown, distinct from detach and goal pause. |
-| `-R`/`--resume`, `/new`, `/resume` | Select a conversation inside the selected workspace server; queues remain per conversation. |
+| `-R`/`--resume`, `/new`, `/resume` | Select a session inside the selected workspace server; queues remain per session. |
 
 Help, version, config dump, Chrome native messaging/registration and standalone
 maintenance utilities do not spawn an agent server. Existing noninteractive
@@ -334,7 +334,7 @@ configured runtime root, avoiding the additional deep workspace path in Unix
 socket names. Both directories belong to the run. Persistence is disabled
 even if inherited or explicitly requested for that temporary invocation.
 Owner/store/reader shutdown and frontend join precede the plain cleanup
-question. Temporary socket metadata, locks and the private conversation tree
+question. Temporary socket metadata, locks and the private session tree
 are removed before asking; only workspace files may be kept. The host run stays
 stoppable throughout confirmation. A startup failure
 never waits for an answer; `--force` still deletes its owned workspace.
@@ -347,11 +347,11 @@ viewer; takeover is explicit. A new attachment may acquire vacant control.
 Takeover advances a server-owned control generation and broadcasts a role
 change. Every mutation carries that generation; pending unadmitted requests
 from the previous generation fail explicitly. Already durably admitted work
-belongs to the conversation and continues. A disconnected editor's holds are
+belongs to the session and continues. A disconnected editor's holds are
 released through normal queue transitions without submitting its local draft.
 
 Viewers can request status, replay, catalogs and attachment-local settings.
-They cannot submit/steer model input, change model/goals/conversation, alter
+They cannot submit/steer model input, change model, goal, or active session, alter
 another producer's entries, approve queued work, run shared shell commands or
 shut down the server. Do not trust a client-side disabled
 widget to enforce this. Graceful detach and abrupt socket loss use one cleanup
@@ -370,7 +370,7 @@ draft. Stale generations remain invalid even for queries. Protocol cancellation,
 shared shell recording and prompt-history writes retain controller authority.
 
 Requests have stable attachment identity, monotonic request ID, selected
-conversation epoch and control generation. Distinguish received, durably
+session epoch and control generation. Distinguish received, durably
 accepted, applied, rejected and unknown outcomes. Correlate all errors with
 the request. Reconnect reconciles uncertain submissions using their original
 identity and receipt; it never blindly reoffers text with a new ID. Existing
@@ -387,7 +387,7 @@ from a trim/export initialization baseline stay unavailable, rather than
 becoming new submissions. Frontends retain their own last-issued request ID
 and reconcile unknown work before making any replacement offer.
 
-The input controller resumes a producer only against its verified conversation
+The input controller resumes a producer only against its verified session
 epoch. Producer lookup runs on the owner; an unknown or already-attached
 identity disconnects that connection with an actionable reason, without
 reserving a replacement or failing other clients. Across a process restart the
@@ -439,7 +439,7 @@ submitting requests. A new instance requires explicit reconciliation, rather
 than treating an old attachment/generation as valid after restart.
 
 Client `DETACH`, `TAKEOVER` and `SHUTDOWN` require null payloads and zero
-conversation/sequence/stream metadata. The actual connection identity must
+session epoch, sequence and stream metadata. The actual connection identity must
 match the attachment header; the header can never impersonate another client.
 `TAKEOVER` checks the original generation at admission, then explicitly changes
 control and broadcasts the new role/generation;
@@ -504,7 +504,7 @@ payloads. Outbound readiness retains only bounded unsent chunks, not an entire
 replay or export. A short send, EINTR, EAGAIN, EOF and SIGPIPE are handled.
 
 Each message is a definite eight-pair map with ascending integer keys:
-0 kind, 1 request ID, 2 conversation epoch, 3 control generation, 4 event
+0 kind, 1 request ID, 2 session epoch, 3 control generation, 4 event
 sequence, 5 stream identity, 6 attachment identity and 7 payload. Metadata
 values are unsigned integers, zero when inapplicable. Payload is one CBOR item;
 its schema is specific to the kind. Require the exact envelope shape/key order;
@@ -562,7 +562,7 @@ and continue as if its transcript were complete.
 
 Retain one command classifier and policy surface. Backend commands retain
 their established request/feed/turn boundaries and go through the durable
-per-conversation queue. Queue receipts are not a second human-visible
+per-session queue. Queue receipts are not a second human-visible
 submission echo. Local frontend actions such as paging, clipboard and theme
 do not create model turns. Backend-facing status is structured data; libmdf
 presentation is produced at the frontend.

@@ -1,7 +1,7 @@
 # Session journals
 
 `libcai` persists ordered changes. `libcai_app` stores them in one liblockdc
-collection per conversation, alongside the runtime's replayable observation
+collection per session, alongside the runtime's replayable observation
 events. Recovery reads the collection in order; it neither loads recurring
 full-state snapshots nor executes recorded tools.
 
@@ -91,7 +91,7 @@ existing complete-event interface. Terminal presentation cutover remains pending
 
 Internal review/subagent scopes have no workspace-latest index. Their journals
 and session metadata remain available by ID and in the parent's replay timeline;
-workspace auto-resume is only for ordinary conversation scopes. Child commit,
+workspace auto-resume is only for ordinary session scopes. Child commit,
 publication and deletion therefore do not acquire a shared latest-index lease.
 An old crash-held child index lease can expire without blocking a new reviewer.
 
@@ -120,7 +120,7 @@ Ordinary cuts therefore append an empty history suffix. An imported journal may
 have only one context initialization after all its events: without a reusable
 prefix, that cut writes the retained context fragment once. There are no recurring
 full-state snapshots. Provider continuation handles are cleared so deleted
-context cannot return through a provider-side response or conversation ID.
+context cannot return through a provider-side response or session ID.
 Commit metadata also retains the explicit-input-acknowledgement boundary, so
 removing the original marker cannot discard queued inputs on a later restart.
 
@@ -164,10 +164,10 @@ adoption of the stored mode. Remote clients receive no local compression setting
 
 Journal appends atomically renew whole-collection inactivity retention through
 the native append request. There is no second collection-metadata write per
-event, and identical retries do not extend the collection deadline. Conversation
+event, and identical retries do not extend the collection deadline. Session
 lookup metadata has no independent expiry: the collection owns the lifecycle.
 Listing removes stale lookup records and associated prompt recall once the
-backing collection is gone, while native use guards protect open conversations.
+backing collection is gone, while native use guards protect open sessions.
 Finite generated records use liblockdc's direct pull append.
 Each source reads already available event/state data; it does not wait for future model output.
 Liblockdc 0.28.0 also provides bounded push and staged-pull writers without whole-entry staging, for inputs that may wait externally.
@@ -177,13 +177,13 @@ Old CAI snapshot-backed journals remain unsupported. Use a fresh root for those 
 
 Writable restore acquires a native SDK collection lease before replaying model
 context or choosing event IDs. All commits/events use that owned receiver until
-the application conversation closes, including its child journal contexts.
+the application session closes, including its child journal contexts.
 Prompt recall has a separate leased collection. Public committed reads and
 exports do not acquire a writer lease. New collections are created with their
 initial lease atomically; retention, import and deletion use credentialed
 receivers too.
 
-CAI holds twenty-four-hour leases until the conversation context closes. A
+CAI holds twenty-four-hour leases until the session context closes. A
 store-context worker renews them every twenty-three hours, leaving an hour of
 expiry margin, independently of journal writes and the UI. It does not acquire
 the journal mutex or create a worker/client per collection or append. Lease
@@ -194,7 +194,7 @@ not a replacement for the SDK lease. Live or foreign owners are never silently
 replaced. Keepalive does not renew inactivity retention, and release does not
 commit or roll back already acknowledged appends.
 
-Append receivers stay open for the application conversation and its children.
+Append receivers stay open for the application session and its children.
 Steady-state event appends do not acquire, load, renew or release a state-object
 lease. First-prompt publication and other logical metadata changes still use
 short transactions, with public committed reads available throughout.
@@ -220,11 +220,11 @@ visible events and selected provider text then flow through incremental JSON
 readers/writers. No agent runtime, complete context buffer or context spool is
 created. Reads are linear passes, not a full scan for each item. Recorded usage,
 goal clocks, original event times and the latest input checkpoint are retained.
-Import assigns a new conversation ID in the selected
+Import assigns a new session ID in the selected
 workspace, validates the journal, and publishes it only after successful
-restoration. Imported conversations are ordered by import time for selection;
+restoration. Imported sessions are ordered by import time for selection;
 their original event/commit timestamps remain available in the records.
-Markdown continues to use the existing libcai conversation/execution exporters.
+Markdown continues to use the existing libcai session and execution exporters.
 
 `cai_agent_runtime_export_journal_state(runtime, sink, error)` (Lua
 `runtime:export_journal_state(writer)`) streams that initialization commit at a

@@ -39,7 +39,7 @@ remain future work.
 ## Startup comparison
 
 Each invocation used a separate copy of the same user store and resumed the
-substantial `~/lab/x` conversation. Configuration selected an unreachable
+substantial `~/lab/x` session. Configuration selected an unreachable
 loopback provider, disabled goal automation and requested no model work. These
 are whole-process elapsed times, including replay and clean EOF shutdown.
 
@@ -127,7 +127,7 @@ latency measurements.
 CAI was acquiring, loading, renewing and releasing a lookup object for every
 delta. That transaction was unnecessary: a native collection append already
 persists the entry and renews whole-collection retention atomically.
-Conversation-scoped collection receivers now remain open, lookup metadata has
+Session-scoped collection receivers now remain open, lookup metadata has
 no independent expiry, and leases cover logical metadata changes only.
 The follow-up native sample used 0.093 CPU seconds, with 0.041 in event append
 and 0.010 in lease release across the entire invocation. Samples are diagnostic;
@@ -143,14 +143,14 @@ These are single comparable samples, not performance thresholds.
 CPU percentage alone is misleading for the burst fixture because the optimized
 invocation finishes much sooner.
 
-The real `~/lab/x` conversation was resumed through the installed musl symlink.
+The real `~/lab/x` session was resumed through the installed musl symlink.
 Status, tool inventory, theme inventory and an ordinary shell command worked.
 Live ChatGPT generation completed without tools or workspace edits. A draft
 typed during output became visible in 8 ms; the request interval used 1.20 CPU
 seconds over 34.04 wall seconds (about 3.5% of one CPU). After finalizing metadata
 release cleanup, the rebuilt binary repeated live generation: 5 ms draft
 visibility, 0.93 CPU seconds over 18.59 wall seconds (about 5%).
-Three verification prompts/replies were added to that conversation.
+Three verification prompts/replies were added to that session.
 
 Startup/replay remains a separate cost: the final live-generation probe took
 4.77 seconds to become ready. A subsequent reopen replayed its completed answer,

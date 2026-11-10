@@ -67,7 +67,7 @@ Their complete contents and loading order are preserved on resume and model chan
 The application defaults it to its program name (`cai`); the lower-level Smith constructors default to `Cai Smith`.
 Case is preserved.
 Names accept ASCII letters, digits, `._-()`, and single spaces between words, with at least one letter or digit and no leading or trailing space.
-This name does not select storage roots, conversation IDs or message queues.
+This name does not select storage roots, session IDs or message queues.
 
 Dump both resolved base prompts without opening authentication, storage, a workspace server or an agent:
 
@@ -79,12 +79,12 @@ cai -p chatgpt -m gpt-6.1-sol -r high -d ./new_agent
 The filename prefix comes from the identity: ASCII letters are lowercased, spaces become underscores, and characters other than letters, digits and underscores are removed.
 For example, `--identity 'My Agent (Rev)'` produces `my_agent_rev_developer_instructions.md`.
 Existing files are refused rather than overwritten; a failed pair is removed without changing existing files.
-Provider, model and reasoning selection follows normal CLI/environment/config/default precedence; the dump does not restore a saved conversation's settings.
+Provider, model and reasoning selection follows normal CLI/environment/config/default precedence; the dump does not restore a saved session's settings.
 Current base templates are reasoning-neutral.
 Configured prompt files, `-z` and `-I` are reflected, but automatic capability contracts, AGENTS.md, skills, MCP and subagent discovery are excluded.
 
 `-z FILE` / `--developer-instructions FILE` replaces the initial agent's base developer instructions with literal file contents.
-It applies to the reviewer when starting with `--review`, and does not propagate to child agents or subsequent conversation selections.
+It applies to the reviewer when starting with `--review`, and does not propagate to child agents or subsequent session selections.
 Changing the current model retains the override.
 `-I` remains an addition, including when `-z` is selected; automatic capability and discovery instructions still follow.
 The long spelling for `-I` is now `--add-developer-instructions`.

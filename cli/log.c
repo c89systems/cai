@@ -216,7 +216,7 @@ static const char *notice_message(const char *event) {
   if (strcmp(event, "cai.http.response_limit") == 0)
     return "HTTP response exceeded the configured limit";
   if (strcmp(event, "cai.openrouter.server_side_continuity") == 0)
-    return "OpenRouter cannot preserve server-side conversation history";
+    return "OpenRouter cannot preserve server-side session history";
   return event[0] != '\0' ? event : "Log diagnostic";
 }
 

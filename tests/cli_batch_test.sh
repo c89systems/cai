@@ -29,14 +29,14 @@ original=$(current_session_id)
 [[ -n "$original" ]]
 kill -0 "$owner_pid"
 
-# Context-changing controls must complete in the new conversation before the
+# Context-changing controls must complete in the new session before the
 # dependent prompt is admitted. Neither old output nor a second runtime wins.
-plan '{"plan":["NEW CONVERSATION REPLY"]}'
-run -s batch-fixture -Nni 'new conversation'; ok
-[[ $(cat "$root/stdout") == 'NEW CONVERSATION REPLY' && $(requests) == 3 ]]
-plan '{"plan":["RESUMED CONVERSATION REPLY"]}'
-run -s batch-fixture -R "$original" -ni 'resumed conversation'; ok
-[[ $(cat "$root/stdout") == 'RESUMED CONVERSATION REPLY' && $(requests) == 4 ]]
+plan '{"plan":["NEW SESSION REPLY"]}'
+run -s batch-fixture -Nni 'new session'; ok
+[[ $(cat "$root/stdout") == 'NEW SESSION REPLY' && $(requests) == 3 ]]
+plan '{"plan":["RESUMED SESSION REPLY"]}'
+run -s batch-fixture -R "$original" -ni 'resumed session'; ok
+[[ $(cat "$root/stdout") == 'RESUMED SESSION REPLY' && $(requests) == 4 ]]
 contains "$root/peer/requests.jsonl" 'FIRST OWNER REPLY'
 
 # An accepted command receipt is not its application outcome.
@@ -91,7 +91,7 @@ wait_for test -s "$term/status"
 wait "$terminal_pid"; terminal_pid=
 [[ $(cat "$term/status") == 0 ]]
 contains "$term/text" '# Review findings'
-absent "$term/text" 'Conversation attached.'
+absent "$term/text" 'Session ready.'
 exec 7>&-
 exec {terminal_event_fd}>&-
 terminal_events=

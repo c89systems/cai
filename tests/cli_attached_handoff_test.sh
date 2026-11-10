@@ -115,7 +115,7 @@ wait_for has "$term/message" 'Observing workspace.'
 send '/takeover\r'; wait_for not_observing
 send '/status\r'; expect 'Session ID'
 plan '{"plan":["NEWSESSIONHANDOFF"]}'
-prompt 'continue in the new conversation' NEWSESSIONHANDOFF
+prompt 'continue in the new session' NEWSESSIONHANDOFF
 jq -se '.[-1].input | tostring | contains("one turn before handing off") | not' "$root/peer/requests.jsonl" >/dev/null
 rm "$SHELL"
 send '/shell\r'; expect 'execute local terminal program'
@@ -137,7 +137,7 @@ send '/status\r'; expect 'Session ID'
 
 # Markdown help uses the same display handoff as the text log viewer. Work
 # accepted while either pager owns the alternate screen must finish there and
-# appear exactly once after returning to the original conversation surface.
+# appear exactly once after returning to the original session surface.
 pager_offset=$(wc -c <"$term/raw")
 send '/help -p\r'; wait_for pager_opened
 plan '{"plan":["HELPPAGERANSWER"]}'

@@ -88,7 +88,7 @@ for colors in yes no; do
     prompt 'finish a turn before quitting' 'QUIT TEST DONE'
   fi
   # Both exit aliases replace the gray status message before releasing the
-  # editor, without adding a farewell to the conversation feed.
+  # editor, without adding a farewell to the session feed.
   count=$(requests)
   if [[ "$colors" == yes ]]; then command=/quit; else command=/exit; fi
   terminal_close "$command"

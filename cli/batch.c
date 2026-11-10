@@ -103,7 +103,7 @@ static int observe(void *context, const cai_app_client_event *e,
         !e->state->bound) {
       if (!b->handoff)
         return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                             "batch conversation changed; outcome unknown");
+                             "batch session changed; outcome unknown");
       b->awaiting_bind = b->subscribed = 0;
     }
     if (e->input->type == CAI_INPUT_OBSERVATION_RESULT && b->pending &&

@@ -3,14 +3,14 @@ source "$(dirname "$0")/cli_test_common.sh"
 peer_start
 session_id() { current_session_id; }
 
-# An open conversation is omitted, and an explicit deletion fails unchanged.
+# An open session is omitted, and an explicit deletion fails unchanged.
 terminal_start -N
 first=$(session_id)
 [[ -n "$first" ]]
 plan '{"plan":["FIRST SAVED ANSWER"]}'
 prompt 'First saved prompt' 'FIRST SAVED ANSWER'
 [[ ! -e "$root/state/cai/history" && -s "$root/cache/cai/$first.log" ]]
-run -D; ok; contains "$root/stdout" 'No conversations.'
+run -D; ok; contains "$root/stdout" 'No sessions.'
 run --delete "$first"; bad; contains "$root/stderr" 'currently open'
 [[ -s "$root/cache/cai/$first.log" ]]
 
@@ -24,18 +24,18 @@ exports="$root/data/cai/exports/$first"
 printf sentinel >"$root/sentinel"
 ln -s "$root/sentinel" "$exports/outside-link"
 printf workspace >"$work/keep-me"
-# A filesystem cleanup error leaves the stored conversation selectable, and
+# A filesystem cleanup error leaves the stored session selectable, and
 # retrying the same ID completes cleanup after the problem is repaired.
 mv "$root/cache/cai/$first.log" "$root/first-log"
 mkdir "$root/cache/cai/$first.log"
-run -D "$first"; bad; contains "$root/stderr" 'remove conversation data'
+run -D "$first"; bad; contains "$root/stderr" 'remove session data'
 run -R; ok; contains "$root/stdout" "$first"
 rmdir "$root/cache/cai/$first.log"
 mv "$root/first-log" "$root/cache/cai/$first.log"
 run --delete; ok
 contains "$root/stdout" "1  $first"
 absent "$root/stdout" "$second"
-run -D 1; ok; contains "$root/stdout" "Deleted conversation $first."
+run -D 1; ok; contains "$root/stdout" "Deleted session $first."
 [[ ! -e "$exports" && ! -e "$root/cache/cai/$first.log" ]]
 [[ $(cat "$root/sentinel") == sentinel && $(cat "$work/keep-me") == workspace ]]
 [[ $(session_id) == "$second" ]]
@@ -49,7 +49,7 @@ done
 run --delete ''; bad
 mkdir "$root/elsewhere"
 run -C "$root/elsewhere" -D 1; bad
-contains "$root/stderr" 'No conversation with that number'
+contains "$root/stderr" 'No session with that number'
 [[ $(session_id) == "$second" ]]
 
 # Deleting the newest repairs auto-resume to the remaining commit.
@@ -77,7 +77,7 @@ terminal_events=
 unset CAI_TEST_TERMINAL_EVENT_FD
 run -D; ok; contains "$root/stdout" "1  $second"
 run --delete "$second"; ok
-run -R; ok; contains "$root/stdout" 'No conversations.'
+run -R; ok; contains "$root/stdout" 'No sessions.'
 [[ $(requests) == 1 ]]
 
 # Real runtime-created reviewer sessions are owned by the parent deletion,
@@ -101,5 +101,5 @@ run --delete "$parent"; ok
 for child in "${children[@]}"; do
   run --export "$child"; bad; contains "$root/stderr" 'was not found'
 done
-run -l; ok; contains "$root/stdout" 'No conversations.'
+run -l; ok; contains "$root/stdout" 'No sessions.'
 [[ $(requests) == 5 ]]

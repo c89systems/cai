@@ -286,7 +286,7 @@ static int notice(frontend *f, const char *message) {
 }
 /** Project operation transitions once per editor. Both Softline setters reset
  * its animation clock, so feed/status refreshes must leave them untouched.
- * Retained conversation editors keep their own applied state when switched. */
+ * Retained session editors keep their own applied state when switched. */
 static int activity(frontend *f, int busy) {
   frontend_view *v = f->current;
   if (!v->activity_known || v->activity_busy != busy) {
@@ -476,9 +476,8 @@ static int status(frontend *f) {
              f->state.transport.controller != f->state.transport.attachment
                  ? "Observing workspace. /takeover acquires control. "
                    "Send /help for usage."
-             : f->greeting_resumed
-                 ? "Conversation resumed. Send /help for usage."
-                 : "Conversation attached. Send /help for usage.");
+             : f->greeting_resumed ? "Session resumed. Send /help for usage."
+                                   : "Session ready. Send /help for usage.");
     f->welcomed = 1;
   } else if (f->group->discovery != NULL || f->group->candidate != NULL)
     snprintf(message, sizeof(message), "Looking up workspace...");
@@ -490,7 +489,7 @@ static int status(frontend *f) {
            (!f->skills_ready || f->skill_conversation != f->state.conversation))
     snprintf(message, sizeof(message), "Loading completions...");
   else if (!f->welcomed && f->subscribed)
-    snprintf(message, sizeof(message), "Replaying conversation...");
+    snprintf(message, sizeof(message), "Replaying session...");
   else if (f->handoff_notice[0] != '\0') {
     snprintf(message, sizeof(message), "Restoring input queue...");
     busy = 1;
@@ -519,13 +518,12 @@ static int observed(void *context, const cai_app_client_event *event,
   frontend *f = context;
   f->state = *event->state;
   if (event->type == CAI_APP_CLIENT_BIND_REJECTED)
-    return cai_cli_error(error,
-                         event->input->result.code != CAI_OK
-                             ? event->input->result.code
-                             : CAI_ERR_INVALID,
-                         event->input->result.reason[0] != '\0'
-                             ? event->input->result.reason
-                             : "conversation binding rejected");
+    return cai_cli_error(
+        error,
+        event->input->result.code != CAI_OK ? event->input->result.code
+                                            : CAI_ERR_INVALID,
+        event->input->result.reason[0] != '\0' ? event->input->result.reason
+                                               : "session binding rejected");
   if (event->type == CAI_APP_CLIENT_SHELL_RESULT &&
       event->request == f->capture_request && f->capture_waiting) {
     cai_app_shell_result result;
@@ -1296,7 +1294,7 @@ static int interests(frontend *f) {
 
 /** Feed explicit CLI intents through the editor's native remote queue. A
  * durable offer receipt precedes the next input; state-changing commands also
- * require their application record, including across a conversation switch. */
+ * require their application record, including across a session switch. */
 static int startup_input(frontend *f) {
   char *text = NULL;
   int rc, control;
@@ -1729,8 +1727,7 @@ static int select_view(frontend *f, const char *session) {
   if (v == NULL) {
     v = calloc(1U, sizeof(*v));
     if (v == NULL)
-      return cai_cli_error(&f->error, CAI_ERR_NOMEM,
-                           "allocate conversation editor");
+      return cai_cli_error(&f->error, CAI_ERR_NOMEM, "allocate session editor");
     v->next = f->views;
     f->views = v;
     v->socket_fd = v->boot_fd = -1;
@@ -1871,7 +1868,7 @@ static frontend *frontend_open(frontend_group *group,
     f->target.expected_instance = f->instance;
   }
   f->boot = boot;
-  /* Select the conversation before binding/replay. Only subsequent explicit
+  /* Select the session before binding/replay. Only subsequent explicit
    * invocation inputs use admissions after that selected replay completes. */
   f->startup.stage = CAI_CLI_STARTUP_MODEL;
   f->startup_select = options->resume_id != NULL || options->new_session;
@@ -2531,7 +2528,7 @@ static int terminal_action(frontend *f, int kind) {
   if (kind == 2) {
     (void)cai_app_client_get_view(f->client, &view, NULL);
     if (view == NULL || view->log_path == NULL) {
-      result = notice(f, "No log file is configured for this conversation.");
+      result = notice(f, "No log file is configured for this session.");
       goto done;
     }
     if (!f->options->prefer_native_pager)
@@ -2684,7 +2681,7 @@ static int terminal_action(frontend *f, int kind) {
       }
     } else if (p->queue != NULL) {
       (void)cai_cli_input_socket_disconnect(p->queue, NULL);
-      /* The parked view retains its editor/queue. A conversation reset while
+      /* The parked view retains its editor/queue. A session reset while
        * the terminal was lent out must not route new events to that queue. */
       p->queue = NULL;
     }

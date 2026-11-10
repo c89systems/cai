@@ -4,13 +4,25 @@ Choose a guide for the job at hand.
 User guides describe the application; SDK guides describe embedding; architecture references explain ownership and protocol contracts.
 Run `cai --help` for startup flags, `/help` for commands and keys, and `cai --dump-config` for the complete current settings template.
 
+## Terminology
+
+| Term | Meaning |
+|---|---|
+| **Workspace** | The canonical directory that scopes saved sessions and has at most one running CAI backend. |
+| **Session** | A saved agent interaction, identified by a session ID. Its history, input queue and goal can outlive the backend and its attachments. |
+| **Attachment** | A live connection from a frontend to a workspace backend. An attachment can control the backend or observe it. |
+
+The backend selects one active session. Selecting another session keeps the attachment, and detaching leaves the saved session available to resume. Use **session** for the saved interaction in CAI prose. Older references to a conversation or chat thread mean a session.
+
+The workspace protocol's `conversation` field carries the **session epoch**, which identifies the active binding. The persistent session ID is separate. OpenAI's **Conversations API** uses a provider session ID, exposed by names such as `cai_conversation` and `conversation_id`. Operating-system threads describe execution.
+
 ## Use the agent
 
 | Guide | Covers |
 |---|---|
 | [Terminal](terminal.md) | Input, steering, goals, model changes, reviews, shells and workspace switching. |
 | [Configuration](configuration.md) | Precedence, paths, named stores, approval, execution policy, temporary runs and logs. |
-| [Conversations](conversations.md) | Resume, recall, retention, deletion, trim, compaction and export. |
+| [Sessions](sessions.md) | Resume, recall, retention, deletion, trim, compaction and export. |
 | [Appearance](appearance.md) | Theme pairs, reviewer offsets, status fields and timestamps. |
 | [Providers](providers.md) | ChatGPT imports/login, API keys, protocols and retries. |
 | [Tools](tools.md) | Capability policy, managed tools and output presentation. |
@@ -18,7 +30,7 @@ Run `cai --help` for startup flags, `/help` for commands and keys, and `cai --du
 | [Skills](skills.md) | Discovery, selection and installation. |
 | [Dynamic tools](plugins.md) | Process/Lua packages and hot reload. |
 | [Chrome](chrome.md) | Extension setup, tab ownership, operations and compatibility. |
-| [Messaging](agent-messaging.md) | Mailboxes, approval and delivery between conversations. |
+| [Messaging](agent-messaging.md) | Mailboxes, approval and delivery between sessions. |
 | [Shared context](context.md) | Searchable text, binary attachments, cross-agent storage and export. |
 | [Kanban](kanban.md) | Shared boards, tasks and optional HTTP integration. |
 | [Troubleshooting](troubleshooting.md) | Evidence, logs, storage recovery, terminal and completion limitations. |
