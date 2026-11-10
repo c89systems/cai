@@ -65,6 +65,8 @@ function(cai_strip_file path primary_flag)
 endfunction()
 
 file(GLOB package_libraries
+  "${package_root}/lib/libcai_context.a"
+  "${package_root}/lib/libcai_context.so*"
   "${package_root}/lib/libcai.a"
   "${package_root}/lib/libcai_app.a"
   "${package_root}/lib/libcai_app.so*"

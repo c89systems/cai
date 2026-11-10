@@ -75,6 +75,7 @@ void cai_cli_options_init(cai_cli_options *options) {
   options->chrome = 1;
   options->web_search = 1;
   options->mcp = 1;
+  options->context = 1;
   options->messaging = 0;
   options->message_ack_timeout_ms = 300000L;
   options->replay_turns = 10L;
@@ -299,6 +300,11 @@ static int cli_read_options(int argc, char *const *argv,
         strcmp(flag, "--no-disable-compression") == 0) {
       options->disable_compression = strcmp(flag, "--disable-compression") == 0;
       options->owner_explicit[CAI_CLI_OWNER_disable_compression] = 1U;
+      continue;
+    }
+    if (strcmp(flag, "--context") == 0 || strcmp(flag, "--no-context") == 0) {
+      options->context = strcmp(flag, "--context") == 0;
+      options->owner_explicit[CAI_CLI_OWNER_context] = 1U;
       continue;
     }
     if (strcmp(flag, "--messaging") == 0 ||
@@ -674,6 +680,12 @@ static int cli_read_options(int argc, char *const *argv,
       field = &options->auth_store;
     else if (strcmp(flag, "--messaging-store") == 0)
       field = &options->messaging_store;
+    else if (strcmp(flag, "--context-store") == 0)
+      field = &options->context_store;
+    else if (strcmp(flag, "--context-namespace") == 0)
+      field = &options->context_namespace;
+    else if (strcmp(flag, "--context-export") == 0)
+      field = &options->context_export;
     else if (strcmp(flag, "--lockd-client-pem") == 0)
       field = &options->lockd_client_pem;
     else if (strcmp(flag, "-g") == 0 || strcmp(flag, "--goal") == 0)
@@ -767,7 +779,9 @@ static int cli_read_options(int argc, char *const *argv,
       cai_cli_option_error(options, "unknown option: %s\n", flag);
       return -1;
     }
-    if (++i >= argc || (argv[i][0] == '\0' && field != &options->export_out)) {
+    if (++i >= argc || (argv[i][0] == '\0' && field != &options->export_out &&
+                        field != &options->context_store &&
+                        field != &options->context_namespace)) {
       cai_cli_option_error(options, "%s requires a value\n", flag);
       return -1;
     }
@@ -775,7 +789,9 @@ static int cli_read_options(int argc, char *const *argv,
     *field = value;
     cai_cli_options_mark_owner(
         options, (size_t)((unsigned char *)field - (unsigned char *)options));
-    if (field == &options->export_out && value[0] == '\0')
+    if ((field == &options->export_out || field == &options->context_store ||
+         field == &options->context_namespace) &&
+        value[0] == '\0')
       *field = NULL;
     if (field == &options->config_file)
       options->config_explicit = 1;
@@ -834,12 +850,22 @@ int cai_cli_options_utility(const cai_cli_options *o) {
          o->login || o->list || o->list_all || o->resume_list ||
          o->delete_list || o->delete_id != NULL || o->export_id != NULL ||
          o->import_file != NULL || o->install_skill != NULL ||
-         o->message != NULL || o->dump_developer_instructions != NULL;
+         o->context_export != NULL || o->message != NULL ||
+         o->dump_developer_instructions != NULL;
 }
 
 int cai_cli_validate_options(cai_cli_options *options) {
   static const char *const providers[] = {"chatgpt", "openai", "openrouter",
                                           "berget",  "custom", NULL};
+  if (options->context_export != NULL &&
+      (options->headless || options->terminate_headless ||
+       options->server != NULL || options->temporary ||
+       options->dump_developer_instructions != NULL)) {
+    cai_cli_option_error(options,
+                         "--context-export cannot be combined with server, "
+                         "temporary or instruction-dump modes");
+    return -1;
+  }
   if (options->all && !options->terminate_headless && !options->list &&
       !options->list_all && !options->resume_list && !options->delete_list &&
       options->delete_id == NULL) {
@@ -966,17 +992,20 @@ int cai_cli_validate_options(cai_cli_options *options) {
        options->delete_list + (options->delete_id != NULL) + options->login +
        options->chrome_setup + options->chrome_remove +
        (options->export_id != NULL) + (options->import_file != NULL) +
-       (options->install_skill != NULL) + (options->message != NULL)) > 1) {
+       (options->install_skill != NULL) + (options->message != NULL) +
+       (options->context_export != NULL)) > 1) {
     cai_cli_option_error(options, "%s",
                          "select only one of --list, --list-all, --resume "
                          "without ID, --delete, --login, "
-                         "--export, --import, --install-skill, or --message\n");
+                         "--export, --context-export, --import, "
+                         "--install-skill, or --message\n");
     return -1;
   }
   if ((options->list || options->list_all || options->resume_list ||
        options->delete_list || options->delete_id != NULL ||
        options->export_id != NULL || options->import_file != NULL ||
-       options->install_skill != NULL || options->message != NULL) &&
+       options->install_skill != NULL || options->message != NULL ||
+       options->context_export != NULL) &&
       (options->new_session || options->resume_id != NULL || options->review ||
        options->review_and_fix || options->goal != NULL ||
        options->instruction_count != 0U || options->non_interactive)) {
@@ -1087,7 +1116,7 @@ int cai_cli_validate_options(cai_cli_options *options) {
   if (options->server != NULL || options->list || options->list_all ||
       options->resume_list || options->export_id != NULL ||
       options->import_file != NULL || options->install_skill != NULL ||
-      options->message != NULL)
+      options->message != NULL || options->context_export != NULL)
     return 1;
   if (strcmp(options->provider, "custom") == 0) {
     if (options->endpoint == NULL ||

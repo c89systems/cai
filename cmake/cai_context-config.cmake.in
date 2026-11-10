@@ -1,0 +1,4 @@
+include(CMakeFindDependencyMacro)
+find_dependency(cai CONFIG)
+find_dependency(lockdc @CAI_LOCKDC_VERSION@ EXACT CONFIG)
+include("${CMAKE_CURRENT_LIST_DIR}/cai-context-targets.cmake")

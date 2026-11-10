@@ -19,6 +19,7 @@ Run `cai --help` for startup flags, `/help` for commands and keys, and `cai --du
 | [Dynamic tools](plugins.md) | Process/Lua packages and hot reload. |
 | [Chrome](chrome.md) | Extension setup, tab ownership, operations and compatibility. |
 | [Messaging](agent-messaging.md) | Mailboxes, approval and delivery between conversations. |
+| [Shared context](context.md) | Searchable text, binary attachments, cross-agent storage and export. |
 | [Kanban](kanban.md) | Shared boards, tasks and optional HTTP integration. |
 | [Troubleshooting](troubleshooting.md) | Evidence, logs, storage recovery, terminal and completion limitations. |
 

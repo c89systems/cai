@@ -112,12 +112,17 @@ static const cli_field fields[] = {
       "Empty uses namespace_prefix.todo."),
     S("storage", "messages_namespace", messages_namespace, 0U,
       "Empty uses namespace_prefix.messages."),
+    S("storage", "context_namespace", context_namespace, 0U,
+      "Shared context namespace; empty uses namespace_prefix.context."),
     S("messaging", "queue_prefix", queue_prefix, 0U,
       "Single-component prefix for automatic queues; empty uses program_name."),
     S("agent", "service_tier", service_tier, 0U,
       "Provider service tier; empty restores saved routing. Explicit default "
       "requests normal routing; priority requests Fast. Use /tier list."),
     B("agent", "mcp", mcp, "Connect named [mcp.NAME] HTTP servers."),
+    B("agent", "context", context,
+      "Enable shared context tools. Default true; no implicit retrieval or "
+      "expiry."),
     {"terminal", "yield_time_ms", offsetof(cai_cli_options, yield_time_ms),
      CAI_CONFIG_INTEGER, 0U, NULL,
      "Command yield interval, 0..30000 ms. Default 10000. Zero selects "
@@ -187,6 +192,9 @@ static const cli_field fields[] = {
       "Named authentication store; retained in --temp runs."),
     S("storage", "messaging_store", messaging_store, 0U,
       "Named messaging store; retained in --temp runs."),
+    S("storage", "context_store", context_store, 0U,
+      "Named context store; empty reuses the active conversation client. "
+      "Context is temporary in --temp runs unless a named store is selected."),
     B("ui", "temporary", temporary,
       "Start in a unique cache workspace; histories are deleted on exit. "
       "Workspace deletion asks [y/N]. --yes/--force also deletes the "
@@ -365,12 +373,12 @@ static int application_defaults_with_scratch(
   static const char *const suffixes[] = {
       "/clipboard", "",        "/pouch.key",  "/exports",
       "/AGENTS.md", "/skills", "/models.json"};
-  const char **namespaces[5];
-  static const char *const ns_keys[] = {"sessions_namespace", "auth_namespace",
-                                        "scopes_namespace", "todo_namespace",
-                                        "messages_namespace"};
-  static const char *const ns_suffixes[] = {"sessions", "auth", "scopes",
-                                            "todo", "messages"};
+  const char **namespaces[6];
+  static const char *const ns_keys[] = {
+      "sessions_namespace", "auth_namespace",     "scopes_namespace",
+      "todo_namespace",     "messages_namespace", "context_namespace"};
+  static const char *const ns_suffixes[] = {"sessions", "auth",     "scopes",
+                                            "todo",     "messages", "context"};
 
   size_t i;
   int rc, n;
@@ -539,7 +547,8 @@ static int application_defaults_with_scratch(
   namespaces[2] = &o->scopes_namespace;
   namespaces[3] = &o->todo_namespace;
   namespaces[4] = &o->messages_namespace;
-  for (i = 0U; i < 5U; i++) {
+  namespaces[5] = &o->context_namespace;
+  for (i = 0U; i < 6U; i++) {
     const char *v = *namespaces[i];
     if (v == NULL) {
       n = snprintf(scratch->path, sizeof(scratch->path), "%s.%s",
@@ -839,6 +848,9 @@ static int tool_environment(cai_config *cfg, const char *prefix,
         {"SESSIONS_STORE", "storage", "sessions_store"},
         {"AUTH_STORE", "storage", "auth_store"},
         {"MESSAGING_STORE", "storage", "messaging_store"},
+        {"CONTEXT_STORE", "storage", "context_store"},
+        {"CONTEXT_NAMESPACE", "storage", "context_namespace"},
+        {"CONTEXT", "agent", "context"},
         {"TEMP", "ui", "temporary"},
         {"REPLAY_TURNS", "ui", "replay_turns"},
         {"PROMPT_HISTORY_LIMIT", "ui", "prompt_history_limit"},
@@ -1299,6 +1311,8 @@ static int cai_cli_configure_at_with_scratch(
   optional_string(cfg, "todo", "default_board", &scratch->defaults.board);
   scratch->defaults.messaging = cai_config_get_bool(
       cfg, "messaging", "enabled", scratch->defaults.messaging);
+  scratch->defaults.context =
+      cai_config_get_bool(cfg, "agent", "context", scratch->defaults.context);
   scratch->defaults.enable_auto_enqueue =
       cai_config_get_bool(cfg, "messaging", "enable_auto_enqueue", 0);
   {

@@ -404,6 +404,34 @@ int main(void) {
     cai_cli_tool_result_close(prepared);
     cai_error_cleanup(&error);
   }
+  {
+    capture *context = calloc(1U, sizeof(*context));
+    assert(context != NULL);
+    assert(result(context, "context_create",
+                  "{\"id\":\"shared-key\",\"version\":2,\"kind\":\"text\","
+                  "\"status\":\"created\"}"));
+    assert(strstr(context->text, "shared-key") &&
+           strstr(context->text, "version 2") &&
+           !strstr(context->text, "\"status\""));
+    assert(result(
+        context, "context_get",
+        "{\"version\":3,\"metadata\":{\"id\":\"shared-key\",\"title\":"
+        "\"Notes\"},\"content\":\"Markdown body\",\"truncated\":false}"));
+    assert(strstr(context->text, "shared-key") &&
+           strstr(context->text, "Markdown body") &&
+           !strstr(context->text, "\"metadata\""));
+    assert(result(context, "context_query",
+                  "{\"items\":[{\"version\":3,\"metadata\":{\"id\":\"one\","
+                  "\"title\":\"First\"}},{\"version\":4,\"metadata\":{\"id\":"
+                  "\"two\",\"title\":\"Second\"}}],\"cursor\":\"next\"}"));
+    assert(strstr(context->text, "First") && strstr(context->text, "Second") &&
+           strstr(context->text, "returned cursor") &&
+           !strstr(context->text, "\"items\""));
+    assert(result(context, "context_custom", "{\"custom\":true}"));
+    assert(strstr(context->text, "context_custom") &&
+           !strstr(context->text, "shared context"));
+    free(context);
+  }
   puts("built-in tool presentation checks passed");
   return 0;
 }

@@ -40,6 +40,8 @@ typedef struct cai_cli_options {
   const char *sessions_namespace, *auth_namespace, *scopes_namespace;
   const char *todo_namespace, *messages_namespace;
   const char *sessions_store, *auth_store, *messaging_store;
+  const char *context_store, *context_namespace, *context_export;
+  int context;
   const char *home_dir, *runtime_dir;
   const char *workspace_name;
   /** Explicit existing-workspace selector; never starts a server. */

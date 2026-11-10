@@ -19,6 +19,21 @@ foreach(path include/cai/app.h include/cai/app_client.h include/cai/workspace_re
     message(FATAL_ERROR "missing application SDK payload: ${path}")
   endif()
 endforeach()
+foreach(path include/cai/context.h lib/libcai_context.a lib/pkgconfig/cai-context.pc
+    lib/cmake/cai_context/cai_context-config.cmake
+    share/cai_context/dependencies.json share/doc/libcai_context/context.md
+    share/doc/libcai_context/LICENSE)
+  if(NOT EXISTS "${prefix}/${path}")
+    message(FATAL_ERROR "missing context SDK payload: ${path}")
+  endif()
+endforeach()
+file(READ "${prefix}/share/cai_context/dependencies.json" context_manifest)
+string(JSON context_project GET "${context_manifest}" project)
+string(JSON context_digest GET "${context_manifest}" dependencies 0 sha256)
+string(LENGTH "${context_digest}" context_digest_length)
+if(NOT context_project STREQUAL "libcai_context" OR NOT context_digest_length EQUAL 64)
+  message(FATAL_ERROR "invalid context dependency manifest")
+endif()
 file(READ "${prefix}/share/cai_app/dependencies.json" manifest)
 string(JSON abi GET "${manifest}" abiVersion)
 string(JSON dependency_count LENGTH "${manifest}" dependencies)
@@ -81,10 +96,36 @@ int main(int argc, char **argv) {
   return cai_example_main(argc, argv);
 }
 ]=])
+file(WRITE "${root}/source/context.c" [=[
+#include <cai/context.h>
+#include <assert.h>
+int main(void) {
+  cai_context_config config;
+  cai_context *context = NULL;
+  cai_error error;
+  cai_error_init(&error);
+  cai_context_config_init(&config);
+  assert(config.client == NULL && config.root_path == NULL && !config.yolo);
+  assert(cai_context_open(&config, &context, &error) == CAI_ERR_INVALID);
+  assert(context == NULL);
+  cai_context_close(context);
+  cai_error_cleanup(&error);
+  return 0;
+}
+]=])
 file(WRITE "${root}/source/CMakeLists.txt" [=[
 cmake_minimum_required(VERSION 3.21)
 project(app_consumer C)
 find_package(cai_app CONFIG REQUIRED)
+find_package(cai_context CONFIG REQUIRED)
+add_executable(context_static context.c)
+target_link_libraries(context_static PRIVATE cai::context_static)
+target_compile_options(context_static PRIVATE -std=c89 -Wall -Wextra -Werror -Wpedantic -Wno-long-long)
+if(TARGET cai::context)
+  add_executable(context_shared context.c)
+  target_link_libraries(context_shared PRIVATE cai::context)
+  target_compile_options(context_shared PRIVATE -std=c89 -Wall -Wextra -Werror -Wpedantic -Wno-long-long)
+endif()
 add_executable(app_static main.c)
 target_link_libraries(app_static PRIVATE cai::app_static)
 target_compile_options(app_static PRIVATE -std=c89 -Wall -Wextra -Werror -Wpedantic -Wno-long-long)
@@ -132,6 +173,13 @@ foreach(dependency IN LISTS CAI_DEPENDENCY_PREFIXES)
   string(APPEND pkg_path ":${dependency}/lib/pkgconfig")
 endforeach()
 foreach(variant static shared)
+  if(EXISTS "${root}/consumer/context_${variant}")
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E env "LD_LIBRARY_PATH=${loader}"
+      "${root}/consumer/context_${variant}" RESULT_VARIABLE result)
+    if(NOT result EQUAL 0)
+      message(FATAL_ERROR "run installed ${variant} context consumer failed")
+    endif()
+  endif()
   if(EXISTS "${root}/consumer/app_${variant}")
     execute_process(COMMAND "${CMAKE_COMMAND}" -E env "LD_LIBRARY_PATH=${loader}"
       "${root}/consumer/app_${variant}" --help RESULT_VARIABLE result OUTPUT_VARIABLE output)
@@ -141,6 +189,24 @@ foreach(variant static shared)
   endif()
 endforeach()
 find_program(PKG_CONFIG pkg-config REQUIRED)
+execute_process(COMMAND "${CMAKE_COMMAND}" -E env "PKG_CONFIG_PATH=${pkg_path}"
+  "${PKG_CONFIG}" --cflags --libs --static cai-context
+  RESULT_VARIABLE result OUTPUT_VARIABLE flags ERROR_VARIABLE errors OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "installed context pkg-config metadata: ${errors}")
+endif()
+separate_arguments(arguments UNIX_COMMAND "${flags}")
+execute_process(COMMAND "${CAI_C_COMPILER}" -std=c89 -Wall -Wextra -Werror
+  "${root}/source/context.c" ${arguments} -o "${root}/context-pkg-consumer"
+  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE errors)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "link context pkg-config consumer: ${output}\n${errors}")
+endif()
+execute_process(COMMAND "${CMAKE_COMMAND}" -E env "LD_LIBRARY_PATH=${loader}"
+  "${root}/context-pkg-consumer" RESULT_VARIABLE result)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "run installed context pkg-config consumer failed")
+endif()
 execute_process(COMMAND "${CMAKE_COMMAND}" -E env "PKG_CONFIG_PATH=${pkg_path}"
   "${PKG_CONFIG}" --cflags --libs --static cai-app
   RESULT_VARIABLE result OUTPUT_VARIABLE flags ERROR_VARIABLE errors OUTPUT_STRIP_TRAILING_WHITESPACE)

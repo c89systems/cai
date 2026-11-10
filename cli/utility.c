@@ -12,6 +12,7 @@
 #include "stores.h"
 #include "theme.h"
 #include <cai/chrome.h>
+#include <cai/context.h>
 #include <cai/workspace.h>
 #include <cai/workspace_client.h>
 #include <cai/workspace_registry.h>
@@ -304,9 +305,12 @@ static int dispatch(utility_run *u) {
         u->configuration->get(u->configuration, "chrome", "socket_directory"),
         u->log->logger, &u->error);
   }
-  store = u->options.login             ? u->options.auth_store
-          : u->options.message != NULL ? u->options.messaging_store
-                                       : u->options.sessions_store;
+  store =
+      u->options.login             ? u->options.auth_store
+      : u->options.message != NULL ? u->options.messaging_store
+      : u->options.context_export != NULL && u->options.context_store != NULL
+          ? u->options.context_store
+          : u->options.sessions_store;
   u->operation = "open lockd store";
   rc = cai_cli_store_options(u->configuration, &u->options, store, &selected,
                              &u->error);
@@ -321,7 +325,25 @@ static int dispatch(utility_run *u) {
                          cai_app_bridge_cleanup_stop, u->bridge, u->environment,
                          u->workspace);
   }
-  if (u->options.message != NULL) {
+  if (u->options.context_export != NULL) {
+    cai_context_config config;
+    cai_context *context = NULL;
+    u->operation = "export shared context";
+    cai_context_config_init(&config);
+    config.client = u->pouch.sessions;
+    config.namespace_name = u->options.context_namespace;
+    config.root_path = u->workspace;
+    config.yolo = 1;
+    rc = cai_context_open(&config, &context, &u->error);
+    if (rc == CAI_OK)
+      rc = cai_sink_stdout(&destination, &u->error);
+    if (rc == CAI_OK)
+      rc = cai_context_export(context, u->options.context_export, destination,
+                              &u->error);
+    if (rc == CAI_OK)
+      rc = cai_sink_write(destination, "\n", 1U, &u->error);
+    cai_context_close(context);
+  } else if (u->options.message != NULL) {
     u->operation = "send message";
     rc = cai_sink_stdout(&destination, &u->error);
     if (rc == CAI_OK)

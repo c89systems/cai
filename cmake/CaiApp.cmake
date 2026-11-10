@@ -11,6 +11,7 @@ target_include_directories(cai_app_static PUBLIC
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(cai_app_static PUBLIC cai_app_server_static cai_static softline::softline_static
   libmdf::mdf_static lockdc::static)
+target_link_libraries(cai_cli_support PUBLIC cai_context_static)
 set(CAI_APP_LUA_TOOLS_PC "")
 set(CAI_LUA_TOOLS_JSON false)
 if(CAI_BUILD_LUA_TOOLS)
@@ -34,6 +35,7 @@ if(CAI_BUILD_SHARED)
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
   target_link_libraries(cai_app_shared PUBLIC cai_app_server_shared cai_shared pslog::pslog_shared PRIVATE
     softline::softline libmdf::mdf_shared lockdc::shared)
+  target_link_libraries(cai_app_shared PRIVATE cai_context_shared)
   if(CAI_BUILD_LUA_TOOLS)
     target_link_libraries(cai_app_shared PRIVATE cai_lua_tools_shared)
   endif()

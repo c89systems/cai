@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "project": "libcai_context",
+  "version": "@CAI_PACKAGE_VERSION@",
+  "targetId": "@CAI_TARGET_ID@",
+  "abiVersion": 0,
+  "libcaiAbiVersion": @CAI_ABI_VERSION@,
+  "dependencies": [
+    {"name":"liblockdc","version":"@CAI_LOCKDC_VERSION@","targetId":"@CAI_TARGET_ID@","sourceUrl":"https://github.com/c89systems/liblockdc/releases/download/v@CAI_LOCKDC_VERSION@/@_cai_lockdc_name@.tar.gz","sha256":"@_cai_lockdc_sha256@","bundled":false}
+  ]
+}

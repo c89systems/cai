@@ -41,6 +41,7 @@
 #include "workspace_claims.h"
 #include <cai/agent_runtime.h>
 #include <cai/auth.h>
+#include <cai/context.h>
 #include <cai/execution.h>
 #include <cai/quota.h>
 #include <cai/session_store.h>
@@ -62,6 +63,13 @@
 #endif
 
 typedef cai_cli_session cli_session;
+/** Extra store handles share the app lifetime and are deduplicated by resolved
+ * connection settings, independently of the feature/name selecting them. */
+typedef struct cli_extra_store {
+  struct cli_extra_store *next;
+  cai_cli_options selected;
+  cai_cli_pouch pouch;
+} cli_extra_store;
 
 typedef struct cli_state {
   const cai_app_config *application;
@@ -81,7 +89,8 @@ typedef struct cli_state {
   cai_environment *environment;
   cai_agent_session_store store;
   cai_cli_pouch pouch;
-  cai_cli_pouch auth_pouch, messaging_pouch;
+  cli_extra_store *extra_stores;
+  cai_context *context;
   cai_chatgpt_auth *auth;
   cai_chatgpt_auth shared_auth;
   pthread_mutex_t auth_lock;
@@ -1282,6 +1291,8 @@ static int cli_register_agent_tools(void *context, cai_agent *agent,
   int rc = CAI_OK;
   if (state->messages != NULL)
     rc = cai_cli_messages_register(state->messages, agent, error);
+  if (rc == CAI_OK && state->context != NULL)
+    rc = cai_context_register(state->context, agent, error);
   if (rc == CAI_OK && state->application != NULL &&
       state->application->register_agent_tools != NULL)
     rc = state->application->register_agent_tools(
@@ -1290,28 +1301,47 @@ static int cli_register_agent_tools(void *context, cai_agent *agent,
 }
 
 /* Handles belong to the app run, not a turn or reopened runtime. */
+static int cli_store_string_equal(const char *a, const char *b) {
+  return a == b || (a != NULL && b != NULL && strcmp(a, b) == 0);
+}
+static int cli_store_equal(const cai_cli_options *a, const cai_cli_options *b) {
+  return cli_store_string_equal(a->lockd, b->lockd) &&
+         cli_store_string_equal(a->pouch_key_file, b->pouch_key_file) &&
+         cli_store_string_equal(a->lockd_client_pem, b->lockd_client_pem) &&
+         a->disable_compression == b->disable_compression;
+}
 static cai_cli_pouch *cli_named_store(cli_state *state, const char *name,
-                                      int authentication, cai_error *error) {
-  cai_cli_options selected;
-  cai_cli_pouch *store;
+                                      cai_error *error) {
+  cai_cli_options selected, history;
+  cli_extra_store *entry;
   /* Reject an empty/invalid selector before any cached-handle comparisons. */
   if (cai_cli_store_options(state->configuration, &state->normal_options, name,
                             &selected, error) != CAI_OK)
     return NULL;
-  if (!state->options.temporary &&
-      strcmp(name, state->normal_options.sessions_store) == 0)
-    return &state->pouch;
-  if (state->auth_pouch.sessions != NULL &&
-      strcmp(name, state->normal_options.auth_store) == 0)
-    return &state->auth_pouch;
-  if (state->messaging_pouch.sessions != NULL &&
-      strcmp(name, state->normal_options.messaging_store) == 0)
-    return &state->messaging_pouch;
-  store = authentication ? &state->auth_pouch : &state->messaging_pouch;
-  if (cai_cli_pouch_open_options(store, &selected, cli_logger(state), error) !=
-      CAI_OK)
+  if (cai_cli_store_options(state->configuration, &state->normal_options,
+                            state->normal_options.sessions_store, &history,
+                            error) != CAI_OK)
     return NULL;
-  return store;
+  if (!state->options.temporary && cli_store_equal(&selected, &history))
+    return &state->pouch;
+  for (entry = state->extra_stores; entry != NULL; entry = entry->next)
+    if (cli_store_equal(&selected, &entry->selected))
+      return &entry->pouch;
+  entry = calloc(1U, sizeof(*entry));
+  if (entry == NULL) {
+    cai_cli_error(error, CAI_ERR_NOMEM, "allocate named store");
+    return NULL;
+  }
+  entry->selected = selected;
+  if (cai_cli_pouch_open_options(&entry->pouch, &selected, cli_logger(state),
+                                 error) != CAI_OK) {
+    cai_cli_pouch_close(&entry->pouch);
+    free(entry);
+    return NULL;
+  }
+  entry->next = state->extra_stores;
+  state->extra_stores = entry;
+  return &entry->pouch;
 }
 
 /** Per-invocation scratch belongs to the heap, including callback reentry. */
@@ -1435,7 +1465,7 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
   }
   if (state->options.messaging && !state->options.review) {
     cai_cli_pouch *messaging =
-        cli_named_store(state, state->normal_options.messaging_store, 0, error);
+        cli_named_store(state, state->normal_options.messaging_store, error);
     if (messaging == NULL)
       return error->code;
     rc = cai_cli_messages_new(messaging, state->options.message_ack_timeout_ms,
@@ -1444,7 +1474,24 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     if (rc != CAI_OK)
       return rc;
   }
-  if (state->messages != NULL ||
+  if (state->options.context && state->context == NULL) {
+    cai_context_config context_config;
+    cai_cli_pouch *store =
+        state->options.context_store != NULL
+            ? cli_named_store(state, state->options.context_store, error)
+            : &state->pouch;
+    if (store == NULL)
+      return error->code;
+    cai_context_config_init(&context_config);
+    context_config.client = store->sessions;
+    context_config.namespace_name = state->options.context_namespace;
+    context_config.root_path = state->workspace;
+    context_config.yolo = state->options.yolo;
+    rc = cai_context_open(&context_config, &state->context, error);
+    if (rc != CAI_OK)
+      return rc;
+  }
+  if (state->messages != NULL || state->context != NULL ||
       (state->application != NULL &&
        state->application->register_agent_tools != NULL)) {
     config.register_agent_tools = cli_register_agent_tools;
@@ -3338,6 +3385,7 @@ static int cli_handle_command(cli_state *state, const char *line,
         return cai_cli_error(error, CAI_ERR_INVALID,
                              "YOLO change waits for an idle runtime and tools");
       state->options.yolo = enabled = requested;
+      cai_context_set_yolo(state->context, requested);
       snprintf(
           message, sizeof(message),
           "**YOLO %s.** %s\n\nThis runtime only; configuration is unchanged.\n",
@@ -4240,7 +4288,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   if (strcmp(state->options.provider, "chatgpt") == 0 ||
       (!state->options.review && state->options.mcp)) {
     auth_store =
-        cli_named_store(state, state->normal_options.auth_store, 1, &error);
+        cli_named_store(state, state->normal_options.auth_store, &error);
     if (auth_store == NULL) {
       cli_print_error(state, "open authentication store", &error);
       goto cleanup;
@@ -4523,9 +4571,14 @@ cleanup:
     state->auth->close(state->auth);
   if (state->has_auth_lock)
     pthread_mutex_destroy(&state->auth_lock);
+  cai_context_close(state->context);
+  while (state->extra_stores != NULL) {
+    cli_extra_store *entry = state->extra_stores;
+    state->extra_stores = entry->next;
+    cai_cli_pouch_close(&entry->pouch);
+    free(entry);
+  }
   cai_cli_pouch_close(&state->pouch);
-  cai_cli_pouch_close(&state->auth_pouch);
-  cai_cli_pouch_close(&state->messaging_pouch);
   cai_cli_documents_close(&state->documents);
   cai_app_bridge_bind_input(state->bridge, NULL);
   cai_input_controller_close(state->input_controller);

@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "tool_result.h"
 #include "pouch_stream.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -50,19 +51,57 @@ static const lonejson_field result_fields[] = {
     LONEJSON_FIELD_OBJECT_ARRAY(result_doc, boards, "boards", result_row,
                                 &row_map, LONEJSON_OVERFLOW_FAIL)};
 LONEJSON_MAP_DEFINE(result_map, result_doc, result_fields);
+typedef struct context_result {
+  char *id, *status, *kind, *path, *content, *cursor;
+  lonejson_int64 version;
+  int truncated;
+  result_row metadata;
+  lonejson_object_array items;
+} context_result;
+static const lonejson_field context_item_fields[] = {
+    LONEJSON_FIELD_I64(context_result, version, "version"),
+    LONEJSON_FIELD_OBJECT(context_result, metadata, "metadata", &row_map)};
+LONEJSON_MAP_DEFINE(context_item_map, context_result, context_item_fields);
+static const lonejson_field context_fields[] = {
+    LONEJSON_FIELD_STRING_ALLOC(context_result, id, "id"),
+    LONEJSON_FIELD_STRING_ALLOC(context_result, status, "status"),
+    LONEJSON_FIELD_STRING_ALLOC(context_result, kind, "kind"),
+    LONEJSON_FIELD_STRING_ALLOC(context_result, path, "path"),
+    LONEJSON_FIELD_STRING_ALLOC(context_result, content, "content"),
+    LONEJSON_FIELD_STRING_ALLOC(context_result, cursor, "cursor"),
+    LONEJSON_FIELD_I64(context_result, version, "version"),
+    LONEJSON_FIELD_BOOL(context_result, truncated, "truncated"),
+    LONEJSON_FIELD_OBJECT(context_result, metadata, "metadata", &row_map),
+    LONEJSON_FIELD_OBJECT_ARRAY(context_result, items, "items", context_result,
+                                &context_item_map, LONEJSON_OVERFLOW_FAIL)};
+LONEJSON_MAP_DEFINE(context_map, context_result, context_fields);
 
 struct cai_cli_tool_result {
   result_doc doc;
   const char *verb, *label, *markdown;
   size_t markdown_length;
   int success, failure, generic, mcp, busy;
+  int context_tool;
+  context_result context;
 };
 static int same(const char *a, const char *b) {
   return a != NULL && strcmp(a, b) == 0;
 }
+static int context_tool_name(const char *name) {
+  static const char *const names[] = {"context_create", "context_set",
+                                      "context_query",  "context_get",
+                                      "context_upload", "context_download",
+                                      "context_delete", "context_replace"};
+  size_t i;
+  for (i = 0U; i < sizeof(names) / sizeof(names[0]); i++)
+    if (same(name, names[i]))
+      return 1;
+  return 0;
+}
 void cai_cli_tool_result_close(cai_cli_tool_result *r) {
   if (r != NULL) {
     lonejson_cleanup(&result_map, &r->doc);
+    lonejson_cleanup(&context_map, &r->context);
     free(r);
   }
 }
@@ -103,6 +142,30 @@ int cai_cli_tool_result_open(const cai_agent_runtime_event *e,
   if (r == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "prepare tool presentation");
   r->success = 1;
+  if (context_tool_name(e->tool_name) && e->data != NULL) {
+    lonejson_error_init(&local);
+    json = lonejson_new(NULL, &local);
+    if (json == NULL) {
+      cai_cli_tool_result_close(r);
+      return cai_cli_error(error, CAI_ERR_NOMEM, "prepare context receipt");
+    }
+    recognized =
+        lonejson_parse_buffer(json, &context_map, &r->context, e->data,
+                              e->data_length, &local) == LONEJSON_STATUS_OK;
+    lonejson_free(json);
+    if (!recognized)
+      goto unrecognized;
+    r->context_tool = 1;
+    r->verb = same(r->context.status, "created")      ? "Stored"
+              : same(r->context.status, "downloaded") ? "Downloaded"
+              : same(r->context.status, "deleted")    ? "Deleted"
+              : same(e->tool_name, "context_query")   ? "Found"
+              : same(e->tool_name, "context_get")     ? "Read"
+                                                      : "Updated";
+    r->label = "shared context";
+    *out = r;
+    return CAI_OK;
+  }
   if (e->data == NULL || (e->tool_action != CAI_AGENT_TOOL_ACTION_MCP &&
                           e->tool_action != CAI_AGENT_TOOL_ACTION_EXECUTE &&
                           !same(e->tool_name, "run_review_and_fix") &&
@@ -437,6 +500,59 @@ int cai_cli_tool_result_write(cai_cli_tool_result *r, int mode, size_t width,
   result_row *rows;
   size_t i, count;
   int boards;
+  if (r->context_tool) {
+    cai_cli_tool_text text;
+    context_result *c = &r->context;
+    context_result *items = (context_result *)c->items.items;
+    char version[64];
+    cai_cli_tool_text_init(&text, mode, width);
+    if (c->id != NULL || c->metadata.id != NULL) {
+      const char *id = c->id != NULL ? c->id : c->metadata.id;
+      if (cai_cli_tool_text_write(&text, id, strlen(id), 0, 0, write, context,
+                                  error) != CAI_OK)
+        return CAI_ERR_TRANSPORT;
+      snprintf(version, sizeof(version), " (version %lld)\n",
+               (long long)c->version);
+      if (cai_cli_tool_text_write(&text, version, strlen(version), 0, 0, write,
+                                  context, error) != CAI_OK)
+        return CAI_ERR_TRANSPORT;
+    }
+    for (i = 0U; i < c->items.count && !text.omitted; i++) {
+      const char *id =
+          items[i].metadata.id != NULL ? items[i].metadata.id : "unknown";
+      const char *title =
+          items[i].metadata.title != NULL ? items[i].metadata.title : "";
+      if (cai_cli_tool_text_write(&text, id, strlen(id), 0, 0, write, context,
+                                  error) != CAI_OK ||
+          cai_cli_tool_text_write(&text, "  ", 2U, 0, 0, write, context,
+                                  error) != CAI_OK ||
+          cai_cli_tool_text_write(&text, title, strlen(title), 0, 0, write,
+                                  context, error) != CAI_OK ||
+          cai_cli_tool_text_write(&text, "\n", 1U, 0, 0, write, context,
+                                  error) != CAI_OK)
+        return CAI_ERR_TRANSPORT;
+    }
+    if (c->items.count == 0U && same(r->verb, "Found"))
+      if (cai_cli_tool_text_write(&text, "No matching context.\n", 21U, 0, 0,
+                                  write, context, error) != CAI_OK)
+        return CAI_ERR_TRANSPORT;
+    if (c->path != NULL)
+      if (cai_cli_tool_text_write(&text, c->path, strlen(c->path), 0, 0, write,
+                                  context, error) != CAI_OK ||
+          cai_cli_tool_text_write(&text, "\n", 1U, 0, 0, write, context,
+                                  error) != CAI_OK)
+        return CAI_ERR_TRANSPORT;
+    if (c->cursor != NULL)
+      if (cai_cli_tool_text_write(
+              &text, "More context is available; follow the returned cursor.\n",
+              strlen(
+                  "More context is available; follow the returned cursor.\n"),
+              0, 0, write, context, error) != CAI_OK)
+        return CAI_ERR_TRANSPORT;
+    return cai_cli_tool_text_write(&text, c->content != NULL ? c->content : "",
+                                   c->content != NULL ? strlen(c->content) : 0U,
+                                   1, 0, write, context, error);
+  }
   if (r->busy)
     return cai_cli_tool_busy_write(r->doc.session_id, r->doc.active_command,
                                    mode, width, write, context, error);

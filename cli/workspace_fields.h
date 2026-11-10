@@ -26,6 +26,8 @@
   X("storage", "sessions_store", sessions_store, 's') \
   X("storage", "auth_store", auth_store, 's') \
   X("storage", "messaging_store", messaging_store, 's') \
+  X("storage", "context_store", context_store, 's') \
+  X("storage", "context_namespace", context_namespace, 's') \
   X("messaging", "queue_prefix", queue_prefix, 's') \
   X("messaging", "queue_name", message_queue, 's') \
   X("messaging", "ack_timeout_ms", message_ack_timeout_ms, 'l') \
@@ -63,6 +65,7 @@
   X("agent", "review_subagent", review_subagent, 'b') \
   X("agent", "codex_agents_md", codex_agents_md, 'b') \
   X("agent", "mcp", mcp, 'b') \
+  X("agent", "context", context, 'b') \
   X("agent", "read_file", read_file, 'b') \
   X("agent", "list_files", list_files, 'b') \
   X("agent", "apply_patch", apply_patch, 'b') \

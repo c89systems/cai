@@ -60,6 +60,7 @@ if(CAI_BUILD_APP)
 endif()
 option(CAI_BUILD_LUA "Build the Lua 5.5 binding and Lua tests." OFF)
 option(CAI_BUILD_LUA_TOOLS "Build the optional embedded Lua tool executor." ${CAI_BUILD_APP})
+option(CAI_BUILD_CONTEXT "Build the optional liblockdc context tool adapter." ${CAI_BUILD_APP_SERVER})
 option(CAI_BUILD_FUZZERS "Build fuzz harnesses." OFF)
 option(CAI_ENABLE_COVERAGE "Build tests with coverage instrumentation." OFF)
 option(CAI_ENABLE_VALGRIND_TESTS "Register native Valgrind memory-check tests." OFF)
@@ -332,7 +333,7 @@ function(cai_set_pslog_from_target)
   endif()
 endfunction()
 
-if(CAI_BUILD_APP OR CAI_BUILD_APP_SERVER)
+if(CAI_BUILD_APP OR CAI_BUILD_APP_SERVER OR CAI_BUILD_CONTEXT)
   if(CAI_TARGET_ID STREQUAL "x86_64-linux-gnu")
     set(_cai_liblql_sha256 "d6b3d12afcf6ba2582cb9103cc6a6a97a7378870d969e0755d467d72b9f43030")
     set(_cai_lockdc_sha256 "efb021c28820b5589c98b82bd64765604bf8bbd7dd295d16702a549ab19a4e93")
@@ -955,6 +956,7 @@ function(cai_configure_cli_target target)
 endfunction()
 
 include(CaiLuaTools)
+include(CaiContext)
 include(CaiAppClient)
 include(CaiAppServer)
 
@@ -1697,7 +1699,7 @@ if(CAI_INSTALL)
     PATTERN "app_server.h" EXCLUDE PATTERN "app_types.h" EXCLUDE
     PATTERN "app_view.h" EXCLUDE
     PATTERN "app_terminal.h" EXCLUDE
-    PATTERN "lua_tools.h" EXCLUDE)
+    PATTERN "lua_tools.h" EXCLUDE PATTERN "context.h" EXCLUDE)
   install(DIRECTORY "${CAI_GENERATED_INCLUDE_DIR}/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
   install(FILES "${CAI_LIBYAML_LICENSE}"
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/third_party/libyaml")
@@ -1746,6 +1748,7 @@ if(CAI_INSTALL)
     list(APPEND _cai_package_deps cai_shared)
   endif()
   foreach(_cai_product_target IN ITEMS cai_app_static cai_app_shared
+      cai_context_static cai_context_shared
       cai_lua_tools_static cai_lua_tools_shared)
     if(TARGET ${_cai_product_target})
       list(APPEND _cai_package_deps ${_cai_product_target})
