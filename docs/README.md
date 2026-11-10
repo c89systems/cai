@@ -54,6 +54,7 @@ Source examples live under `examples/` in the repository; [the examples guide](h
 - [Benchmark workload and commands](benchmarks.md).
 - [Initial transport baseline](benchmark-baseline.md) and [presentation attribution / CBOR optimization](performance-cbor-presentation.md).
 - [Historical startup/CPU measurements](startup-responsiveness.md), taken before the workspace-server cutover.
+- [Network prompt and event transport specification](network-prompt-events.md), agreed behavior for the upcoming TCP/multicast feature; not a shipped interface.
 
 Design proposals and dependency incident reports that have been superseded are not current API documentation.
 Their history remains available in Git.
