@@ -1234,11 +1234,23 @@ static int event_ready(sl_t *sl, const sl_watch_event_t *event, void *context) {
  * Socket watches must never substitute for this editor-owned boundary. */
 static void editor_idle(sl_t *editor, void *context) {
   frontend *f = context;
+  frontend *parked;
   cai_cli_prompt_listener_idle(f->prompt_listener);
   if (f->queue != NULL &&
       cai_cli_input_socket_idle(f->queue, editor, &f->error) != CAI_OK) {
     f->failed = f->quit = 1;
     (void)sl_suspend(editor);
+  }
+  /* Parked editors have no input loop of their own. Their callback-driven
+   * queue offers and receipts still settle at the active editor's idle seam,
+   * after all watched sockets/native queue callbacks have been processed. */
+  for (parked = f->group->first; parked != NULL; parked = parked->next) {
+    if (parked != f && !parked->parked_failed && parked->queue != NULL &&
+        cai_cli_input_socket_idle(parked->queue, parked->ui->sl,
+                                  &parked->error) != CAI_OK) {
+      parked->parked_failed = 1;
+      parked->ready = 0;
+    }
   }
   if (!f->failed && f->handoff_notice[0] != '\0' && f->queue != NULL) {
     sl_queue_backend_info_t info;
@@ -1288,11 +1300,16 @@ static int interests(frontend *f) {
   uint64_t deadline = 0U, boot_deadline = 0U, now = clock_ms();
   const cai_app_view *view = NULL;
   if (f->group->active == f)
-    for (other = f->group->first; other != NULL; other = other->next)
+    for (other = f->group->first; other != NULL; other = other->next) {
+      /* A parked producer can enqueue transport writes after prepare(), in
+       * the native idle callback. Wake the editor that owns the poll loop. */
+      if (other->queue != NULL)
+        cai_cli_input_socket_set_wakeup(other->queue, f->wake[1]);
       if (cai_cli_prompt_listener_watch(other->prompt_listener, f->ui->sl,
                                         &f->error) != CAI_OK ||
           network_progress(other) != 0)
         return -1;
+    }
   if (f->client != NULL) {
     if (cai_app_client_prepare(f->client, &descriptor, &deadline, &f->error) !=
             CAI_OK ||

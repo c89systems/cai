@@ -19,6 +19,13 @@ int cai_cli_tool_result_write(cai_cli_tool_result *result, int mode,
                               int (*write)(void *, const char *, size_t),
                               void *context, cai_error *error);
 void cai_cli_tool_result_close(cai_cli_tool_result *result);
+/** Incrementally decode known network receipts, retaining only bounded preview
+ * fields. Open returns NULL for other tools. Malformed final receipts become
+ * formatted failures, without replaying their JSON as generic output. */
+int cai_cli_tool_result_stream_open(const cai_agent_runtime_event *,
+                                    cai_cli_tool_result **, cai_error *);
+void cai_cli_tool_result_stream_feed(cai_cli_tool_result *, const char *,
+                                     size_t offset, int final);
 int cai_cli_tool_busy_write(const char *session_id, const char *command,
                             int mode, size_t width,
                             int (*write)(void *, const char *, size_t),

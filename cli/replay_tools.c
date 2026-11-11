@@ -39,6 +39,7 @@ typedef struct replay_call {
   lonejson_path_value_visitor visitor;
   cai_tool_display *display;
   cai_agent_runtime_event event;
+  cai_cli_tool_result *receipt;
   cai_error *error;
   int rc;
 } replay_call;
@@ -99,6 +100,7 @@ static void parse_close(replay_call *c) {
 }
 static void call_free(replay_call *c) {
   parse_close(c);
+  cai_cli_tool_result_close(c->receipt);
   free(c->id);
   free(c->session);
   free(c->name);
@@ -680,6 +682,28 @@ int cai_cli_replay_tools_render(cai_cli_replay_tools *r,
     return CAI_OK;
   c->event.data = record->data;
   c->event.data_length = strlen(record->data);
+  if (!command && !c->failed && same(record->kind, "tool.output")) {
+    if (record->offset == 0U) {
+      cai_cli_tool_result_close(c->receipt);
+      c->receipt = NULL;
+      rc = cai_cli_tool_result_stream_open(&c->event, &c->receipt, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
+    if (c->receipt != NULL) {
+      cai_cli_tool_result_stream_feed(c->receipt, record->data,
+                                      (size_t)record->offset, record->final);
+      if (record->final) {
+        rc = cai_cli_tool_result_heading(c->receipt, display, &c->event, error);
+        if (rc == CAI_OK)
+          rc = cai_cli_tool_result_write(c->receipt, mode, width, markdown,
+                                         context, error);
+        cai_cli_tool_result_close(c->receipt);
+        c->receipt = NULL;
+      }
+      return rc;
+    }
+  }
   if (!command && record->offset == 0U && record->final) {
     rc = cai_cli_tool_result_open(&c->event, &result, error);
     if (rc == CAI_OK && result != NULL) {

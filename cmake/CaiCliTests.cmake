@@ -1,4 +1,14 @@
   if(CAI_BUILD_TESTS)
+    add_test(NAME cai_cli_network_lifecycle COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_network_lifecycle_test.sh"
+      "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_network_test>"
+      "$<TARGET_FILE:cai_cli>")
+    add_test(NAME cai_cli_network_stream COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_network_stream_test.sh"
+      "$<TARGET_FILE:cai_cli>")
+    set_tests_properties(cai_cli_network_lifecycle cai_cli_network_stream PROPERTIES
+      TIMEOUT 60 LABELS "cli;local;offline"
+      ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
     add_test(NAME cai_cli_network_tools COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_network_tools_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_network_test>")

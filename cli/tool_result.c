@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#define LONEJSON_WITH_CURL
 #include "tool_result.h"
 #include "pouch_stream.h"
 #include <stdio.h>
@@ -109,6 +110,13 @@ static const lonejson_field network_fields[] = {
                                 network_row, &network_row_map,
                                 LONEJSON_OVERFLOW_FAIL)};
 LONEJSON_MAP_DEFINE(network_map, network_result, network_fields);
+typedef struct result_stream {
+  lonejson *json;
+  lonejson_curl_parse parser;
+  const char *name;
+  size_t offset;
+  int invalid;
+} result_stream;
 
 struct cai_cli_tool_result {
   result_doc doc;
@@ -119,9 +127,92 @@ struct cai_cli_tool_result {
   context_result context;
   int network_tool;
   network_result network;
+  result_stream *stream;
 };
 static int same(const char *a, const char *b) {
   return a != NULL && strcmp(a, b) == 0;
+}
+static int network_name(const char *name) {
+  return same(name, "event_stream_listen") || same(name, "network_list") ||
+         same(name, "prompt_listener_info") || same(name, "prompt_send");
+}
+static void network_heading(cai_cli_tool_result *r, const char *name) {
+  r->network_tool = 1;
+  r->success = !same(r->network.status, "failed");
+  r->verb = same(name, "event_stream_listen")    ? "Observed"
+            : same(name, "network_list")         ? "Listed"
+            : same(name, "prompt_listener_info") ? "Read"
+            : r->success                         ? "Transmitted"
+                                                 : "TCP send failed";
+  r->label = same(name, "event_stream_listen")    ? "multicast events"
+             : same(name, "network_list")         ? "network endpoints"
+             : same(name, "prompt_listener_info") ? "prompt listener"
+             : r->network.address != NULL         ? r->network.address
+                                                  : "TCP prompt";
+}
+int cai_cli_tool_result_stream_open(const cai_agent_runtime_event *event,
+                                    cai_cli_tool_result **out,
+                                    cai_error *error) {
+  cai_cli_tool_result *r;
+  lonejson_error local;
+  *out = NULL;
+  if (!network_name(event->tool_name))
+    return CAI_OK;
+  r = calloc(1U, sizeof(*r));
+  if (r == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate network presentation");
+  r->stream = calloc(1U, sizeof(*r->stream));
+  lonejson_error_init(&local);
+  if (r->stream != NULL)
+    r->stream->json = lonejson_new(NULL, &local);
+  if (r->stream == NULL || r->stream->json == NULL) {
+    cai_cli_tool_result_close(r);
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate network receipt parser");
+  }
+  r->stream->name = event->tool_name;
+  if (lonejson_curl_parse_init(&r->stream->parser, r->stream->json,
+                               &network_map,
+                               &r->network) != LONEJSON_STATUS_OK) {
+    cai_cli_tool_result_close(r);
+    return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                         "initialize network receipt parser");
+  }
+  *out = r;
+  return CAI_OK;
+}
+void cai_cli_tool_result_stream_feed(cai_cli_tool_result *r, const char *data,
+                                     size_t offset, int final) {
+  result_stream *stream = r->stream;
+  size_t length = strlen(data);
+  size_t consumed = 0U;
+  char chunk[2048];
+  if (offset != stream->offset)
+    stream->invalid = 1;
+  stream->offset += length;
+  while (!stream->invalid && consumed < length) {
+    size_t count = length - consumed;
+    if (count > sizeof(chunk))
+      count = sizeof(chunk);
+    memcpy(chunk, data + consumed, count);
+    if (lonejson_curl_write_callback(chunk, 1U, count, &stream->parser) !=
+        count)
+      stream->invalid = 1;
+    consumed += count;
+  }
+  if (!final)
+    return;
+  if (!stream->invalid &&
+      lonejson_curl_parse_finish(&stream->parser) != LONEJSON_STATUS_OK)
+    stream->invalid = 1;
+  if (stream->invalid) {
+    r->verb = "Failed";
+    r->label = stream->name;
+    r->failure = 1;
+    r->markdown = "Network tool receipt is invalid or incomplete.";
+    r->markdown_length = strlen(r->markdown);
+  } else
+    network_heading(r, stream->name);
 }
 static int context_tool_name(const char *name) {
   static const char *const names[] = {"context_create", "context_set",
@@ -136,6 +227,11 @@ static int context_tool_name(const char *name) {
 }
 void cai_cli_tool_result_close(cai_cli_tool_result *r) {
   if (r != NULL) {
+    if (r->stream != NULL) {
+      lonejson_curl_parse_cleanup(&r->stream->parser);
+      lonejson_free(r->stream->json);
+      free(r->stream);
+    }
     lonejson_cleanup(&result_map, &r->doc);
     lonejson_cleanup(&context_map, &r->context);
     lonejson_cleanup(&network_map, &r->network);
@@ -179,11 +275,7 @@ int cai_cli_tool_result_open(const cai_agent_runtime_event *e,
   if (r == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "prepare tool presentation");
   r->success = 1;
-  if ((same(e->tool_name, "event_stream_listen") ||
-       same(e->tool_name, "network_list") ||
-       same(e->tool_name, "prompt_listener_info") ||
-       same(e->tool_name, "prompt_send")) &&
-      e->data != NULL) {
+  if (network_name(e->tool_name) && e->data != NULL) {
     lonejson_error_init(&local);
     json = lonejson_new(NULL, &local);
     if (json == NULL) {
@@ -196,18 +288,7 @@ int cai_cli_tool_result_open(const cai_agent_runtime_event *e,
     lonejson_free(json);
     if (!recognized)
       goto unrecognized;
-    r->network_tool = 1;
-    r->success = !same(r->network.status, "failed");
-    r->verb = same(e->tool_name, "event_stream_listen")    ? "Observed"
-              : same(e->tool_name, "network_list")         ? "Listed"
-              : same(e->tool_name, "prompt_listener_info") ? "Read"
-              : r->success                                 ? "Transmitted"
-                                                           : "TCP send failed";
-    r->label = same(e->tool_name, "event_stream_listen") ? "multicast events"
-               : same(e->tool_name, "network_list")      ? "network endpoints"
-               : same(e->tool_name, "prompt_listener_info") ? "prompt listener"
-               : r->network.address != NULL                 ? r->network.address
-                                                            : "TCP prompt";
+    network_heading(r, e->tool_name);
     *out = r;
     return CAI_OK;
   }

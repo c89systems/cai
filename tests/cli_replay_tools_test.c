@@ -526,7 +526,46 @@ static void live_ranges(void) {
   }
 }
 
+static void network_chunks(void) {
+  size_t steps[] = {1U, 127U, 4096U};
+  size_t i;
+  int following;
+  char *body = malloc(10000U);
+  assert(body != NULL);
+  strcpy(body, "{\"content\":\"");
+  memset(body + strlen(body), 'x', 9000U);
+  strcpy(body + 9012U, "\",\"bytes\":9000,\"events\":3}");
+  for (following = 0; following < 2; following++)
+    for (i = 0U; i < sizeof(steps) / sizeof(steps[0]); i++) {
+      fixture *f = calloc(1U, sizeof(*f));
+      int phase;
+      assert(f != NULL);
+      open_fixture(f, 0);
+      for (phase = following ? 2 : 0; phase <= (following ? 2 : 1); phase++) {
+        f->phase = phase;
+        assert(record(f, "s", "net", "event_stream_listen", "tool.started",
+                      NULL, "", steps[i]) == CAI_OK);
+        assert(record(f, "s", "net", "event_stream_listen", "tool.completed",
+                      NULL, "", steps[i]) == CAI_OK);
+        assert(record(f, "s", "net", "event_stream_listen", "tool.output",
+                      "data", body, steps[i]) == CAI_OK);
+        assert(record(f, "s", "invalid-net", "event_stream_listen",
+                      "tool.output", "data", "{\"content\":\"unfinished",
+                      steps[i]) == CAI_OK);
+      }
+      assert(strstr(f->text, "Observed multicast events") != NULL);
+      assert(strstr(f->text, "9000 bytes, 3 events") != NULL);
+      assert(strstr(f->text, "\"content\"") == NULL && f->length < 2000U);
+      assert(strstr(f->text,
+                    "Network tool receipt is invalid or incomplete.") != NULL);
+      assert(strstr(f->text, "unfinished") == NULL);
+      close_fixture(f);
+      free(f);
+    }
+  free(body);
+}
 int main(void) {
+  network_chunks();
   live_ranges();
   call_timestamps();
   commands(0, 1U);
