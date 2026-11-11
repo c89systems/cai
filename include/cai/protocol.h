@@ -51,7 +51,9 @@ typedef enum cai_protocol_kind {
   CAI_PROTOCOL_SHELL_OUTPUT_END,
   /** Ephemeral command-tool output; durable results remain the replay source.
    */
-  CAI_PROTOCOL_TERMINAL_OUTPUT
+  CAI_PROTOCOL_TERMINAL_OUTPUT,
+  /** Typed attachment endpoint metadata and correlated frontend TCP actions. */
+  CAI_PROTOCOL_NETWORK
 } cai_protocol_kind;
 /** Each record is a definite eight-pair map, with ascending integer keys:
  * 0 kind, 1 request, 2 session epoch, 3 generation, 4 sequence, 5 stream,

@@ -33,6 +33,36 @@ typedef struct cli_field {
 #define B(s, k, m, d)                                                          \
   {s, k, offsetof(cai_cli_options, m), CAI_CONFIG_BOOL, 0U, NULL, d}
 static const cli_field fields[] = {
+    S("server", "event_multicast", event_multicast, 0U,
+      "Empty disables publication; auto allocates a group; GROUP:PORT fixes "
+      "it."),
+    S("server", "event_multicast_base", event_multicast_base, 0U,
+      "First automatic IPv4 group; default 239.193.89.1."),
+    S("server", "ip_multicast_if", ip_multicast_if, 0U,
+      "Multicast interface name or IPv4 address; empty uses routing."),
+    {"server", "event_multicast_count",
+     offsetof(cai_cli_options, event_multicast_count), CAI_CONFIG_INTEGER, 0U,
+     NULL, "Automatic group pool size; default 254."},
+    {"server", "event_multicast_port",
+     offsetof(cai_cli_options, event_multicast_port), CAI_CONFIG_INTEGER, 0U,
+     NULL, "Automatic multicast destination port; default 49189."},
+    {"server", "ip_multicast_ttl", offsetof(cai_cli_options, ip_multicast_ttl),
+     CAI_CONFIG_INTEGER, 0U, NULL, "Multicast hop limit; default 1."},
+    B("server", "disable_multicast_loop", disable_multicast_loop,
+      "Disable local multicast loopback; default false."),
+    B("agent", "network_tools", network_tools,
+      "Enable registry discovery and frontend TCP sends; default false."),
+    B("agent", "disable_event_stream_listener", disable_event_stream_listener,
+      "Disable on-demand multicast observation; default false."),
+    S("ui", "prompt_listener", prompt_listener, 0U,
+      "Frontend TCP prompt endpoint; empty disables it. Omitted host is "
+      "loopback."),
+    S("ui", "prompt_advertise", prompt_advertise, 0U,
+      "Usable reply endpoint; empty uses a concrete listener bind address."),
+    S("ui", "proto", proto, 0U, "TCP family: tcpv4 (default) or tcpv6."),
+    {"ui", "simulate_typing_ms", offsetof(cai_cli_options, simulate_typing_ms),
+     CAI_CONFIG_INTEGER, 0U, NULL,
+     "Listener Unicode typing delay; zero disables pacing."},
     S("agent", "developer_instructions_file", developer_instructions_file,
       CAI_CONFIG_PATH,
       "Literal base instructions file for ordinary agents; empty uses model "
@@ -810,12 +840,26 @@ static int tool_environment(cai_config *cfg, const char *prefix,
   {
     static const char *const aliases[][3] = {
         {"INSECURE", "agent", "insecure"},
+        {"EVENT_MULTICAST", "server", "event_multicast"},
+        {"EVENT_MULTICAST_BASE", "server", "event_multicast_base"},
+        {"EVENT_MULTICAST_COUNT", "server", "event_multicast_count"},
+        {"EVENT_MULTICAST_PORT", "server", "event_multicast_port"},
+        {"IP_MULTICAST_IF", "server", "ip_multicast_if"},
+        {"IP_MULTICAST_TTL", "server", "ip_multicast_ttl"},
+        {"DISABLE_MULTICAST_LOOP", "server", "disable_multicast_loop"},
+        {"NETWORK_TOOLS", "agent", "network_tools"},
+        {"DISABLE_EVENT_STREAM_LISTENER", "agent",
+         "disable_event_stream_listener"},
         {"PLUGINS", "plugins", "enabled"},
         {"TOOLS_DIR", "plugins", "directory"},
         {"WORKSPACE_TOOLS_DIR", "plugins", "workspace_directory"},
         {"MODEL", "agent", "model"},
         {"THEME", "ui", "theme"},
         {"UTC", "ui", "utc"},
+        {"PROMPT_LISTENER", "ui", "prompt_listener"},
+        {"PROMPT_ADVERTISE", "ui", "prompt_advertise"},
+        {"PROTO", "ui", "proto"},
+        {"SIMULATE_TYPING_MS", "ui", "simulate_typing_ms"},
         {"PREFER_NATIVE_PAGER", "ui", "prefer_native_pager"},
         {"NO_BANNER", "ui", "no_banner"},
         {"THEME_OFFSET", "ui", "theme_offset"},
@@ -1243,6 +1287,17 @@ static int cai_cli_configure_at_with_scratch(
   if (scratch->defaults.shell_context_max_bytes < 4U)
     return fail(error, NULL, "shell_context_max_bytes must be at least 4");
   optional_string(cfg, "client", "provider", &scratch->defaults.provider);
+  scratch->defaults.event_multicast_count = (long)cai_config_get_integer(
+      cfg, "server", "event_multicast_count", 254LL);
+  scratch->defaults.event_multicast_port = (long)cai_config_get_integer(
+      cfg, "server", "event_multicast_port", 49189LL);
+  scratch->defaults.ip_multicast_ttl =
+      (long)cai_config_get_integer(cfg, "server", "ip_multicast_ttl", 1LL);
+  scratch->defaults.simulate_typing_ms =
+      cai_config_get_integer(cfg, "ui", "simulate_typing_ms", 0LL);
+  if (scratch->defaults.simulate_typing_ms < 0 ||
+      scratch->defaults.simulate_typing_ms > 60000)
+    return fail(error, NULL, "ui.simulate_typing_ms must be 0..60000");
   scratch->defaults.theme_offset =
       cai_config_get_integer(cfg, "ui", "theme_offset", 0LL);
   scratch->defaults.subagent_theme_offset =
@@ -1375,6 +1430,9 @@ static int cai_cli_configure_at_with_scratch(
     } else if (f->type == CAI_CONFIG_BOOL)
       *(int *)p = cai_config_get_bool(cfg, f->section, f->key, *(int *)p);
   }
+  if (strcmp(scratch->defaults.proto, "tcpv4") &&
+      strcmp(scratch->defaults.proto, "tcpv6"))
+    return fail(error, NULL, "ui.proto must be tcpv4 or tcpv6");
   if (strcmp(scratch->early.provider_explicit ? scratch->early.provider
                                               : scratch->defaults.provider,
              "custom") == 0) {

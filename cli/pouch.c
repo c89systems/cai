@@ -5,6 +5,7 @@
 #include "identity.h"
 #include "log.h"
 #include <cai/auth.h>
+#include <cai/network.h>
 
 #include <curl/curl.h>
 #include <errno.h>
@@ -239,15 +240,6 @@ typedef struct cli_record {
   lonejson_json_value state;
   lonejson_json_value data_value;
 } cli_record;
-static const lonejson_field event_fields[] = {
-    LONEJSON_FIELD_STRING_FIXED_REQ(cli_record, record_type, "record_type",
-                                    LONEJSON_OVERFLOW_FAIL),
-    LONEJSON_FIELD_U64_REQ(cli_record, sequence, "sequence"),
-    LONEJSON_FIELD_U64(cli_record, timestamp_ns, "timestamp_ns"),
-    LONEJSON_FIELD_I64(cli_record, utc_offset_seconds, "utc_offset_seconds"),
-    LONEJSON_FIELD_STRING_ALLOC_REQ(cli_record, type, "type"),
-    LONEJSON_FIELD_STRING_ALLOC(cli_record, data, "data")};
-LONEJSON_MAP_DEFINE(event_map, cli_record, event_fields);
 static const lonejson_field journal_event_fields[] = {
     LONEJSON_FIELD_STRING_FIXED_REQ(cli_record, record_type, "record_type",
                                     LONEJSON_OVERFLOW_FAIL),
@@ -1770,7 +1762,6 @@ static int append_event(void *context, const char *scope, const char *id,
   cai_cli_pouch *pouch;
   cai_cli_session session;
   cai_cli_journal_context *journal = NULL;
-  cli_record record;
   cai_agent_session_event visible;
   lc_lease *lease;
   cai_source *source;
@@ -1783,13 +1774,6 @@ static int append_event(void *context, const char *scope, const char *id,
   pouch = (cai_cli_pouch *)context;
   lease = NULL;
   source = NULL;
-  memset(&record, 0, sizeof(record));
-  strcpy(record.record_type, "event");
-  record.sequence = event->sequence;
-  record.timestamp_ns = event->timestamp_ns;
-  record.utc_offset_seconds = event->utc_offset_seconds;
-  record.type = event->type;
-  record.data = event->data;
   snprintf(name, sizeof(name), "event-%020llu", event->sequence);
   rc = session_claim(pouch, id, error);
   pthread_mutex_lock(&pouch->journal_lock);
@@ -1800,7 +1784,7 @@ static int append_event(void *context, const char *scope, const char *id,
   if (rc == CAI_OK)
     rc = journal_context_open(pouch, scope, id, &journal, error);
   if (rc == CAI_OK)
-    rc = cai_cli_mapped_source(&event_map, &record, &source, error);
+    rc = cai_session_event_source(event, &source, error);
   if (rc == CAI_OK)
     rc = journal_append_source(pouch, &journal->session, journal->collection,
                                name, source, &position, error);
@@ -1808,6 +1792,11 @@ static int append_event(void *context, const char *scope, const char *id,
     transcript_index_event(pouch, id, event);
   if (rc == CAI_OK && pouch->journal_observer != NULL)
     pouch->journal_observer(pouch->journal_observer_context, id, position,
+                            event);
+  /* Children already forward tagged events into the parent journal. Publish
+   * that presentation stream once, rather than their unscoped private copy. */
+  if (rc == CAI_OK && scope_indexed(scope) && pouch->network_observer != NULL)
+    pouch->network_observer(pouch->network_observer_context, id, position,
                             event);
   if (rc == CAI_OK && journal->session.first_prompt[0] == '\0' &&
       visible.data != NULL &&

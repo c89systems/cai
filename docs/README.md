@@ -31,6 +31,7 @@ The workspace protocol's `conversation` field carries the **session epoch**, whi
 | [Dynamic tools](plugins.md) | Process/Lua packages and hot reload. |
 | [Chrome](chrome.md) | Extension setup, tab ownership, operations and compatibility. |
 | [Messaging](agent-messaging.md) | Mailboxes, approval and delivery between sessions. |
+| [Network prompts and events](networking.md) | Frontend TCP input, backend multicast, endpoint discovery and network tools. |
 | [Shared context](context.md) | Searchable text, binary attachments, cross-agent storage and export. |
 | [Kanban](kanban.md) | Shared boards, tasks and optional HTTP integration. |
 | [Troubleshooting](troubleshooting.md) | Evidence, logs, storage recovery, terminal and completion limitations. |
@@ -66,7 +67,7 @@ Source examples live under `examples/` in the repository; [the examples guide](h
 - [Benchmark workload and commands](benchmarks.md).
 - [Initial transport baseline](benchmark-baseline.md) and [presentation attribution / CBOR optimization](performance-cbor-presentation.md).
 - [Historical startup/CPU measurements](startup-responsiveness.md), taken before the workspace-server cutover.
-- [Network prompt and event transport specification](network-prompt-events.md), agreed behavior for the upcoming TCP/multicast feature; not a shipped interface.
+- [Network prompt and event transport specification](network-prompt-events.md).
 
 Design proposals and dependency incident reports that have been superseded are not current API documentation.
 Their history remains available in Git.

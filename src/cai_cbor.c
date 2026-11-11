@@ -1,5 +1,6 @@
 #include "cai_internal.h"
 #include <cai/cbor.h>
+#include <cai/utf8.h>
 #include <float.h>
 #include <string.h>
 
@@ -7,9 +8,9 @@
  * state survive input fragments without retaining the container's contents. */
 typedef struct cbor_frame {
   uint64_t remaining;
-  uint32_t scalar, minimum;
+  cai_utf8_state text;
   cai_cbor_type type;
-  unsigned int utf8, indefinite, odd;
+  unsigned int indefinite, odd;
 } cbor_frame;
 /** Fixed-depth grammar stack shared by encoder and decoder validation.
  * A failed or finished codec cannot silently restart on the next fragment. */
@@ -138,57 +139,7 @@ static int begin(cbor_state *state, const cai_cbor_token *token,
   }
   return CAI_OK;
 }
-static int utf8(cbor_frame *frame, const unsigned char *data, size_t count) {
-  size_t i = 0U;
-  unsigned int pending = frame->utf8;
-  uint32_t scalar = frame->scalar, minimum = frame->minimum;
-  while (i < count) {
-    unsigned int byte = data[i];
-    /* ASCII has no scalar state. Inspect whole words only inside this span;
-     * memcpy permits unaligned input without aliasing or endian assumptions.
-     * Stop before any non-ASCII byte and resume the scalar validator below. */
-    if (pending == 0U && byte < 0x80U) {
-      while (count - i >= sizeof(uint64_t)) {
-        uint64_t word;
-        memcpy(&word, data + i, sizeof(word));
-        if ((word & UINT64_C(0x8080808080808080)) != 0U)
-          break;
-        i += sizeof(word);
-      }
-      while (i < count && data[i] < 0x80U)
-        ++i;
-      continue;
-    }
-    ++i;
-    if (pending) {
-      if ((byte & 0xc0U) != 0x80U)
-        return 0;
-      scalar = (scalar << 6U) | (byte & 0x3fU);
-      if (--pending == 0U && (scalar < minimum || scalar > 0x10ffffU ||
-                              (scalar >= 0xd800U && scalar <= 0xdfffU)))
-        return 0;
-    } else if (byte >= 0xc2U && byte <= 0xdfU) {
-      pending = 1U;
-      scalar = byte & 0x1fU;
-      minimum = 0x80U;
-    } else if (byte >= 0xe0U && byte <= 0xefU) {
-      pending = 2U;
-      scalar = byte & 0x0fU;
-      minimum = 0x800U;
-    } else if (byte >= 0xf0U && byte <= 0xf4U) {
-      pending = 3U;
-      scalar = byte & 0x07U;
-      minimum = 0x10000U;
-    } else if (byte >= 0x80U)
-      return 0;
-  }
-  /* Keep continuation state across arbitrary DATA/feed boundaries, without
-   * repeatedly loading/storing the heap frame for each multibyte byte. */
-  frame->utf8 = pending;
-  frame->scalar = scalar;
-  frame->minimum = minimum;
-  return 1;
-}
+
 static int data_room(cbor_state *state, const void *bytes, size_t count,
                      cai_error *error) {
   cbor_frame *frame = top(state);
@@ -206,7 +157,8 @@ static int data(cbor_state *state, const void *bytes, size_t count,
   if (rc != CAI_OK)
     return rc;
   frame = top(state);
-  if (frame->type == CAI_CBOR_TEXT && !utf8(frame, bytes, count))
+  if (frame->type == CAI_CBOR_TEXT &&
+      !cai_utf8_feed(&frame->text, bytes, count))
     return fail(state, error, CAI_ERR_PROTOCOL, "Invalid CBOR UTF-8 text");
   frame->remaining -= (uint64_t)count;
   return CAI_OK;
@@ -214,7 +166,8 @@ static int data(cbor_state *state, const void *bytes, size_t count,
 static int end(cbor_state *state, uint64_t type, cai_error *error) {
   cbor_frame *frame = top(state);
   if (frame == NULL || type != (uint64_t)frame->type ||
-      (!frame->indefinite && frame->remaining != 0U) || frame->utf8 != 0U ||
+      (!frame->indefinite && frame->remaining != 0U) ||
+      !cai_utf8_complete(&frame->text) ||
       (frame->type == CAI_CBOR_MAP && frame->odd))
     return fail(state, error, CAI_ERR_PROTOCOL,
                 "Invalid or incomplete CBOR container end");

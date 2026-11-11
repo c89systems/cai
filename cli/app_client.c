@@ -2,6 +2,7 @@
 #include "catalog_wire.h"
 #include "error.h"
 #include "input_wire.h"
+#include "network_wire.h"
 #include "status_wire.h"
 #include "transcript_wire.h"
 #include <cai/app_client.h>
@@ -11,6 +12,9 @@
 #include <string.h>
 
 struct cai_app_client {
+  cai_cli_network_decoder *network_decoder;
+  cai_app_network_event_fn network_handler;
+  void *network_context;
   cai_workspace_client *socket;
   cai_cli_input_wire_decoder *decoder;
   cai_cli_transcript_decoder *transcript_decoder;
@@ -131,6 +135,19 @@ static int receive(void *context, const cai_protocol_event *event,
   const cai_cli_input_wire_message *m = NULL;
   cai_input_observation o;
   int rc;
+  if (event->header->kind == CAI_PROTOCOL_NETWORK) {
+    const cai_app_network_event *network = NULL;
+    if (client->network_decoder == NULL) {
+      rc = cai_cli_network_decoder_open(&client->network_decoder, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
+    rc =
+        cai_cli_network_decode(client->network_decoder, event, &network, error);
+    if (rc == CAI_OK && network != NULL && client->network_handler != NULL)
+      rc = client->network_handler(client->network_context, network, error);
+    return rc;
+  }
   if (event->header->kind == CAI_PROTOCOL_CATALOG) {
     const cai_app_catalog_event *row = NULL;
     if (client->catalog_decoder == NULL) {
@@ -1072,10 +1089,39 @@ void cai_app_client_close(cai_app_client *client) {
   cai_workspace_client_close(client->socket);
   cai_cli_input_wire_decoder_close(client->decoder);
   cai_cli_catalog_decoder_close(client->catalog_decoder);
+  cai_cli_network_decoder_close(client->network_decoder);
   cai_cli_transcript_decoder_close(client->transcript_decoder);
   cai_cli_status_decoder_close(client->status_decoder);
   cai_cli_status_cleanup(&client->view);
   cai_execution_record_cleanup(&client->execution_record);
   cai_execution_decoder_close(client->execution_decoder);
   free(client);
+}
+int cai_app_client_network_handler(cai_app_client *client,
+                                   cai_app_network_event_fn handler,
+                                   void *context, cai_error *error) {
+  int rc = valid(client, error);
+  if (rc == CAI_OK) {
+    client->network_handler = handler;
+    client->network_context = context;
+  }
+  return rc;
+}
+int cai_app_client_network_write(cai_app_client *client,
+                                 const cai_app_network_event *event,
+                                 cai_error *error) {
+  cai_cli_input_wire_output output;
+  int rc = valid(client, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (event == NULL || event->header.kind != CAI_PROTOCOL_NETWORK ||
+      (event->operation != CAI_APP_NETWORK_CAPABILITY &&
+       event->operation != CAI_APP_NETWORK_RECEIPT &&
+       event->operation != CAI_APP_NETWORK_NOTICE))
+    return invalid(error);
+  output.context = client;
+  output.begin = output_begin;
+  output.write = output_write;
+  output.end = output_end;
+  return cai_cli_network_write(&output, event, error);
 }

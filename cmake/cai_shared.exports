@@ -374,6 +374,18 @@ cai_model_estimate_usage_usd
 cai_model_info_by_id
 cai_model_metadata_flags
 cai_model_supports
+cai_net_accept
+cai_net_close
+cai_net_config_init
+cai_net_connected
+cai_net_fd
+cai_net_local
+cai_net_open
+cai_net_remote
+cai_net_send
+cai_network_tool_cancel_requested
+cai_network_tools_register
+cai_network_tools_register_registry
 cai_output_as_lc_source
 cai_output_destroy
 cai_output_raw_json
@@ -497,6 +509,7 @@ cai_session_context_percent
 cai_session_context_window_tokens
 cai_session_conversation_id
 cai_session_destroy
+cai_session_event_source
 cai_session_export_history_source
 cai_session_export_state_source
 cai_session_history_spilled
@@ -612,6 +625,8 @@ cai_transcript_selection_get
 cai_transcript_selection_open
 cai_usage_accounting_init
 cai_usage_limits_init
+cai_utf8_complete
+cai_utf8_feed
 cai_wire_decoder_close
 cai_wire_decoder_feed
 cai_wire_decoder_finish

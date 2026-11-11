@@ -75,6 +75,40 @@ static const lonejson_field context_fields[] = {
     LONEJSON_FIELD_OBJECT_ARRAY(context_result, items, "items", context_result,
                                 &context_item_map, LONEJSON_OVERFLOW_FAIL)};
 LONEJSON_MAP_DEFINE(context_map, context_result, context_fields);
+typedef struct network_row {
+  char *kind, *advertised, *workspace;
+} network_row;
+static const lonejson_field network_row_fields[] = {
+    LONEJSON_FIELD_STRING_ALLOC(network_row, kind, "kind"),
+    LONEJSON_FIELD_STRING_ALLOC(network_row, advertised, "advertised"),
+    LONEJSON_FIELD_STRING_ALLOC(network_row, workspace, "workspace")};
+LONEJSON_MAP_DEFINE(network_row_map, network_row, network_row_fields);
+typedef struct network_result {
+  char *status, *message, *address;
+  char content[2048];
+  lonejson_uint64 bytes;
+  lonejson_uint64 events, invalid_lines;
+  int uncertain, invalid_utf8, truncated;
+  int partial_line;
+  lonejson_object_array endpoints;
+} network_result;
+static const lonejson_field network_fields[] = {
+    LONEJSON_FIELD_STRING_ALLOC(network_result, status, "status"),
+    LONEJSON_FIELD_STRING_ALLOC(network_result, message, "message"),
+    LONEJSON_FIELD_STRING_ALLOC(network_result, address, "address"),
+    LONEJSON_FIELD_STRING_FIXED(network_result, content, "content",
+                                LONEJSON_OVERFLOW_TRUNCATE_SILENT),
+    LONEJSON_FIELD_U64(network_result, bytes, "bytes"),
+    LONEJSON_FIELD_U64(network_result, events, "events"),
+    LONEJSON_FIELD_U64(network_result, invalid_lines, "invalid_lines"),
+    LONEJSON_FIELD_BOOL(network_result, partial_line, "partial_line"),
+    LONEJSON_FIELD_BOOL(network_result, uncertain, "uncertain"),
+    LONEJSON_FIELD_BOOL(network_result, invalid_utf8, "invalid_utf8"),
+    LONEJSON_FIELD_BOOL(network_result, truncated, "truncated"),
+    LONEJSON_FIELD_OBJECT_ARRAY(network_result, endpoints, "endpoints",
+                                network_row, &network_row_map,
+                                LONEJSON_OVERFLOW_FAIL)};
+LONEJSON_MAP_DEFINE(network_map, network_result, network_fields);
 
 struct cai_cli_tool_result {
   result_doc doc;
@@ -83,6 +117,8 @@ struct cai_cli_tool_result {
   int success, failure, generic, mcp, busy;
   int context_tool;
   context_result context;
+  int network_tool;
+  network_result network;
 };
 static int same(const char *a, const char *b) {
   return a != NULL && strcmp(a, b) == 0;
@@ -102,6 +138,7 @@ void cai_cli_tool_result_close(cai_cli_tool_result *r) {
   if (r != NULL) {
     lonejson_cleanup(&result_map, &r->doc);
     lonejson_cleanup(&context_map, &r->context);
+    lonejson_cleanup(&network_map, &r->network);
     free(r);
   }
 }
@@ -142,6 +179,38 @@ int cai_cli_tool_result_open(const cai_agent_runtime_event *e,
   if (r == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "prepare tool presentation");
   r->success = 1;
+  if ((same(e->tool_name, "event_stream_listen") ||
+       same(e->tool_name, "network_list") ||
+       same(e->tool_name, "prompt_listener_info") ||
+       same(e->tool_name, "prompt_send")) &&
+      e->data != NULL) {
+    lonejson_error_init(&local);
+    json = lonejson_new(NULL, &local);
+    if (json == NULL) {
+      cai_cli_tool_result_close(r);
+      return cai_cli_error(error, CAI_ERR_NOMEM, "prepare network receipt");
+    }
+    recognized =
+        lonejson_parse_buffer(json, &network_map, &r->network, e->data,
+                              e->data_length, &local) == LONEJSON_STATUS_OK;
+    lonejson_free(json);
+    if (!recognized)
+      goto unrecognized;
+    r->network_tool = 1;
+    r->success = !same(r->network.status, "failed");
+    r->verb = same(e->tool_name, "event_stream_listen")    ? "Observed"
+              : same(e->tool_name, "network_list")         ? "Listed"
+              : same(e->tool_name, "prompt_listener_info") ? "Read"
+              : r->success                                 ? "Transmitted"
+                                                           : "TCP send failed";
+    r->label = same(e->tool_name, "event_stream_listen") ? "multicast events"
+               : same(e->tool_name, "network_list")      ? "network endpoints"
+               : same(e->tool_name, "prompt_listener_info") ? "prompt listener"
+               : r->network.address != NULL                 ? r->network.address
+                                                            : "TCP prompt";
+    *out = r;
+    return CAI_OK;
+  }
   if (context_tool_name(e->tool_name) && e->data != NULL) {
     lonejson_error_init(&local);
     json = lonejson_new(NULL, &local);
@@ -500,6 +569,67 @@ int cai_cli_tool_result_write(cai_cli_tool_result *r, int mode, size_t width,
   result_row *rows;
   size_t i, count;
   int boards;
+  if (r->network_tool) {
+    network_result *n = &r->network;
+    network_row *entries = n->endpoints.items;
+    cai_cli_tool_text text;
+    char summary[256];
+    cai_cli_tool_text_init(&text, mode, width);
+    snprintf(summary, sizeof(summary), "%llu bytes%s%s%s.\n",
+             (unsigned long long)n->bytes,
+             n->uncertain ? "; delivery uncertain" : "",
+             n->truncated ? "; output limit reached" : "",
+             n->invalid_utf8 ? "; invalid UTF-8 observed" : "");
+    if (same(r->verb, "Observed"))
+      snprintf(summary, sizeof(summary),
+               "%llu bytes, %llu events, %llu invalid lines%s%s%s.\n",
+               (unsigned long long)n->bytes, (unsigned long long)n->events,
+               (unsigned long long)n->invalid_lines,
+               n->partial_line ? "; partial line" : "",
+               n->truncated ? "; output limit reached" : "",
+               n->invalid_utf8 ? "; invalid UTF-8 observed" : "");
+    if (!same(r->verb, "Listed") && !same(r->verb, "Read") &&
+        cai_cli_tool_text_write(&text, summary, strlen(summary), 0, 0, write,
+                                context, error) != CAI_OK)
+      return CAI_ERR_TRANSPORT;
+    if (n->message != NULL) {
+      if (cai_cli_tool_text_write(&text, n->message, strlen(n->message), 0, 0,
+                                  write, context, error) != CAI_OK ||
+          cai_cli_tool_text_write(&text, "\n", 1U, 0, 0, write, context,
+                                  error) != CAI_OK)
+        return CAI_ERR_TRANSPORT;
+    }
+    if (same(r->verb, "Read") && n->address != NULL)
+      if (cai_cli_tool_text_write(&text, n->address, strlen(n->address), 0, 0,
+                                  write, context, error) != CAI_OK)
+        return CAI_ERR_TRANSPORT;
+    for (i = 0U; i < n->endpoints.count && !text.omitted; i++) {
+      const char *kind = entries[i].kind != NULL ? entries[i].kind : "endpoint";
+      const char *address =
+          entries[i].advertised != NULL ? entries[i].advertised : "unavailable";
+      const char *workspace =
+          entries[i].workspace != NULL ? entries[i].workspace : "";
+      if (cai_cli_tool_text_write(&text, kind, strlen(kind), 0, 0, write,
+                                  context, error) != CAI_OK ||
+          cai_cli_tool_text_write(&text, "  ", 2U, 0, 0, write, context,
+                                  error) != CAI_OK ||
+          cai_cli_tool_text_write(&text, address, strlen(address), 0, 0, write,
+                                  context, error) != CAI_OK ||
+          cai_cli_tool_text_write(&text, "  ", 2U, 0, 0, write, context,
+                                  error) != CAI_OK ||
+          cai_cli_tool_text_write(&text, workspace, strlen(workspace), 0, 0,
+                                  write, context, error) != CAI_OK ||
+          cai_cli_tool_text_write(&text, "\n", 1U, 0, 0, write, context,
+                                  error) != CAI_OK)
+        return CAI_ERR_TRANSPORT;
+    }
+    if (same(r->verb, "Listed") && n->endpoints.count == 0U)
+      if (cai_cli_tool_text_write(&text, "No registered endpoints.\n", 25U, 0,
+                                  0, write, context, error) != CAI_OK)
+        return CAI_ERR_TRANSPORT;
+    return cai_cli_tool_text_write(&text, n->content, strlen(n->content), 1, 0,
+                                   write, context, error);
+  }
   if (r->context_tool) {
     cai_cli_tool_text text;
     context_result *c = &r->context;

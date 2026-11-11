@@ -56,6 +56,15 @@
   X("review", "reasoning_effort", review_reasoning_effort, 's') \
   X("review", "reasoning_summary", review_reasoning_summary, 's') \
   X("server", "persist", server_persist, 'b') \
+  X("server", "event_multicast", event_multicast, 's') \
+  X("server", "event_multicast_base", event_multicast_base, 's') \
+  X("server", "event_multicast_count", event_multicast_count, 'l') \
+  X("server", "event_multicast_port", event_multicast_port, 'l') \
+  X("server", "ip_multicast_if", ip_multicast_if, 's') \
+  X("server", "ip_multicast_ttl", ip_multicast_ttl, 'l') \
+  X("server", "disable_multicast_loop", disable_multicast_loop, 'b') \
+  X("agent", "network_tools", network_tools, 'b') \
+  X("agent", "disable_event_stream_listener", disable_event_stream_listener, 'b') \
   X("storage", "disable_compression", disable_compression, 'b') \
   X("agent", "insecure", insecure, 'b') \
   X("plugins", "enabled", plugins, 'b') \

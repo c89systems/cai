@@ -58,6 +58,11 @@ void cai_cli_options_init(cai_cli_options *options) {
   options->reasoning_summary = "concise";
   options->todo_layout = "board";
   options->theme = "default";
+  options->proto = "tcpv4";
+  options->event_multicast_base = "239.193.89.1";
+  options->event_multicast_count = 254L;
+  options->event_multicast_port = 49189L;
+  options->ip_multicast_ttl = 1L;
   options->review_theme_offset = 1LL;
   options->status_fields = CAI_CLI_STATUS_DEFAULT_FIELDS;
   options->sessions_store = options->auth_store = options->messaging_store =
@@ -151,6 +156,100 @@ static int cli_read_options(int argc, char *const *argv,
     char short_flag[3];
 
     flag = argv[i];
+    if (strcmp(flag, "--event-multicast") == 0) {
+      options->event_multicast = "auto";
+      if (i + 1 < argc && argv[i + 1][0] != '-')
+        options->event_multicast = argv[++i];
+      cai_cli_options_mark_owner(options,
+                                 offsetof(cai_cli_options, event_multicast));
+      continue;
+    }
+    if (strcmp(flag, "--disable-multicast-loop") == 0 ||
+        strcmp(flag, "--no-disable-multicast-loop") == 0) {
+      options->disable_multicast_loop =
+          strcmp(flag, "--disable-multicast-loop") == 0;
+      cai_cli_options_mark_owner(
+          options, offsetof(cai_cli_options, disable_multicast_loop));
+      continue;
+    }
+    if (strcmp(flag, "--event-multicast-count") == 0 ||
+        strcmp(flag, "--event-multicast-port") == 0 ||
+        strcmp(flag, "--ip-multicast-ttl") == 0) {
+      char *end;
+      long number;
+      long *target;
+      if (++i >= argc) {
+        cai_cli_option_error(options, "%s requires an integer", flag);
+        return -1;
+      }
+      errno = 0;
+      number = strtol(argv[i], &end, 10);
+      if (errno || end == argv[i] || *end || number < 1L || number > 65535L) {
+        cai_cli_option_error(options, "%s requires 1..65535", flag);
+        return -1;
+      }
+      target = strcmp(flag, "--event-multicast-count") == 0
+                   ? &options->event_multicast_count
+               : strcmp(flag, "--event-multicast-port") == 0
+                   ? &options->event_multicast_port
+                   : &options->ip_multicast_ttl;
+      *target = number;
+      cai_cli_options_mark_owner(options, (size_t)((unsigned char *)target -
+                                                   (unsigned char *)options));
+      continue;
+    }
+    if (strcmp(flag, "--network-tools") == 0 ||
+        strcmp(flag, "--no-network-tools") == 0) {
+      options->network_tools = strcmp(flag, "--network-tools") == 0;
+      cai_cli_options_mark_owner(options,
+                                 offsetof(cai_cli_options, network_tools));
+      continue;
+    }
+    if (strcmp(flag, "--disable-event-stream-listener") == 0 ||
+        strcmp(flag, "--no-disable-event-stream-listener") == 0) {
+      options->disable_event_stream_listener =
+          strcmp(flag, "--disable-event-stream-listener") == 0;
+      cai_cli_options_mark_owner(
+          options, offsetof(cai_cli_options, disable_event_stream_listener));
+      continue;
+    }
+    if (strcmp(flag, "--simulate-typing") == 0) {
+      char *end;
+      options->simulate_typing_ms = 30;
+      if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') {
+        errno = 0;
+        options->simulate_typing_ms = strtoll(argv[++i], &end, 10);
+        if (errno || *end || options->simulate_typing_ms > 60000) {
+          cai_cli_option_error(options,
+                               "--simulate-typing requires 0..60000 ms");
+          return -1;
+        }
+      }
+      options->prompt_listener_explicit = 1;
+      continue;
+    }
+    if (strcmp(flag, "--prompt-listener") == 0 ||
+        strcmp(flag, "--prompt-advertise") == 0 ||
+        strcmp(flag, "--proto") == 0) {
+      if (++i >= argc) {
+        cai_cli_option_error(options, "%s requires a value", flag);
+        return -1;
+      }
+      if (strcmp(flag, "--proto") == 0) {
+        if (strcmp(argv[i], "tcpv4") && strcmp(argv[i], "tcpv6")) {
+          cai_cli_option_error(options, "--proto requires tcpv4 or tcpv6");
+          return -1;
+        }
+        options->proto = argv[i];
+      } else {
+        if (strcmp(flag, "--prompt-listener") == 0)
+          options->prompt_listener = argv[i];
+        else
+          options->prompt_advertise = argv[i];
+        options->prompt_listener_explicit = 1;
+      }
+      continue;
+    }
     if (strcmp(flag, "uncommitted") == 0 &&
         (options->review || options->review_and_fix) &&
         !options->review_uncommitted) {
@@ -611,6 +710,10 @@ static int cli_read_options(int argc, char *const *argv,
       continue;
     }
     field = NULL;
+    if (strcmp(flag, "--event-multicast-base") == 0)
+      field = &options->event_multicast_base;
+    if (strcmp(flag, "--ip-multicast-if") == 0)
+      field = &options->ip_multicast_if;
     if (strcmp(flag, "-s") == 0 || strcmp(flag, "--server") == 0)
       field = &options->server;
     if (strcmp(flag, "-i") == 0 || strcmp(flag, "--instruction") == 0) {
@@ -857,6 +960,14 @@ int cai_cli_options_utility(const cai_cli_options *o) {
 int cai_cli_validate_options(cai_cli_options *options) {
   static const char *const providers[] = {"chatgpt", "openai", "openrouter",
                                           "berget",  "custom", NULL};
+  if (options->prompt_listener_explicit &&
+      (options->headless || options->non_interactive || options->review ||
+       options->review_and_fix || cai_cli_options_utility(options))) {
+    cai_cli_option_error(
+        options,
+        "explicit prompt listener settings require a Softline frontend");
+    return -1;
+  }
   if (options->context_export != NULL &&
       (options->headless || options->terminate_headless ||
        options->server != NULL || options->temporary ||

@@ -7,6 +7,8 @@
 #include "error.h"
 #include "input_socket.h"
 #include "input_wire.h"
+#include "prompt_listener.h"
+#include "prompt_send.h"
 #include "replay_tools.h"
 #include "review_report.h"
 #include "startup.h"
@@ -143,6 +145,14 @@ typedef struct frontend {
   size_t command_length;
   char *command;
   cai_cli_tool_text tool_text;
+  cai_cli_prompt_listener *prompt_listener;
+  int prompt_announced;
+  cai_cli_prompt_send *prompt_send;
+  cai_protocol_header prompt_send_scope;
+  sl_watch_id_t send_watch;
+  sl_t *send_editor;
+  uint64_t capability_generation, capability_epoch;
+  unsigned int capability_flags;
 } frontend;
 
 /** One terminal, several explicitly visited owners. Parked sockets continue
@@ -172,6 +182,8 @@ static int workspace_begin(frontend *, const char *);
 static int workspace_progress(frontend *);
 static int workspace_interests(frontend *, uint64_t *);
 static int workspace_activate(frontend **);
+static int network_event(void *, const cai_app_network_event *, cai_error *);
+static int network_progress(frontend *);
 static int completion_catalog(void *context, char trigger,
                               sl_completion_emit_t emit, void *emit_context) {
   size_t i;
@@ -308,8 +320,16 @@ static int goodbye(frontend *f) {
 }
 static void save_submission(void *context, const cai_input_request *request) {
   frontend *f = context;
+  cai_cli_prompt_scope remote;
+  cai_input_scope original;
   cai_error local;
   recall_pending *pending = NULL;
+  if (request->operation == CAI_INPUT_OFFER &&
+      cai_cli_prompt_listener_submission(f->prompt_listener, &remote)) {
+    original.conversation = remote.epoch;
+    original.generation = remote.generation;
+    cai_cli_input_socket_offer_scope(f->queue, &original);
+  }
   if ((f->startup_feeding && f->startup_control) || f->history_limit == 0U ||
       request->text[0] == '\0')
     return;
@@ -1051,6 +1071,8 @@ static int connect_target(frontend *f) {
   config.catalog_context = f;
   rc = cai_app_client_open(&config, clock_ms(), &f->client, &f->error);
   if (rc == CAI_OK)
+    rc = cai_app_client_network_handler(f->client, network_event, f, &f->error);
+  if (rc == CAI_OK)
     rc = cai_cli_input_socket_reconnect(f->queue, f->client, &f->error);
   return rc;
 }
@@ -1212,6 +1234,7 @@ static int event_ready(sl_t *sl, const sl_watch_event_t *event, void *context) {
  * Socket watches must never substitute for this editor-owned boundary. */
 static void editor_idle(sl_t *editor, void *context) {
   frontend *f = context;
+  cai_cli_prompt_listener_idle(f->prompt_listener);
   if (f->queue != NULL &&
       cai_cli_input_socket_idle(f->queue, editor, &f->error) != CAI_OK) {
     f->failed = f->quit = 1;
@@ -1259,10 +1282,17 @@ static int watch(frontend *f, sl_watch_id_t *id, int *old,
   return sl_watch_modify(f->ui->sl, *id, flags) == SL_OK ? 0 : -1;
 }
 static int interests(frontend *f) {
+  frontend *other;
   struct pollfd descriptor;
   struct itimerspec timer;
   uint64_t deadline = 0U, boot_deadline = 0U, now = clock_ms();
   const cai_app_view *view = NULL;
+  if (f->group->active == f)
+    for (other = f->group->first; other != NULL; other = other->next)
+      if (cai_cli_prompt_listener_watch(other->prompt_listener, f->ui->sl,
+                                        &f->error) != CAI_OK ||
+          network_progress(other) != 0)
+        return -1;
   if (f->client != NULL) {
     if (cai_app_client_prepare(f->client, &descriptor, &deadline, &f->error) !=
             CAI_OK ||
@@ -1300,7 +1330,8 @@ static int startup_input(frontend *f) {
   int rc, control;
   sl_queue_request_t request;
   sl_queue_request_id_t id;
-  if (!f->ready || !f->subscribed || f->replaying || f->startup_request != 0U ||
+  if (cai_cli_prompt_listener_active(f->prompt_listener) || !f->ready ||
+      !f->subscribed || f->replaying || f->startup_request != 0U ||
       !f->state.transcript.active || f->state.transcript.subscribing ||
       f->state.transcript.replaying ||
       f->state.transport.controller != f->state.transport.attachment ||
@@ -1509,6 +1540,14 @@ static int service(frontend *f) {
       return -1;
     if (startup_input(f) != 0)
       return -1;
+    if (f->prompt_listener != NULL && !f->prompt_announced && f->ready) {
+      char text[256];
+      snprintf(text, sizeof(text), "TCP prompt listener: %s",
+               cai_cli_prompt_listener_address(f->prompt_listener));
+      if (notice(f, text) != 0)
+        return -1;
+      f->prompt_announced = 1;
+    }
   }
   return status(f) == 0 ? interests(f) : -1;
 }
@@ -1517,6 +1556,9 @@ static int quit_key(sl_t *sl, sl_key_t key, void *context,
   frontend *f = context;
   (void)sl;
   (void)key;
+  /* Unfinished remote input must never become saved prompt recall on exit.
+   * Separate receipt buffers leave the user's ordinary draft untouched. */
+  cai_cli_prompt_listener_cancel(f->prompt_listener);
   if (sl_buffer(sl)[0] != '\0') {
     if (f->exit_save != 0U) {
       *action = SL_KEY_ACTION_HANDLED;
@@ -1570,9 +1612,14 @@ static int eof_key(sl_t *sl, sl_key_t key, void *context,
 }
 static int cancel_key(sl_t *sl, sl_key_t key, void *context,
                       sl_key_action_t *action) {
+  frontend *f = context;
   (void)sl;
   (void)key;
-  (void)context;
+  if (cai_cli_prompt_listener_active(f->prompt_listener)) {
+    cai_cli_prompt_listener_cancel(f->prompt_listener);
+    *action = SL_KEY_ACTION_HANDLED;
+    return SL_OK;
+  }
   /* Match Softline's chat adapter: CANCEL owns stopped-backlog and draft
    * semantics; the outer owner then cancels the remote foreground operation. */
   *action = SL_KEY_ACTION_CANCEL;
@@ -1582,6 +1629,10 @@ static int enter_key(sl_t *sl, sl_key_t key, void *context,
                      sl_key_action_t *action) {
   frontend *f = context;
   (void)key;
+  if (cai_cli_prompt_listener_draft(f->prompt_listener)) {
+    *action = SL_KEY_ACTION_HANDLED;
+    return SL_OK;
+  }
   if (!sl->history_search_active(sl) &&
       strncmp(sl_buffer(sl), "/workspace", 10U) == 0 &&
       (sl_buffer(sl)[10] == '\0' || sl_buffer(sl)[10] == ' ' ||
@@ -1837,6 +1888,180 @@ static int select_view(frontend *f, const char *session) {
   return sl_output_stream_begin(f->ui->sl) == SL_OK ? 0 : -1;
 }
 
+static void prompt_scope(void *context, cai_cli_prompt_scope *scope) {
+  frontend *f = context;
+  sl_queue_backend_info_t info;
+  if (f->client != NULL)
+    (void)cai_app_client_get_state(f->client, &f->state, NULL);
+  scope->attachment = f->state.transport.attachment;
+  scope->generation = f->state.transport.generation;
+  scope->epoch = f->state.conversation;
+  memcpy(scope->instance, f->state.transport.instance, sizeof(scope->instance));
+  scope->editor = f->ui != NULL ? f->ui->sl : NULL;
+  scope->parked = f->group->active != f;
+  scope->ready = f->ready && f->bound && !f->pending_context && !f->switching &&
+                 !f->replaying && f->state.ready &&
+                 f->state.transport.phase == CAI_WORKSPACE_CONNECTED &&
+                 scope->attachment != 0U &&
+                 scope->attachment == f->state.transport.controller &&
+                 scope->editor != NULL &&
+                 sl_queue_backend_info(scope->editor, &info) == SL_OK &&
+                 info.synchronized;
+}
+static void prompt_notice(void *context, const char *message) {
+  frontend *f = context;
+  if (f->client != NULL && f->state.bound) {
+    cai_app_network_event diagnostic;
+    memset(&diagnostic, 0, sizeof(diagnostic));
+    diagnostic.header.kind = CAI_PROTOCOL_NETWORK;
+    diagnostic.header.attachment = f->state.transport.attachment;
+    diagnostic.header.generation = f->state.transport.generation;
+    diagnostic.header.conversation = f->state.conversation;
+    diagnostic.operation = CAI_APP_NETWORK_NOTICE;
+    diagnostic.reason = message;
+    (void)cai_app_client_network_write(f->client, &diagnostic, NULL);
+  }
+  if (f->group->active == f) {
+    if (notice(f, message) != 0)
+      f->failed = f->quit = 1;
+  } else {
+    snprintf(f->handoff_notice, sizeof(f->handoff_notice), "%s", message);
+    f->handoff_notice_error = 1;
+  }
+}
+static void prompt_changed(void *context) {
+  frontend *f = context;
+  frontend *active = f->group->active;
+  char byte = 'p';
+  ssize_t written;
+  if (active == NULL)
+    return;
+  do {
+    written = write(active->wake[1], &byte, 1U);
+  } while (written < 0 && errno == EINTR);
+}
+static int network_scope(frontend *f, const cai_protocol_header *h) {
+  cai_app_client_state state;
+  if (f->client == NULL ||
+      cai_app_client_get_state(f->client, &state, NULL) != CAI_OK)
+    return 0;
+  return state.transport.phase == CAI_WORKSPACE_CONNECTED &&
+         state.transport.attachment == h->attachment &&
+         state.transport.controller == h->attachment &&
+         state.transport.generation == h->generation &&
+         state.conversation == h->conversation;
+}
+static int network_event(void *context, const cai_app_network_event *event,
+                         cai_error *error) {
+  frontend *f = context;
+  if (event->operation == CAI_APP_NETWORK_NOTICE) {
+    prompt_notice(f, event->reason);
+    return f->failed ? CAI_ERR_TRANSPORT : CAI_OK;
+  }
+  if (event->operation == CAI_APP_NETWORK_PUBLISHER) {
+    char *text = malloc(4608U);
+    int rc;
+    if (text == NULL)
+      return cai_cli_error(error, CAI_ERR_NOMEM,
+                           "format multicast startup notice");
+    snprintf(text, 4608U, "Workspace event multicast: %s\n%s", event->address,
+             event->socat);
+    prompt_notice(f, text);
+    free(text);
+    rc = f->failed ? CAI_ERR_TRANSPORT : CAI_OK;
+    return rc;
+  }
+  if (event->operation == CAI_APP_NETWORK_CANCEL) {
+    if (f->prompt_send != NULL &&
+        event->header.request == f->prompt_send_scope.request &&
+        event->header.generation == f->prompt_send_scope.generation)
+      cai_cli_prompt_send_cancel(f->prompt_send);
+    return CAI_OK;
+  }
+  if (event->operation == CAI_APP_NETWORK_SEND) {
+    cai_app_network_event rejected;
+    cai_error local;
+    int rc;
+    cai_error_init(&local);
+    rc = f->prompt_send != NULL || !network_scope(f, &event->header)
+             ? cai_cli_error(&local, CAI_ERR_INVALID,
+                             "frontend TCP action is busy or authority changed")
+             : cai_cli_prompt_send_open(event,
+                                        strcmp(f->options->proto, "tcpv6") == 0,
+                                        &f->prompt_send, &local);
+    if (rc == CAI_OK)
+      f->prompt_send_scope = event->header;
+    else {
+      memset(&rejected, 0, sizeof(rejected));
+      rejected.header = event->header;
+      rejected.operation = CAI_APP_NETWORK_RECEIPT;
+      rejected.code = rc;
+      rejected.reason = local.message;
+      rc = cai_app_client_network_write(f->client, &rejected, error);
+    }
+    cai_error_cleanup(&local);
+    return rc;
+  }
+  return cai_cli_error(error, CAI_ERR_PROTOCOL,
+                       "unexpected backend network operation");
+}
+static int network_progress(frontend *f) {
+  sl_t *editor = f->group->active != NULL ? f->group->active->ui->sl : NULL;
+  const cai_app_network_event *result;
+  cai_cli_prompt_scope scope;
+  cai_app_network_event capability;
+  unsigned int flags;
+  if (f->prompt_send != NULL && !network_scope(f, &f->prompt_send_scope))
+    cai_cli_prompt_send_cancel(f->prompt_send);
+  if (f->prompt_send != NULL &&
+      cai_cli_prompt_send_result(f->prompt_send, &result)) {
+    if (f->send_editor != NULL) {
+      (void)sl_watch_remove(f->send_editor, f->send_watch);
+      f->send_editor = NULL;
+    }
+    if (cai_app_client_network_write(f->client, result, &f->error) != CAI_OK)
+      return -1;
+    cai_cli_prompt_send_close(f->prompt_send);
+    f->prompt_send = NULL;
+  }
+  if (f->prompt_send != NULL && editor != f->send_editor) {
+    if (f->send_editor != NULL)
+      (void)sl_watch_remove(f->send_editor, f->send_watch);
+    f->send_editor = NULL;
+    if (editor != NULL &&
+        sl_watch_add(editor, cai_cli_prompt_send_fd(f->prompt_send),
+                     SL_WATCH_READ, event_ready, f->group->active,
+                     &f->send_watch) != SL_OK)
+      return -1;
+    f->send_editor = editor;
+  }
+  memset(&scope, 0, sizeof(scope));
+  prompt_scope(f, &scope);
+  flags = CAI_APP_NETWORK_CAN_SEND |
+          (scope.ready && !cai_cli_prompt_listener_active(f->prompt_listener)
+               ? CAI_APP_NETWORK_AVAILABLE
+               : 0U);
+  if (f->state.bound && f->state.transport.phase == CAI_WORKSPACE_CONNECTED &&
+      (f->capability_generation != scope.generation ||
+       f->capability_epoch != scope.epoch || f->capability_flags != flags)) {
+    memset(&capability, 0, sizeof(capability));
+    capability.header.kind = CAI_PROTOCOL_NETWORK;
+    capability.header.attachment = scope.attachment;
+    capability.header.generation = scope.generation;
+    capability.header.conversation = scope.epoch;
+    capability.operation = CAI_APP_NETWORK_CAPABILITY;
+    capability.flags = flags;
+    capability.address = cai_cli_prompt_listener_address(f->prompt_listener);
+    capability.advertise = f->options->prompt_advertise;
+    if (cai_app_client_network_write(f->client, &capability, &f->error) !=
+        CAI_OK)
+      return -1;
+    f->capability_generation = scope.generation;
+    f->capability_epoch = scope.epoch;
+    f->capability_flags = flags;
+  }
+  return 0;
+}
 static frontend *frontend_open(frontend_group *group,
                                const cai_app_config *application,
                                const cai_cli_options *options,
@@ -1900,6 +2125,15 @@ static frontend *frontend_open(frontend_group *group,
       select_view(f, NULL) != 0) {
     cai_cli_error(error, CAI_ERR_TRANSPORT, "create terminal editor/theme");
     return NULL;
+  }
+  if (group->active == NULL && options->prompt_listener != NULL &&
+      options->prompt_listener[0] != '\0') {
+    if (cai_cli_prompt_listener_open(
+            options->prompt_listener, strcmp(options->proto, "tcpv6") == 0,
+            (unsigned long)options->simulate_typing_ms, prompt_scope,
+            prompt_notice, prompt_changed, f, &f->prompt_listener,
+            error) != CAI_OK)
+      return NULL;
   }
   if (group->active != NULL && sl_output_stream_end(f->ui->sl) != SL_OK) {
     cai_cli_error(error, CAI_ERR_TRANSPORT, "park new workspace editor");
@@ -2853,6 +3087,14 @@ done:
   cai_workspace_discovery_close(group.discovery);
   free(group.selector);
   close_deadline = clock_ms() + 2000U;
+  for (f = group.first; f != NULL; f = f->next) {
+    if (f->send_editor != NULL)
+      (void)sl_watch_remove(f->send_editor, f->send_watch);
+    cai_cli_prompt_send_close(f->prompt_send);
+    f->prompt_send = NULL;
+    cai_cli_prompt_listener_close(f->prompt_listener);
+    f->prompt_listener = NULL;
+  }
   for (f = group.first; f != NULL;) {
     frontend *next = f->next;
     if (f->client != NULL) {

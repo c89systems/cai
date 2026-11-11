@@ -170,7 +170,7 @@ static void retention_test(cai_cli_pouch *pouch, cai_error *error) {
   unsigned long long sequence = 0U;
   size_t count;
   long days;
-  cli_record imported;
+  cai_agent_session_event imported;
   cai_cli_session metadata;
   time_t before = time(NULL);
   lc_error_init(&local);
@@ -232,13 +232,11 @@ static void retention_test(cai_cli_pouch *pouch, cai_error *error) {
          info.retention_expires_at_unix <= time(NULL) + 7L * 86400L);
   /* Imports renew their owner in the append, without a metadata lease. */
   memset(&imported, 0, sizeof(imported));
-  strcpy(imported.record_type, "event");
   imported.sequence = 5U;
   imported.type = "text";
   imported.data = "leased import append";
   assert(cai_cli_pouch_session(pouch, "retained", &metadata, error) == CAI_OK);
-  assert(cai_cli_mapped_source(&event_map, &imported, &source, error) ==
-         CAI_OK);
+  assert(cai_session_event_source(&imported, &source, error) == CAI_OK);
   real_metadata = owned->metadata;
   metadata_calls = 0;
   owned->metadata = reject_metadata;

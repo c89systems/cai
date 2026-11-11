@@ -21,6 +21,8 @@ struct cai_cli_input_socket {
   void (*submitted)(void *, const cai_input_request *);
   void *submitted_context;
   cai_error error;
+  cai_input_scope offer_scope;
+  int has_offer_scope;
 };
 static int unavailable(cai_error *error, const char *message) {
   return cai_cli_error(error, CAI_ERR_INVALID, message);
@@ -40,7 +42,11 @@ static int submit(cai_cli_input_socket *s, const cai_input_scope *scope,
   cai_input_request request = *source;
   cai_input_scope original = *scope;
   unsigned long long maximum = ~(unsigned long long)0;
-  int rc;
+  int rc, pinned = source->operation == CAI_INPUT_OFFER && s->has_offer_scope;
+  if (pinned) {
+    original = s->offer_scope;
+    s->has_offer_scope = 0;
+  }
   if (s->detached || s->client == NULL || !s->fixed)
     return unavailable(error, "Wait for the producer binding snapshot");
   rc = cai_app_client_get_state(s->client, &state, error);
@@ -67,7 +73,8 @@ static int submit(cai_cli_input_socket *s, const cai_input_scope *scope,
   s->source_high = source->request_id;
   if (request.request_id > s->highest)
     s->highest = request.request_id;
-  original.generation = state.transport.generation;
+  if (!pinned)
+    original.generation = state.transport.generation;
   return cai_app_client_request(s->client, &original, &request, error);
 }
 static int request(void *context, const cai_input_scope *scope,
@@ -144,6 +151,14 @@ int cai_cli_input_socket_open(cai_app_client *client,
 void cai_cli_input_socket_set_wakeup(cai_cli_input_socket *s, int descriptor) {
   if (s != NULL)
     s->wakeup = descriptor;
+}
+void cai_cli_input_socket_offer_scope(cai_cli_input_socket *s,
+                                      const cai_input_scope *scope) {
+  if (s != NULL) {
+    s->has_offer_scope = scope != NULL;
+    if (scope != NULL)
+      s->offer_scope = *scope;
+  }
 }
 cai_cli_input_adapter *cai_cli_input_socket_adapter(cai_cli_input_socket *s) {
   return s != NULL ? s->adapter : NULL;

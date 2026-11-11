@@ -8,6 +8,8 @@ cai_app_client_get_shell_result
 cai_app_client_get_state
 cai_app_client_get_view
 cai_app_client_manage_delivery
+cai_app_client_network_handler
+cai_app_client_network_write
 cai_app_client_open
 cai_app_client_prepare
 cai_app_client_prompt_history

@@ -1,6 +1,7 @@
 /** Public-header-only link/run probe for the independent client package. */
 #include <assert.h>
 #include <cai/app_client.h>
+#include <cai/app_network.h>
 #include <string.h>
 int main(void) {
   cai_app_client_config config;
@@ -12,6 +13,9 @@ int main(void) {
   assert(config.event == NULL && config.workspace == NULL);
   assert(cai_app_client_open(NULL, 0U, &client, NULL) == CAI_ERR_INVALID);
   assert(client == NULL);
+  assert(cai_app_client_network_handler(client, NULL, NULL, NULL) ==
+         CAI_ERR_INVALID);
+  assert(cai_app_client_network_write(client, NULL, NULL) == CAI_ERR_INVALID);
   assert(cai_app_client_select(client, 1U, "1", NULL) == CAI_ERR_INVALID);
   memset(&view, 0, sizeof(view));
   view.outcome = CAI_APP_NOT_RUN;

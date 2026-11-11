@@ -18,6 +18,10 @@ int cai_cli_input_socket_open(cai_app_client *, unsigned long long last_issued,
  * interests. Negative disables. NULL client at open permits a startup editor
  * before an owner is ready; reconnect attaches its first transport. */
 void cai_cli_input_socket_set_wakeup(cai_cli_input_socket *, int descriptor);
+/** Pin only the OFFER currently entering the native callback. Never refresh an
+ * externally accepted prompt's original epoch/generation during admission. */
+void cai_cli_input_socket_offer_scope(cai_cli_input_socket *,
+                                      const cai_input_scope *);
 /** Record canonical prompt attempts before native queue handoff, after
  * completion-prefix removal. Never reenter the editor. Recall is separate
  * from model admission and this callback does not claim durable storage. */

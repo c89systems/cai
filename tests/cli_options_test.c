@@ -22,12 +22,15 @@ static int value_option_instructions(void) {
   for (i = 0U; i < cai_cli_help_count(); i++) {
     const cai_app_option *option = cai_cli_help_at(i);
     const char *value = marker;
-    if (strcmp(option->long_flag, "--dump-config") == 0)
+    if (strcmp(option->long_flag, "--dump-config") == 0 ||
+        strcmp(option->long_flag, "--feed-tcp") == 0)
       continue; /* A standalone utility, not an agent invocation. */
     if (option->type != CAI_APP_STRING && option->type != CAI_APP_INTEGER &&
         option->type != CAI_APP_OPTIONAL_STRING)
       continue;
-    if (option->type == CAI_APP_INTEGER)
+    if (strcmp(option->long_flag, "--simulate-typing") == 0)
+      value = "30";
+    else if (option->type == CAI_APP_INTEGER)
       value = "7";
     else if (option->type == CAI_APP_OPTIONAL_STRING)
       value = "session-id";
@@ -39,6 +42,8 @@ static int value_option_instructions(void) {
       value = "compact";
     else if (strcmp(option->long_flag, "--todo-layout") == 0)
       value = "board";
+    else if (strcmp(option->long_flag, "--proto") == 0)
+      value = "tcpv4";
     for (form = 0; form < (option->short_flag != '\0' ? 2 : 1); form++) {
       short_flag[1] = option->short_flag;
       args[0] = program;

@@ -751,6 +751,11 @@ set(CAI_SOURCES
   src/cai_chrome_protocol.c
   src/cai_client.c
   src/cai_cbor.c
+  src/cai_utf8.c
+  src/cai_network.c
+  src/cai_network_tools.c
+  src/cai_network_jsonl.c
+  src/cai_event_source.c
   src/cai_wire.c
   src/cai_wire_peer.c
   src/cai_protocol.c
@@ -976,7 +981,7 @@ if(CAI_BUILD_APP)
 endif()
 
 if(CAI_BUILD_CLI)
-  add_executable(cai_cli cli/main.c cli/process.c cli/bootstrap.c cli/spawn.c cli/attach.c cli/executable_path.c)
+  add_executable(cai_cli cli/main.c cli/feed_tcp.c cli/process.c cli/bootstrap.c cli/spawn.c cli/attach.c cli/executable_path.c)
   set_target_properties(cai_cli PROPERTIES OUTPUT_NAME cai)
   if(CAI_TARGET_ID MATCHES "-linux-musl$")
     set_target_properties(cai_cli PROPERTIES SKIP_BUILD_RPATH ON)
@@ -1139,6 +1144,19 @@ if(CAI_BUILD_TESTS)
   add_test(NAME cai_execution_decoder COMMAND cai_execution_decoder_test)
   set_tests_properties(cai_execution_decoder PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   add_executable(cai_cbor_test tests/cbor_test.c)
+  add_executable(cai_network_test tests/network_test.c)
+  add_executable(cai_network_tools_test tests/network_tools_test.c)
+  target_link_libraries(cai_network_tools_test PRIVATE ${_cai_internal_link_target})
+  target_link_options(cai_network_tools_test PRIVATE -Wl,--wrap=cai_net_open)
+  cai_configure_cli_target(cai_network_tools_test)
+  target_compile_options(cai_network_tools_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_network_tools COMMAND cai_network_tools_test)
+  set_tests_properties(cai_network_tools PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
+  target_link_libraries(cai_network_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_network_test)
+  target_compile_options(cai_network_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_network COMMAND cai_network_test)
+  set_tests_properties(cai_network PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
   target_link_libraries(cai_cbor_test PRIVATE ${_cai_internal_link_target})
   cai_configure_cli_target(cai_cbor_test)
   target_compile_options(cai_cbor_test PRIVATE -UNDEBUG)
@@ -1698,6 +1716,7 @@ if(CAI_INSTALL)
     PATTERN "app.h" EXCLUDE PATTERN "app_client.h" EXCLUDE
     PATTERN "app_server.h" EXCLUDE PATTERN "app_types.h" EXCLUDE
     PATTERN "app_view.h" EXCLUDE
+    PATTERN "app_network.h" EXCLUDE
     PATTERN "app_terminal.h" EXCLUDE
     PATTERN "lua_tools.h" EXCLUDE PATTERN "context.h" EXCLUDE)
   install(DIRECTORY "${CAI_GENERATED_INCLUDE_DIR}/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")

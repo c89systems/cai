@@ -60,22 +60,20 @@ static int cut_test_edit(lc_collection *collection,
   if (cut_fault_mode == 2) {
     /* Mutate between head capture and edit, using the same owned receiver.
      * The expected-head precondition must reject the whole cut. */
-    cli_record event;
+    cai_agent_session_event event;
     cai_source *record = NULL;
     lc_source *input = NULL;
     cai_error local;
     lc_collection_append_req append;
     lc_collection_append_res appended;
     memset(&event, 0, sizeof(event));
-    strcpy(event.record_type, "event");
     event.sequence = 3U;
     event.type = "test_event";
     event.data = "RACING event";
     cai_error_init(&local);
     lc_collection_append_req_init(&append);
     append.append_id = "event-00000000000000000003";
-    assert(cai_cli_mapped_source(&event_map, &event, &record, &local) ==
-           CAI_OK);
+    assert(cai_session_event_source(&event, &record, &local) == CAI_OK);
     assert(cai_cli_lc_source(record, &input, &local) == CAI_OK);
     assert(collection->append(collection, &append, input, &appended, error) ==
            LC_OK);

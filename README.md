@@ -77,6 +77,7 @@ See [configuration and storage locations](docs/configuration.md) and [provider a
 | Resume, trim, compact, export or delete a session | [Sessions](docs/sessions.md) |
 | Add MCP apps, skills or custom tools | [MCP](docs/mcp.md), [skills](docs/skills.md), [dynamic tools](docs/plugins.md) |
 | Share searchable documents and files across agents | [Context](docs/context.md) |
+| Receive network prompts or observe workspace events | [Networking](docs/networking.md) |
 | Embed the SDK in C or Lua | [C SDK](docs/c-sdk.md), [Lua](docs/lua.md), [runtime](docs/runtime.md) |
 | Embed the complete app or attach a frontend | [Application embedding](docs/embedding.md), [client](docs/application-client.md), [server](docs/application-server.md) |
 | Investigate failures or performance | [Troubleshooting](docs/troubleshooting.md), [benchmarks](docs/benchmarks.md) |

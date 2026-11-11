@@ -744,6 +744,36 @@ static void *run(void *unused) {
   cases(f);
   pause_cases(f);
   settlement_cases(f);
+  {
+    frontend *a = calloc(1U, sizeof(*a));
+    frontend *b = calloc(1U, sizeof(*b));
+    cai_input_scope original;
+    size_t queued = count(f);
+    assert(a != NULL && b != NULL);
+    open_frontend(f, a, 1, 0U, 0U);
+    takeover(f, a);
+    original.conversation = a->state.conversation;
+    original.generation = a->state.transport.generation;
+    open_frontend(f, b, 1, 0U, 0U);
+    takeover(f, b);
+    assert(drive(f, a, b) == CAI_OK);
+    takeover(f, a);
+    assert(drive(f, a, b) == CAI_OK);
+    /* An accepted TCP receipt keeps its old generation even if the same
+     * attachment regains control before its callback-driven OFFER is sent. */
+    cai_cli_input_socket_offer_scope(a->queue, &original);
+    (void)request(a, SL_QUEUE_OFFER, "stale external receipt", 0U, 0U);
+    assert(drive(f, a, b) == CAI_OK &&
+           a->result.outcome == CAI_INPUT_REJECTED && count(f) == queued);
+    (void)request(a, SL_QUEUE_OFFER, "fresh local offer", 0U, 0U);
+    assert(drive(f, a, b) == CAI_OK &&
+           a->result.outcome == CAI_INPUT_ACCEPTED && count(f) == queued + 1U);
+    close_frontend(a);
+    close_frontend(b);
+    free(a);
+    free(b);
+    server(f);
+  }
   assert(cai_cli_workspace_host_input(f->host, NULL, NULL, NULL) == CAI_OK);
   cai_cli_workspace_host_close(f->host);
   cai_input_controller_close(f->controller);

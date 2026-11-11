@@ -1,11 +1,12 @@
 #ifndef CAI_CLI_WORKSPACE_HOST_H
 #define CAI_CLI_WORKSPACE_HOST_H
 #include "app_internal.h"
+#include "network_host.h"
 #include <cai/app_view.h>
 #include <cai/workspace_server.h>
 #include <poll.h>
 #define CAI_CLI_WORKSPACE_HOST_FDS                                             \
-  (CAI_WORKSPACE_SERVER_FDS + CAI_ATTACHMENT_LIMIT + 1U)
+  (CAI_WORKSPACE_SERVER_FDS + CAI_ATTACHMENT_LIMIT + 2U)
 typedef struct cai_cli_workspace_host cai_cli_workspace_host;
 struct cai_cli_pouch;
 /* Owner-thread socket binding, without a terminal or renderer. Its transcript
@@ -48,6 +49,16 @@ int cai_cli_workspace_host_input(cai_cli_workspace_host *,
                                  cai_error *);
 int cai_cli_workspace_host_history(cai_cli_workspace_host *,
                                    struct cai_cli_pouch *, cai_error *);
+/** Borrow history client/options through close; own networking in the backend.
+ */
+int cai_cli_workspace_host_network(cai_cli_workspace_host *, cai_cli_pouch *,
+                                   const cai_cli_options *, const char *,
+                                   cai_error *);
+int cai_cli_workspace_host_network_call(void *, const char *, const char *,
+                                        cai_sink *, cai_error *);
+void cai_cli_workspace_host_network_stop(cai_cli_workspace_host *);
+void cai_cli_workspace_host_network_cancel(cai_cli_workspace_host *);
+void cai_cli_workspace_host_network_close(cai_cli_workspace_host *);
 /* Append socket interests; shorten timeout for deadlines or credit-ready work.
  * Capacity must cover CAI_CLI_WORKSPACE_HOST_FDS. */
 int cai_cli_workspace_host_prepare(cai_cli_workspace_host *, struct pollfd *,

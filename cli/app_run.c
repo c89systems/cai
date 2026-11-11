@@ -32,6 +32,7 @@
 #include "todo.h"
 #include "workspace_host.h"
 #include <cai/chrome.h>
+#include <cai/network_tools.h>
 #include <cai/plugins.h>
 #ifdef CAI_APP_LUA_TOOLS
 #include <cai/lua_tools.h>
@@ -91,6 +92,7 @@ typedef struct cli_state {
   cai_cli_pouch pouch;
   cli_extra_store *extra_stores;
   cai_context *context;
+  cai_network_tools_config network_tools;
   cai_chatgpt_auth *auth;
   cai_chatgpt_auth shared_auth;
   pthread_mutex_t auth_lock;
@@ -1293,6 +1295,8 @@ static int cli_register_agent_tools(void *context, cai_agent *agent,
     rc = cai_cli_messages_register(state->messages, agent, error);
   if (rc == CAI_OK && state->context != NULL)
     rc = cai_context_register(state->context, agent, error);
+  if (rc == CAI_OK)
+    rc = cai_network_tools_register(agent, &state->network_tools, error);
   if (rc == CAI_OK && state->application != NULL &&
       state->application->register_agent_tools != NULL)
     rc = state->application->register_agent_tools(
@@ -1491,7 +1495,14 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     if (rc != CAI_OK)
       return rc;
   }
-  if (state->messages != NULL || state->context != NULL ||
+  state->network_tools.network_tools = state->options.network_tools;
+  state->network_tools.disable_event_stream_listener =
+      state->options.disable_event_stream_listener;
+  state->network_tools.call = cai_cli_workspace_host_network_call;
+  state->network_tools.context = state->workspace_host;
+  if (!state->options.disable_event_stream_listener ||
+      state->options.network_tools || state->messages != NULL ||
+      state->context != NULL ||
       (state->application != NULL &&
        state->application->register_agent_tools != NULL)) {
     config.register_agent_tools = cli_register_agent_tools;
@@ -1675,6 +1686,7 @@ static int cli_prepare_clipboard(cli_state *state, cai_error *error) {
 
 static int cli_close_runtime(cli_state *state, cai_error *error) {
   int rc, output = CAI_OK;
+  cai_cli_workspace_host_network_cancel(state->workspace_host);
   output = cai_cli_documents_bind(&state->documents, NULL, error);
   cai_app_bridge_bind_input(state->bridge, NULL);
   rc = cai_cli_workspace_host_input(state->workspace_host, NULL, NULL, error);
@@ -4255,6 +4267,13 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     goto cleanup;
   }
   state->store = state->pouch.store;
+  rc =
+      cai_cli_workspace_host_network(state->workspace_host, &state->pouch,
+                                     &state->options, state->workspace, &error);
+  if (rc != CAI_OK) {
+    cli_print_error(state, "open workspace networking", &error);
+    goto cleanup;
+  }
   rc = cli_host_process(state, &error);
   if (rc != CAI_OK || state->host_stopped) {
     result = rc == CAI_OK ? 0 : 1;
@@ -4485,6 +4504,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   }
   result = 0;
 cleanup:
+  cai_cli_workspace_host_network_stop(state->workspace_host);
   cai_cli_workspace_host_stop(state->workspace_host);
   if (error.code == CAI_ERR_CANCELLED && cai_app_bridge_stopping(bridge)) {
     cai_error_cleanup(&error);
@@ -4571,6 +4591,7 @@ cleanup:
   if (state->has_auth_lock)
     pthread_mutex_destroy(&state->auth_lock);
   cai_context_close(state->context);
+  cai_cli_workspace_host_network_close(state->workspace_host);
   while (state->extra_stores != NULL) {
     cli_extra_store *entry = state->extra_stores;
     state->extra_stores = entry->next;

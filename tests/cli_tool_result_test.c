@@ -433,5 +433,33 @@ int main(void) {
     free(context);
   }
   puts("built-in tool presentation checks passed");
+  {
+    capture *network = calloc(1U, sizeof(*network));
+    assert(network != NULL);
+    assert(
+        result(network, "prompt_send",
+               "{\"status\":\"transmitted\",\"address\":\"127.0.0.1:1234\","
+               "\"message\":\"Local transmission completed\",\"bytes\":12}"));
+    assert(strstr(network->text, "Transmitted") &&
+           strstr(network->text, "12 bytes") &&
+           !strstr(network->text, "\"status\""));
+    assert(result(network, "event_stream_listen",
+                  "{\"content\":\"A bounded "
+                  "preview\\n\",\"bytes\":10,\"truncated\":true}"));
+    assert(strstr(network->text, "Observed") &&
+           strstr(network->text, "A bounded preview") &&
+           !strstr(network->text, "\"content\""));
+    assert(result(network, "network_list",
+                  "{\"endpoints\":[{\"kind\":\"tcp_listener\",\"advertised\":"
+                  "\"127.0.0.1:1234\",\"workspace\":\"/test\"}]}"));
+    assert(strstr(network->text, "Listed") && strstr(network->text, "/test") &&
+           !strstr(network->text, "\"endpoints\""));
+    assert(result(network, "prompt_send",
+                  "{\"status\":\"failed\",\"message\":\"authority "
+                  "revoked\",\"uncertain\":true}"));
+    assert(strstr(network->text, "TCP send failed") &&
+           strstr(network->text, "delivery uncertain"));
+    free(network);
+  }
   return 0;
 }

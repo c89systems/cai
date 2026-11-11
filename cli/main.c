@@ -2,6 +2,7 @@
  * APIs directly; examples/app.c remains the minimal public-only example. */
 #include "attach.h"
 #include "batch.h"
+#include "feed_tcp.h"
 #include "log.h"
 #include "options.h"
 #include "process.h"
@@ -22,6 +23,9 @@ int main(int argc, char **argv) {
   int code = 1;
   int diagnostic_presented = 0;
   int rc;
+  rc = cai_cli_feed_tcp(argc, argv);
+  if (rc >= 0)
+    return rc;
   cai_app_config_init(&config);
   config.banner =
       isatty(STDOUT_FILENO) && getenv("NO_COLOR") == NULL &&

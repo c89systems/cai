@@ -1,6 +1,6 @@
 # Network prompts and workspace events
 
-This is the implementation specification. These options and tools are not yet shipped.
+This is the implementation specification. See [Network prompts and events](networking.md) for configuration, commands and embedding entrypoints.
 
 ## Ownership
 

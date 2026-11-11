@@ -86,7 +86,9 @@ static void owner_inventory(void) {
       size_t value = (size_t)-1;
       memcpy(member, &value, sizeof(value));
     } else if (fields[i].type == 'l') {
-      long value = 1L;
+      long value;
+      memcpy(&value, member, sizeof(value));
+      value = value == 1L ? 2L : 1L;
       memcpy(member, &value, sizeof(value));
     } else {
       int value;

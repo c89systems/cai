@@ -74,7 +74,7 @@ static int deletion_reviews(session_deletion *plan,
     plan->review_scope = scope;
     read.pouch = plan->pouch;
     read.id = parent->id;
-    read.map = &event_map;
+    read.map = &journal_event_map;
     read.visit = deletion_review;
     read.visitor = plan;
     read.error = error;

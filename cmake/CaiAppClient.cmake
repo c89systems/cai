@@ -4,7 +4,7 @@ if(NOT CAI_BUILD_APP_CLIENT AND NOT CAI_BUILD_APP_SERVER)
   return()
 endif()
 add_library(cai_app_wire_objects OBJECT cli/input_wire.c cli/status_wire.c
-  cli/transcript_wire.c cli/catalog_wire.c cli/error.c)
+  cli/transcript_wire.c cli/catalog_wire.c cli/network_wire.c cli/error.c)
 target_link_libraries(cai_app_wire_objects PRIVATE ${_cai_internal_link_target})
 cai_configure_c_target(cai_app_wire_objects)
 if(NOT CAI_BUILD_APP_CLIENT)
@@ -69,6 +69,7 @@ if(CAI_INSTALL)
   install(FILES "${CMAKE_CURRENT_BINARY_DIR}/cai-app-client.pc"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig" COMPONENT cai-app-client)
   install(FILES "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_client.h"
+    "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_network.h"
     "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_view.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/cai" COMPONENT cai-app-client)
   install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/docs/application-client.md"

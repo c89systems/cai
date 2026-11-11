@@ -287,9 +287,45 @@ static int recovered_event(void *context, const cai_agent_session_event *event,
   return CAI_OK;
 }
 
+static void publication(void *context, const char *id,
+                        unsigned long long position,
+                        const cai_agent_session_event *event) {
+  unsigned int *count = context;
+  assert(!strcmp(id, "network-parent") && position > 0U);
+  assert(event->sequence == (unsigned long long)*count + 1U);
+  (*count)++;
+}
+static void publication_scope(cai_cli_pouch *pouch, cai_error *error) {
+  cai_agent_session_event event = {0};
+  unsigned int count = 0U;
+  save(pouch, "/work/network", "network-parent", error);
+  save(pouch, "smith-review:/work/network", "network-child", error);
+  pouch->network_observer = publication;
+  pouch->network_observer_context = &count;
+  event.sequence = 1U;
+  event.type = "assistant_text_delta";
+  event.data = "parent";
+  assert(append_event(pouch, "/work/network", "network-parent", &event,
+                      error) == CAI_OK);
+  event.data = "child";
+  assert(append_event(pouch, "smith-review:/work/network", "network-child",
+                      &event, error) == CAI_OK);
+  assert(count == 1U);
+  event.sequence = 2U;
+  event.type = "execution";
+  event.data = "{\"kind\":\"assistant_text_delta\",\"subagent\":\"review\","
+               "\"data\":\"child\"}";
+  assert(append_event(pouch, "/work/network", "network-parent", &event,
+                      error) == CAI_OK);
+  assert(count == 2U);
+  pouch->network_observer = NULL;
+  pouch->network_observer_context = NULL;
+}
 static void replay_limits(cai_cli_pouch *pouch, cai_error *error) {
   lonejson_config config = lonejson_default_config();
   cli_record original, parsed;
+  cai_agent_session_event event;
+  lonejson *json;
   cai_source *source;
   unsigned long long last;
   size_t length;
@@ -306,16 +342,19 @@ static void replay_limits(cai_cli_pouch *pouch, cai_error *error) {
     original.type = "assistant_text_delta";
     original.data = data;
     memset(&parsed, 0, sizeof(parsed));
-    assert(cai_cli_mapped_source(&event_map, &original, &source, error) ==
-           CAI_OK);
-    rc = parse_source_optional(source, &event_map, &parsed, NULL, &limited,
-                               error);
+    memset(&event, 0, sizeof(event));
+    event.sequence = original.sequence;
+    event.type = original.type;
+    event.data = original.data;
+    assert(cai_session_event_source(&event, &source, error) == CAI_OK);
+    rc = parse_source_optional(source, &journal_event_map, &parsed, NULL,
+                               &limited, error);
     assert(limited == (length > config.max_dynamic_string_bytes));
     assert((rc == CAI_OK) == !limited);
     if (!limited)
       assert(strlen(parsed.data) == length);
     cai_source_close(source);
-    lonejson_cleanup(&event_map, &parsed);
+    lonejson_cleanup(&journal_event_map, &parsed);
     cai_error_cleanup(error);
     cai_error_init(error);
   }
@@ -332,7 +371,15 @@ static void replay_limits(cai_cli_pouch *pouch, cai_error *error) {
   original.sequence = 1000004U;
   original.type = "assistant_text_delta";
   original.data = "invalid identity";
-  assert(cai_cli_mapped_source(&event_map, &original, &source, error) ==
+  /* The journal reader also accepts initialization records with a state value.
+   * Give its generic generator a valid value for this deliberately bad record.
+   */
+  json = lonejson_new(NULL, NULL);
+  assert(json != NULL);
+  lonejson_json_value_init(json, &original.state);
+  assert(lonejson_json_value_set_buffer(&original.state, "null", 4U, NULL) ==
+         LONEJSON_STATUS_OK);
+  assert(cai_cli_mapped_source(&journal_event_map, &original, &source, error) ==
          CAI_OK);
   {
     lc_collection *collection = NULL;
@@ -343,6 +390,8 @@ static void replay_limits(cai_cli_pouch *pouch, cai_error *error) {
                                   NULL, NULL, error);
     assert(rc == CAI_OK);
   }
+  lonejson_json_value_cleanup(&original.state);
+  lonejson_free(json);
   cai_source_close(source);
   assert(load_events(pouch, "/work/oversized", "oversized", last,
                      recovered_event, &last, error) == CAI_ERR_INVALID);
@@ -763,6 +812,7 @@ int main(int argc, char **argv) {
   collection_regressions(&pouch, &error);
   todo_transactions(&pouch, &error);
   replay_limits(&pouch, &error);
+  publication_scope(&pouch, &error);
   journal_faults(&pouch, &error);
   append_context_test(&pouch, &error);
   foreign_metadata_owner(&pouch, &error);

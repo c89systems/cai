@@ -5,6 +5,7 @@
 #include "identity.h"
 #include "input_wire.h"
 #include "log.h"
+#include "network_wire.h"
 #include "pouch_stream.h"
 #include "status_wire.h"
 #include "transcript_feed.h"
@@ -19,6 +20,7 @@ typedef struct host_peer {
   cai_cli_workspace_host *host;
   uint64_t attachment;
   cai_cli_input_wire_decoder *decoder;
+  cai_cli_network_decoder *network_decoder;
   cai_cli_transcript_decoder *transcript_decoder;
   cai_input_connection *input;
   unsigned long long binding_request, snapshot_request;
@@ -56,6 +58,9 @@ struct cai_cli_workspace_host {
   uint64_t catalog_revision;
   char session[129];
   uint64_t generation, controller;
+  cai_cli_network_host *network;
+  cai_cli_network_host_config network_config;
+  char network_instance[33];
   cai_app_view status;
   int (*cancel)(void *, cai_error *);
   void *cancel_context;
@@ -694,8 +699,10 @@ static int message(void *context, const cai_workspace_server_event *event,
     return CAI_OK;
   }
   if (event->type == CAI_WORKSPACE_DETACHED) {
-    if (peer != NULL)
+    if (peer != NULL) {
       peer->detached = 1;
+      cai_cli_network_host_detach(host->network, peer->attachment);
+    }
     return CAI_OK;
   }
   if (event->type == CAI_WORKSPACE_PEER_ERROR && event->error != NULL)
@@ -705,6 +712,25 @@ static int message(void *context, const cai_workspace_server_event *event,
   if (peer == NULL || peer->detached)
     return cai_cli_error(error, CAI_ERR_PROTOCOL,
                          "workspace input attachment is unavailable");
+  if (event->message->header->kind == CAI_PROTOCOL_NETWORK) {
+    const cai_app_network_event *network = NULL;
+    if (peer->network_decoder == NULL) {
+      rc = cai_cli_network_decoder_open(&peer->network_decoder, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
+    rc = cai_cli_network_decode(peer->network_decoder, event->message, &network,
+                                error);
+    if (rc == CAI_OK && network != NULL && host->network == NULL &&
+        network->operation == CAI_APP_NETWORK_CAPABILITY &&
+        network->address[0] && host->network_config.pouch != NULL)
+      rc = cai_cli_network_host_open(&host->network_config, &host->network,
+                                     error);
+    return rc == CAI_OK && network != NULL
+               ? cai_cli_network_host_receive(host->network, peer->attachment,
+                                              network, error)
+               : rc;
+  }
   if (event->message->header->kind == CAI_PROTOCOL_HISTORY_GET ||
       event->message->header->kind == CAI_PROTOCOL_SUBSCRIBE ||
       event->message->header->kind == CAI_PROTOCOL_UNSUBSCRIBE)
@@ -1197,6 +1223,13 @@ int cai_cli_workspace_host_prepare(cai_cli_workspace_host *host,
                                     count, &deadline, error);
   if (rc != CAI_OK)
     return rc;
+  if (host->network != NULL) {
+    uint64_t network_deadline = cai_cli_network_host_deadline(host->network);
+    fds[*count].fd = cai_cli_network_host_fd(host->network);
+    fds[(*count)++].events = POLLIN;
+    if (network_deadline && (!deadline || network_deadline < deadline))
+      deadline = network_deadline;
+  }
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
     host_peer *peer = &host->peers[i];
     size_t pending;
@@ -1307,6 +1340,9 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
       }
   host->generation = snapshot.generation;
   host->controller = snapshot.controller;
+  rc = cai_cli_network_host_pump(host->network, error);
+  if (rc != CAI_OK)
+    return rc;
   for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
     host_peer *peer = &host->peers[i];
     size_t pending;
@@ -1316,6 +1352,7 @@ int cai_cli_workspace_host_pump(cai_cli_workspace_host *host, int *stopping,
     if (peer->detached) {
       rc = release_peer(peer, error);
       cai_cli_input_wire_decoder_close(peer->decoder);
+      cai_cli_network_decoder_close(peer->network_decoder);
       cai_cli_transcript_decoder_close(peer->transcript_decoder);
       memset(peer, 0, sizeof(*peer));
       if (rc != CAI_OK)
@@ -1404,14 +1441,100 @@ void cai_cli_workspace_host_stop(cai_cli_workspace_host *host) {
 void cai_cli_workspace_host_close(cai_cli_workspace_host *host) {
   size_t i;
   if (host != NULL) {
+    cai_cli_workspace_host_network_close(host);
     cai_cli_transcript_feed_close(host->history);
     for (i = 0U; i < CAI_ATTACHMENT_LIMIT; ++i) {
       cai_input_connection_close(host->peers[i].input);
       cai_cli_input_wire_decoder_close(host->peers[i].decoder);
+      cai_cli_network_decoder_close(host->peers[i].network_decoder);
       cai_cli_transcript_decoder_close(host->peers[i].transcript_decoder);
     }
     cai_workspace_server_close(host->server);
     cai_cli_status_cleanup(&host->status);
     free(host);
+  }
+}
+static int network_scope(void *context, cai_cli_network_scope *out,
+                         cai_error *error) {
+  cai_cli_workspace_host *host = context;
+  cai_attachment_state state;
+  unsigned long long epoch = 0U;
+  int rc = cai_workspace_server_get_state(host->server, &state, error);
+  if (rc != CAI_OK)
+    return rc;
+  memset(out, 0, sizeof(*out));
+  out->controller = state.controller;
+  out->generation = state.generation;
+  snprintf(out->session, sizeof(out->session), "%s", host->session);
+  if (host->input != NULL)
+    rc = cai_input_controller_conversation(host->input, &epoch, error);
+  out->epoch = epoch;
+  return rc;
+}
+static int network_send(void *context, uint64_t attachment,
+                        const cai_app_network_event *event, cai_error *error) {
+  cai_cli_workspace_host *host = context;
+  cai_cli_input_wire_output output;
+  size_t i;
+  for (i = 0U; i < CAI_ATTACHMENT_LIMIT; i++)
+    if (host->peers[i].attachment == attachment && !host->peers[i].detached) {
+      output.context = &host->peers[i];
+      output.begin = output_begin;
+      output.write = output_write;
+      output.end = output_end;
+      return cai_cli_network_write(&output, event, error);
+    }
+  return cai_cli_error(error, CAI_ERR_INVALID,
+                       "selected frontend attachment disconnected");
+}
+int cai_cli_workspace_host_network(cai_cli_workspace_host *host,
+                                   cai_cli_pouch *pouch,
+                                   const cai_cli_options *options,
+                                   const char *workspace, cai_error *error) {
+  cai_cli_network_host_config config;
+  const unsigned char *instance;
+  size_t i;
+  if (host == NULL || host->network != NULL)
+    return CAI_OK;
+  memset(&config, 0, sizeof(config));
+  instance = cai_workspace_server_instance(host->server);
+  for (i = 0U; i < 16U; i++)
+    snprintf(host->network_instance + i * 2U, 3U, "%02x", instance[i]);
+  config.pouch = pouch;
+  config.options = options;
+  config.workspace = workspace;
+  config.instance = host->network_instance;
+  config.context = host;
+  config.scope = network_scope;
+  config.send = network_send;
+  host->network_config = config;
+  /* Merely advertising an on-demand receive tool creates no network worker,
+   * registry claim or extra owner-loop wake source. A listener opens this
+   * adapter lazily when its attachment announces a successfully bound socket.
+   */
+  if (!options->network_tools &&
+      (options->event_multicast == NULL || !*options->event_multicast))
+    return CAI_OK;
+  return cai_cli_network_host_open(&config, &host->network, error);
+}
+int cai_cli_workspace_host_network_call(void *context, const char *operation,
+                                        const char *arguments, cai_sink *sink,
+                                        cai_error *error) {
+  cai_cli_workspace_host *host = context;
+  return cai_cli_network_host_call(host != NULL ? host->network : NULL,
+                                   operation, arguments, sink, error);
+}
+void cai_cli_workspace_host_network_stop(cai_cli_workspace_host *host) {
+  if (host != NULL)
+    cai_cli_network_host_stop(host->network);
+}
+void cai_cli_workspace_host_network_cancel(cai_cli_workspace_host *host) {
+  if (host != NULL)
+    cai_cli_network_host_cancel(host->network);
+}
+void cai_cli_workspace_host_network_close(cai_cli_workspace_host *host) {
+  if (host != NULL) {
+    cai_cli_network_host_close(host->network);
+    host->network = NULL;
   }
 }

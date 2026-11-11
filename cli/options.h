@@ -53,6 +53,13 @@ typedef struct cai_cli_options {
   int server_persist;
   int list_themes;
   int prefer_native_pager;
+  const char *prompt_listener, *prompt_advertise, *proto;
+  long long simulate_typing_ms;
+  int prompt_listener_explicit;
+  int network_tools, disable_event_stream_listener;
+  const char *event_multicast, *event_multicast_base, *ip_multicast_if;
+  long event_multicast_count, event_multicast_port, ip_multicast_ttl;
+  int disable_multicast_loop;
   const char *theme;
   long long theme_offset, subagent_theme_offset, review_theme_offset;
   const char *status_fields;

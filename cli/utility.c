@@ -7,6 +7,7 @@
 #include "log.h"
 #include "login.h"
 #include "messages.h"
+#include "network_registry.h"
 #include "session_commands.h"
 #include "skills.h"
 #include "stores.h"
@@ -369,6 +370,10 @@ static int dispatch(utility_run *u) {
                                   !(u->options.list_all || u->options.all),
                                   mdf_terminal_width(STDOUT_FILENO, 80),
                                   &u->error);
+    if (rc == CAI_OK && (u->options.list || u->options.list_all))
+      rc = cai_cli_network_registry_print(
+          &u->pouch, &u->options, u->options.list_all ? NULL : u->workspace,
+          destination, &u->error);
   } else if (u->options.delete_id != NULL) {
     cai_cli_pouch *messaging = &u->pouch;
     u->operation = "delete session";

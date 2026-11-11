@@ -41,6 +41,7 @@ cai_cli_documents_delegate
 cai_cli_documents_finish
 cai_cli_documents_operation
 cai_cli_documents_write
+cai_cli_dump_instructions
 cai_cli_environment_prefix
 cai_cli_error
 cai_cli_goal_input_argument
@@ -60,7 +61,6 @@ cai_cli_input_wire_decoder_open
 cai_cli_input_wire_write
 cai_cli_install_skill
 cai_cli_instruction_at
-cai_cli_dump_instructions
 cai_cli_log_error
 cai_cli_log_file_at
 cai_cli_log_message
@@ -89,6 +89,11 @@ cai_cli_messages_set_queue
 cai_cli_messages_start
 cai_cli_messages_stop
 cai_cli_messages_sync
+cai_cli_network_decode
+cai_cli_network_decoder_close
+cai_cli_network_decoder_open
+cai_cli_network_registry_print
+cai_cli_network_write
 cai_cli_options_utility
 cai_cli_pouch_approve_workspace
 cai_cli_pouch_begin_use

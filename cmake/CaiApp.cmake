@@ -1,4 +1,4 @@
-add_library(cai_app_objects OBJECT cli/app.c cli/input_socket.c cli/frontend.c cli/batch.c cli/batch_document.c cli/terminal_program.c cli/run_frontend.c cli/existing_frontend.c cli/utility.c cli/kanban.c)
+add_library(cai_app_objects OBJECT cli/app.c cli/input_socket.c cli/frontend.c cli/prompt_listener.c cli/prompt_send.c cli/batch.c cli/batch_document.c cli/terminal_program.c cli/run_frontend.c cli/existing_frontend.c cli/utility.c cli/kanban.c)
 target_link_libraries(cai_app_objects PRIVATE cai_cli_support)
 cai_configure_c_target(cai_app_objects)
 add_library(cai_app_static STATIC $<TARGET_OBJECTS:cai_app_objects>
@@ -44,6 +44,34 @@ if(CAI_BUILD_SHARED)
   cai_configure_c_target(cai_app_shared)
 endif()
 if(CAI_BUILD_TESTS)
+  add_executable(cai_feed_tcp_test tests/feed_tcp_test.c cli/feed_tcp.c)
+  target_link_libraries(cai_feed_tcp_test PRIVATE cai_app_static)
+  target_link_options(cai_feed_tcp_test PRIVATE -Wl,--wrap=read -Wl,--wrap=lc_client_open)
+  cai_configure_cli_target(cai_feed_tcp_test)
+  target_compile_options(cai_feed_tcp_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_feed_tcp COMMAND cai_feed_tcp_test)
+  set_tests_properties(cai_feed_tcp PROPERTIES LABELS "unit;local;offline" TIMEOUT 10)
+  add_executable(cai_network_wire_test tests/network_wire_test.c cli/network_wire.c cli/error.c)
+  target_link_libraries(cai_network_wire_test PRIVATE ${_cai_internal_link_target})
+  cai_configure_cli_target(cai_network_wire_test)
+  target_compile_options(cai_network_wire_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_network_wire COMMAND cai_network_wire_test)
+  set_tests_properties(cai_network_wire PROPERTIES LABELS "unit;local;offline" TIMEOUT 5)
+  add_executable(cai_network_registry_test tests/network_registry_test.c)
+  target_link_libraries(cai_network_registry_test PRIVATE cai_app_static)
+  target_link_options(cai_network_registry_test PRIVATE -Wl,--wrap=cai_net_send)
+  cai_configure_cli_target(cai_network_registry_test)
+  target_compile_options(cai_network_registry_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_network_registry COMMAND cai_network_registry_test
+    "${CMAKE_CURRENT_BINARY_DIR}/test-tmp")
+  set_tests_properties(cai_network_registry PROPERTIES LABELS "unit;local;offline" TIMEOUT 15)
+  add_executable(cai_network_host_test tests/network_host_test.c)
+  target_link_libraries(cai_network_host_test PRIVATE cai_app_static)
+  cai_configure_cli_target(cai_network_host_test)
+  target_compile_options(cai_network_host_test PRIVATE -UNDEBUG)
+  add_test(NAME cai_network_host COMMAND cai_network_host_test
+    "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(cai_network_host PROPERTIES LABELS "unit;local;offline" TIMEOUT 10)
   add_test(NAME cai_app_owner_boundary COMMAND "${CMAKE_COMMAND}"
     "-DCAI_NM=${CMAKE_NM}"
     "-DCAI_OWNER_OBJECT=$<TARGET_OBJECTS:cai_app_owner_objects>"
@@ -405,6 +433,7 @@ if(CAI_INSTALL)
     "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_types.h"
     "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_server.h"
     "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_client.h"
+    "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_network.h"
     "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_terminal.h"
     "${CAI_PUBLIC_INCLUDE_DIR}/cai/app_view.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/cai" COMPONENT cai-app)

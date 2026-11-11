@@ -1,4 +1,17 @@
   if(CAI_BUILD_TESTS)
+    add_test(NAME cai_cli_network_tools COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_network_tools_test.sh"
+      "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_network_test>")
+    set_tests_properties(cai_cli_network_tools PROPERTIES TIMEOUT 40
+      LABELS "cli;local;offline"
+      ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+    add_test(NAME cai_cli_prompt_listener COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_prompt_listener_test.sh"
+      "$<TARGET_FILE:cai_cli_mock_fixture>" "$<TARGET_FILE:cai_network_test>"
+      "$<TARGET_FILE:cai_cli>")
+    set_tests_properties(cai_cli_prompt_listener PROPERTIES TIMEOUT 40
+      LABELS "cli;local;offline"
+      ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
     add_test(NAME cai_cli_timestamps COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_timestamps_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")
@@ -165,7 +178,7 @@
       LABELS "cli;local;offline"
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
     add_executable(cai_cli_progress_owner tests/cli_catalog_client_fixture.c tests/export_gate_fixture.c
-      cli/main.c cli/process.c cli/bootstrap.c cli/spawn.c cli/attach.c cli/executable_path.c)
+      cli/main.c cli/feed_tcp.c cli/process.c cli/bootstrap.c cli/spawn.c cli/attach.c cli/executable_path.c)
     target_link_libraries(cai_cli_progress_owner PRIVATE cai_app_static)
     target_link_options(cai_cli_progress_owner PRIVATE -Wl,--wrap=cai_client_open)
     target_link_options(cai_cli_progress_owner PRIVATE -Wl,--wrap=cai_cli_journal_view_open)

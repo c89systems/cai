@@ -52,6 +52,10 @@ typedef struct cai_cli_pouch {
   void (*journal_observer)(void *, const char *, unsigned long long,
                            const cai_agent_session_event *);
   void *journal_observer_context;
+  /** Optional synchronous nonblocking network observation; never calls SDK. */
+  void (*network_observer)(void *, const char *, unsigned long long,
+                           const cai_agent_session_event *);
+  void *network_observer_context;
   /* One renewal service for this store context, independent of journal writes.
    * Receivers retain their SDK lease until the context exits. */
   struct cai_cli_collection_owner *collection_owners;

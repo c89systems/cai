@@ -589,7 +589,8 @@ int cai_workspace_client_begin(cai_workspace_client *client,
        header->kind != CAI_PROTOCOL_HISTORY_GET &&
        header->kind != CAI_PROTOCOL_HISTORY_APPEND &&
        header->kind != CAI_PROTOCOL_INPUT_SETTLED &&
-       header->kind != CAI_PROTOCOL_USER_SHELL) ||
+       header->kind != CAI_PROTOCOL_USER_SHELL &&
+       header->kind != CAI_PROTOCOL_NETWORK) ||
       (mutation && (client->state.phase != CAI_WORKSPACE_CONNECTED ||
                     client->state.controller != client->state.attachment ||
                     header->generation != client->state.generation)))

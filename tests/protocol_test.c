@@ -174,7 +174,7 @@ static void malformed(void) {
        * information byte masquerading as a kind above 23. */
       memmove(bytes + 8U, bytes + 7U, n - 7U);
       bytes[6] = 0x18;
-      bytes[7] = (unsigned char)(CAI_PROTOCOL_TERMINAL_OUTPUT + 1);
+      bytes[7] = (unsigned char)(CAI_PROTOCOL_NETWORK + 1);
       ++n;
       bytes[3] = (unsigned char)(n - 4U);
       break;
@@ -335,7 +335,7 @@ static void socket_stream(void) {
   }
   assert(c.bytes == 32U * 1024U * 1024U);
   /* Reject impossible sizes/unknown kinds before emitting any prefix. */
-  c.expected.kind = (cai_protocol_kind)(CAI_PROTOCOL_TERMINAL_OUTPUT + 1);
+  c.expected.kind = (cai_protocol_kind)(CAI_PROTOCOL_NETWORK + 1);
   assert(cai_protocol_peer_begin(sender, &c.expected, 1U, NULL) ==
          CAI_ERR_INVALID);
   assert(cai_wire_peer_pending(sender) == 0U);

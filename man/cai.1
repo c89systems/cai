@@ -32,6 +32,64 @@ history, queue and goal. An attachment is a live frontend connection to the
 workspace backend. The backend selects one active session.
 .SH OPTIONS
 .TP
+.BI \-\-prompt-listener " ADDRESS"
+Receive one UTF-8 prompt per TCP connection in the Softline frontend.
+Normal EOF submits; invalid input, reset or cancellation discards the receipt.
+An existing local draft is preserved and complete input enters the turn queue.
+PORT, :PORT and HOST:PORT are supported; omitted hosts bind only to loopback.
+Disabled by default. Configure [ui] prompt_listener or CAI_PROMPT_LISTENER.
+.TP
+.BI \-\-prompt-advertise " ADDRESS"
+Advertise a usable reply endpoint. Wildcard binds require this explicit setting
+to offer a reply address. Configure [ui] prompt_advertise.
+.TP
+.BI \-\-proto " tcpv4|tcpv6"
+Select the TCP family, default tcpv4. IPv6 listeners are IPv6-only;
+bracket IPv6 endpoint literals. Configure [ui] proto.
+.TP
+.BR \-\-simulate-typing " [MS]"
+Pace listener insertion by Unicode character, without blocking the editor.
+A bare flag selects 30 ms; zero disables pacing. Configure [ui] simulate_typing_ms.
+.TP
+.BI \-\-feed-tcp " ADDRESS"
+Executable-only raw stdin-to-TCP utility. Bypasses configuration, authentication,
+storage and agent startup; emits ordinary JSON diagnostics. Accepts --proto.
+It forwards bytes unchanged and does not simulate typing.
+.TP
+.BR \-\-event-multicast " [GROUP:PORT]"
+Publish backend journal events as best-effort multicast JSONL. Disabled by
+default; a bare flag allocates a group from 239.193.89.1 through 239.193.89.254,
+port 49189. Configure [server] event_multicast; use auto for automatic allocation.
+Endpoint listings and attaching frontends include the actual destination and
+a socat receive command. Oversized lines span bounded datagrams; UDP may lose
+or reorder data.
+.TP
+.BI \-\-event-multicast-base " GROUP"
+First IPv4 group in the automatic allocation pool. Default 239.193.89.1.
+.TP
+.BI \-\-event-multicast-count " COUNT"
+Number of automatic destinations. Default 254.
+.TP
+.BI \-\-event-multicast-port " PORT"
+Automatic destination port. Default 49189.
+.TP
+.BI \-\-ip-multicast-if " INTERFACE"
+Multicast interface name, IPv4 address or IPv6 interface index. Empty uses routing.
+.TP
+.BI \-\-ip-multicast-ttl " HOPS"
+Multicast TTL or IPv6 hop limit, default 1.
+.TP
+.B \-\-disable-multicast-loop
+Disable local multicast loopback. Default false.
+.TP
+.B \-\-network-tools
+Enable network_list, prompt_listener_info and frontend-owned prompt_send.
+Disabled by default. Configure [agent] network_tools or CAI_NETWORK_TOOLS.
+.TP
+.B \-\-disable-event-stream-listener
+Disable the otherwise available on-demand event_stream_listen agent tool.
+It opens no socket until called. Configure [agent] disable_event_stream_listener.
+.TP
 .BR \-x , " " \-\-headless
 Start this workspace's server in the foreground, with persistence enabled by
 default and without a terminal frontend. JSON logs use stderr and automatic color; normal LOG_
