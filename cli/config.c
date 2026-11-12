@@ -85,7 +85,7 @@ static const cli_field fields[] = {
       "Show DTG timestamps in UTC (Zulu); false uses local time. Default "
       "false."),
     B("ui", "no_banner", no_banner,
-      "Suppress the initial interactive welcome, banner and introduction. "
+      "Suppress the application's interactive banner and introduction. "
       "Default false; attachment readiness is still shown."),
     B("ui", "prefer_native_pager", prefer_native_pager,
       "Use only libmdf for log paging, even when less is available. Default "

@@ -12,9 +12,10 @@ First-time workspaces require `cai -y` to save approval for that directory and i
 Use `cai --login` for ChatGPT authentication if no usable imported or stored credentials exist.
 See [configuration](configuration.md) and [providers](providers.md) for other setups.
 
-Interactive startup prints the welcome and application banner before attachment or replay.
+Interactive startup prints the application's banner and introduction before attachment or replay.
+Any welcome text belongs to that banner; the library generates no separate greeting.
 `--no-banner`, `[ui] no_banner = true`, or `CAI_NO_BANNER=true` suppress this startup text; `--banner` overrides that setting.
-Attachment readiness still appears, and utilities and batch/headless runs do not print the welcome.
+Attachment readiness still appears, and utilities and batch/headless runs do not print the banner.
 
 ```sh
 cai -y

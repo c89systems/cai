@@ -2158,16 +2158,6 @@ static frontend *frontend_open(frontend_group *group,
   }
   cai_cli_status_init(&f->status, target->workspace, getenv("HOME"));
   (void)cai_cli_status_fields_parse(options->status_fields, &f->status.fields);
-  if (group->active == NULL && !options->no_banner) {
-    char welcome[192];
-    int n = snprintf(welcome, sizeof(welcome), "Welcome to %s.\n\n",
-                     options->program_name);
-    if (n < 0 || (size_t)n >= sizeof(welcome) ||
-        cai_cli_presenter_sink(f->ui, welcome, (size_t)n) != 0) {
-      cai_cli_error(error, CAI_ERR_TRANSPORT, "write frontend welcome");
-      return NULL;
-    }
-  }
   if (group->active == NULL && !options->no_banner &&
       application->banner != NULL &&
       cai_cli_presenter_sink(f->ui, application->banner,

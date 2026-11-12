@@ -29,6 +29,7 @@ executable owns process scaffolding in `cli/main.c` and `cli/process.c`;
 The example binary embeds `banners/cai.ansi` and its uncolored `banners/cai.txt`
 fallback through `cai_app_config.banner`; the artwork is not part of `libcai_app`.
 It appears only during interactive startup and respects `--no-banner`.
+The library generates no welcome message; any welcome text belongs in the host's banner.
 Use `find_package(cai_app CONFIG REQUIRED)` and `cai::app_static` or
 `cai::app_shared`, or pkg-config `cai-app`. The application shared library has
 ABI 0; the core libcai ABI is 5.

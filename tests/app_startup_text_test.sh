@@ -10,6 +10,7 @@ introduction='Enter sends or queues; Alt-Enter steers.'
 repo='https://github.com/c89systems/cai/'
 cai_intro=$'cai is an example of embedding libcai_app: https://github.com/c89systems/cai/.\nEnter sends or queues; Alt-Enter steers. /help or cai -h for options.'
 layout() {
+  absent "$term/text" 'Welcome to cai.'
   if [[ "$mode" == cai ]]; then
     jq -Rse --rawfile banner "$support/../banners/cai.txt" --arg intro "$2" \
       'contains($banner + $intro + "\n\n")' "$term/text" >/dev/null || fail 'Incorrect example banner or introduction layout'
@@ -46,6 +47,7 @@ if [[ "$mode" == cai ]]; then
   jq -Rse --arg banner "$banner" --arg intro "$introduction" \
     'index($banner) < index($intro) and index($intro) < index("> STARTUP USER")' "$term/text" >/dev/null
 else
+  absent "$term/text" 'Welcome to cai.'
   absent "$term/text" "$banner"
   absent "$term/text" "$introduction"
   absent "$term/text" "$repo"

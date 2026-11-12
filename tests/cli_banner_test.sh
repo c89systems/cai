@@ -9,8 +9,7 @@ absent "$root/stdout" 'Welcome to'
 run --not-a-real-option; bad
 absent "$root/stdout" 'Welcome to'
 terminal_start
-contains "$term/text" 'Welcome to cai.'
-awk '/Welcome to cai[.]/{welcome=NR} /Session (ready|resumed)[.]/{if (!welcome || welcome >= NR) exit 1; ready=1} END{if (!ready) exit 1}' "$term/text"
+absent "$term/text" 'Welcome to'
 terminal_close
 terminal_start --no-banner
 absent "$term/text" 'Welcome to'
@@ -20,7 +19,7 @@ terminal_start
 absent "$term/text" 'Welcome to'
 terminal_close
 terminal_start --banner
-contains "$term/text" 'Welcome to cai.'
+absent "$term/text" 'Welcome to'
 terminal_close
 unset CAI_NO_BANNER
 printf '[ui]\nno_banner = true\n' >"$root/banner.ini"
