@@ -1,2 +1,5 @@
 # Imported prompt bytes and their identity-only templates retain upstream spacing.
 prompts/smith/*-codex*.md -text whitespace=-blank-at-eol,-blank-at-eof
+
+# Banner bytes include the final spacer row before the introduction.
+banners/cai.* -text whitespace=-blank-at-eof

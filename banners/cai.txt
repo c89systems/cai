@@ -1,0 +1,6 @@
+
+   ___   /\    _
+  / __| /  \  |#| Welcome to CAI.
+ | (__ / /\ \ |#| libcai (c) 2026 C89 Systems AB
+  \___/_/##\_\|#| https://c89.systems https://github.com/c89systems/libcai
+

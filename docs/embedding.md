@@ -26,6 +26,9 @@ Build with `CAI_BUILD_APP=ON`; `CAI_BUILD_CLI=ON` also selects it. The `cai`
 executable owns process scaffolding in `cli/main.c` and `cli/process.c`;
 `examples/app.c` is the minimal public-only C embedding example. Install the
 `cai-app` and `cai-app-server` components alongside their core/dependency SDKs.
+The example binary embeds `banners/cai.ansi` and its uncolored `banners/cai.txt`
+fallback through `cai_app_config.banner`; the artwork is not part of `libcai_app`.
+It appears only during interactive startup and respects `--no-banner`.
 Use `find_package(cai_app CONFIG REQUIRED)` and `cai::app_static` or
 `cai::app_shared`, or pkg-config `cai-app`. The application shared library has
 ABI 0; the core libcai ABI is 5.

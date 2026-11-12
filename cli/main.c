@@ -15,6 +15,15 @@
 #include <string.h>
 #include <unistd.h>
 
+/** Example-owned startup artwork; libcai_app only receives the selected text.
+ */
+static const char cai_banner_ansi[] = {
+#include "cai_banner_ansi.inc"
+};
+static const char cai_banner_txt[] = {
+#include "cai_banner_txt.inc"
+};
+
 int main(int argc, char **argv) {
   cai_app_config config;
   cai_app *app = NULL;
@@ -30,9 +39,8 @@ int main(int argc, char **argv) {
   config.banner =
       isatty(STDOUT_FILENO) && getenv("NO_COLOR") == NULL &&
               (getenv("TERM") == NULL || strcmp(getenv("TERM"), "dumb") != 0)
-          ? "\033[97mC\033[94mA\033[97mI\033[0m Smith (C) 2026 C89 Systems "
-            "AB https://c89.systems\n\n"
-          : "CAI Smith (C) 2026 C89 Systems AB https://c89.systems\n\n";
+          ? cai_banner_ansi
+          : cai_banner_txt;
   config.introduction_margin_left = 0;
   config.introduction_margin_right = 0;
   config.introduction_markdown =
