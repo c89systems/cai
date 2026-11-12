@@ -452,7 +452,7 @@ static int frame_bytes(projection *p, const char *data, size_t length) {
             lonejson_curl_parse_finish(&p->frame_parser) != LONEJSON_STATUS_OK)
           return fail(p, CAI_ERR_PROTOCOL, "invalid retained provider JSON");
         lonejson_curl_parse_cleanup(&p->frame_parser);
-        lonejson_cleanup(&copy_map, &p->frame);
+        lonejson_cleanup(&copy_map, &p->frame, NULL);
         memset(&p->frame_parser, 0, sizeof(p->frame_parser));
         memset(&p->frame, 0, sizeof(p->frame));
         p->frame_phase = 2;
@@ -585,7 +585,8 @@ static lonejson_status copy_key_end(void *context,
 static void clear_record(projection *p) {
   lonejson_curl_parse_cleanup(&p->parser);
   lonejson_cleanup(p->pass == INDEX ? &record_map : &copy_map,
-                   p->pass == INDEX ? (void *)&p->record : (void *)&p->copy);
+                   p->pass == INDEX ? (void *)&p->record : (void *)&p->copy,
+                   NULL);
   memset(&p->parser, 0, sizeof(p->parser));
   memset(&p->record, 0, sizeof(p->record));
   memset(&p->copy, 0, sizeof(p->copy));
@@ -1094,7 +1095,7 @@ void cai_cli_journal_view_close(cai_cli_journal_view *p) {
   cai_cli_transcript_close(p->transcript);
   clear_record(p);
   lonejson_curl_parse_cleanup(&p->frame_parser);
-  lonejson_cleanup(&copy_map, &p->frame);
+  lonejson_cleanup(&copy_map, &p->frame, NULL);
   lonejson_writer_cleanup(&p->writer);
   /* Folded indexes use our realloc, unlike parser-owned array tails. */
   free(p->metadata.blocks.items);
@@ -1123,7 +1124,7 @@ static int view_finish(projection *p) {
   lonejson_writer_cleanup(&p->writer);
   clear_record(p);
   lonejson_curl_parse_cleanup(&p->frame_parser);
-  lonejson_cleanup(&copy_map, &p->frame);
+  lonejson_cleanup(&copy_map, &p->frame, NULL);
   memset(&p->frame_parser, 0, sizeof(p->frame_parser));
   memset(&p->frame, 0, sizeof(p->frame));
   p->event_callback = NULL;

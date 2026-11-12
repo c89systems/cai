@@ -4121,12 +4121,13 @@ static int cai_runtime_validate_review_report(const char *report,
                          "Smith review completed without a final JSON report");
   }
   memset(&doc, 0, sizeof(doc));
-  CAI_LJ->init(CAI_LJ, &cai_runtime_review_report_map, &doc);
-  lonejson_error_init(&json_error);
-  status = CAI_LJ->parse_cstr(CAI_LJ, &cai_runtime_review_report_map, &doc,
-                              report, &json_error);
+  status =
+      CAI_LJ->init(CAI_LJ, &cai_runtime_review_report_map, &doc, &json_error);
+  if (status == LONEJSON_STATUS_OK)
+    status = CAI_LJ->parse_cstr(CAI_LJ, &cai_runtime_review_report_map, &doc,
+                                report, &json_error);
   if (status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_runtime_review_report_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_runtime_review_report_map, &doc, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "Smith review final output does not match the "
                                 "required JSON report schema",
@@ -4156,7 +4157,7 @@ static int cai_runtime_validate_review_report(const char *report,
                          "Smith review final JSON contains an invalid finding");
     }
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_runtime_review_report_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_runtime_review_report_map, &doc, NULL);
   return rc;
 }
 
@@ -4203,12 +4204,13 @@ static int cai_runtime_render_review_markdown(const char *report, char **out,
   *out = NULL;
   memset(&doc, 0, sizeof(doc));
   memset(&builder, 0, sizeof(builder));
-  CAI_LJ->init(CAI_LJ, &cai_runtime_review_report_map, &doc);
-  lonejson_error_init(&json_error);
-  status = CAI_LJ->parse_cstr(CAI_LJ, &cai_runtime_review_report_map, &doc,
-                              report, &json_error);
+  status =
+      CAI_LJ->init(CAI_LJ, &cai_runtime_review_report_map, &doc, &json_error);
+  if (status == LONEJSON_STATUS_OK)
+    status = CAI_LJ->parse_cstr(CAI_LJ, &cai_runtime_review_report_map, &doc,
+                                report, &json_error);
   if (status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_runtime_review_report_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_runtime_review_report_map, &doc, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to render review Markdown",
                                 json_error.message);
@@ -4256,7 +4258,7 @@ static int cai_runtime_render_review_markdown(const char *report, char **out,
     if (rc == CAI_OK)
       rc = cai_buffer_append_cstr(&builder, "`\n\n", error);
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_runtime_review_report_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_runtime_review_report_map, &doc, NULL);
   if (rc != CAI_OK) {
     cai_free_mem(NULL, builder.data);
     return rc;
@@ -4762,17 +4764,17 @@ static char *cai_runtime_tool_path_from_arguments(const cai_tool_event *event) {
     snprintf(label, sizeof(label), "%s%s%s", doc.action,
              extra != NULL ? " " : "", extra != NULL ? extra : "");
     path = cai_strdup(NULL, label);
-    CAI_LJ->cleanup(CAI_LJ, &cai_runtime_path_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_runtime_path_map, &doc, NULL);
     cai_free_mem(NULL, arguments_copy);
     return path;
   }
   if (status != LONEJSON_STATUS_OK || doc.path == NULL || doc.path[0] == '\0') {
-    CAI_LJ->cleanup(CAI_LJ, &cai_runtime_path_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_runtime_path_map, &doc, NULL);
     cai_free_mem(NULL, arguments_copy);
     return NULL;
   }
   path = cai_strdup(NULL, doc.path);
-  CAI_LJ->cleanup(CAI_LJ, &cai_runtime_path_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_runtime_path_map, &doc, NULL);
   cai_free_mem(NULL, arguments_copy);
   return path;
 }
@@ -12001,12 +12003,12 @@ static int cai_runtime_run_profile_subagent(void *context,
   if (rc != CAI_OK)
     return rc;
   (void)field_count;
-  CAI_LJ->init(CAI_LJ, &map, &parsed);
-  lonejson_error_init(&json_error);
-  status =
-      CAI_LJ->parse_cstr(CAI_LJ, &map, &parsed, arguments_json, &json_error);
+  status = CAI_LJ->init(CAI_LJ, &map, &parsed, &json_error);
+  if (status == LONEJSON_STATUS_OK)
+    status =
+        CAI_LJ->parse_cstr(CAI_LJ, &map, &parsed, arguments_json, &json_error);
   if (status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &map, &parsed);
+    CAI_LJ->cleanup(CAI_LJ, &map, &parsed, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to parse generated subagent arguments",
                                 json_error.message);
@@ -12067,7 +12069,7 @@ static int cai_runtime_run_profile_subagent(void *context,
   cai_free_mem(NULL, instructions);
   cai_free_mem(NULL, display_summary);
   cai_free_mem(NULL, metadata_json);
-  CAI_LJ->cleanup(CAI_LJ, &map, &parsed);
+  CAI_LJ->cleanup(CAI_LJ, &map, &parsed, NULL);
   cai_runtime_subagent_result_cleanup(&result);
   return rc;
 }

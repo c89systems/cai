@@ -182,7 +182,7 @@ int cai_raw_input_validate(const char *schema_json,
       }
     }
   }
-  CAI_LJ->cleanup(CAI_LJ, &schema, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &schema, &doc, NULL);
   return rc;
 }
 typedef struct cai_raw_meta_presence {
@@ -300,7 +300,7 @@ int cai_raw_input_parse_meta(const lonejson_json_value *meta,
     if (error != NULL)
       error->code = rc;
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_raw_meta_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_raw_meta_map, &doc, NULL);
   return rc;
 }
 lonejson_status cai_raw_input_write_meta(lonejson_writer *writer,

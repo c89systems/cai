@@ -65,7 +65,7 @@ static void cai_chat_custom_close(cai_chat_custom_stream *custom) {
     lonejson_curl_parse_cleanup(&custom->parser);
     if (custom->runtime != NULL)
       custom->runtime->cleanup(custom->runtime, &cai_chat_custom_delta_map,
-                               &custom->doc);
+                               &custom->doc, NULL);
     lonejson_free(custom->runtime);
     cai_free_mem(NULL, custom);
   }
@@ -108,8 +108,11 @@ static int cai_chat_custom_delta(cai_chat_stream_state *state,
       return cai_set_error_detail(state->error, CAI_ERR_NOMEM,
                                   "allocate custom tool input parser",
                                   error.message);
-    custom->runtime->init(custom->runtime, &cai_chat_custom_delta_map,
-                          &custom->doc);
+    if (custom->runtime->init(custom->runtime, &cai_chat_custom_delta_map,
+                              &custom->doc, &error) != LONEJSON_STATUS_OK)
+      return cai_set_error_detail(state->error, CAI_ERR_NOMEM,
+                                  "initialize custom tool input decoder",
+                                  error.message);
     if (lonejson_curl_parse_init(&custom->parser, custom->runtime,
                                  &cai_chat_custom_delta_map,
                                  &custom->doc) != LONEJSON_STATUS_OK)

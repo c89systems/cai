@@ -202,7 +202,7 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
       rc = cai_cli_error(error, CAI_ERR_INVALID,
                          "unknown imported journal record");
     lonejson_curl_parse_cleanup(&line.parser);
-    lonejson_cleanup(&import_map, &record);
+    lonejson_cleanup(&import_map, &record, NULL);
   }
   if (ferror(file) && rc == CAI_OK)
     rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "read imported journal");

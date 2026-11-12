@@ -423,7 +423,7 @@ int cai_cli_todo_command(cai_agent_runtime *runtime, const char *arguments,
     if (write(context, note, strlen(note)) != 0)
       rc = CAI_ERR_TRANSPORT;
   }
-  lonejson_cleanup(&view_map, &view);
+  lonejson_cleanup(&view_map, &view, NULL);
   lonejson_free(json);
   if (rc == CAI_ERR_TRANSPORT && (error == NULL || error->code == CAI_OK))
     cai_cli_error(error, rc, "display kanban view");

@@ -303,11 +303,11 @@ int cai_plugins_define(cai_plugins *plugins,
                           definition->parameters_json, &local);
   if (rc != LONEJSON_STATUS_OK || schema.type == NULL ||
       strcmp(schema.type, "object") != 0) {
-    CAI_LJ->cleanup(CAI_LJ, &schema_map, &schema);
+    CAI_LJ->cleanup(CAI_LJ, &schema_map, &schema, NULL);
     return cai_set_error(error, CAI_ERR_INVALID,
                          "plugin parameters must be an object JSON schema");
   }
-  CAI_LJ->cleanup(CAI_LJ, &schema_map, &schema);
+  CAI_LJ->cleanup(CAI_LJ, &schema_map, &schema, NULL);
   entry = cai_alloc(NULL, sizeof(*entry));
   if (entry == NULL)
     return cai_set_error(error, CAI_ERR_NOMEM, "allocate plugin");
@@ -439,7 +439,7 @@ static int cai_plugins_load_with_scratch(cai_plugins *plugins,
     rc = CAI_ERR_INVALID;
   cai_free_mem(NULL, bytes);
   if (rc != CAI_OK || manifest.parameters.json == NULL) {
-    CAI_LJ->cleanup(CAI_LJ, &manifest_map, &manifest);
+    CAI_LJ->cleanup(CAI_LJ, &manifest_map, &manifest, NULL);
     return cai_set_error_detail(error, CAI_ERR_INVALID,
                                 "invalid plugin manifest (maximum 64 KiB)",
                                 local.message);
@@ -473,7 +473,7 @@ static int cai_plugins_load_with_scratch(cai_plugins *plugins,
     rc = cai_plugins_define(plugins, &definition, &handler, error);
   if (rc != CAI_OK && handler.destroy != NULL)
     handler.destroy(handler.context);
-  CAI_LJ->cleanup(CAI_LJ, &manifest_map, &manifest);
+  CAI_LJ->cleanup(CAI_LJ, &manifest_map, &manifest, NULL);
   return rc;
 }
 
@@ -702,7 +702,7 @@ static int plugin_control_execute(void *context, const char *arguments,
     rc = cai_plugins_load(agent->plugins, request.path, error);
   else
     rc = cai_plugins_reload(agent->plugins, error);
-  CAI_LJ->cleanup(CAI_LJ, &control_map, &request);
+  CAI_LJ->cleanup(CAI_LJ, &control_map, &request, NULL);
   if (rc == CAI_OK)
     rc = cai_sink_write(
         output, "Tool catalog updated for the next model request.",

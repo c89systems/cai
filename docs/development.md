@@ -70,7 +70,7 @@ The same source also supplies the GNU SDKs and Darwin cross-build lane; Darwin r
   `pslog.h`, and cpktmisc's `CpktYaml` package with a compatible cpkt core SDK.
   The libcurl minimum is required for Responses WebSocket
   support. The discovered `liblonejson` must match cai's required ABI
-  generation (`liblonejson.so.27` on Linux, `liblonejson.27.dylib` on Darwin).
+  generation (`liblonejson.so.29` on Linux, `liblonejson.29.dylib` on Darwin).
   `auto` chooses host only when all required host pieces are discoverable and
   the lonejson ABI matches, otherwise it falls back to `cpkt`.
 - Installed CMake and pkg-config metadata preserve that dependency mode.

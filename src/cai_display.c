@@ -122,7 +122,7 @@ static int display_mcp_failed(const cai_agent_runtime_event *event) {
   status = CAI_LJ->parse_reader(CAI_LJ, &display_mcp_result_map, &doc,
                                 display_result_read, &reader, &error);
   failed = status == LONEJSON_STATUS_OK && doc.is_error;
-  CAI_LJ->cleanup(CAI_LJ, &display_mcp_result_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &display_mcp_result_map, &doc, NULL);
   return failed;
 }
 

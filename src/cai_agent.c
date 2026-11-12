@@ -8510,7 +8510,7 @@ static int cai_session_import_state(cai_session *session, cai_source *source,
 
 done:
   if (metadata == NULL)
-    CAI_LJ->cleanup(CAI_LJ, &cai_session_state_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_session_state_map, &doc, NULL);
   cai_free_mem(NULL, next_blocks.items);
   cai_free_mem(NULL, next_hidden.items);
   cai_free_mem(NULL, next_owned.items);

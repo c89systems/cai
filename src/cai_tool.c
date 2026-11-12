@@ -42,6 +42,28 @@ typedef struct cai_tool_registry_impl {
 #define CAI_TOOL_REGISTRY_IMPL(registry)                                       \
   ((cai_tool_registry_impl *)((registry)->impl))
 
+/** Initialize both mapped records before exposing either to a tool callback.
+ * A failed initialization leaves its destination untouched. */
+static int cai_tool_records_init(const cai_tool_entry *entry, void *params,
+                                 void *result, cai_error *error) {
+  lonejson_error json_error;
+  lonejson_status status;
+
+  status = CAI_LJ->init(CAI_LJ, entry->params_map, params, &json_error);
+  if (status == LONEJSON_STATUS_OK) {
+    status = CAI_LJ->init(CAI_LJ, entry->result_map, result, &json_error);
+    if (status != LONEJSON_STATUS_OK)
+      CAI_LJ->cleanup(CAI_LJ, entry->params_map, params, NULL);
+  }
+  if (status != LONEJSON_STATUS_OK)
+    return cai_set_error_detail(
+        error,
+        status == LONEJSON_STATUS_ALLOCATION_FAILED ? CAI_ERR_NOMEM
+                                                    : CAI_ERR_INVALID,
+        "failed to initialize mapped tool records", json_error.message);
+  return CAI_OK;
+}
+
 static cai_tool_registry_impl *
 cai_tool_registry_impl_from_public(cai_tool_registry *registry) {
   return registry != NULL ? CAI_TOOL_REGISTRY_IMPL(registry) : NULL;
@@ -1971,7 +1993,7 @@ int cai_tool_registry_run_mcp(cai_tool_registry *registry, const char *name,
     rc = cai_tool_registry_run_spooled(registry, name, &doc.input, output,
                                        error);
   }
-  CAI_LJ->cleanup(CAI_LJ, &map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &map, &doc, NULL);
   return rc;
 }
 
@@ -2281,14 +2303,19 @@ int cai_tool_registry_run(cai_tool_registry *registry, const char *name,
   }
   memset(params, 0, entry->params_map->struct_size);
   memset(result, 0, entry->result_map->struct_size);
-  CAI_LJ->init(CAI_LJ, entry->params_map, params);
-  CAI_LJ->init(CAI_LJ, entry->result_map, result);
+  rc = cai_tool_records_init(entry, params, result, error);
+  if (rc != CAI_OK) {
+    cai_free_mem(NULL, walk);
+    cai_free_mem(NULL, result);
+    cai_free_mem(NULL, params);
+    return rc;
+  }
   lonejson_error_init(&json_error);
   status = CAI_LJ->parse_cstr(CAI_LJ, entry->params_map, params, arguments_json,
                               &json_error);
   if (status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, entry->params_map, params);
-    CAI_LJ->cleanup(CAI_LJ, entry->result_map, result);
+    CAI_LJ->cleanup(CAI_LJ, entry->params_map, params, NULL);
+    CAI_LJ->cleanup(CAI_LJ, entry->result_map, result, NULL);
     cai_free_mem(NULL, walk);
     cai_free_mem(NULL, result);
     cai_free_mem(NULL, params);
@@ -2310,7 +2337,7 @@ int cai_tool_registry_run(cai_tool_registry *registry, const char *name,
       entry->result_commit(entry->context, result);
     }
   }
-  CAI_LJ->cleanup(CAI_LJ, entry->params_map, params);
+  CAI_LJ->cleanup(CAI_LJ, entry->params_map, params, NULL);
   cai_tool_result_cleanup_plain(entry->result_map, result, walk);
   cai_free_mem(NULL, walk);
   cai_free_mem(NULL, result);
@@ -2465,13 +2492,18 @@ int cai_tool_registry_run_spooled(cai_tool_registry *registry, const char *name,
   }
   memset(params, 0, entry->params_map->struct_size);
   memset(result, 0, entry->result_map->struct_size);
-  CAI_LJ->init(CAI_LJ, entry->params_map, params);
-  CAI_LJ->init(CAI_LJ, entry->result_map, result);
+  rc = cai_tool_records_init(entry, params, result, error);
+  if (rc != CAI_OK) {
+    cai_free_mem(NULL, walk);
+    cai_free_mem(NULL, result);
+    cai_free_mem(NULL, params);
+    return rc;
+  }
   reader.cursor = *arguments_json;
   lonejson_error_init(&json_error);
   if (reader.cursor.rewind(&reader.cursor, &json_error) != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, entry->params_map, params);
-    CAI_LJ->cleanup(CAI_LJ, entry->result_map, result);
+    CAI_LJ->cleanup(CAI_LJ, entry->params_map, params, NULL);
+    CAI_LJ->cleanup(CAI_LJ, entry->result_map, result, NULL);
     cai_free_mem(NULL, walk);
     cai_free_mem(NULL, result);
     cai_free_mem(NULL, params);
@@ -2482,8 +2514,8 @@ int cai_tool_registry_run_spooled(cai_tool_registry *registry, const char *name,
   status = CAI_LJ->parse_reader(CAI_LJ, entry->params_map, params,
                                 cai_tool_spooled_read, &reader, &json_error);
   if (status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, entry->params_map, params);
-    CAI_LJ->cleanup(CAI_LJ, entry->result_map, result);
+    CAI_LJ->cleanup(CAI_LJ, entry->params_map, params, NULL);
+    CAI_LJ->cleanup(CAI_LJ, entry->result_map, result, NULL);
     cai_free_mem(NULL, walk);
     cai_free_mem(NULL, result);
     cai_free_mem(NULL, params);
@@ -2505,7 +2537,7 @@ int cai_tool_registry_run_spooled(cai_tool_registry *registry, const char *name,
       entry->result_commit(entry->context, result);
     }
   }
-  CAI_LJ->cleanup(CAI_LJ, entry->params_map, params);
+  CAI_LJ->cleanup(CAI_LJ, entry->params_map, params, NULL);
   cai_tool_result_cleanup_plain(entry->result_map, result, walk);
   cai_free_mem(NULL, walk);
   cai_free_mem(NULL, result);

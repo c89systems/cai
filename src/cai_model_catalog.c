@@ -548,11 +548,12 @@ static int cai_model_catalog_parse_provider(cai_client *client,
 
   impl = CAI_CLIENT_IMPL(client);
   memset(&doc, 0, sizeof(doc));
-  CAI_LJ->init(CAI_LJ, &cai_provider_catalog_map, &doc);
-  status = CAI_LJ->parse_cstr(CAI_LJ, &cai_provider_catalog_map, &doc, json,
-                              &json_error);
+  status = CAI_LJ->init(CAI_LJ, &cai_provider_catalog_map, &doc, &json_error);
+  if (status == LONEJSON_STATUS_OK)
+    status = CAI_LJ->parse_cstr(CAI_LJ, &cai_provider_catalog_map, &doc, json,
+                                &json_error);
   if (status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 fallback ? "invalid model metadata JSON"
                                          : "invalid provider model catalog",
@@ -574,7 +575,7 @@ static int cai_model_catalog_parse_provider(cai_client *client,
   status = CAI_LJ->visit_path_value_cstr(CAI_LJ, json, &presence_visitor,
                                          &presence, &json_error);
   if (status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "invalid model catalog choices",
                                 json_error.message);
@@ -583,7 +584,7 @@ static int cai_model_catalog_parse_provider(cai_client *client,
   for (i = 0U; i < model_count; i++) {
     size_t n, k;
     if (models[i].reasoning_efforts.count > 64U) {
-      CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc);
+      CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc, NULL);
       return cai_set_error(error, CAI_ERR_INVALID,
                            "too many reasoning efforts");
     }
@@ -591,13 +592,13 @@ static int cai_model_catalog_parse_provider(cai_client *client,
       const char *effort = models[i].reasoning_efforts.items[n];
       if (effort == NULL || effort[0] == '\0' || strlen(effort) > 64U ||
           strpbrk(effort, " \t\r\n") != NULL) {
-        CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc);
+        CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc, NULL);
         return cai_set_error(error, CAI_ERR_INVALID,
                              "invalid reasoning effort");
       }
       for (k = 0U; k < n; k++)
         if (strcmp(effort, models[i].reasoning_efforts.items[k]) == 0) {
-          CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc);
+          CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc, NULL);
           return cai_set_error(error, CAI_ERR_INVALID,
                                "duplicate reasoning effort");
         }
@@ -608,14 +609,14 @@ static int cai_model_catalog_parse_provider(cai_client *client,
         models[i].context_window_tokens < 0LL ||
         models[i].auto_compact_token_limit < 0LL ||
         models[i].pricing.input < 0.0 || models[i].pricing.output < 0.0) {
-      CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc);
+      CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc, NULL);
       return cai_set_error(error, CAI_ERR_INVALID,
                            "invalid model metadata entry");
     }
     for (j = 0U; j < i; j++) {
       if (strcmp(models[j].id, models[i].id) == 0 &&
           (!fallback || strcmp(models[j].provider, models[i].provider) == 0)) {
-        CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc);
+        CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc, NULL);
         return cai_set_error(error, CAI_ERR_INVALID,
                              "duplicate provider model metadata entry");
       }
@@ -673,7 +674,7 @@ static int cai_model_catalog_parse_provider(cai_client *client,
                                       &source, error);
     selected_count++;
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_provider_catalog_map, &doc, NULL);
   if (rc != CAI_OK) {
     cai_model_catalog_close(catalog);
     return rc;

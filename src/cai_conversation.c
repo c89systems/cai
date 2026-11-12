@@ -157,23 +157,24 @@ int cai_conversation_parse_json(const char *json, cai_conversation **out,
                          "provider session JSON is required");
   }
   memset(&doc, 0, sizeof(doc));
-  CAI_LJ->init(CAI_LJ, &cai_conversation_map, &doc);
-  status = CAI_LJ->parse_cstr(CAI_LJ, &cai_conversation_map, &doc, json,
-                              &json_error);
+  status = CAI_LJ->init(CAI_LJ, &cai_conversation_map, &doc, &json_error);
+  if (status == LONEJSON_STATUS_OK)
+    status = CAI_LJ->parse_cstr(CAI_LJ, &cai_conversation_map, &doc, json,
+                                &json_error);
   if (status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to parse provider session JSON",
                                 json_error.message);
   }
   if (doc.id == NULL || doc.object == NULL) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc, NULL);
     return cai_set_error(error, CAI_ERR_PROTOCOL,
                          "provider session JSON is missing id or object");
   }
   conversation = (cai_conversation *)cai_alloc(NULL, sizeof(*conversation));
   if (conversation == NULL) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc, NULL);
     return cai_set_error(error, CAI_ERR_NOMEM,
                          "failed to allocate provider session");
   }
@@ -183,11 +184,11 @@ int cai_conversation_parse_json(const char *json, cai_conversation **out,
   conversation->object_value = cai_strdup(NULL, doc.object);
   if (conversation->id_value == NULL || conversation->object_value == NULL) {
     cai_conversation_destroy(conversation);
-    CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc, NULL);
     return cai_set_error(error, CAI_ERR_NOMEM,
                          "failed to allocate parsed provider session");
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_conversation_map, &doc, NULL);
   *out = conversation;
   return CAI_OK;
 }

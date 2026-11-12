@@ -1102,19 +1102,24 @@ static int cai_local_replay_complete_event(void *context, int fd,
   }
   record[length] = '\0';
   memset(&doc, 0, sizeof(doc));
-  CAI_LJ->init(CAI_LJ, &cai_local_event_map, &doc);
+  if (CAI_LJ->init(CAI_LJ, &cai_local_event_map, &doc, &json_error) !=
+      LONEJSON_STATUS_OK) {
+    free(record);
+    return cai_set_error_detail(error, CAI_ERR_NOMEM,
+                                "initialize session event", json_error.message);
+  }
   lonejson_error_init(&json_error);
   status = CAI_LJ->parse_buffer(CAI_LJ, &cai_local_event_map, &doc, record,
                                 length, &json_error);
   free(record);
   if (status != LONEJSON_STATUS_OK || strcmp(doc.record_type, "event") != 0) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_local_event_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_local_event_map, &doc, NULL);
     return cai_set_error_detail(error, CAI_ERR_INVALID,
                                 "invalid session event record",
                                 json_error.message);
   }
   if (doc.sequence == 0U || doc.sequence <= replay->previous_sequence) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_local_event_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_local_event_map, &doc, NULL);
     return cai_set_error(error, CAI_ERR_INVALID,
                          "session event sequences must be strictly increasing");
   }
@@ -1128,7 +1133,7 @@ static int cai_local_replay_complete_event(void *context, int fd,
     event.utc_offset_seconds = doc.utc_offset_seconds;
     rc = replay->callback(replay->callback_context, &event, error);
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_local_event_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_local_event_map, &doc, NULL);
   return rc;
 }
 

@@ -924,19 +924,19 @@ static int cai_auth_jwt_exp(const char *jwt, long long *out_exp,
     return error != NULL ? error->code : CAI_ERR_PROTOCOL;
   }
   memset(&claims, 0, sizeof(claims));
-  CAI_LJ->init(CAI_LJ, &cai_auth_jwt_claims_map, &claims);
-  lonejson_error_init(&json_error);
-  status = CAI_LJ->parse_cstr(CAI_LJ, &cai_auth_jwt_claims_map, &claims,
-                              payload, &json_error);
+  status = CAI_LJ->init(CAI_LJ, &cai_auth_jwt_claims_map, &claims, &json_error);
+  if (status == LONEJSON_STATUS_OK)
+    status = CAI_LJ->parse_cstr(CAI_LJ, &cai_auth_jwt_claims_map, &claims,
+                                payload, &json_error);
   cai_free_mem(NULL, payload);
   if (status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_auth_jwt_claims_map, &claims);
+    CAI_LJ->cleanup(CAI_LJ, &cai_auth_jwt_claims_map, &claims, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to parse JWT claims",
                                 json_error.message);
   }
   *out_exp = claims.exp;
-  CAI_LJ->cleanup(CAI_LJ, &cai_auth_jwt_claims_map, &claims);
+  CAI_LJ->cleanup(CAI_LJ, &cai_auth_jwt_claims_map, &claims, NULL);
   return CAI_OK;
 }
 
@@ -957,7 +957,11 @@ static int cai_chatgpt_auth_parse_file(cai_chatgpt_auth_impl *auth,
 
   json = NULL;
   memset(doc, 0, sizeof(*doc));
-  CAI_LJ->init(CAI_LJ, &cai_auth_file_map, doc);
+  if (CAI_LJ->init(CAI_LJ, &cai_auth_file_map, doc, &json_error) !=
+      LONEJSON_STATUS_OK)
+    return cai_set_error_detail(error, CAI_ERR_NOMEM,
+                                "initialize authentication record",
+                                json_error.message);
   rc = auth->has_storage
            ? cai_auth_read_storage(&auth->storage, auth->storage_key, &json,
                                    error)
@@ -1014,7 +1018,7 @@ static int cai_chatgpt_auth_load(cai_chatgpt_auth_impl *auth,
   if (rc == CAI_OK) {
     rc = cai_chatgpt_auth_apply_doc(auth, &doc, error);
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_auth_file_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_auth_file_map, &doc, NULL);
   return rc;
 }
 
@@ -1031,7 +1035,7 @@ static int cai_chatgpt_auth_reload_changed(cai_chatgpt_auth_impl *auth,
   *out_changed = 0;
   rc = cai_chatgpt_auth_parse_file(auth, &doc, error);
   if (rc != CAI_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_auth_file_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_auth_file_map, &doc, NULL);
     return rc;
   }
   changed =
@@ -1042,14 +1046,14 @@ static int cai_chatgpt_auth_reload_changed(cai_chatgpt_auth_impl *auth,
   if (changed && auth->account_id != NULL &&
       (doc.tokens.account_id == NULL ||
        strcmp(auth->account_id, doc.tokens.account_id) != 0)) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_auth_file_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_auth_file_map, &doc, NULL);
     return cai_set_error(error, CAI_ERR_INVALID,
                          "auth JSON changed to a different ChatGPT account");
   }
   if (changed) {
     rc = cai_chatgpt_auth_apply_doc(auth, &doc, error);
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_auth_file_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_auth_file_map, &doc, NULL);
   if (rc == CAI_OK) {
     *out_changed = changed;
   }
@@ -1632,14 +1636,15 @@ int cai_chatgpt_auth_refresh(cai_chatgpt_auth *auth, cai_error *error) {
         NULL, NULL, NULL);
   }
   memset(&response, 0, sizeof(response));
-  CAI_LJ->init(CAI_LJ, &cai_auth_refresh_response_map, &response);
-  lonejson_error_init(&json_error);
-  json_status = CAI_LJ->parse_cstr(CAI_LJ, &cai_auth_refresh_response_map,
-                                   &response, response_json, &json_error);
+  json_status = CAI_LJ->init(CAI_LJ, &cai_auth_refresh_response_map, &response,
+                             &json_error);
+  if (json_status == LONEJSON_STATUS_OK)
+    json_status = CAI_LJ->parse_cstr(CAI_LJ, &cai_auth_refresh_response_map,
+                                     &response, response_json, &json_error);
   cai_auth_secure_clear(response_json);
   cai_free_mem(NULL, response_json);
   if (json_status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_auth_refresh_response_map, &response);
+    CAI_LJ->cleanup(CAI_LJ, &cai_auth_refresh_response_map, &response, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to parse refresh response",
                                 json_error.message);
@@ -1667,7 +1672,7 @@ int cai_chatgpt_auth_refresh(cai_chatgpt_auth *auth, cai_error *error) {
   if (rc == CAI_OK) {
     rc = cai_chatgpt_auth_save(impl, error);
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_auth_refresh_response_map, &response);
+  CAI_LJ->cleanup(CAI_LJ, &cai_auth_refresh_response_map, &response, NULL);
   return rc;
 }
 
@@ -2286,20 +2291,21 @@ static int cai_chatgpt_login_exchange_code(cai_chatgpt_login_impl *login,
                               NULL, NULL, NULL);
   }
   memset(&response, 0, sizeof(response));
-  CAI_LJ->init(CAI_LJ, &cai_auth_refresh_response_map, &response);
-  lonejson_error_init(&json_error);
-  json_status = CAI_LJ->parse_cstr(CAI_LJ, &cai_auth_refresh_response_map,
-                                   &response, response_json, &json_error);
+  json_status = CAI_LJ->init(CAI_LJ, &cai_auth_refresh_response_map, &response,
+                             &json_error);
+  if (json_status == LONEJSON_STATUS_OK)
+    json_status = CAI_LJ->parse_cstr(CAI_LJ, &cai_auth_refresh_response_map,
+                                     &response, response_json, &json_error);
   cai_auth_secure_clear(response_json);
   cai_free_mem(NULL, response_json);
   if (json_status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_auth_refresh_response_map, &response);
+    CAI_LJ->cleanup(CAI_LJ, &cai_auth_refresh_response_map, &response, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to parse code exchange response",
                                 json_error.message);
   }
   if (response.access_token == NULL || response.refresh_token == NULL) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_auth_refresh_response_map, &response);
+    CAI_LJ->cleanup(CAI_LJ, &cai_auth_refresh_response_map, &response, NULL);
     return cai_set_error(error, CAI_ERR_PROTOCOL,
                          "code exchange response omitted required tokens");
   }
@@ -2314,7 +2320,7 @@ static int cai_chatgpt_login_exchange_code(cai_chatgpt_login_impl *login,
   auth_view.refresh_token = response.refresh_token;
   auth_view.account_id = response.account_id;
   rc = cai_chatgpt_auth_save(&auth_view, error);
-  CAI_LJ->cleanup(CAI_LJ, &cai_auth_refresh_response_map, &response);
+  CAI_LJ->cleanup(CAI_LJ, &cai_auth_refresh_response_map, &response, NULL);
   return rc;
 }
 

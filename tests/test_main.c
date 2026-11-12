@@ -4438,9 +4438,17 @@ static void test_lonejson_nested_mapped_array_stream(test_state *state) {
   memset(&board_handler, 0, sizeof(board_handler));
   memset(&item_handler, 0, sizeof(item_handler));
   lonejson_error_init(&error);
-  CAI_LJ->init(CAI_LJ, &nested_stream_store_map, &store);
-  CAI_LJ->init(CAI_LJ, &nested_stream_board_map, &stream_state.board);
-  CAI_LJ->init(CAI_LJ, &nested_stream_item_map, &stream_state.item);
+  expect_int(state, "nested_stream_store_init",
+             CAI_LJ->init(CAI_LJ, &nested_stream_store_map, &store, NULL),
+             LONEJSON_STATUS_OK);
+  expect_int(
+      state, "nested_stream_board_init",
+      CAI_LJ->init(CAI_LJ, &nested_stream_board_map, &stream_state.board, NULL),
+      LONEJSON_STATUS_OK);
+  expect_int(
+      state, "nested_stream_item_init",
+      CAI_LJ->init(CAI_LJ, &nested_stream_item_map, &stream_state.item, NULL),
+      LONEJSON_STATUS_OK);
   lonejson_mapped_array_stream_init(&store.boards);
   lonejson_mapped_array_stream_init(&stream_state.board.items);
   item_handler.item_map = &nested_stream_item_map;
@@ -4466,9 +4474,9 @@ static void test_lonejson_nested_mapped_array_stream(test_state *state) {
              2L);
   expect_int(state, "lonejson_nested_mapped_array_items", stream_state.items,
              3L);
-  CAI_LJ->cleanup(CAI_LJ, &nested_stream_store_map, &store);
-  CAI_LJ->cleanup(CAI_LJ, &nested_stream_board_map, &stream_state.board);
-  CAI_LJ->cleanup(CAI_LJ, &nested_stream_item_map, &stream_state.item);
+  CAI_LJ->cleanup(CAI_LJ, &nested_stream_store_map, &store, NULL);
+  CAI_LJ->cleanup(CAI_LJ, &nested_stream_board_map, &stream_state.board, NULL);
+  CAI_LJ->cleanup(CAI_LJ, &nested_stream_item_map, &stream_state.item, NULL);
 }
 
 static lonejson_status
@@ -4820,6 +4828,27 @@ static void test_lonejson_selected_array_rewrite(test_state *state) {
   unlink(output_path);
 }
 
+static lonejson_status (*test_record_init_real)(lonejson *,
+                                                const lonejson_map *, void *,
+                                                lonejson_error *);
+static int test_record_init_countdown;
+static lonejson_status test_record_init_failure;
+
+/** Fail either mapped initialization, before the callback can own results. */
+static lonejson_status test_record_init(lonejson *runtime,
+                                        const lonejson_map *map, void *record,
+                                        lonejson_error *error) {
+  if (--test_record_init_countdown == 0) {
+    lonejson_error_init(error);
+    if (error != NULL) {
+      error->code = test_record_init_failure;
+      strcpy(error->message, "injected record initialization failure");
+    }
+    return test_record_init_failure;
+  }
+  return test_record_init_real(runtime, map, record, error);
+}
+
 static void test_tool_registry(test_state *state) {
   static const char schema[] =
       "{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"},"
@@ -5010,6 +5039,43 @@ static void test_tool_registry(test_state *state) {
              CAI_OK);
   expect_int(state, "tool_sink",
              cai_sink_from_callbacks(&sink_callbacks, &sink, &error), CAI_OK);
+  {
+    lonejson_spooled arguments;
+    lonejson_error json_error;
+    int spooled, stage, invalid, rc;
+    const char *input = "{\"city\":\"Malmo\",\"days\":3}";
+    CAI_LJ->spooled_init(CAI_LJ, &arguments);
+    expect_int(state, "tool_init_failure_arguments",
+               arguments.append(&arguments, input, strlen(input), &json_error),
+               LONEJSON_STATUS_OK);
+    test_record_init_real = CAI_LJ->init;
+    for (spooled = 0; spooled < 2; spooled++) {
+      for (stage = 1; stage <= 2; stage++) {
+        for (invalid = 0; invalid < 2; invalid++) {
+          test_record_init_countdown = stage;
+          test_record_init_failure = invalid
+                                         ? LONEJSON_STATUS_INVALID_ARGUMENT
+                                         : LONEJSON_STATUS_ALLOCATION_FAILED;
+          CAI_LJ->init = test_record_init;
+          rc = spooled ? registry->run_spooled(registry, "secure_weather",
+                                               &arguments, sink, &error)
+                       : registry->run(registry, "secure_weather", input, sink,
+                                       &error);
+          CAI_LJ->init = test_record_init_real;
+          expect_int(state, "tool_init_failure_status", rc,
+                     invalid ? CAI_ERR_INVALID : CAI_ERR_NOMEM);
+          expect_int(state, "tool_init_failure_no_callback",
+                     secure_state.called, 0);
+          expect_int(state, "tool_init_failure_no_output", writer.length, 0);
+          expect_str(state, "tool_init_failure_detail", error.detail,
+                     "injected record initialization failure");
+          cai_error_cleanup(&error);
+          cai_error_init(&error);
+        }
+      }
+    }
+    arguments.cleanup(&arguments);
+  }
   expect_int(state, "tool_run_typed",
              registry->run(registry, "weather",
                            "{\"city\":\"Malmo\","
@@ -7947,7 +8013,7 @@ static void test_response_json(test_state *state) {
              output->write_json(output, &parsed_output_map, &parsed, &error),
              CAI_OK);
   expect_str(state, "output_write_json_value", parsed.answer, "structured");
-  CAI_LJ->cleanup(CAI_LJ, &parsed_output_map, &parsed);
+  CAI_LJ->cleanup(CAI_LJ, &parsed_output_map, &parsed, NULL);
   output->close(output);
   cai_response_destroy(response);
   cai_error_cleanup(&error);
@@ -38200,7 +38266,7 @@ static void test_exec_tool(test_state *state) {
                  parsed.output_truncated, 1);
       expect_int(state, "exec_output_cap_original", parsed.original_byte_count,
                  9);
-      CAI_LJ->cleanup(CAI_LJ, &parsed_exec_result_map, &parsed);
+      CAI_LJ->cleanup(CAI_LJ, &parsed_exec_result_map, &parsed, NULL);
     }
   }
   cai_error_cleanup(&error);
@@ -38230,7 +38296,7 @@ static void test_exec_tool(test_state *state) {
                  parsed.stderr_truncated, 1);
       expect_int(state, "exec_combined_output_cap_original",
                  parsed.original_byte_count, 16);
-      CAI_LJ->cleanup(CAI_LJ, &parsed_exec_result_map, &parsed);
+      CAI_LJ->cleanup(CAI_LJ, &parsed_exec_result_map, &parsed, NULL);
     }
   }
   cai_error_cleanup(&error);
@@ -38255,7 +38321,7 @@ static void test_exec_tool(test_state *state) {
                  parsed.output_truncated, 1);
       expect_int(state, "exec_per_call_output_cap_original",
                  parsed.original_byte_count, 10);
-      CAI_LJ->cleanup(CAI_LJ, &parsed_exec_result_map, &parsed);
+      CAI_LJ->cleanup(CAI_LJ, &parsed_exec_result_map, &parsed, NULL);
     }
   }
   cai_error_cleanup(&error);

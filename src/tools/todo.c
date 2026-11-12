@@ -384,7 +384,9 @@ LONEJSON_MAP_DEFINE(cai_todo_result_map, cai_todo_result,
 
 static void cai_todo_result_init(cai_todo_result *result) {
   memset(result, 0, sizeof(*result));
-  CAI_LJ->init(CAI_LJ, &cai_todo_result_map, result);
+  CAI_LJ->spooled_init(CAI_LJ, &result->description);
+  result->items.elem_size = sizeof(cai_todo_result_item);
+  result->boards.elem_size = sizeof(cai_todo_result_board);
 }
 
 static const lonejson_field cai_todo_board_fields[] = {
@@ -1396,7 +1398,6 @@ static int cai_todo_item_init(cai_todo_item *item) {
   memset(item, 0, sizeof(*item));
   CAI_LJ->spooled_init(CAI_LJ, &item->title);
   CAI_LJ->spooled_init(CAI_LJ, &item->description);
-  CAI_LJ->init(CAI_LJ, &cai_todo_item_map, item);
   return CAI_OK;
 }
 
@@ -1424,12 +1425,11 @@ static void cai_todo_item_parse_init(cai_todo_item *item) {
 }
 
 static void cai_todo_item_parse_cleanup(cai_todo_item *item) {
-  CAI_LJ->cleanup(CAI_LJ, &cai_todo_item_map, item);
+  CAI_LJ->cleanup(CAI_LJ, &cai_todo_item_map, item, NULL);
 }
 
 static void cai_todo_board_init(cai_todo_board *board) {
   memset(board, 0, sizeof(*board));
-  CAI_LJ->init(CAI_LJ, &cai_todo_board_map, board);
 }
 
 static void cai_todo_board_cleanup(cai_todo_board *board) {
@@ -1447,7 +1447,7 @@ static void cai_todo_board_parse_init(cai_todo_board *board) {
 }
 
 static void cai_todo_board_parse_cleanup(cai_todo_board *board) {
-  CAI_LJ->cleanup(CAI_LJ, &cai_todo_board_map, board);
+  CAI_LJ->cleanup(CAI_LJ, &cai_todo_board_map, board, NULL);
 }
 
 static int cai_todo_add_result_item(cai_todo_result *result,
@@ -3627,7 +3627,7 @@ int cai_todo_select(cai_todo *self, const char *name, int create,
     rc = cai_todo_run_locked(ctx, &args, &result, error);
     if (rc == CAI_OK && !result.ok)
       rc = cai_set_error(error, CAI_ERR_INVALID, result.message);
-    CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result);
+    CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result, NULL);
     cai_todo_result_init(&result);
   }
   if (rc == CAI_OK) {
@@ -3648,7 +3648,7 @@ int cai_todo_select(cai_todo *self, const char *name, int create,
                              : cai_status_string(rc));
   }
   pthread_mutex_unlock(&ctx->lock);
-  CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result);
+  CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result, NULL);
   cai_free_mem(NULL, args.board_name);
   return rc;
 }
@@ -3725,7 +3725,7 @@ int cai_todo_http_snapshot(cai_todo *self, const char *board, int head,
       lonejson_free(json);
     }
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result);
+  CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result, NULL);
   cai_free_mem(NULL, args.board_name);
   return written != CAI_OK ? written : rc;
 }
@@ -3765,8 +3765,8 @@ int cai_todo_call(cai_todo *self, cai_source *arguments, cai_sink *output,
                : cai_set_error_detail(error, CAI_ERR_TRANSPORT,
                                       "write kanban result", local.message);
   }
-  lonejson_cleanup(&cai_todo_args_map, &args);
-  CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result);
+  lonejson_cleanup(&cai_todo_args_map, &args, NULL);
+  CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result, NULL);
   lonejson_free(json);
   return rc;
 }

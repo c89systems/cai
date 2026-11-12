@@ -74,7 +74,7 @@ static lonejson_status cai_cut_discard(void *context, const void *bytes,
 static void cai_cut_record_close(cai_cut_plan *p) {
   if (p->initialized) {
     lonejson_curl_parse_cleanup(&p->parser);
-    lonejson_cleanup(&cai_cut_map, &p->record);
+    lonejson_cleanup(&cai_cut_map, &p->record, NULL);
     p->initialized = 0;
   }
 }

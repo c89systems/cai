@@ -911,20 +911,24 @@ static int cai_mcp_parse_call_params(const lonejson_spooled *params_spool,
   lonejson_error json_error;
 
   memset(&params, 0, sizeof(params));
-  CAI_LJ_PRESERVE->init(CAI_LJ_PRESERVE, &cai_mcp_call_params_map, &params);
+  if (CAI_LJ_PRESERVE->init(CAI_LJ_PRESERVE, &cai_mcp_call_params_map, &params,
+                            &json_error) != LONEJSON_STATUS_OK)
+    return cai_set_error_detail(error, CAI_ERR_NOMEM,
+                                "initialize mapped JSON record",
+                                json_error.message);
   lonejson_error_init(&json_error);
   CAI_LJ->spooled_init(CAI_LJ, arguments);
   if (params.arguments.methods->set_parse_sink(
           &params.arguments, cai_mcp_spool_sink, arguments, &json_error) !=
       LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_call_params_map, &params);
+    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_call_params_map, &params, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to configure MCP arguments parser",
                                 json_error.message);
   }
   reader.cursor = *params_spool;
   if (reader.cursor.rewind(&reader.cursor, &json_error) != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_call_params_map, &params);
+    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_call_params_map, &params, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to rewind MCP params",
                                 json_error.message);
@@ -932,7 +936,7 @@ static int cai_mcp_parse_call_params(const lonejson_spooled *params_spool,
   if (CAI_LJ_PRESERVE->parse_reader(CAI_LJ_PRESERVE, &cai_mcp_call_params_map,
                                     &params, cai_mcp_spooled_read, &reader,
                                     &json_error) != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_call_params_map, &params);
+    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_call_params_map, &params, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to parse MCP tool call params",
                                 json_error.message);
@@ -940,18 +944,18 @@ static int cai_mcp_parse_call_params(const lonejson_spooled *params_spool,
   if (arguments->size_fn(arguments) == 0U &&
       arguments->append(arguments, "{}", 2U, &json_error) !=
           LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_call_params_map, &params);
+    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_call_params_map, &params, NULL);
     return cai_set_error_detail(error, CAI_ERR_TRANSPORT,
                                 "failed to default MCP tool arguments",
                                 json_error.message);
   }
   *out_name = cai_strdup(NULL, params.name);
   if (*out_name == NULL) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_call_params_map, &params);
+    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_call_params_map, &params, NULL);
     return cai_set_error(error, CAI_ERR_NOMEM,
                          "failed to allocate MCP tool name");
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_mcp_call_params_map, &params);
+  CAI_LJ->cleanup(CAI_LJ, &cai_mcp_call_params_map, &params, NULL);
   return CAI_OK;
 }
 
@@ -1068,7 +1072,11 @@ static int cai_mcp_parse_request(cai_source *source, size_t limit,
   cai_mcp_source_reader reader;
   lonejson_error json_error;
 
-  CAI_LJ_PRESERVE->init(CAI_LJ_PRESERVE, &cai_mcp_jsonrpc_map, doc);
+  if (CAI_LJ_PRESERVE->init(CAI_LJ_PRESERVE, &cai_mcp_jsonrpc_map, doc,
+                            &json_error) != LONEJSON_STATUS_OK)
+    return cai_set_error_detail(error, CAI_ERR_NOMEM,
+                                "initialize mapped JSON record",
+                                json_error.message);
   lonejson_error_init(&json_error);
   if (doc->id.methods->set_parse_sink(&doc->id, cai_mcp_spool_sink, id_spool,
                                       &json_error) != LONEJSON_STATUS_OK ||
@@ -1101,15 +1109,18 @@ cai_mcp_parse_initialize_params(const lonejson_spooled *params_spool,
   lonejson_error json_error;
 
   memset(params, 0, sizeof(*params));
-  CAI_LJ_PRESERVE->init(CAI_LJ_PRESERVE, &cai_mcp_initialize_params_map,
-                        params);
+  if (CAI_LJ_PRESERVE->init(CAI_LJ_PRESERVE, &cai_mcp_initialize_params_map,
+                            params, &json_error) != LONEJSON_STATUS_OK)
+    return cai_set_error_detail(error, CAI_ERR_NOMEM,
+                                "initialize mapped JSON record",
+                                json_error.message);
   if (params_spool == NULL || params_spool->size_fn(params_spool) == 0U) {
     return CAI_OK;
   }
   reader.cursor = *params_spool;
   lonejson_error_init(&json_error);
   if (reader.cursor.rewind(&reader.cursor, &json_error) != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_initialize_params_map, params);
+    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_initialize_params_map, params, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to rewind MCP initialize params",
                                 json_error.message);
@@ -1117,7 +1128,7 @@ cai_mcp_parse_initialize_params(const lonejson_spooled *params_spool,
   if (CAI_LJ_PRESERVE->parse_reader(
           CAI_LJ_PRESERVE, &cai_mcp_initialize_params_map, params,
           cai_mcp_spooled_read, &reader, &json_error) != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_initialize_params_map, params);
+    CAI_LJ->cleanup(CAI_LJ, &cai_mcp_initialize_params_map, params, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to parse MCP initialize params",
                                 json_error.message);
@@ -1540,7 +1551,8 @@ int cai_mcp_handler_handle_http(cai_mcp_handler *handler,
                                   created_session_id,
                                   sizeof(created_session_id), error);
       }
-      CAI_LJ->cleanup(CAI_LJ, &cai_mcp_initialize_params_map, &init_params);
+      CAI_LJ->cleanup(CAI_LJ, &cai_mcp_initialize_params_map, &init_params,
+                      NULL);
       if (rc != CAI_OK) {
         response->status = 500;
         cai_mcp_set_header(response, "content-type", "application/json", error);
@@ -1584,7 +1596,7 @@ int cai_mcp_handler_handle_http(cai_mcp_handler *handler,
 
 done:
   cai_sink_close(sse_sink);
-  CAI_LJ->cleanup(CAI_LJ, &cai_mcp_jsonrpc_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_mcp_jsonrpc_map, &doc, NULL);
   id_spool.cleanup(&id_spool);
   params_spool.cleanup(&params_spool);
   return rc;

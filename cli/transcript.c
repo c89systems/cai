@@ -140,7 +140,7 @@ static lonejson_status discard(void *context, const void *bytes, size_t count,
 }
 static void record_clear(cai_cli_transcript *t) {
   lonejson_curl_parse_cleanup(&t->parser);
-  lonejson_cleanup(&record_map, &t->record);
+  lonejson_cleanup(&record_map, &t->record, NULL);
   memset(&t->parser, 0, sizeof(t->parser));
   memset(&t->record, 0, sizeof(t->record));
   t->active = t->data_started = t->data_done = 0;

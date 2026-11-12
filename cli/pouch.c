@@ -1950,7 +1950,7 @@ static lonejson_status discard_json(void *context, const void *bytes,
 static void collection_event_cleanup(collection_events *read) {
   lonejson_curl_parse_cleanup(&read->parser);
   if (read->map != NULL)
-    lonejson_cleanup(read->map, &read->record);
+    lonejson_cleanup(read->map, &read->record, NULL);
   memset(&read->parser, 0, sizeof(read->parser));
   memset(&read->record, 0, sizeof(read->record));
   read->initialized = 0;

@@ -104,18 +104,22 @@ int cai_chatgpt_quota_parse_json(const char *json, cai_chatgpt_quota *out,
   memset(out, 0, sizeof(*out));
   lonejson_error_init(&json_error);
   memset(&doc, 0, sizeof(doc));
-  CAI_LJ->init(CAI_LJ, &cai_quota_map, &doc);
+  if (CAI_LJ->init(CAI_LJ, &cai_quota_map, &doc, &json_error) !=
+      LONEJSON_STATUS_OK)
+    return cai_set_error_detail(error, CAI_ERR_NOMEM,
+                                "initialize mapped JSON record",
+                                json_error.message);
   status = lonejson_json_value_enable_parse_capture(&doc.credits.balance,
                                                     &json_error);
   if (status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_quota_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_quota_map, &doc, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to capture ChatGPT credit balance",
                                 json_error.message);
   }
   status = CAI_LJ->parse_cstr(CAI_LJ, &cai_quota_map, &doc, json, &json_error);
   if (status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_quota_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_quota_map, &doc, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to parse ChatGPT quota",
                                 json_error.message);
@@ -134,7 +138,7 @@ int cai_chatgpt_quota_parse_json(const char *json, cai_chatgpt_quota *out,
     if (balance_length > 0U) {
       numeric_locale = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
       if (numeric_locale == (locale_t)0) {
-        CAI_LJ->cleanup(CAI_LJ, &cai_quota_map, &doc);
+        CAI_LJ->cleanup(CAI_LJ, &cai_quota_map, &doc, NULL);
         return cai_set_error(error, CAI_ERR_NOMEM,
                              "failed to create credit balance numeric locale");
       }
@@ -149,7 +153,7 @@ int cai_chatgpt_quota_parse_json(const char *json, cai_chatgpt_quota *out,
       }
     }
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_quota_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_quota_map, &doc, NULL);
   return CAI_OK;
 }
 

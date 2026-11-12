@@ -126,11 +126,12 @@ int cai_cli_review_format(const char *json, size_t length,
   parser = lonejson_new(NULL, &error);
   if (parser == NULL)
     return -1;
-  lonejson_init(parser, &report_map, &report);
-  status =
-      lonejson_parse_buffer(parser, &report_map, &report, json, length, &error);
+  status = lonejson_init(parser, &report_map, &report, &error);
+  if (status == LONEJSON_STATUS_OK)
+    status = lonejson_parse_buffer(parser, &report_map, &report, json, length,
+                                   &error);
   if (status != LONEJSON_STATUS_OK) {
-    lonejson_cleanup(&report_map, &report);
+    lonejson_cleanup(&report_map, &report, NULL);
     lonejson_free(parser);
     return -1;
   }
@@ -138,7 +139,7 @@ int cai_cli_review_format(const char *json, size_t length,
   buffer_length = 0U;
   stream = open_memstream(&buffer, &buffer_length);
   if (stream == NULL) {
-    lonejson_cleanup(&report_map, &report);
+    lonejson_cleanup(&report_map, &report, NULL);
     lonejson_free(parser);
     return -1;
   }
@@ -166,7 +167,7 @@ int cai_cli_review_format(const char *json, size_t length,
   rc = ferror(stream) ? -1 : 0;
   if (fclose(stream) != 0)
     rc = -1;
-  lonejson_cleanup(&report_map, &report);
+  lonejson_cleanup(&report_map, &report, NULL);
   lonejson_free(parser);
   if (rc != 0) {
     free(buffer);

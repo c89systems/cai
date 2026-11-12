@@ -105,7 +105,7 @@ typedef struct prompt_read {
 } prompt_read;
 static void prompt_read_cleanup(prompt_read *read) {
   lonejson_curl_parse_cleanup(&read->parser);
-  lonejson_cleanup(&prompt_map, &read->record);
+  lonejson_cleanup(&prompt_map, &read->record, NULL);
   memset(&read->parser, 0, sizeof(read->parser));
   memset(&read->record, 0, sizeof(read->record));
   read->initialized = 0;

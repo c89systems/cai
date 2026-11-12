@@ -318,8 +318,8 @@ static int control_read(chrome_host *h, const char *executable,
     drop_client(h);
   }
 done:
-  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_stop_map, &request);
-  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_rpc_map, &rpc);
+  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_stop_map, &request, NULL);
+  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_rpc_map, &rpc, NULL);
   free(params);
   frame_clear(&h->control_frame);
   return rc;
@@ -523,8 +523,8 @@ static int dispatch_client(chrome_host *h, const char *json, cai_error *error) {
     h->pending_deadline = cai_chrome_now_ms() + 60000LL;
   }
 done:
-  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &identity_map, &identity);
-  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_rpc_map, &rpc);
+  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &identity_map, &identity, NULL);
+  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_rpc_map, &rpc, NULL);
   free(params);
   free(id);
   return rc;
@@ -596,7 +596,7 @@ static int dispatch_extension(chrome_host *h, const char *json,
     free(id);
   }
 done:
-  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_rpc_map, &rpc);
+  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_rpc_map, &rpc, NULL);
   return rc;
 }
 int cai_chrome_native_host_run(const char *origin, pslog_logger *logger,

@@ -421,7 +421,7 @@ void cai_input_checkpoint_close(cai_input_checkpoint_restore *restore) {
   lonejson_curl_parse_cleanup(&restore->parser);
   if (restore->json != NULL) {
     restore->json->cleanup(restore->json, &input_checkpoint_parse_map,
-                           &restore->document);
+                           &restore->document, NULL);
     lonejson_free(restore->json);
   }
   cai_input_queue_close(restore->queue);

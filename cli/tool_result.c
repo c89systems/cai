@@ -232,9 +232,9 @@ void cai_cli_tool_result_close(cai_cli_tool_result *r) {
       lonejson_free(r->stream->json);
       free(r->stream);
     }
-    lonejson_cleanup(&result_map, &r->doc);
-    lonejson_cleanup(&context_map, &r->context);
-    lonejson_cleanup(&network_map, &r->network);
+    lonejson_cleanup(&result_map, &r->doc, NULL);
+    lonejson_cleanup(&context_map, &r->context, NULL);
+    lonejson_cleanup(&network_map, &r->network, NULL);
     free(r);
   }
 }

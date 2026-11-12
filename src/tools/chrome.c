@@ -490,7 +490,7 @@ static int chrome_callback(void *context, const void *arguments, void *output,
                    image.data);
       }
     }
-    CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &image_map, &image);
+    CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &image_map, &image, NULL);
     if (rc == CAI_OK) {
       cai_free_mem(NULL, reply);
       reply = cai_strdup(
@@ -558,7 +558,7 @@ static int chrome_raw_callback(void *context, const char *arguments,
     else
       rc = cai_sink_write(output, json, strlen(json), error);
   }
-  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &args_map, &args);
+  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &args_map, &args, NULL);
   CAI_LJ_CHROME->json_value_cleanup(CAI_LJ_CHROME, &result.result);
   cai_free_mem(NULL, result.status);
   cai_free_mem(NULL, json);

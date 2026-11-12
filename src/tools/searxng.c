@@ -489,9 +489,21 @@ static int cai_searxng_parse(lonejson_spooled *json,
   memset(&infobox_item, 0, sizeof(infobox_item));
   memset(&result_handler, 0, sizeof(result_handler));
   memset(&infobox_handler, 0, sizeof(infobox_handler));
-  CAI_LJ->init(CAI_LJ, &cai_searxng_response_map, doc);
-  CAI_LJ->init(CAI_LJ, &cai_searxng_item_map, &result_item);
-  CAI_LJ->init(CAI_LJ, &cai_searxng_item_map, &infobox_item);
+  if (CAI_LJ->init(CAI_LJ, &cai_searxng_response_map, doc, &json_error) !=
+      LONEJSON_STATUS_OK)
+    return cai_set_error_detail(error, CAI_ERR_NOMEM,
+                                "initialize mapped JSON record",
+                                json_error.message);
+  if (CAI_LJ->init(CAI_LJ, &cai_searxng_item_map, &result_item, &json_error) !=
+      LONEJSON_STATUS_OK)
+    return cai_set_error_detail(error, CAI_ERR_NOMEM,
+                                "initialize mapped JSON record",
+                                json_error.message);
+  if (CAI_LJ->init(CAI_LJ, &cai_searxng_item_map, &infobox_item, &json_error) !=
+      LONEJSON_STATUS_OK)
+    return cai_set_error_detail(error, CAI_ERR_NOMEM,
+                                "initialize mapped JSON record",
+                                json_error.message);
   lonejson_mapped_array_stream_init(&doc->results);
   lonejson_mapped_array_stream_init(&doc->infoboxes);
   result_handler.item_map = &cai_searxng_item_map;
@@ -505,9 +517,9 @@ static int cai_searxng_parse(lonejson_spooled *json,
   lonejson_error_init(&json_error);
   if (doc->results.set_handler(&doc->results, &result_handler, &json_error) !=
       LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &result_item);
-    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &infobox_item);
-    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_response_map, doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &result_item, NULL);
+    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &infobox_item, NULL);
+    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_response_map, doc, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to configure SearXNG result stream",
                                 json_error.message);
@@ -515,9 +527,9 @@ static int cai_searxng_parse(lonejson_spooled *json,
   lonejson_error_init(&json_error);
   if (doc->infoboxes.set_handler(&doc->infoboxes, &infobox_handler,
                                  &json_error) != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &result_item);
-    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &infobox_item);
-    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_response_map, doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &result_item, NULL);
+    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &infobox_item, NULL);
+    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_response_map, doc, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to configure SearXNG infobox stream",
                                 json_error.message);
@@ -525,9 +537,9 @@ static int cai_searxng_parse(lonejson_spooled *json,
   reader.cursor = *json;
   lonejson_error_init(&json_error);
   if (reader.cursor.rewind(&reader.cursor, &json_error) != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &result_item);
-    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &infobox_item);
-    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_response_map, doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &result_item, NULL);
+    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &infobox_item, NULL);
+    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_response_map, doc, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to rewind SearXNG response",
                                 json_error.message);
@@ -536,16 +548,16 @@ static int cai_searxng_parse(lonejson_spooled *json,
   if (CAI_LJ->parse_reader(CAI_LJ, &cai_searxng_response_map, doc,
                            cai_searxng_spool_read, &reader,
                            &json_error) != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &result_item);
-    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &infobox_item);
-    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_response_map, doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &result_item, NULL);
+    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &infobox_item, NULL);
+    CAI_LJ->cleanup(CAI_LJ, &cai_searxng_response_map, doc, NULL);
     cai_searxng_parse_state_cleanup(state);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "failed to parse SearXNG response JSON",
                                 json_error.message);
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &result_item);
-  CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &infobox_item);
+  CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &result_item, NULL);
+  CAI_LJ->cleanup(CAI_LJ, &cai_searxng_item_map, &infobox_item, NULL);
   return CAI_OK;
 }
 
@@ -644,7 +656,7 @@ static int cai_searxng_tool_callback(void *context, const void *params,
   }
   rc = cai_searxng_fill_result(ctx, args, &doc, &parse_state, out, error);
   cai_searxng_parse_state_cleanup(&parse_state);
-  CAI_LJ->cleanup(CAI_LJ, &cai_searxng_response_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_searxng_response_map, &doc, NULL);
   return rc;
 }
 

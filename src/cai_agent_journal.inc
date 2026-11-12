@@ -612,7 +612,7 @@ int cai_session_restore_journal_source(cai_session *session, cai_source *source,
                                                     &visitor, &restore, &local);
     result = lonejson_stream_next(stream, &record, &local);
     if (result == LONEJSON_STREAM_EOF) {
-      lonejson_cleanup(&cai_journal_record_map, &record);
+      lonejson_cleanup(&cai_journal_record_map, &record, NULL);
       break;
     }
     if (result != LONEJSON_STREAM_OBJECT)
@@ -686,7 +686,7 @@ int cai_session_restore_journal_source(cai_session *session, cai_source *source,
     } else if (strcmp(record.record_type, "event") != 0)
       rc = cai_set_error(error, CAI_ERR_INVALID,
                          "unknown session journal record");
-    lonejson_cleanup(&cai_journal_record_map, &record);
+    lonejson_cleanup(&cai_journal_record_map, &record, NULL);
     cai_input_checkpoint_close(restore.input_checkpoint);
   }
   if (stream != NULL)

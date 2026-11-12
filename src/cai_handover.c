@@ -662,7 +662,7 @@ static int handover_parser_bytes(handover_workspace *work, const char *data,
 
 static void handover_frame_cleanup(handover_workspace *work) {
   lonejson_curl_parse_cleanup(&work->parser);
-  lonejson_cleanup(&frame_map, &work->frame);
+  lonejson_cleanup(&frame_map, &work->frame, NULL);
   memset(&work->parser, 0, sizeof(work->parser));
   memset(&work->frame, 0, sizeof(work->frame));
 }

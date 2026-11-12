@@ -86,7 +86,7 @@ void cai_network_jsonl_feed(cai_network_jsonl *reader, void *bytes,
       else
         reader->stats.invalid_lines++;
       lonejson_curl_parse_cleanup(&reader->parser);
-      lonejson_cleanup(&observed_map, &reader->event);
+      lonejson_cleanup(&observed_map, &reader->event, NULL);
       memset(&reader->event, 0, sizeof(reader->event));
       reader->started = reader->failed = reader->stats.partial_line = 0;
       length++;
@@ -103,7 +103,7 @@ void cai_network_jsonl_close(cai_network_jsonl *reader) {
   if (reader != NULL) {
     if (reader->started)
       lonejson_curl_parse_cleanup(&reader->parser);
-    lonejson_cleanup(&observed_map, &reader->event);
+    lonejson_cleanup(&observed_map, &reader->event, NULL);
     lonejson_free(reader->json);
     free(reader);
   }

@@ -309,7 +309,7 @@ chrome_registration_with_scratch(const char *program_name, const char *override,
     } else
       printf("CAI Chrome registration already installed: %s\n",
              scratch->manifest_path);
-    CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &manifest_map, &existing);
+    CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &manifest_map, &existing, NULL);
   } else if (errno != ENOENT) {
     rc = cai_set_error_detail(
         error, CAI_ERR_TRANSPORT,

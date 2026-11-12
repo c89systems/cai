@@ -276,7 +276,7 @@ static int mailbox_claim_selected(cai_cli_messages *m, const char *name,
   } else
     rc = fail_lc(error, &local);
   lc_error_cleanup(&local);
-  lonejson_cleanup(&message_map, doc);
+  lonejson_cleanup(&message_map, doc, NULL);
   free(doc);
   return rc;
 }
@@ -322,7 +322,7 @@ static int mailbox_guard(cai_cli_messages *m, lc_lease **out, lc_error *error) {
     rc = lease_finish(*out, rc, error);
     *out = NULL;
   }
-  lonejson_cleanup(&message_map, doc);
+  lonejson_cleanup(&message_map, doc, NULL);
   free(doc);
   return rc;
 }
@@ -358,7 +358,7 @@ static void mailbox_release(cai_cli_messages *m, const char *name) {
                            2U);
   }
   lc_error_cleanup(&error);
-  lonejson_cleanup(&message_map, doc);
+  lonejson_cleanup(&message_map, doc, NULL);
   free(doc);
 }
 static void inbox_key(char key[300], const message_doc *doc) {
@@ -605,7 +605,7 @@ static int consume_with_scratch(void *context, lc_consumer_message *delivery,
 done:
   if (binding != NULL)
     rc = lease_finish(binding, rc, error);
-  lonejson_cleanup(&message_map, &scratch->doc);
+  lonejson_cleanup(&message_map, &scratch->doc, NULL);
   lonejson_free(json);
   lc_error_cleanup(&reader.error);
   cai_error_cleanup(&local);
@@ -982,7 +982,7 @@ static int name_catalog_read_with_scratch(cai_cli_messages *m, lc_lease *guard,
       rc = load_doc(m, scratch->page.keys[i], doc, error);
       if (rc == CAI_OK && strcmp(doc->kind, "mailbox") == 0)
         rc = name_catalog_append(catalog, doc, error);
-      lonejson_cleanup(&message_map, doc);
+      lonejson_cleanup(&message_map, doc, NULL);
     }
   } while (rc == CAI_OK && cursor != NULL);
   free(cursor);
@@ -1145,7 +1145,7 @@ static int list_mailboxes_with_scratch(cai_cli_messages *m, cai_sink *output,
         if (rc == CAI_OK)
           rc = cai_sink_write(output, " |\n", 3U, error);
       }
-      lonejson_cleanup(&message_map, doc);
+      lonejson_cleanup(&message_map, doc, NULL);
     }
   } while (rc == CAI_OK && cursor != NULL);
   free(cursor);
@@ -1236,7 +1236,7 @@ static int finish_message(cai_cli_messages *m, unsigned long long id,
                       error) != CAI_OK)
       return error != NULL ? error->code : CAI_ERR_TRANSPORT;
     *link = found->next;
-    lonejson_cleanup(&message_map, &found->doc);
+    lonejson_cleanup(&message_map, &found->doc, NULL);
     free(found);
     return CAI_OK;
   }
@@ -1354,20 +1354,20 @@ cai_cli_messages_sync_with_scratch(cai_cli_messages *m, cai_input_queue *queue,
     for (i = 0U; rc == CAI_OK && i < scratch->page.count; i++) {
       rc = load_doc(m, scratch->page.keys[i], &scratch->doc, error);
       if (rc != CAI_OK) {
-        lonejson_cleanup(&message_map, &scratch->doc);
+        lonejson_cleanup(&message_map, &scratch->doc, NULL);
         break;
       }
       if (strcmp(scratch->doc.kind, "pending") != 0 ||
           strcmp(scratch->doc.pending_for, m->session) != 0 ||
           find_doc(m, scratch->doc.id) != NULL) {
-        lonejson_cleanup(&message_map, &scratch->doc);
+        lonejson_cleanup(&message_map, &scratch->doc, NULL);
         continue;
       }
       if (cai_input_queue_find_origin(queue, scratch->doc.id, &entry,
                                       &origin_status, NULL) == CAI_OK) {
         link = calloc(1U, sizeof(*link));
         if (link == NULL) {
-          lonejson_cleanup(&message_map, &scratch->doc);
+          lonejson_cleanup(&message_map, &scratch->doc, NULL);
           rc = cai_cli_error(error, CAI_ERR_NOMEM,
                              "restore pending message link");
           break;
@@ -1391,7 +1391,7 @@ cai_cli_messages_sync_with_scratch(cai_cli_messages *m, cai_input_queue *queue,
         pthread_mutex_lock(&m->lock);
         m->dirty = 1;
         pthread_mutex_unlock(&m->lock);
-        lonejson_cleanup(&message_map, &scratch->doc);
+        lonejson_cleanup(&message_map, &scratch->doc, NULL);
         break;
       }
       capacity =
@@ -1401,7 +1401,7 @@ cai_cli_messages_sync_with_scratch(cai_cli_messages *m, cai_input_queue *queue,
       if (text == NULL || link == NULL) {
         free(text);
         free(link);
-        lonejson_cleanup(&message_map, &scratch->doc);
+        lonejson_cleanup(&message_map, &scratch->doc, NULL);
         rc =
             cai_cli_error(error, CAI_ERR_NOMEM, "queue incoming agent message");
         break;
@@ -1418,7 +1418,7 @@ cai_cli_messages_sync_with_scratch(cai_cli_messages *m, cai_input_queue *queue,
       if (rc != CAI_OK) {
         free(text);
         free(link);
-        lonejson_cleanup(&message_map, &scratch->doc);
+        lonejson_cleanup(&message_map, &scratch->doc, NULL);
         if (rc == CAI_ERR_LIMIT) {
           if (cai_input_queue_get_state(queue, &scratch->pending, NULL) ==
               CAI_OK) {
@@ -1555,7 +1555,7 @@ static int cai_cli_messages_delete_session_with_scratch(
       }
       if (lease != NULL)
         rc = lease_finish(lease, rc, &local);
-      lonejson_cleanup(&message_map, &scratch->doc);
+      lonejson_cleanup(&message_map, &scratch->doc, NULL);
     }
     free(keys);
     keys = NULL;
@@ -1714,7 +1714,7 @@ done:
   if (binding != NULL)
     (void)lease_finish(binding, LC_OK, &local);
   lc_error_cleanup(&local);
-  lonejson_cleanup(&arguments_map, &args);
+  lonejson_cleanup(&arguments_map, &args, NULL);
   lonejson_free(json);
   return rc;
 }
@@ -1818,7 +1818,7 @@ void cai_cli_messages_close(cai_cli_messages *m) {
   lc_consumer_service_close(m->receipts_service);
   for (link = m->links; link != NULL; link = next) {
     next = link->next;
-    lonejson_cleanup(&message_map, &link->doc);
+    lonejson_cleanup(&message_map, &link->doc, NULL);
     free(link);
   }
   close(m->fd);

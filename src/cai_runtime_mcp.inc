@@ -144,7 +144,7 @@ static int cai_runtime_search_tools(void *context, const char *arguments,
     agent->mcp_tools_dirty = 1;
   pthread_mutex_unlock(&agent->plugins_lock);
 done:
-  CAI_LJ->cleanup(CAI_LJ, &cai_runtime_search_map, &args);
+  CAI_LJ->cleanup(CAI_LJ, &cai_runtime_search_map, &args, NULL);
   return rc;
 }
 static int cai_runtime_register_mcp_search(cai_agent_runtime *runtime,

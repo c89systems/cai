@@ -258,7 +258,7 @@ static int metadata(markdown *m, cai_sink *goal_sink) {
       lonejson_curl_parse_finish(&m->parser) != LONEJSON_STATUS_OK)
     fail(m, CAI_ERR_PROTOCOL, "incomplete handover metadata");
   lonejson_curl_parse_cleanup(&m->parser);
-  lonejson_cleanup(&value_map, &m->value);
+  lonejson_cleanup(&value_map, &m->value, NULL);
   memset(&m->parser, 0, sizeof(m->parser));
   memset(&m->value, 0, sizeof(m->value));
   m->goal_sink = NULL;

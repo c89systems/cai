@@ -190,9 +190,10 @@ int cai_set_openai_error(cai_error *error, long http_status, const char *body,
   detail = body != NULL ? body : "";
   server_code = NULL;
   memset(&doc, 0, sizeof(doc));
-  CAI_LJ->init(CAI_LJ, &cai_api_error_map, &doc);
-  status =
-      CAI_LJ->parse_cstr(CAI_LJ, &cai_api_error_map, &doc, detail, &json_error);
+  status = CAI_LJ->init(CAI_LJ, &cai_api_error_map, &doc, &json_error);
+  if (status == LONEJSON_STATUS_OK)
+    status = CAI_LJ->parse_cstr(CAI_LJ, &cai_api_error_map, &doc, detail,
+                                &json_error);
   if (status == LONEJSON_STATUS_OK) {
     if (doc.error.message != NULL)
       detail = doc.error.message;
@@ -201,7 +202,7 @@ int cai_set_openai_error(cai_error *error, long http_status, const char *body,
   rc = cai_set_error_http(error, CAI_ERR_SERVER, http_status,
                           "OpenAI API request failed", detail, server_code,
                           request_id);
-  CAI_LJ->cleanup(CAI_LJ, &cai_api_error_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &cai_api_error_map, &doc, NULL);
   return rc;
 }
 
@@ -1045,7 +1046,7 @@ int cai_client_count_response_input_tokens(
       out->input_tokens = doc.input_tokens;
       out->total_tokens = doc.input_tokens;
     }
-    CAI_LJ->cleanup(CAI_LJ, &cai_input_token_count_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &cai_input_token_count_map, &doc, NULL);
   }
   cai_free_mem(NULL, body);
   cai_free_mem(NULL, request_id);

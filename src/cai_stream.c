@@ -567,8 +567,9 @@ static int cai_stream_parse_output_item_event(
   lonejson_status status;
 
   memset(event_doc, 0, sizeof(*event_doc));
-  CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_output_item_event_map,
-                      event_doc);
+  if (CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_output_item_event_map,
+                          event_doc, &json_error) != LONEJSON_STATUS_OK)
+    return CAI_ERR_NOMEM;
   CAI_LJ_STREAM->spooled_init(CAI_LJ_STREAM, &event_doc->item_storage);
   CAI_LJ_STREAM->json_value_init(CAI_LJ_STREAM, &event_doc->item);
   lonejson_error_init(&json_error);
@@ -578,7 +579,7 @@ static int cai_stream_parse_output_item_event(
     CAI_LJ_STREAM->json_value_cleanup(CAI_LJ_STREAM, &event_doc->item);
     event_doc->item_storage.cleanup(&event_doc->item_storage);
     CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_output_item_event_map,
-                           event_doc);
+                           event_doc, NULL);
     return CAI_ERR_NOMEM;
   }
   reader.cursor = *value;
@@ -587,7 +588,7 @@ static int cai_stream_parse_output_item_event(
     CAI_LJ_STREAM->json_value_cleanup(CAI_LJ_STREAM, &event_doc->item);
     event_doc->item_storage.cleanup(&event_doc->item_storage);
     CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_output_item_event_map,
-                           event_doc);
+                           event_doc, NULL);
     return CAI_ERR_PROTOCOL;
   }
   lonejson_error_init(&json_error);
@@ -598,7 +599,7 @@ static int cai_stream_parse_output_item_event(
     CAI_LJ_STREAM->json_value_cleanup(CAI_LJ_STREAM, &event_doc->item);
     event_doc->item_storage.cleanup(&event_doc->item_storage);
     CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_output_item_event_map,
-                           event_doc);
+                           event_doc, NULL);
     return CAI_ERR_PROTOCOL;
   }
   return CAI_OK;
@@ -609,7 +610,7 @@ static void cai_stream_output_item_event_cleanup(
   CAI_LJ_STREAM->json_value_cleanup(CAI_LJ_STREAM, &event_doc->item);
   event_doc->item_storage.cleanup(&event_doc->item_storage);
   CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_output_item_event_map,
-                         event_doc);
+                         event_doc, NULL);
 }
 
 static int
@@ -620,7 +621,9 @@ cai_stream_parse_response_event(const lonejson_spooled *value,
   lonejson_status status;
 
   memset(event_doc, 0, sizeof(*event_doc));
-  CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_response_event_map, event_doc);
+  if (CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_response_event_map,
+                          event_doc, &json_error) != LONEJSON_STATUS_OK)
+    return CAI_ERR_NOMEM;
   CAI_LJ_STREAM->spooled_init(CAI_LJ_STREAM, &event_doc->response_storage);
   CAI_LJ_STREAM->json_value_init(CAI_LJ_STREAM, &event_doc->response);
   lonejson_error_init(&json_error);
@@ -630,7 +633,7 @@ cai_stream_parse_response_event(const lonejson_spooled *value,
     CAI_LJ_STREAM->json_value_cleanup(CAI_LJ_STREAM, &event_doc->response);
     event_doc->response_storage.cleanup(&event_doc->response_storage);
     CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_response_event_map,
-                           event_doc);
+                           event_doc, NULL);
     return CAI_ERR_NOMEM;
   }
   reader.cursor = *value;
@@ -639,7 +642,7 @@ cai_stream_parse_response_event(const lonejson_spooled *value,
     CAI_LJ_STREAM->json_value_cleanup(CAI_LJ_STREAM, &event_doc->response);
     event_doc->response_storage.cleanup(&event_doc->response_storage);
     CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_response_event_map,
-                           event_doc);
+                           event_doc, NULL);
     return CAI_ERR_PROTOCOL;
   }
   lonejson_error_init(&json_error);
@@ -650,7 +653,7 @@ cai_stream_parse_response_event(const lonejson_spooled *value,
     CAI_LJ_STREAM->json_value_cleanup(CAI_LJ_STREAM, &event_doc->response);
     event_doc->response_storage.cleanup(&event_doc->response_storage);
     CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_response_event_map,
-                           event_doc);
+                           event_doc, NULL);
     return CAI_ERR_PROTOCOL;
   }
   return CAI_OK;
@@ -661,17 +664,20 @@ cai_stream_response_event_cleanup(cai_stream_response_event_doc *event_doc) {
   CAI_LJ_STREAM->json_value_cleanup(CAI_LJ_STREAM, &event_doc->response);
   event_doc->response_storage.cleanup(&event_doc->response_storage);
   CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_response_event_map,
-                         event_doc);
+                         event_doc, NULL);
 }
 
 static int
 cai_stream_parse_output_item_spooled(const lonejson_spooled *value,
                                      cai_stream_output_item_doc *item) {
   memset(item, 0, sizeof(*item));
-  CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_output_item_map, item);
+  if (CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_output_item_map, item,
+                          NULL) != LONEJSON_STATUS_OK)
+    return CAI_ERR_NOMEM;
   if (cai_stream_parse_spooled(&cai_stream_output_item_map, item, value) !=
       CAI_OK) {
-    CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_output_item_map, item);
+    CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_output_item_map, item,
+                           NULL);
     return CAI_ERR_PROTOCOL;
   }
   return CAI_OK;
@@ -1800,7 +1806,9 @@ static int cai_sse_provider_error(cai_sse_state *state,
   lonejson_status status;
   int rc;
   memset(&doc, 0, sizeof(doc));
-  CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_error_event_map, &doc);
+  if (CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_error_event_map, &doc,
+                          &json_error) != LONEJSON_STATUS_OK)
+    return CAI_ERR_NOMEM;
   reader.cursor = state->event_json_storage;
   lonejson_error_init(&json_error);
   status = reader.cursor.rewind(&reader.cursor, &json_error);
@@ -1829,7 +1837,8 @@ static int cai_sse_provider_error(cai_sse_state *state,
         code[0] != '\0' ? code : NULL,
         doc.request_id[0] != '\0' ? doc.request_id : NULL);
   }
-  CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_error_event_map, &doc);
+  CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_error_event_map, &doc,
+                         NULL);
   return rc;
 }
 
@@ -1910,8 +1919,11 @@ cai_sse_emit_event_with_scratch(cai_sse_state *state,
       strcmp(event_name, "response.reasoning_text.delta") == 0 ||
       strcmp(event_name, "response.function_call_arguments.delta") == 0 ||
       strcmp(event_name, "response.custom_tool_call_input.delta") == 0) {
-    CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_delta_event_map,
-                        &scratch->delta_doc);
+    if (CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_delta_event_map,
+                            &scratch->delta_doc, NULL) != LONEJSON_STATUS_OK) {
+      rc = CAI_ERR_NOMEM;
+      goto done;
+    }
     delta_initialized = 1;
     rc = cai_stream_parse_spooled(&cai_stream_delta_event_map,
                                   &scratch->delta_doc,
@@ -1957,8 +1969,12 @@ cai_sse_emit_event_with_scratch(cai_sse_state *state,
   }
 
   if (strcmp(event_name, "response.function_call_arguments.done") == 0) {
-    CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_function_call_done_event_map,
-                        &scratch->done_doc);
+    if (CAI_LJ_STREAM->init(CAI_LJ_STREAM,
+                            &cai_stream_function_call_done_event_map,
+                            &scratch->done_doc, NULL) != LONEJSON_STATUS_OK) {
+      rc = CAI_ERR_NOMEM;
+      goto done;
+    }
     done_initialized = 1;
     rc = cai_stream_parse_spooled(&cai_stream_function_call_done_event_map,
                                   &scratch->done_doc,
@@ -2089,7 +2105,7 @@ done:
   }
   if (function_item_doc_initialized) {
     CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_output_item_map,
-                           &scratch->function_item_doc);
+                           &scratch->function_item_doc, NULL);
   }
   if (item_event_initialized) {
     cai_stream_output_item_event_cleanup(&scratch->item_event);
@@ -2097,11 +2113,11 @@ done:
   if (done_initialized) {
     CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM,
                            &cai_stream_function_call_done_event_map,
-                           &scratch->done_doc);
+                           &scratch->done_doc, NULL);
   }
   if (delta_initialized) {
     CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_delta_event_map,
-                           &scratch->delta_doc);
+                           &scratch->delta_doc, NULL);
   }
   return rc;
 }
@@ -2774,12 +2790,16 @@ static int cai_ws_parse_error_event(cai_sse_state *state, cai_error *error) {
   int rc;
 
   memset(&doc, 0, sizeof(doc));
-  CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_ws_error_event_map, &doc);
+  if (CAI_LJ_STREAM->init(CAI_LJ_STREAM, &cai_stream_ws_error_event_map, &doc,
+                          NULL) != LONEJSON_STATUS_OK)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "initialize WebSocket error record");
   rc = cai_stream_parse_spooled(&cai_stream_ws_error_event_map, &doc,
                                 &state->event_json_storage);
   if (rc != CAI_OK || doc.type == NULL || strcmp(doc.type, "error") != 0 ||
       doc.status < 400LL) {
-    CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_ws_error_event_map, &doc);
+    CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_ws_error_event_map, &doc,
+                           NULL);
     return CAI_OK;
   }
   body = NULL;
@@ -2788,7 +2808,8 @@ static int cai_ws_parse_error_event(cai_sse_state *state, cai_error *error) {
     rc = cai_set_openai_error(error, (long)doc.status, body, NULL);
   }
   cai_free_mem(NULL, body);
-  CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_ws_error_event_map, &doc);
+  CAI_LJ_STREAM->cleanup(CAI_LJ_STREAM, &cai_stream_ws_error_event_map, &doc,
+                         NULL);
   return rc != CAI_OK ? rc : CAI_ERR_SERVER;
 }
 

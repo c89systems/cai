@@ -508,12 +508,13 @@ static void render_review_report(const char *data, size_t length) {
     fputs(RED "Reviewer report could not be displayed" RESET "\n", stdout);
     return;
   }
-  lonejson_init(json, &review_report_map, &report);
-  status = lonejson_parse_buffer(json, &review_report_map, &report, data,
-                                 length, &error);
+  status = lonejson_init(json, &review_report_map, &report, &error);
+  if (status == LONEJSON_STATUS_OK)
+    status = lonejson_parse_buffer(json, &review_report_map, &report, data,
+                                   length, &error);
   if (status != LONEJSON_STATUS_OK) {
     fputs(RED "Reviewer report could not be displayed" RESET "\n", stdout);
-    lonejson_cleanup(&review_report_map, &report);
+    lonejson_cleanup(&review_report_map, &report, NULL);
     lonejson_free(json);
     return;
   }
@@ -546,7 +547,7 @@ static void render_review_report(const char *data, size_t length) {
             findings[i].code_location.line_range.end);
     render_review_body(findings[i].body);
   }
-  lonejson_cleanup(&review_report_map, &report);
+  lonejson_cleanup(&review_report_map, &report, NULL);
   lonejson_free(json);
 }
 

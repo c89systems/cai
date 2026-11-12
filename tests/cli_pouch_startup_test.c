@@ -354,7 +354,7 @@ static void replay_limits(cai_cli_pouch *pouch, cai_error *error) {
     if (!limited)
       assert(strlen(parsed.data) == length);
     cai_source_close(source);
-    lonejson_cleanup(&journal_event_map, &parsed);
+    lonejson_cleanup(&journal_event_map, &parsed, NULL);
     cai_error_cleanup(error);
     cai_error_init(error);
   }

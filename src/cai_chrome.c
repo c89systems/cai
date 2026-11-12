@@ -185,7 +185,7 @@ int cai_chrome_request(cai_chrome *c, const char *method, const char *params,
       if (reply.has_id)
         rc = cai_set_error(error, CAI_ERR_PROTOCOL,
                            "Unexpected request from Chrome native host");
-      CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_rpc_map, &reply);
+      CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_rpc_map, &reply, NULL);
       continue;
     }
     if (rc == CAI_OK) {
@@ -212,7 +212,7 @@ int cai_chrome_request(cai_chrome *c, const char *method, const char *params,
       if (*out == NULL)
         rc = CAI_ERR_NOMEM;
     }
-    CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_rpc_map, &reply);
+    CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &cai_chrome_rpc_map, &reply, NULL);
     break;
   }
   if (rc != CAI_OK)
@@ -343,7 +343,7 @@ static int cai_chrome_open_with_scratch(const cai_chrome_config *config,
                        strcmp(info.family, "chrome") != 0))
     rc = cai_set_error(error, CAI_ERR_PROTOCOL,
                        "The selected host is not a Chrome extension backend");
-  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &info_map, &info);
+  CAI_LJ_CHROME->cleanup(CAI_LJ_CHROME, &info_map, &info, NULL);
   cai_free_mem(NULL, json);
   if (rc != CAI_OK) {
     cai_chrome_close(c);

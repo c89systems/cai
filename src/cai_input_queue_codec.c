@@ -145,7 +145,7 @@ void cai_input_record_cleanup(cai_input_record *record) {
          record->entry.text != NULL ? &record->entry.text
                                     : &record->request.text,
          sizeof(doc.text));
-  CAI_LJ->cleanup(CAI_LJ, &queue_map, &doc);
+  CAI_LJ->cleanup(CAI_LJ, &queue_map, &doc, NULL);
   memset(record, 0, sizeof(*record));
 }
 int cai_input_record_parse(const char *json, cai_input_record *out,
@@ -165,7 +165,7 @@ int cai_input_record_parse(const char *json, cai_input_record *out,
   lonejson_error_init(&local);
   if (CAI_LJ->parse_cstr(CAI_LJ, &queue_map, &doc, json, &local) !=
       LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &queue_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &queue_map, &doc, NULL);
     return cai_set_error_detail(error, CAI_ERR_PROTOCOL,
                                 "parse input queue transition", local.message);
   }
@@ -179,7 +179,7 @@ int cai_input_record_parse(const char *json, cai_input_record *out,
       doc.entry_intent > CAI_INPUT_STEERING ||
       doc.outcome < CAI_INPUT_ACCEPTED || doc.outcome > CAI_INPUT_UNKNOWN ||
       doc.code < INT_MIN || doc.code > INT_MAX) {
-    CAI_LJ->cleanup(CAI_LJ, &queue_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &queue_map, &doc, NULL);
     return cai_set_error(error, CAI_ERR_PROTOCOL,
                          "invalid input queue transition fields");
   }
@@ -196,7 +196,7 @@ int cai_input_record_parse(const char *json, cai_input_record *out,
     doc.value.request.text = doc.text;
   if (((doc.entry_text || doc.request_text) && doc.text == NULL) ||
       (!doc.entry_text && !doc.request_text && doc.text != NULL)) {
-    CAI_LJ->cleanup(CAI_LJ, &queue_map, &doc);
+    CAI_LJ->cleanup(CAI_LJ, &queue_map, &doc, NULL);
     return cai_set_error(error, CAI_ERR_PROTOCOL,
                          "unexpected input queue text");
   }

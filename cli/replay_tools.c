@@ -93,7 +93,7 @@ static int action(const char *name) {
 }
 static void parse_close(replay_call *c) {
   lonejson_curl_parse_cleanup(&c->parser);
-  lonejson_cleanup(&value_map, &c->value);
+  lonejson_cleanup(&value_map, &c->value, NULL);
   memset(&c->parser, 0, sizeof(c->parser));
   memset(&c->value, 0, sizeof(c->value));
   c->parsing = 0;

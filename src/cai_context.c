@@ -1117,7 +1117,7 @@ static int upload(cai_context *p, context_args *a, cai_sink *out, int replace,
   cai_source_close(source);
   close(fd);
   if (doc != NULL) {
-    lonejson_cleanup(&doc_map, doc);
+    lonejson_cleanup(&doc_map, doc, NULL);
     free(doc);
   }
   lc_error_cleanup(&le);
@@ -1270,7 +1270,7 @@ static int query(cai_context *p, context_args *a, cai_sink *out, cai_error *e) {
       rc = cai_sink_write(out, ",", 1U, e);
     if (rc == CAI_OK)
       rc = write_doc(out, doc, version, NULL, e);
-    lonejson_cleanup(&doc_map, doc);
+    lonejson_cleanup(&doc_map, doc, NULL);
     memset(doc, 0, sizeof(*doc));
     memset(s, 0, sizeof(*s));
   }
@@ -1452,7 +1452,7 @@ static int download(cai_context *p, context_args *a, cai_sink *out,
     rc = receipt(out, a->id, version, doc->kind, "downloaded", a->path, e);
   lc_attachment_get_res_cleanup(&res);
   lc_error_cleanup(&l);
-  lonejson_cleanup(&doc_map, doc);
+  lonejson_cleanup(&doc_map, doc, NULL);
   free(doc);
   free(s);
   return rc;
@@ -1540,7 +1540,7 @@ static void *copy_content(void *ctx) {
     rc = read_doc(p->context, p->id, NULL, doc, reader, &version, &p->error);
   }
   if (doc != NULL) {
-    lonejson_cleanup(&doc_map, doc);
+    lonejson_cleanup(&doc_map, doc, NULL);
     free(doc);
   }
   cai_sink_close(sink);
@@ -1679,7 +1679,7 @@ static int mutate(cai_context *p, const char *tool, context_args *a,
   if (rc == CAI_OK)
     rc = receipt(out, a->id, version, doc->kind,
                  !strcmp(tool, "context_set") ? "updated" : "deleted", NULL, e);
-  lonejson_cleanup(&doc_map, doc);
+  lonejson_cleanup(&doc_map, doc, NULL);
   free(doc);
   free(s);
   lc_error_cleanup(&l);
@@ -1736,7 +1736,7 @@ int cai_context_call(cai_context *p, const char *tool, const char *input,
         rc = write_doc(out, doc, v, s, e);
     }
     if (doc != NULL) {
-      lonejson_cleanup(&doc_map, doc);
+      lonejson_cleanup(&doc_map, doc, NULL);
       free(doc);
     }
     if (s != NULL) {
@@ -1749,7 +1749,7 @@ int cai_context_call(cai_context *p, const char *tool, const char *input,
     rc = mutate(p, tool, &a, out, e);
   else if (rc == CAI_OK)
     rc = fail(e, CAI_ERR_INVALID, "unknown context tool");
-  lonejson_cleanup(&args_map, &a);
+  lonejson_cleanup(&args_map, &a, NULL);
   if (error == NULL)
     cai_error_cleanup(&local);
   return rc;
@@ -1923,7 +1923,7 @@ int cai_context_export(cai_context *p, const char *directory, cai_sink *out,
       path = NULL;
       free(dir);
       dir = NULL;
-      lonejson_cleanup(&doc_map, doc);
+      lonejson_cleanup(&doc_map, doc, NULL);
       memset(doc, 0, sizeof(*doc));
       memset(s, 0, sizeof(*s));
     }
@@ -1946,7 +1946,7 @@ int cai_context_export(cai_context *p, const char *directory, cai_sink *out,
   free(dir);
   cai_sink_close(discard);
   if (doc != NULL) {
-    lonejson_cleanup(&doc_map, doc);
+    lonejson_cleanup(&doc_map, doc, NULL);
     free(doc);
   }
   free(s);

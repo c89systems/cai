@@ -623,7 +623,7 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
          CAI_OK);
   assert(load_doc(sender, "mailbox.cai.two.project", &doc, &error) == CAI_OK);
   assert(doc.automatic);
-  lonejson_cleanup(&message_map, &doc);
+  lonejson_cleanup(&message_map, &doc, NULL);
   assert(run_send(sender, "{\"operation\":\"list\"}", &output, &error) ==
          CAI_OK);
   assert(strstr(output.text, "Current queue: test-sender") != NULL);
@@ -659,7 +659,7 @@ static void workspace_mailboxes(cai_cli_pouch *pouch, const char *root) {
   snprintf(key, sizeof(key), "mailbox.%s", name);
   assert(load_doc(sender, key, &doc, &error) == CAI_OK);
   assert(strcmp(doc.sender_session, "explicit-owner") == 0);
-  lonejson_cleanup(&message_map, &doc);
+  lonejson_cleanup(&message_map, &doc, NULL);
   cai_cli_messages_close(other);
   cai_cli_messages_close(sender);
   lc_error_cleanup(&local);
@@ -839,7 +839,7 @@ static void queue_overrides(cai_cli_pouch *pouch, const char *workspace) {
   assert(deliver_direct(receiver, &doc) != LC_OK);
   assert(load_doc(sender, "mailbox.before-rename", &doc, &error) == CAI_OK);
   assert(doc.instance[0] == '\0');
-  lonejson_cleanup(&message_map, &doc);
+  lonejson_cleanup(&message_map, &doc, NULL);
   assert(cai_cli_messages_is_message(receiver, held.id));
   assert(cai_cli_messages_sync(receiver, sl, &error) == CAI_OK);
   assert(pending_count(sl) == 1U);
@@ -922,14 +922,14 @@ static void delete_conversation_inbox(cai_cli_pouch *pouch) {
     assert(!result.no_content == (i == PAGE_KEYS + 2U));
     if (!result.no_content)
       assert(strcmp(loaded.pending_for, "keep-target") == 0);
-    lonejson_cleanup(&message_map, &loaded);
+    lonejson_cleanup(&message_map, &loaded, NULL);
     lc_get_res_cleanup(&result);
   }
   assert(load_doc(&owner, "mailbox.cai.delete-test", &loaded, &error) ==
          CAI_OK);
   assert(strcmp(loaded.kind, "mailbox") == 0 &&
          loaded.sender_session[0] == '\0' && loaded.instance[0] == '\0');
-  lonejson_cleanup(&message_map, &loaded);
+  lonejson_cleanup(&message_map, &loaded, NULL);
   lc_error_cleanup(&local);
   cai_error_cleanup(&error);
 }
@@ -1052,7 +1052,7 @@ static void scheduled_messages(cai_cli_pouch *pouch, const char *workspace) {
   cai_cli_messages_close(sender);
   cai_cli_messages_close(receiver);
   cai_input_queue_close(input);
-  lonejson_cleanup(&message_map, &s->doc);
+  lonejson_cleanup(&message_map, &s->doc, NULL);
   free(s);
   lc_error_cleanup(&local);
   cai_error_cleanup(&error);
@@ -1149,7 +1149,7 @@ int main(int argc, char **argv) {
     inbox_key(key, &duplicate);
     assert(load_doc(receiver, key, &loaded, &error) == CAI_OK);
     assert(strcmp(loaded.kind, "pending") == 0 && loaded.text != NULL);
-    lonejson_cleanup(&message_map, &loaded);
+    lonejson_cleanup(&message_map, &loaded, NULL);
   }
   /* Shutdown flush writes only explicit removals; it must not retire the
    * second, still-queued message or need a delivery/discovery pass. */
@@ -1159,7 +1159,7 @@ int main(int argc, char **argv) {
   assert(load_doc(receiver, key, &loaded, &error) == CAI_OK);
   assert(strcmp(loaded.kind, "rejected") == 0);
   assert(loaded.text == NULL && loaded.pending_for[0] == '\0');
-  lonejson_cleanup(&message_map, &loaded);
+  lonejson_cleanup(&message_map, &loaded, NULL);
   /* Undecided messages survive close/reopen in the encrypted inbox. */
   cai_input_queue_close(sl);
   cai_cli_messages_close(receiver);

@@ -555,20 +555,22 @@ cai_chat_write_history(lonejson_writer *writer,
   tool_message_open = 0;
   for (;;) {
     memset(&item, 0, sizeof(item));
-    CAI_LJ->init(CAI_LJ, &cai_chat_history_map, &item);
+    status = CAI_LJ->init(CAI_LJ, &cai_chat_history_map, &item, error);
+    if (status != LONEJSON_STATUS_OK)
+      break;
     result = stream->next(stream, &cai_chat_history_map, &item, error);
     if (result == LONEJSON_ARRAY_STREAM_EOF) {
-      CAI_LJ->cleanup(CAI_LJ, &cai_chat_history_map, &item);
+      CAI_LJ->cleanup(CAI_LJ, &cai_chat_history_map, &item, NULL);
       break;
     }
     if (result != LONEJSON_ARRAY_STREAM_ITEM) {
       status = LONEJSON_STATUS_INVALID_JSON;
-      CAI_LJ->cleanup(CAI_LJ, &cai_chat_history_map, &item);
+      CAI_LJ->cleanup(CAI_LJ, &cai_chat_history_map, &item, NULL);
       break;
     }
     status =
         cai_chat_write_history_item(writer, &item, &tool_message_open, error);
-    CAI_LJ->cleanup(CAI_LJ, &cai_chat_history_map, &item);
+    CAI_LJ->cleanup(CAI_LJ, &cai_chat_history_map, &item, NULL);
     if (status != LONEJSON_STATUS_OK) {
       break;
     }
@@ -1841,11 +1843,12 @@ static int cai_chat_emit_tool_done(cai_chat_stream_state *state, size_t index) {
       return cai_set_error(state->error, CAI_ERR_PROTOCOL,
                            "failed to read custom tool arguments");
     }
-    CAI_LJ->init(CAI_LJ, &cai_chat_custom_arguments_map, &custom);
-    if (CAI_LJ->parse_reader(CAI_LJ, &cai_chat_custom_arguments_map, &custom,
+    if (CAI_LJ->init(CAI_LJ, &cai_chat_custom_arguments_map, &custom,
+                     &json_error) != LONEJSON_STATUS_OK ||
+        CAI_LJ->parse_reader(CAI_LJ, &cai_chat_custom_arguments_map, &custom,
                              cai_chat_read, &reader,
                              &json_error) != LONEJSON_STATUS_OK) {
-      CAI_LJ->cleanup(CAI_LJ, &cai_chat_custom_arguments_map, &custom);
+      CAI_LJ->cleanup(CAI_LJ, &cai_chat_custom_arguments_map, &custom, NULL);
       return cai_set_error_detail(state->error, CAI_ERR_PROTOCOL,
                                   "invalid custom tool arguments",
                                   json_error.message);
@@ -1855,7 +1858,7 @@ static int cai_chat_emit_tool_done(cai_chat_stream_state *state, size_t index) {
           state->sinks->custom_tool_call_context, tool->id, (int)index + 1,
           tool->id, tool->name, &custom.input, state->error);
       if (rc != CAI_OK) {
-        CAI_LJ->cleanup(CAI_LJ, &cai_chat_custom_arguments_map, &custom);
+        CAI_LJ->cleanup(CAI_LJ, &cai_chat_custom_arguments_map, &custom, NULL);
         return rc;
       }
     }
@@ -1869,7 +1872,7 @@ static int cai_chat_emit_tool_done(cai_chat_stream_state *state, size_t index) {
   }
   if (state->sinks->output_item_done == NULL) {
     if (tool->is_custom) {
-      CAI_LJ->cleanup(CAI_LJ, &cai_chat_custom_arguments_map, &custom);
+      CAI_LJ->cleanup(CAI_LJ, &cai_chat_custom_arguments_map, &custom, NULL);
     }
     return CAI_OK;
   }
@@ -1916,7 +1919,7 @@ static int cai_chat_emit_tool_done(cai_chat_stream_state *state, size_t index) {
   if (status != LONEJSON_STATUS_OK) {
     item.cleanup(&item);
     if (tool->is_custom) {
-      CAI_LJ->cleanup(CAI_LJ, &cai_chat_custom_arguments_map, &custom);
+      CAI_LJ->cleanup(CAI_LJ, &cai_chat_custom_arguments_map, &custom, NULL);
     }
     return cai_set_error(state->error, CAI_ERR_PROTOCOL,
                          "failed to serialize Chat Completions tool call");
@@ -1927,7 +1930,7 @@ static int cai_chat_emit_tool_done(cai_chat_stream_state *state, size_t index) {
       state->error);
   item.cleanup(&item);
   if (tool->is_custom) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_chat_custom_arguments_map, &custom);
+    CAI_LJ->cleanup(CAI_LJ, &cai_chat_custom_arguments_map, &custom, NULL);
   }
   return rc;
 }
@@ -1952,11 +1955,12 @@ static int cai_chat_parse_event(cai_chat_stream_state *state) {
                          "failed to rewind Chat Completions SSE event");
   }
   memset(&chunk, 0, sizeof(chunk));
-  CAI_LJ->init(CAI_LJ, &cai_chat_chunk_map, &chunk);
-  status = CAI_LJ->parse_reader(CAI_LJ, &cai_chat_chunk_map, &chunk,
-                                cai_chat_read, &reader, &json_error);
+  status = CAI_LJ->init(CAI_LJ, &cai_chat_chunk_map, &chunk, &json_error);
+  if (status == LONEJSON_STATUS_OK)
+    status = CAI_LJ->parse_reader(CAI_LJ, &cai_chat_chunk_map, &chunk,
+                                  cai_chat_read, &reader, &json_error);
   if (status != LONEJSON_STATUS_OK) {
-    CAI_LJ->cleanup(CAI_LJ, &cai_chat_chunk_map, &chunk);
+    CAI_LJ->cleanup(CAI_LJ, &cai_chat_chunk_map, &chunk, NULL);
     return cai_set_error_detail(state->error, CAI_ERR_PROTOCOL,
                                 "invalid Chat Completions SSE chunk",
                                 json_error.message);
@@ -2053,7 +2057,7 @@ static int cai_chat_parse_event(cai_chat_stream_state *state) {
     }
     state->saw_usage = 1;
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_chat_chunk_map, &chunk);
+  CAI_LJ->cleanup(CAI_LJ, &cai_chat_chunk_map, &chunk, NULL);
   return rc;
 }
 

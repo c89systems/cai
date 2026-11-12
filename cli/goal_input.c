@@ -20,7 +20,7 @@ const char *cai_cli_goal_input_argument(const char *arg) {
 }
 
 void cai_cli_goal_input_close(cai_cli_goal_input *input) {
-  lonejson_cleanup(&goal_input_map, input);
+  lonejson_cleanup(&goal_input_map, input, NULL);
   memset(input, 0, sizeof(*input));
 }
 int cai_cli_goal_input_parse(const char *text, cai_cli_goal_input *input,
