@@ -16,17 +16,21 @@ typedef struct cai_cli_spawn_state {
   int was_ready, exit_code, signal;
   cai_cli_bootstrap_message observation;
 } cai_cli_spawn_state;
-/* Standalone executable only, on its single frontend thread before creating
- * workers or installing SIGCHLD handlers. A threadless editor may already be
- * open. program is an absolute path; argv contains backend startup options
- * only, without argv[0]. The child execs the same program's private owner
- * entry. Zero startup timeout selects 60 seconds. No attachment/store is opened
- * here. The supplied clock is monotonic milliseconds; ordinary child failures
- * are observations, not errors from pump. All operations have one owner thread.
- */
-int cai_cli_spawn_open(const char *program, int argc, const char *const *argv,
-                       uint64_t now_ms, uint64_t timeout_ms,
-                       cai_cli_spawn **out, cai_error *);
+/** Runs only in the detached child, after closing inherited frontend file
+ * descriptors and resetting signals. Construct a new app here. The returned
+ * exit code is passed to _exit; no parent exit handlers run. */
+typedef int (*cai_cli_spawn_entry_fn)(const void *, int descriptor, int argc,
+                                      const char *const *argv);
+/** Standalone executable only, before creating workers or installing SIGCHLD
+ * handlers. A threadless editor may already be open. The child calls entry
+ * directly; there is no executable lookup or reexec. Context and argv are
+ * inherited by value through fork and borrowed in the child. Zero startup
+ * timeout selects 60 seconds. No runtime/store is opened in the parent.
+ * The supplied clock is monotonic milliseconds; ordinary child failures are
+ * observations, not errors from pump. All operations have one owner thread. */
+int cai_cli_spawn_open(cai_cli_spawn_entry_fn entry, const void *context,
+                       int argc, const char *const *argv, uint64_t now_ms,
+                       uint64_t timeout_ms, cai_cli_spawn **out, cai_error *);
 int cai_cli_spawn_prepare(cai_cli_spawn *, struct pollfd *,
                           uint64_t *deadline_ms, cai_error *);
 int cai_cli_spawn_pump(cai_cli_spawn *, uint64_t now_ms, cai_error *);

@@ -1,6 +1,6 @@
 /** Exercises executable startup without a UI, runtime or storage client.
  * Real native probes verify a winner after a deterministic first-launch race;
- * tiny exec children supply readiness/failure observations only. */
+ * tiny forked children supply readiness/failure observations only. */
 #define _GNU_SOURCE
 #include "../cli/attach.h"
 #include "../cli/bootstrap.h"
@@ -34,15 +34,23 @@ static int ignore(void *context, const cai_wire_event *event,
   (void)error;
   return CAI_OK;
 }
-static void child(int argc, char **argv) {
+static int no_launch(const void *context, int fd, int argc,
+                     const char *const *argv) {
+  (void)context;
+  (void)fd;
+  (void)argc;
+  (void)argv;
+  abort();
+}
+static int child(const void *context, int fd, int argc,
+                 const char *const *argv) {
   cai_cli_bootstrap_message *message = calloc(1U, sizeof(*message));
   cai_wire_peer *peer;
   int ready;
-  assert(argc == 7 && message != NULL && strcmp(argv[1], "-x") == 0 &&
-         strcmp(argv[5], "--no-persist") == 0);
-  ready = strcmp(argv[6], "ready") == 0;
-  assert(cai_wire_peer_open(atoi(argv[3]), 16384U, ignore, NULL, &peer, NULL) ==
-         CAI_OK);
+  (void)context;
+  assert(argc == 2 && message != NULL && strcmp(argv[0], "--no-persist") == 0);
+  ready = strcmp(argv[1], "ready") == 0;
+  assert(cai_wire_peer_open(fd, 16384U, ignore, NULL, &peer, NULL) == CAI_OK);
   if (ready) {
     message->ready = 1;
     memset(message->instance, 19, sizeof(message->instance));
@@ -52,7 +60,7 @@ static void child(int argc, char **argv) {
   } else {
     message->exit_code = 1;
     message->code =
-        strcmp(argv[6], "conflict") == 0 ? CAI_ERR_LIMIT : CAI_ERR_INVALID;
+        strcmp(argv[1], "conflict") == 0 ? CAI_ERR_LIMIT : CAI_ERR_INVALID;
     strcpy(message->message, "fixture startup failure");
   }
   assert(cai_cli_bootstrap_write(peer, message, NULL) == CAI_OK);
@@ -76,11 +84,11 @@ static cai_workspace_server *owner(const char *runtime, const char *workspace,
   return server;
 }
 static cai_cli_attach_boot *open_boot(cai_cli_options *options,
-                                      const char *self,
+                                      cai_cli_spawn_entry_fn entry,
                                       const char *const *arguments) {
   cai_cli_attach_boot *boot;
-  assert(cai_cli_attach_boot_open(options, self, 1, arguments, &boot, NULL) ==
-         CAI_OK);
+  assert(cai_cli_attach_boot_open(options, entry, NULL, 1, arguments, &boot,
+                                  NULL) == CAI_OK);
   return boot;
 }
 static int drive(cai_cli_attach_boot *boot, cai_workspace_server *server,
@@ -117,7 +125,7 @@ static void no_attachment(cai_workspace_server *server) {
   assert(cai_workspace_server_get_state(server, &state, NULL) == CAI_OK);
   assert(state.count == 0U && state.controller == 0U);
 }
-static void cases(const char *self, const char *runtime, const char *workspace,
+static void cases(const char *runtime, const char *workspace,
                   const char *other) {
   cai_cli_options options;
   cai_cli_attach_boot *boot;
@@ -135,7 +143,7 @@ static void cases(const char *self, const char *runtime, const char *workspace,
 
   server = owner(runtime, other, "named-fixture");
   options.server = "named-fixture";
-  boot = open_boot(&options, "/must-not-launch", conflict);
+  boot = open_boot(&options, no_launch, conflict);
   assert(drive(boot, server, &target, &ready, &error) == CAI_OK);
   assert(ready == CAI_CLI_FRONTEND_EXISTING &&
          strcmp(target.workspace, other) == 0 &&
@@ -153,7 +161,7 @@ static void cases(const char *self, const char *runtime, const char *workspace,
   cai_workspace_server_close(server);
 
   options.server = "missing-fixture";
-  boot = open_boot(&options, "/must-not-launch", conflict);
+  boot = open_boot(&options, no_launch, conflict);
   assert(drive(boot, NULL, &target, &ready, &error) == CAI_ERR_INVALID);
   assert(!ready && strstr(error.message, "no running server"));
   cai_error_cleanup(&error);
@@ -163,7 +171,7 @@ static void cases(const char *self, const char *runtime, const char *workspace,
   /* Both launches observed absence. Before reading the losing child's EXIT,
    * another native owner appears. The loser must attach to that identity and
    * retain its own startup intents, without launching a second writer. */
-  boot = open_boot(&options, self, conflict);
+  boot = open_boot(&options, child, conflict);
   adapter = cai_cli_attach_boot_adapter(boot);
   assert(adapter->pump(adapter->context, now_ms(), &target, &ready, NULL) ==
              CAI_OK &&
@@ -182,14 +190,14 @@ static void cases(const char *self, const char *runtime, const char *workspace,
   cai_workspace_server_close(server);
 
   /* A claim failure with no verifiable winner remains the original failure. */
-  boot = open_boot(&options, self, conflict);
+  boot = open_boot(&options, child, conflict);
   assert(drive(boot, NULL, &target, &ready, &error) == CAI_ERR_LIMIT);
   assert(!ready && strcmp(error.message, "fixture startup failure") == 0);
   cai_error_cleanup(&error);
   cai_cli_attach_boot_close(boot);
 
   /* A different startup failure must not be hidden by a concurrent owner. */
-  boot = open_boot(&options, self, invalid);
+  boot = open_boot(&options, child, invalid);
   adapter = cai_cli_attach_boot_adapter(boot);
   assert(adapter->pump(adapter->context, now_ms(), &target, &ready, NULL) ==
          CAI_OK);
@@ -202,7 +210,7 @@ static void cases(const char *self, const char *runtime, const char *workspace,
   cai_cli_attach_boot_close(boot);
   cai_workspace_server_close(server);
 
-  boot = open_boot(&options, self, ready_child);
+  boot = open_boot(&options, child, ready_child);
   assert(drive(boot, NULL, &target, &ready, &error) == CAI_OK);
   assert(ready == CAI_CLI_FRONTEND_STARTED &&
          target.expected_instance[0] == 19);
@@ -223,22 +231,17 @@ static void cases(const char *self, const char *runtime, const char *workspace,
 
   /* Cancelling lookup creates neither a process nor a controller lease. */
   server = owner(runtime, workspace, NULL);
-  boot = open_boot(&options, "/must-not-launch", conflict);
+  boot = open_boot(&options, no_launch, conflict);
   cai_cli_attach_boot_close(boot);
   no_attachment(server);
   cai_workspace_server_close(server);
-  rc = cai_cli_attach_boot_open(&options, self, 65536, conflict, &boot, NULL);
+  rc = cai_cli_attach_boot_open(&options, child, NULL, 65536, conflict, &boot,
+                                NULL);
   assert(rc == CAI_ERR_INVALID && boot == NULL);
-  rc = cai_cli_attach_boot_open(NULL, NULL, 0, NULL, &boot, NULL);
+  rc = cai_cli_attach_boot_open(NULL, NULL, NULL, 0, NULL, &boot, NULL);
   assert(rc == CAI_ERR_INVALID && boot == NULL);
 }
 int main(int argc, char **argv) {
-  char *self;
-  if (argc > 2 && strcmp(argv[1], "-x") == 0 &&
-      strcmp(argv[2], "--_workspace-owner") == 0) {
-    child(argc, argv);
-    return 0;
-  }
   if (argc == 4 && strcmp(argv[1], "--stall") == 0) {
     cai_workspace_endpoint *endpoint;
     assert(cai_workspace_endpoint_open(argv[2], argv[3], &endpoint, NULL) ==
@@ -250,9 +253,6 @@ int main(int argc, char **argv) {
       pause();
   }
   assert(argc == 4);
-  self = realpath(argv[0], NULL);
-  assert(self != NULL);
-  cases(self, argv[1], argv[2], argv[3]);
-  free(self);
+  cases(argv[1], argv[2], argv[3]);
   return 0;
 }

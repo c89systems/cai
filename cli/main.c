@@ -7,8 +7,6 @@
 #include "options.h"
 #include "process.h"
 #include <cai/app.h>
-#include <errno.h>
-#include <limits.h>
 #include <pslog.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,24 +48,6 @@ int main(int argc, char **argv) {
       "for "
       "options.\n";
   cai_error_init(&error);
-  /* Only the exec launcher uses this descriptor handoff. Values passed as
-   * instructions or elsewhere in argv cannot select the private mode. */
-  if (argc > 2 && strcmp(argv[1], "-x") == 0 &&
-      strcmp(argv[2], "--_workspace-owner") == 0) {
-    char *end = NULL;
-    long descriptor;
-    if (argc < 5 || strcmp(argv[4], "--") != 0 || argv[3][0] < '0' ||
-        argv[3][0] > '9')
-      return 2;
-    errno = 0;
-    descriptor = strtol(argv[3], &end, 10);
-    if (errno || *end || descriptor < 3 || descriptor > INT_MAX)
-      return 2;
-    rc = cai_cli_owner_run(&config, (int)descriptor, argc - 5,
-                           (const char *const *)(argv + 5), &code, &error);
-    cai_error_cleanup(&error);
-    return rc == CAI_OK ? code : 1;
-  }
   /* Reuse the primary parser so a value such as -i '--headless' cannot
    * accidentally select a process mode. Help/version/dump remain utilities. */
   rc = cai_cli_read_options(argc, argv, NULL, &options);

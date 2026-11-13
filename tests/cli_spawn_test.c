@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "../cli/process.h"
 #include "../cli/spawn.h"
 #include <assert.h>
 #include <cai/app_client.h>
@@ -17,6 +18,8 @@
 #include <unistd.h>
 static cai_cli_spawn *active, *other;
 static volatile sig_atomic_t owned[2];
+static pid_t original_parent;
+static int inherited[2];
 static void failed(int number) {
   size_t i;
   for (i = 0U; i < 2U; i++) {
@@ -30,10 +33,11 @@ static void failed(int number) {
   }
   _exit(128 + number);
 }
-static int open_spawn(const char *program, int argc, const char *const *argv,
-                      uint64_t now, uint64_t timeout, cai_cli_spawn **out,
-                      cai_error *error) {
-  int rc = cai_cli_spawn_open(program, argc, argv, now, timeout, out, error);
+static int open_spawn(cai_cli_spawn_entry_fn entry, const void *context,
+                      int argc, const char *const *argv, uint64_t now,
+                      uint64_t timeout, cai_cli_spawn **out, cai_error *error) {
+  int rc =
+      cai_cli_spawn_open(entry, context, argc, argv, now, timeout, out, error);
   if (rc == CAI_OK)
     owned[out == &other ? 1 : 0] = (sig_atomic_t)cai_cli_spawn_pid(*out);
   return rc;
@@ -95,12 +99,29 @@ static void finish(cai_cli_spawn **s, int expected) {
 }
 /* No parent-side storage clients may be opened by launching or attaching. */
 int __wrap_lc_client_open(void *config, void *out, void *error);
+int __real_lc_client_open(void *config, void *out, void *error);
 int __wrap_lc_client_open(void *config, void *out, void *error) {
-  (void)config;
-  (void)out;
-  (void)error;
+  assert(getpid() != original_parent);
+  return __real_lc_client_open(config, out, error);
+}
+int __wrap_execv(const char *, char *const *);
+int __wrap_execv(const char *path, char *const *arguments) {
+  (void)path;
+  (void)arguments;
   abort();
-  return -1;
+}
+static int real_child(const void *context, int fd, int argc,
+                      const char *const *argv) {
+  cai_app_config config;
+  cai_error error;
+  int code = 1, rc;
+  (void)context;
+  assert(getpid() != original_parent);
+  cai_app_config_init(&config);
+  cai_error_init(&error);
+  rc = cai_cli_owner_run(&config, fd, argc, argv, &code, &error);
+  cai_error_cleanup(&error);
+  return rc == CAI_OK ? code : 1;
 }
 static int ignore_record(void *context, const cai_wire_event *e,
                          cai_error *error) {
@@ -109,12 +130,20 @@ static int ignore_record(void *context, const cai_wire_event *e,
   (void)error;
   return CAI_OK;
 }
-static void fake_child(int argc, char **argv) {
-  int fd = atoi(argv[3]);
-  const char *mode = argv[5];
+static int fake_child(const void *context, int fd, int argc,
+                      const char *const *argv) {
+  const char *mode = argv[0];
   cai_wire_peer *peer;
+  struct sigaction inherited_signal;
   cai_cli_bootstrap_message *v = calloc(1U, sizeof(*v));
-  assert(argc == 6 && strcmp(argv[1], "-x") == 0 && v);
+  assert(argc == 1 && v);
+  assert(context == &original_parent && getpid() != original_parent);
+  assert(getsid(0) == getpid());
+  assert((fcntl(fd, F_GETFD) & FD_CLOEXEC) != 0);
+  assert(sigaction(SIGUSR1, NULL, &inherited_signal) == 0 &&
+         inherited_signal.sa_handler == SIG_DFL);
+  assert(fcntl(inherited[0], F_GETFD) == -1 && errno == EBADF);
+  assert(fcntl(inherited[1], F_GETFD) == -1 && errno == EBADF);
   if (strcmp(mode, "early-exit") == 0)
     _exit(23);
   if (strcmp(mode, "truncated") == 0) {
@@ -161,17 +190,25 @@ static void fake_child(int argc, char **argv) {
   assert(cai_wire_peer_flush(peer, 0U, NULL) == CAI_OK);
   cai_wire_peer_close(peer);
   free(v);
-  _exit(strcmp(mode, "nonzero") == 0 ? 23 : 0);
+  return strcmp(mode, "nonzero") == 0 ? 23 : 0;
 }
-static void fixtures(const char *self) {
+static void fixtures(void) {
   static const char *const names[] = {"early-exit", "truncated", "duplicate",
                                       "nonzero", "noisy"};
   size_t i;
   cai_error error;
+  struct sigaction parent_action, parent_before, parent_after;
+  memset(&parent_action, 0, sizeof(parent_action));
+  parent_action.sa_handler = SIG_IGN;
+  sigemptyset(&parent_action.sa_mask);
+  assert(sigaction(SIGUSR1, &parent_action, &parent_before) == 0);
+  inherited[0] = open("/dev/null", O_RDONLY);
+  inherited[1] = open("/dev/null", O_RDONLY | O_CLOEXEC);
+  assert(inherited[0] >= 3 && inherited[1] >= 3);
   cai_error_init(&error);
   for (i = 0U; i < sizeof(names) / sizeof(names[0]); i++) {
-    assert(cai_cli_spawn_open(self, 1, &names[i], clock_ms(), 0U, &active,
-                              &error) == CAI_OK);
+    assert(cai_cli_spawn_open(fake_child, &original_parent, 1, &names[i],
+                              clock_ms(), 0U, &active, &error) == CAI_OK);
     assert(cai_cli_spawn_close(active, &error) == CAI_ERR_INVALID);
     cai_error_cleanup(&error);
     if (strcmp(names[i], "nonzero") == 0) {
@@ -190,8 +227,8 @@ static void fixtures(const char *self) {
     const char *args[] = {"noisy"};
     int saved_input = dup(STDIN_FILENO);
     assert(saved_input >= 0 && close(STDIN_FILENO) == 0);
-    assert(cai_cli_spawn_open(self, 1, args, clock_ms(), 0U, &active, NULL) ==
-           CAI_OK);
+    assert(cai_cli_spawn_open(fake_child, &original_parent, 1, args, clock_ms(),
+                              0U, &active, NULL) == CAI_OK);
     assert(dup2(saved_input, STDIN_FILENO) == STDIN_FILENO);
     close(saved_input);
     finish(&active, CAI_CLI_SPAWN_EXITED);
@@ -199,7 +236,8 @@ static void fixtures(const char *self) {
   {
     const char *args[] = {"wait"};
     uint64_t now = clock_ms();
-    assert(cai_cli_spawn_open(self, 1, args, now, 1U, &active, NULL) == CAI_OK);
+    assert(cai_cli_spawn_open(fake_child, &original_parent, 1, args, now, 1U,
+                              &active, NULL) == CAI_OK);
     assert(cai_cli_spawn_pump(active, now + 2U, NULL) == CAI_OK);
     assert(strstr(cai_cli_spawn_get_state(active)->observation.message,
                   "timed out"));
@@ -209,8 +247,8 @@ static void fixtures(const char *self) {
       sigemptyset(&block);
       sigaddset(&block, SIGTERM);
       assert(sigprocmask(SIG_BLOCK, &block, &before) == 0);
-      assert(cai_cli_spawn_open(self, 1, args, clock_ms(), 0U, &active, NULL) ==
-             CAI_OK);
+      assert(cai_cli_spawn_open(fake_child, &original_parent, 1, args,
+                                clock_ms(), 0U, &active, NULL) == CAI_OK);
       assert(sigprocmask(SIG_BLOCK, NULL, &after) == 0 &&
              sigismember(&after, SIGTERM) == 1);
       assert(sigprocmask(SIG_SETMASK, &before, NULL) == 0);
@@ -222,8 +260,8 @@ static void fixtures(const char *self) {
   }
   {
     const char *args[] = {"stubborn"};
-    assert(cai_cli_spawn_open(self, 1, args, clock_ms(), 0U, &active, NULL) ==
-           CAI_OK);
+    assert(cai_cli_spawn_open(fake_child, &original_parent, 1, args, clock_ms(),
+                              0U, &active, NULL) == CAI_OK);
     while (cai_cli_spawn_get_state(active)->phase == CAI_CLI_SPAWN_STARTING)
       step(active);
     assert(cai_cli_spawn_cancel(active, clock_ms(), NULL) == CAI_OK);
@@ -232,11 +270,11 @@ static void fixtures(const char *self) {
     assert(cai_cli_spawn_get_state(active)->signal == SIGKILL);
     finish(&active, CAI_CLI_SPAWN_FAILED);
   }
-  assert(cai_cli_spawn_open("relative", 0, NULL, 0U, 0U, &active, NULL) ==
+  assert(cai_cli_spawn_open(NULL, NULL, 0, NULL, 0U, 0U, &active, NULL) ==
              CAI_ERR_INVALID &&
          active == NULL);
-  assert(cai_cli_spawn_open("/no-such-cai-executable", 0, NULL, 0U, 0U, &active,
-                            NULL) == CAI_ERR_INVALID &&
+  assert(cai_cli_spawn_open(fake_child, NULL, 1, NULL, 0U, 0U, &active, NULL) ==
+             CAI_ERR_INVALID &&
          active == NULL);
   {
     struct sigaction action, before;
@@ -244,11 +282,18 @@ static void fixtures(const char *self) {
     action.sa_handler = SIG_IGN;
     sigemptyset(&action.sa_mask);
     assert(sigaction(SIGCHLD, &action, &before) == 0);
-    assert(cai_cli_spawn_open(self, 0, NULL, 0U, 0U, &active, NULL) ==
-               CAI_ERR_INVALID &&
+    assert(cai_cli_spawn_open(fake_child, &original_parent, 0, NULL, 0U, 0U,
+                              &active, NULL) == CAI_ERR_INVALID &&
            active == NULL);
     assert(sigaction(SIGCHLD, &before, NULL) == 0);
   }
+  assert(fcntl(inherited[0], F_GETFD) >= 0);
+  assert(fcntl(inherited[1], F_GETFD) >= 0);
+  close(inherited[0]);
+  close(inherited[1]);
+  assert(sigaction(SIGUSR1, NULL, &parent_after) == 0 &&
+         parent_after.sa_handler == SIG_IGN);
+  assert(sigaction(SIGUSR1, &parent_before, NULL) == 0);
 }
 static cai_workspace_client *attach(const unsigned char *instance,
                                     int persistent) {
@@ -357,11 +402,7 @@ int main(int argc, char **argv) {
   const cai_cli_spawn_state *state;
   const char *mode = getenv("CAI_TEST_SPAWN_MODE");
   int persistent, admitted_receipt = 0;
-  if (argc > 2 && strcmp(argv[1], "-x") == 0 &&
-      strcmp(argv[2], "--_workspace-owner") == 0) {
-    fake_child(argc, argv);
-    return 0;
-  }
+  original_parent = getpid();
   {
     struct sigaction action;
     memset(&action, 0, sizeof(action));
@@ -370,15 +411,16 @@ int main(int argc, char **argv) {
     assert(sigaction(SIGABRT, &action, NULL) == 0);
     assert(sigaction(SIGTERM, &action, NULL) == 0);
   }
-  assert(argc > 2 && mode);
+  assert(argc > 1 && mode);
   if (strcmp(mode, "fixtures") == 0) {
-    fixtures(argv[0]);
+    fixtures();
     return 0;
   }
   persistent =
       strcmp(mode, "persistent") == 0 || strcmp(mode, "half-close") == 0;
-  assert(cai_cli_spawn_open(argv[1], argc - 2, (const char *const *)(argv + 2),
-                            clock_ms(), 0U, &active, NULL) == CAI_OK);
+  assert(cai_cli_spawn_open(real_child, NULL, argc - 1,
+                            (const char *const *)(argv + 1), clock_ms(), 0U,
+                            &active, NULL) == CAI_OK);
   if (strcmp(mode, "cancel") == 0) {
     assert(cai_cli_spawn_cancel(active, clock_ms(), NULL) == CAI_OK);
     finish(&active, CAI_CLI_SPAWN_FAILED);
@@ -432,8 +474,9 @@ int main(int argc, char **argv) {
     assert(cai_cli_spawn_prepare(active, &fd, &deadline, NULL) == CAI_OK);
     assert(shutdown(fd.fd, SHUT_WR) == 0);
   }
-  assert(cai_cli_spawn_open(argv[1], argc - 2, (const char *const *)(argv + 2),
-                            clock_ms(), 0U, &other, NULL) == CAI_OK);
+  assert(cai_cli_spawn_open(real_child, NULL, argc - 1,
+                            (const char *const *)(argv + 1), clock_ms(), 0U,
+                            &other, NULL) == CAI_OK);
   wait_phase(other, 0);
   assert(cai_cli_spawn_get_state(other)->observation.code == CAI_ERR_LIMIT);
   finish(&other, CAI_CLI_SPAWN_FAILED);

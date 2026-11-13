@@ -12,17 +12,15 @@ workspace owner. The executable's
 [terminal attachment](terminal-attachment.md) now uses this handoff for automatic
 startup after workspace discovery.
 
-Workspace discovery and startup create no frontend worker threads. After nonblocking
-discovery, it may launch its own absolute program path on that single frontend
-thread by executing `cai -x --_workspace-owner FD -- ...`. The editor
-can already be open; this launcher must remain outside threaded library hosts.
-The child becomes a session leader, restores normal child signal dispositions
-and masks, redirects standard input/output/error to `/dev/null`, and execs.
-Only the explicit Unix socket is deliberately retained across that exec; the
-child protects it with CLOEXEC before creating the owner or running tools.
-The private bootstrap entry point is recognized only immediately after `-x`, with a
-strict decimal descriptor of at least 3 and an explicit separator. A connected
-same-user Unix stream is required. It is not a public startup flag.
+Workspace discovery and startup create no frontend worker threads or storage
+clients. After nonblocking discovery, the executable forks on its single
+frontend thread. The editor can already be open; this launcher remains outside
+threaded library hosts. The child becomes a session leader, closes inherited
+frontend descriptors, resets signal handlers and masks, and redirects standard
+input/output/error to `/dev/null`. It then constructs a fresh `libcai_app`
+instance directly, without executing another binary. The bootstrap socket
+reports startup readiness and remains CLOEXEC so tools cannot inherit it.
+The server listens on the ordinary public workspace socket for other clients.
 
 The child uses the common native owner lifecycle and signal loop. It creates
 owned session logs without a frontend notice queue and publishes readiness
@@ -34,8 +32,10 @@ eventually be submitted once through the bound producer, not forwarded as
 both backend startup instructions and frontend input.
 
 Automatic launches pass the resolved `--no-persist`/`--persist` policy to the
-headless process. The normal default exits after its last client disconnects;
+child app. The normal default exits after its last client disconnects;
 explicit `cai -x` defaults to persistent. Both use the same native server lifecycle.
+With `--persist`, a forked server survives the launching client's exit and accepts
+later attachments independently.
 
 `cai -X` (`--terminate-headless`) stops the current directory's server through
 the Unix socket, including persistent servers and servers with attached clients.

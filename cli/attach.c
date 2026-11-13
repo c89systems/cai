@@ -3,9 +3,9 @@
 #include "batch.h"
 #include "config.h"
 #include "error.h"
-#include "executable_path.h"
 #include "frontend.h"
 #include "identity.h"
+#include "process.h"
 #include "run_frontend.h"
 #include "spawn.h"
 #include "theme.h"
@@ -26,7 +26,8 @@
 struct cai_cli_attach_boot {
   cai_cli_frontend_boot adapter;
   const cai_cli_options *options;
-  const char *program;
+  cai_cli_spawn_entry_fn entry;
+  const void *context;
   int argc;
   const char *const *argv;
   cai_workspace_discovery *query;
@@ -65,25 +66,17 @@ static int discover(cai_cli_attach_boot *s, uint64_t now, cai_error *error) {
   return cai_workspace_discovery_open(&config, now, &s->query, error);
 }
 static int launch(cai_cli_attach_boot *s, uint64_t now, cai_error *error) {
-  char program[PATH_MAX];
   const char **arguments;
   int i, rc;
-  const char *executable = s->program;
-  if (executable == NULL) {
-    rc = cai_cli_executable_path(program, sizeof(program), error);
-    if (rc != CAI_OK)
-      return rc;
-    executable = program;
-  }
   arguments = calloc((size_t)s->argc + 1U, sizeof(*arguments));
   if (arguments == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM,
                          "allocate headless server arguments");
-  /* Freeze the resolved lifetime policy across reexec, including overrides. */
+  /* Freeze the resolved lifetime policy for the new child app. */
   arguments[0] = s->options->server_persist ? "--persist" : "--no-persist";
   for (i = 0; i < s->argc; ++i)
     arguments[i + 1] = s->argv[i];
-  rc = cai_cli_spawn_open(executable, s->argc + 1, arguments, now, 0U,
+  rc = cai_cli_spawn_open(s->entry, s->context, s->argc + 1, arguments, now, 0U,
                           &s->child, error);
   free(arguments);
   return rc;
@@ -169,23 +162,25 @@ static int pump(void *context, uint64_t now, cai_app_client_config *target,
   return CAI_OK;
 }
 int cai_cli_attach_boot_open(const cai_cli_options *options,
-                             const char *program, int argc,
-                             const char *const *argv, cai_cli_attach_boot **out,
-                             cai_error *error) {
+                             cai_cli_spawn_entry_fn entry, const void *context,
+                             int argc, const char *const *argv,
+                             cai_cli_attach_boot **out, cai_error *error) {
   cai_cli_attach_boot *s;
   int rc;
   if (out != NULL)
     *out = NULL;
-  if (options == NULL || out == NULL || options->directory == NULL ||
-      options->runtime_dir == NULL || argc < 0 || argc >= 65536 ||
-      (argc != 0 && argv == NULL) || strlen(options->directory) >= 4096U)
+  if (options == NULL || entry == NULL || out == NULL ||
+      options->directory == NULL || options->runtime_dir == NULL || argc < 0 ||
+      argc >= 65536 || (argc != 0 && argv == NULL) ||
+      strlen(options->directory) >= 4096U)
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "workspace startup options and output required");
   s = calloc(1U, sizeof(*s));
   if (s == NULL)
     return cai_cli_error(error, CAI_ERR_NOMEM, "allocate workspace startup");
   s->options = options;
-  s->program = program;
+  s->entry = entry;
+  s->context = context;
   s->argc = argc;
   s->argv = argv;
   strcpy(s->workspace, options->directory);
@@ -208,6 +203,18 @@ int cai_cli_attach_boot_open(const cai_cli_options *options,
 const cai_cli_frontend_boot *
 cai_cli_attach_boot_adapter(cai_cli_attach_boot *s) {
   return s != NULL ? &s->adapter : NULL;
+}
+
+/** The child constructs and owns a fresh app; no frontend app is reused. */
+static int child_owner(const void *context, int descriptor, int argc,
+                       const char *const *argv) {
+  const cai_app_config *application = context;
+  cai_error error;
+  int code = 1, rc;
+  cai_error_init(&error);
+  rc = cai_cli_owner_run(application, descriptor, argc, argv, &code, &error);
+  cai_error_cleanup(&error);
+  return rc == CAI_OK ? code : 1;
 }
 
 int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
@@ -265,7 +272,7 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
   options.workspace_requirements = requirements.values;
   options.workspace_requirement_count = requirements.count;
   if (rc == CAI_OK)
-    rc = cai_cli_attach_boot_open(&options, NULL, argc - 1,
+    rc = cai_cli_attach_boot_open(&options, child_owner, application, argc - 1,
                                   (const char *const *)(argv + 1), &startup,
                                   error);
   if (rc != CAI_OK)

@@ -1,21 +1,23 @@
 #ifndef CAI_CLI_ATTACH_H
 #define CAI_CLI_ATTACH_H
 #include "frontend.h"
+#include "spawn.h"
 #include <cai/app.h>
 /** Executable-only, single-threaded discovery/launch state. The adapter drives
  * identity probes and the exact child watch through frontend interests. Options
- * and argv are borrowed until close; NULL program selects this executable only
- * if a launch is needed. No runtime or storage client is opened here. */
+ * and argv are borrowed until close. entry/context are used only if a launch
+ * is needed. No runtime or storage client is opened in the parent. */
 typedef struct cai_cli_attach_boot cai_cli_attach_boot;
-int cai_cli_attach_boot_open(const cai_cli_options *, const char *program,
-                             int argc, const char *const *argv,
-                             cai_cli_attach_boot **, cai_error *);
+int cai_cli_attach_boot_open(const cai_cli_options *, cai_cli_spawn_entry_fn,
+                             const void *context, int argc,
+                             const char *const *argv, cai_cli_attach_boot **,
+                             cai_error *);
 const cai_cli_frontend_boot *cai_cli_attach_boot_adapter(cai_cli_attach_boot *);
 /** After the terminal returns, cancel/reap an unfinished owned launch. Ready
  * owners follow attachment lifetime policy. Call only before executable exit:
  * a ready surviving child's local watch is abandoned without signalling it. */
 void cai_cli_attach_boot_close(cai_cli_attach_boot *);
-/** Executable discovery/quiet-exec composition. Resolved temporary mode uses
+/** Executable discovery/forked-app composition. Resolved temporary mode uses
  * the common in-process ephemeral owner/terminal composition instead. The
  * reusable terminal
  * frontend never starts an owner or opens storage. Explicit local shell/pager

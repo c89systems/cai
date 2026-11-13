@@ -1,14 +1,15 @@
-#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 #include "spawn.h"
-#include "../src/cai_process_child.h"
 #include "error.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 struct cai_cli_spawn {
@@ -30,6 +31,39 @@ static int retained_fd(int descriptor) {
   copy = fcntl(descriptor, F_DUPFD_CLOEXEC, 3);
   close(descriptor);
   return copy;
+}
+/** A forked app must not retain the frontend's terminal, watches or listeners.
+ * close_range handles modern Linux; the bounded fallback covers older kernels.
+ */
+static int child_descriptors(int keep, long limit) {
+  long fd;
+#ifdef SYS_close_range
+  if ((keep == 3 ||
+       syscall(SYS_close_range, 3U, (unsigned int)keep - 1U, 0U) == 0) &&
+      syscall(SYS_close_range, (unsigned int)keep + 1U, ~0U, 0U) == 0)
+    return 0;
+  if (errno != ENOSYS && errno != EINVAL && errno != EPERM)
+    return -1;
+#endif
+  for (fd = 3; fd < limit; ++fd)
+    if (fd != keep)
+      close((int)fd);
+  return 0;
+}
+/** No frontend signal handlers or blocked signals belong to the new app. */
+static int child_signals(void) {
+  struct sigaction action;
+  sigset_t empty;
+  int number;
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = SIG_DFL;
+  if (sigemptyset(&action.sa_mask) != 0 || sigemptyset(&empty) != 0)
+    return -1;
+  for (number = 1; number < NSIG; ++number)
+    if (number != SIGKILL && number != SIGSTOP &&
+        sigaction(number, &action, NULL) != 0 && errno != EINVAL)
+      return -1;
+  return sigprocmask(SIG_SETMASK, &empty, NULL);
 }
 static void failure(cai_cli_spawn *s, int code, const char *message) {
   if (s->state.observation.code == CAI_OK) {
@@ -77,36 +111,33 @@ int cai_cli_spawn_close(cai_cli_spawn *s, cai_error *error) {
   cai_cli_spawn_abandon(s);
   return CAI_OK;
 }
-int cai_cli_spawn_open(const char *program, int argc, const char *const *argv,
-                       uint64_t now, uint64_t timeout, cai_cli_spawn **out,
+int cai_cli_spawn_open(cai_cli_spawn_entry_fn entry, const void *context,
+                       int argc, const char *const *argv, uint64_t now,
+                       uint64_t timeout, cai_cli_spawn **out,
                        cai_error *error) {
   cai_cli_spawn *s;
   struct sigaction child_action;
   sigset_t blocked, original;
   int pair[2] = {-1, -1}, null_fd = -1, i, rc, masked = 0;
-  char **arguments = NULL;
-  char descriptor[32];
+  long descriptor_limit;
   if (out != NULL)
     *out = NULL;
-  if (out == NULL || program == NULL || program[0] != '/' || argc < 0 ||
-      argc > 65536 || (argc != 0 && argv == NULL))
-    return cai_cli_error(
-        error, CAI_ERR_INVALID,
-        "absolute workspace executable and arguments required");
+  if (out == NULL || entry == NULL || argc < 0 || argc > 65536 ||
+      (argc != 0 && argv == NULL))
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "workspace child entry and arguments required");
   if (sigaction(SIGCHLD, NULL, &child_action) != 0 ||
       child_action.sa_handler != SIG_DFL ||
       (child_action.sa_flags & SA_NOCLDWAIT))
     return cai_cli_error(
         error, CAI_ERR_INVALID,
         "workspace launch requires default child reaping before threads");
-  if (access(program, X_OK) != 0)
-    return cai_cli_error(error, CAI_ERR_INVALID,
-                         "workspace executable is not accessible");
+  descriptor_limit = sysconf(_SC_OPEN_MAX);
+  if (descriptor_limit < 3 || descriptor_limit > INT_MAX)
+    return cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "read workspace child descriptor limit");
   s = calloc(1U, sizeof(*s));
-  arguments = calloc((size_t)argc + 6U, sizeof(*arguments));
-  if (s == NULL || arguments == NULL) {
-    free(s);
-    free(arguments);
+  if (s == NULL) {
     return cai_cli_error(error, CAI_ERR_NOMEM, "allocate workspace launch");
   }
   rc = cai_cli_bootstrap_decoder_open(&s->decoder, error);
@@ -116,9 +147,6 @@ int cai_cli_spawn_open(const char *program, int argc, const char *const *argv,
     if (argv[i] == NULL)
       rc = cai_cli_error(error, CAI_ERR_INVALID,
                          "null workspace startup argument");
-    else if ((arguments[i + 5] = strdup(argv[i])) == NULL)
-      rc = cai_cli_error(error, CAI_ERR_NOMEM,
-                         "copy workspace startup argument");
   if (rc == CAI_OK && socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0)
     rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
                        "create workspace bootstrap socket");
@@ -144,18 +172,6 @@ int cai_cli_spawn_open(const char *program, int argc, const char *const *argv,
     rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
                        "retain quiet workspace standard descriptors");
   if (rc == CAI_OK) {
-    snprintf(descriptor, sizeof(descriptor), "%d", pair[1]);
-    arguments[0] = strdup(program);
-    arguments[1] = strdup("-x");
-    arguments[2] = strdup("--_workspace-owner");
-    arguments[3] = strdup(descriptor);
-    arguments[4] = strdup("--");
-    for (i = 0; i < 5; i++)
-      if (arguments[i] == NULL)
-        rc = cai_cli_error(error, CAI_ERR_NOMEM,
-                           "copy workspace executable arguments");
-  }
-  if (rc == CAI_OK) {
     sigemptyset(&blocked);
     sigaddset(&blocked, SIGINT);
     sigaddset(&blocked, SIGTERM);
@@ -171,12 +187,11 @@ int cai_cli_spawn_open(const char *program, int argc, const char *const *argv,
     s->pid = fork();
     if (s->pid == 0) {
       if (setsid() < 0 || dup2(null_fd, 0) < 0 || dup2(null_fd, 1) < 0 ||
-          dup2(null_fd, 2) < 0 || fcntl(pair[1], F_SETFD, 0) != 0 ||
-          cai_process_child_signals() != 0)
+          dup2(null_fd, 2) < 0 ||
+          child_descriptors(pair[1], descriptor_limit) != 0 ||
+          child_signals() != 0)
         _exit(126);
-      close(null_fd);
-      execv(program, arguments);
-      _exit(127);
+      _exit(entry(context, pair[1], argc, argv));
     }
     if (s->pid < 0)
       rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "fork workspace owner");
@@ -189,9 +204,6 @@ int cai_cli_spawn_open(const char *program, int argc, const char *const *argv,
     close(pair[0]);
   if (pair[1] >= 0)
     close(pair[1]);
-  for (i = 0; i < argc + 5; i++)
-    free(arguments[i]);
-  free(arguments);
   if (rc != CAI_OK) {
     cai_cli_spawn_abandon(s);
     return rc;
