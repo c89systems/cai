@@ -109,12 +109,19 @@ int cai_workspace_client_takeover(cai_workspace_client *client,
 int cai_workspace_client_shutdown(cai_workspace_client *client,
                                   uint64_t request, uint64_t generation,
                                   cai_error *error);
-/** Gracefully enqueue DETACH and drain bounded output through pump. Before
+/** Gracefully enqueue DETACH and pump until the server closes this attachment,
+ * confirming that prior input and the detach control have been consumed. Before
  * WELCOME, or during a partial outgoing record, disconnects immediately rather
  * than sending an invalid record. Never blocks or waits for server shutdown.
- * The executable separately waits for nonpersistent server exit/temp cleanup.
+ * A busy nonpersistent last-client server finishes its current turn before
+ * stopping. A new authenticated attachment cancels that pending shutdown.
  */
 int cai_workspace_client_detach(cai_workspace_client *client, cai_error *error);
+/** Send an immediate detach. Persistent servers and other attachments keep
+ * running; a nonpersistent last-client server cancels work and stops. Pump
+ * until the server closes this attachment, confirming delivery of the control;
+ * this does not wait for server shutdown or turn completion. */
+int cai_workspace_client_detach_now(cai_workspace_client *, cai_error *);
 /** Borrow the canonical directory until close. */
 const char *cai_workspace_client_directory(const cai_workspace_client *client);
 /** Immediate local release; never implicitly flushes or retries output. */

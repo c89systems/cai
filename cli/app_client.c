@@ -1078,6 +1078,15 @@ int cai_app_client_detach(cai_app_client *client, cai_error *error) {
                          "detach cannot reenter client");
   return cai_workspace_client_detach(client->socket, error);
 }
+int cai_app_client_detach_now(cai_app_client *client, cai_error *error) {
+  int rc = valid(client, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (client->pumping)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "detach cannot reenter client");
+  return cai_workspace_client_detach_now(client->socket, error);
+}
 const char *cai_app_client_directory(const cai_app_client *client) {
   return client != NULL && pthread_equal(client->owner, pthread_self())
              ? cai_workspace_client_directory(client->socket)

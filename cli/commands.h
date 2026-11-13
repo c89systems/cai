@@ -21,6 +21,9 @@ typedef struct cai_cli_command_tokens {
   size_t name_length, arguments_length;
 } cai_cli_command_tokens;
 void cai_cli_command_parse(const char *, cai_cli_command_tokens *);
+/** 0 other command, 1 ordinary detach, 2 immediate detach, -1 invalid quit
+ * arguments. /terminate is the argument-free alias for /quit now. */
+int cai_cli_command_quit(const char *);
 cli_command_boundary cai_cli_command_delivery(const char *line);
 int cai_cli_command_is_theme(const char *line);
 /** Native manual reviewers and admitted review commands share presentation;

@@ -152,14 +152,18 @@ cancellation token that bounded restoration/configuration/network waits inspect;
 it cannot depend solely on the owner reaching its mailbox. Stopping does not
 call `exit()` in a host. Join is explicitly blocking and never runs in Softline
 callbacks. Detach releases attachment resources, then evaluates last-client
-lifetime: a nonpersistent server stops after its last client leaves; a
-persistent server continues. An initial readiness/attachment grace period
+lifetime: a nonpersistent server waits for durable completion of the current
+turn after its last client leaves; a persistent server continues. While waiting,
+the server remains READY with LAST_DETACHED, starts no queued turn or automatic
+goal continuation, and accepts authenticated reattachment to cancel the pending
+shutdown. The host reports busy through the settlement append, then clears it.
+Forced detach skips this wait only for a nonpersistent last client. An initial readiness/attachment grace period
 allows an automatically launched server to receive its first client. Failure
 to attach must not leave a nonpersistent server running indefinitely. If
 an autostarting client quits before READY, its startup cancellation channel
 must also stop the server it launched; disconnecting an incomplete handshake
 alone is insufficient. An SDK client must never kill an unrelated owner.
-Once last-client shutdown begins, a racing attachment receives a stopping
+Once shutdown commits to STOPPING, a racing attachment receives a stopping
 response and retries discovery after the old owner releases its endpoint; it
 does not revive a partially stopped runtime.
 
@@ -302,7 +306,8 @@ other backend settings constrain attachment through per-field fingerprints.
 | `/workspace` | List available running workspaces and identify the current one. |
 | `/workspace SELECTOR` | Select an existing owner after verified discovery and handshake. Retain visited attachments until client quit; do not stop either owner or carry accepted inputs across workspaces. |
 | `/takeover` | Explicitly acquire control, revoking the previous controlling attachment. |
-| `/quit`, Alt-Q, terminal EOF | Detach; Alt-Q persists the local draft to this session's prompt history before detach. The last detach shuts down a nonpersistent server; a persistent server continues. |
+| `/quit`, `/exit`, Alt-Q, terminal EOF | Detach; Alt-Q persists the local draft to this session's prompt history before detach. A nonpersistent last-client server finishes its current turn before stopping; reattachment cancels pending shutdown. A persistent server continues. |
+| `/quit now`, `/quit force`, `/quit -f`, `/quit --force`, `/terminate` | Immediate detach; skip the turn-completion wait for a nonpersistent last-client server. Other attachments and persistent servers continue. |
 | `/shutdown` | Controller-only orderly shutdown, distinct from detach and goal pause. |
 | `-R`/`--resume`, `/new`, `/resume` | Select a session inside the selected workspace server; queues remain per session. |
 
@@ -438,7 +443,7 @@ zero means vacant control. Clients verify the complete welcome identity before
 submitting requests. A new instance requires explicit reconciliation, rather
 than treating an old attachment/generation as valid after restart.
 
-Client `DETACH`, `TAKEOVER` and `SHUTDOWN` require null payloads and zero
+Client `DETACH`, `DETACH_NOW`, `TAKEOVER` and `SHUTDOWN` require null payloads and zero
 session epoch, sequence and stream metadata. The actual connection identity must
 match the attachment header; the header can never impersonate another client.
 `TAKEOVER` checks the original generation at admission, then explicitly changes
@@ -448,6 +453,10 @@ take effect only after validated record completion. `REQUEST` and
 `SYNCHRONIZE` payloads remain incremental application callbacks; applications
 must classify mutations, validate payloads and recheck authority at actual
 admission. A COMPLETE callback is still not a durable acceptance receipt.
+`DETACH_NOW` skips the last-client turn-completion wait. Both detach forms keep
+the receive side open until the server closes the attachment, so a concurrent
+server write cannot discard preceding edits or the unread control as an
+ordinary disconnect. Attachment closure never waits for turn completion.
 
 The socket client has no default connection/greeting deadline: restoration can
 take time while its owner loop remains responsive. Hosts can configure an
@@ -512,7 +521,7 @@ reject duplicates, missing keys and unknown keys. Workspace and server-instance
 identity belong in the greeting payload. An attachment field supplied by a peer
 does not authenticate that peer: admission uses its bound connection identity.
 
-Semantic kinds include HELLO/WELCOME (attachment handshake), DETACH,
+Semantic kinds include HELLO/WELCOME (attachment handshake), DETACH/DETACH_NOW,
 TAKEOVER/ROLE, REQUEST/
 RESULT, STATUS, QUEUE snapshot/items/end/change, EVENT, REPLAY begin/item/end,
 stream begin/chunk/end, synchronization required and shutdown. Unknown

@@ -28,7 +28,7 @@ typedef struct batch {
   cai_cli_log *log;
   cai_cli_line_input *lines;
   cai_cli_plain_feed *feed;
-  int input_ready, input_eof, source_quit;
+  int input_ready, input_eof, source_quit, force_quit;
   unsigned long long plain_turns, plain_commands;
   int plain_quiet, plain_handoff_drain;
   unsigned long long plain_barrier, plain_quit;
@@ -171,10 +171,14 @@ static int plain_execution(batch *b, const cai_app_execution_event *e,
       b->action_prefix[b->action_prefix_used] = '\0';
       b->action_offset += n;
       if (r->final) {
-        if (request == b->plain_quit ||
-            strcmp(b->action_prefix, "/quit") == 0 ||
-            strcmp(b->action_prefix, "/exit") == 0)
+        int quit = cai_cli_command_quit(b->action_prefix);
+        if (request == b->plain_quit || quit > 0) {
           b->input_eof = 1;
+          b->force_quit = quit == 2;
+        } else if (quit < 0)
+          rc = cai_cli_plain_feed_notice(
+              b->feed, "Usage: /quit [now|force|-f|--force] or /terminate",
+              error);
         else
           rc = cai_cli_plain_feed_notice(
               b->feed,
@@ -707,10 +711,7 @@ static int advance(batch *b, const cai_cli_options *o, cai_error *error) {
     b->command = control || text[0] == '/' || text[0] == '!';
     cai_cli_command_parse(text, &tokens);
     if (b->feed != NULL) {
-      if (tokens.arguments_length == 0U &&
-          ((tokens.name_length == 5U &&
-            memcmp(tokens.name, "/quit", 5U) == 0) ||
-           (tokens.name_length == 5U && memcmp(tokens.name, "/exit", 5U) == 0)))
+      if (cai_cli_command_quit(text) > 0)
         b->source_quit = 1;
       if ((tokens.name_length == 4U && memcmp(tokens.name, "/new", 4U) == 0) ||
           (tokens.name_length == 7U && memcmp(tokens.name, "/resume", 7U) == 0))
@@ -843,6 +844,17 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
               error, CAI_ERR_TRANSPORT,
               "batch server disconnected; accepted work outcome unknown");
         break;
+      }
+      /* A force-quit receipt is attachment-local, not another turn to await.
+       * Flush only the rendered feed before ending this connection. */
+      if (!b->detaching && b->force_quit) {
+        rc = cai_cli_plain_feed_finish(b->feed, error);
+        if (rc == CAI_OK)
+          rc = cai_app_client_detach_now(b->client, error);
+        if (rc != CAI_OK)
+          break;
+        b->detaching = 1;
+        detach_deadline = now + 2000U;
       }
       if (!b->detaching &&
           b->state.transport.phase == CAI_WORKSPACE_CONNECTED) {

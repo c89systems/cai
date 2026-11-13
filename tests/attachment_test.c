@@ -92,6 +92,63 @@ static void lifetime(void) {
   assert(state(controller).stop_reason == CAI_ATTACHMENT_STOP_REQUESTED);
   cai_attachment_controller_close(controller);
 }
+static void draining(void) {
+  cai_attachment_controller *c = NULL;
+  cai_attachment_config config = {0, 0U};
+  uint64_t a, b;
+  int persist;
+  for (persist = 0; persist <= 1; ++persist) {
+    config.persist = persist;
+    assert(cai_attachment_controller_open(&config, &c, NULL) == CAI_OK);
+    assert(cai_attachment_controller_ready(c, 0U, NULL) == CAI_OK);
+    assert(cai_attachment_controller_busy(c, 1, NULL) == CAI_OK);
+    assert(cai_attachment_controller_attach(c, 1U, &a, NULL) == CAI_OK);
+    assert(cai_attachment_controller_detach(c, a, NULL) == CAI_OK);
+    assert(state(c).phase == CAI_ATTACHMENT_READY && state(c).count == 0U);
+    assert(state(c).stop_reason == (persist ? CAI_ATTACHMENT_NOT_STOPPED
+                                            : CAI_ATTACHMENT_LAST_DETACHED));
+    /* No shutdown timer: only settlement or authenticated reattachment can
+     * resolve a busy last detach. A reconnect cancels that pending decision. */
+    assert(cai_attachment_controller_advance(c, 999999U, NULL) == CAI_OK);
+    assert(state(c).phase == CAI_ATTACHMENT_READY);
+    assert(cai_attachment_controller_attach(c, 999999U, &b, NULL) == CAI_OK);
+    assert(state(c).stop_reason == CAI_ATTACHMENT_NOT_STOPPED);
+    assert(cai_attachment_controller_busy(c, 0, NULL) == CAI_OK);
+    assert(state(c).phase == CAI_ATTACHMENT_READY);
+    assert(cai_attachment_controller_busy(c, 1, NULL) == CAI_OK);
+    assert(cai_attachment_controller_detach(c, b, NULL) == CAI_OK);
+    assert(cai_attachment_controller_busy(c, 0, NULL) == CAI_OK);
+    assert(state(c).phase ==
+           (persist ? CAI_ATTACHMENT_READY : CAI_ATTACHMENT_STOPPING));
+    cai_attachment_controller_close(c);
+
+    assert(cai_attachment_controller_open(&config, &c, NULL) == CAI_OK);
+    assert(cai_attachment_controller_ready(c, 0U, NULL) == CAI_OK);
+    assert(cai_attachment_controller_busy(c, 1, NULL) == CAI_OK);
+    assert(cai_attachment_controller_attach(c, 0U, &a, NULL) == CAI_OK);
+    assert(cai_attachment_controller_attach(c, 0U, &b, NULL) == CAI_OK);
+    assert(cai_attachment_controller_detach_now(c, a, NULL) == CAI_OK);
+    assert(state(c).phase == CAI_ATTACHMENT_READY && state(c).count == 1U);
+    assert(state(c).stop_reason == CAI_ATTACHMENT_NOT_STOPPED);
+    assert(cai_attachment_controller_detach_now(c, b, NULL) == CAI_OK);
+    assert(state(c).phase ==
+           (persist ? CAI_ATTACHMENT_READY : CAI_ATTACHMENT_STOPPING));
+    cai_attachment_controller_close(c);
+  }
+  assert(cai_attachment_controller_open(NULL, &c, NULL) == CAI_OK);
+  assert(cai_attachment_controller_ready(c, 0U, NULL) == CAI_OK);
+  assert(cai_attachment_controller_busy(c, 1, NULL) == CAI_OK);
+  assert(cai_attachment_controller_attach(c, 0U, &a, NULL) == CAI_OK);
+  assert(cai_attachment_controller_detach(c, a, NULL) == CAI_OK);
+  assert(cai_attachment_controller_stop(c, NULL) == CAI_OK);
+  assert(cai_attachment_controller_busy(c, 0, NULL) == CAI_OK);
+  assert(cai_attachment_controller_attach(c, 0U, &b, NULL) == CAI_ERR_INVALID);
+  assert(state(c).phase == CAI_ATTACHMENT_STOPPING);
+  assert(state(c).stop_reason == CAI_ATTACHMENT_STOP_REQUESTED);
+  assert(cai_attachment_controller_busy(c, -1, NULL) == CAI_ERR_INVALID);
+  assert(cai_attachment_controller_busy(c, 2, NULL) == CAI_ERR_INVALID);
+  cai_attachment_controller_close(c);
+}
 static void timing(void) {
   cai_attachment_controller *controller = NULL;
   cai_attachment_config config;
@@ -174,6 +231,10 @@ static void *wrong_owner(void *context) {
   assert(cai_attachment_controller_attach(controller, 0U, &id, NULL) ==
          CAI_ERR_INVALID);
   assert(cai_attachment_controller_stop(controller, NULL) == CAI_ERR_INVALID);
+  assert(cai_attachment_controller_busy(controller, 1, NULL) ==
+         CAI_ERR_INVALID);
+  assert(cai_attachment_controller_detach_now(controller, 1U, NULL) ==
+         CAI_ERR_INVALID);
   cai_attachment_controller_close(controller);
   return NULL;
 }
@@ -345,6 +406,7 @@ static void admission(void) {
 }
 int main(void) {
   lifetime();
+  draining();
   timing();
   capacity_and_roles();
   invalid();

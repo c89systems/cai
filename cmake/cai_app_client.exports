@@ -3,6 +3,7 @@ cai_app_client_cancel
 cai_app_client_close
 cai_app_client_config_init
 cai_app_client_detach
+cai_app_client_detach_now
 cai_app_client_directory
 cai_app_client_get_shell_result
 cai_app_client_get_state

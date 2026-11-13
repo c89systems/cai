@@ -11,6 +11,7 @@ struct cai_attachment_controller {
   cai_attachment_state state;
   uint64_t slots[CAI_ATTACHMENT_LIMIT];
   uint64_t serial, now, timeout;
+  int busy;
 };
 static int owner(cai_attachment_controller *controller, cai_error *error) {
   if (controller == NULL || !pthread_equal(controller->owner, pthread_self()))
@@ -130,6 +131,7 @@ int cai_attachment_controller_attach(cai_attachment_controller *controller,
       break;
   *id = controller->slots[i] = ++controller->serial;
   ++controller->state.count;
+  controller->state.stop_reason = CAI_ATTACHMENT_NOT_STOPPED;
   controller->state.deadline_ms = 0U;
   if (controller->state.controller == 0U) {
     controller->state.controller = *id;
@@ -137,8 +139,8 @@ int cai_attachment_controller_attach(cai_attachment_controller *controller,
   }
   return CAI_OK;
 }
-int cai_attachment_controller_detach(cai_attachment_controller *controller,
-                                     uint64_t id, cai_error *error) {
+static int detach(cai_attachment_controller *controller, uint64_t id, int force,
+                  cai_error *error) {
   int slot, rc = owner(controller, error);
   if (rc != CAI_OK)
     return rc;
@@ -152,7 +154,34 @@ int cai_attachment_controller_detach(cai_attachment_controller *controller,
     if (controller->state.generation != UINT64_MAX)
       ++controller->state.generation;
   }
-  if (controller->state.count == 0U && !controller->state.persist)
+  if (controller->state.count == 0U && !controller->state.persist &&
+      controller->state.phase != CAI_ATTACHMENT_STOPPING) {
+    if (controller->busy && !force)
+      controller->state.stop_reason = CAI_ATTACHMENT_LAST_DETACHED;
+    else
+      stop(controller, CAI_ATTACHMENT_LAST_DETACHED);
+  }
+  return CAI_OK;
+}
+int cai_attachment_controller_detach(cai_attachment_controller *controller,
+                                     uint64_t id, cai_error *error) {
+  return detach(controller, id, 0, error);
+}
+int cai_attachment_controller_detach_now(cai_attachment_controller *controller,
+                                         uint64_t id, cai_error *error) {
+  return detach(controller, id, 1, error);
+}
+int cai_attachment_controller_busy(cai_attachment_controller *controller,
+                                   int busy, cai_error *error) {
+  int rc = owner(controller, error);
+  if (rc != CAI_OK)
+    return rc;
+  if (busy != 0 && busy != 1)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "attachment busy must be zero or one");
+  controller->busy = busy;
+  if (!busy && controller->state.count == 0U &&
+      controller->state.stop_reason == CAI_ATTACHMENT_LAST_DETACHED)
     stop(controller, CAI_ATTACHMENT_LAST_DETACHED);
   return CAI_OK;
 }

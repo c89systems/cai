@@ -96,6 +96,9 @@ int cai_workspace_server_authorize(cai_workspace_server *server,
 /** Mark irreversible STOPPING. The host still owns cancelling/joining its
  * runtime, closing stores and finally releasing this server. */
 int cai_workspace_server_stop(cai_workspace_server *server, cai_error *error);
+/** Report host work through durable completion. Last-client shutdown waits
+ * while busy; a new authenticated attachment cancels that pending shutdown. */
+int cai_workspace_server_busy(cai_workspace_server *, int busy, cai_error *);
 /** Current bounded output backlog for a live attachment. Use it to gate
  * additional producer work; readiness still comes from prepare(). */
 int cai_workspace_server_pending(cai_workspace_server *, uint64_t attachment,

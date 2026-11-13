@@ -114,8 +114,13 @@ static const char *const help[] = {
     "| `/new` | Start a fresh session in this directory. |\n"
     "| `/export [BASENAME]` | Export this session. `.md` or `.jsonl` "
     "selects one format; other names get both suffixes. No name uses the "
-    "default export directory. |\n"
-    "| `/quit`, `/exit` | Exit the application. |\n\n",
+    "default export directory. |\n",
+    "| `/quit`, `/exit` | Detach; a nonpersistent last-client server finishes "
+    "its current turn before stopping. Reconnect to cancel pending shutdown. "
+    "|\n"
+    "| `/quit now`, `/quit force`, `/quit -f`, `/quit --force`, `/terminate` | "
+    "Detach immediately; cancel work if this is the last client of a "
+    "nonpersistent server. |\n\n",
     "## Completions\n\n"
     "| Prefix/key | Action |\n| --- | --- |\n"
     "| `/` | Complete slash commands and aliases at draft start. |\n"

@@ -115,6 +115,7 @@ typedef struct frontend {
   int wake[2], timer;
   sl_watch_id_t socket_watch, boot_watch, timer_watch, wake_watch;
   int socket_fd, boot_fd, failed, quit, ready, bound, subscribed, replaying;
+  uint64_t quit_deadline;
   int replay_finished;
   int action_field, shell, awaiting_bind, welcomed, control, greeting_resumed;
   int child_theme_scope;
@@ -163,7 +164,7 @@ struct frontend_group {
   cai_workspace_discovery *discovery;
   sl_watch_id_t discovery_watch;
   int discovery_fd, listing, listed, switching, requested;
-  int terminal_active;
+  int terminal_active, force_quit;
   char *selector;
 };
 
@@ -317,6 +318,32 @@ static int goodbye(frontend *f) {
                  sl_set_status_message(f->ui->sl, "Goodbye.") == SL_OK
              ? 0
              : -1;
+}
+/** Let native edit/withdraw receipts settle before releasing their authority.
+ * Keep Softline running so accepted receipts can trigger deferred operations.
+ * A two-second receipt grace bounds an unresponsive owner. */
+static void request_quit(frontend *f) {
+  char byte = 'q';
+  cai_cli_prompt_listener_cancel(f->prompt_listener);
+  if (f->quit_deadline == 0U)
+    f->quit_deadline = clock_ms() + 2000U;
+  (void)write(f->wake[1], &byte, 1U);
+}
+static int queue_settling(frontend *f) {
+  sl_queue_backend_info_t info;
+  sl_queue_pending_info_t pending;
+  size_t i;
+  if (!f->bound || f->queue == NULL)
+    return 0;
+  if (sl_queue_backend_info(f->ui->sl, &info) != SL_OK)
+    return -1;
+  for (i = 0U; i < info.pending_count; ++i) {
+    if (sl_queue_backend_pending(f->ui->sl, i, &pending) != SL_OK)
+      return -1;
+    if (pending.pending || pending.status == SL_QUEUE_ACCEPTED)
+      return 1;
+  }
+  return 0;
 }
 static void save_submission(void *context, const cai_input_request *request) {
   frontend *f = context;
@@ -604,10 +631,7 @@ static int observed(void *context, const cai_app_client_event *event,
     if (f->exit_save != 0U && event->request == f->exit_save) {
       if (event->input->result.code == CAI_OK && f->current == f->exit_view &&
           strcmp(sl_buffer(f->ui->sl), f->exit_draft) == 0) {
-        if (goodbye(f) != 0)
-          return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                               "close terminal draft");
-        f->quit = 1;
+        request_quit(f);
       } else if (event->input->result.code == CAI_OK)
         (void)notice(f, "Draft changed while saving; exit cancelled.");
       else
@@ -1087,9 +1111,12 @@ static int actions(frontend *f) {
   if (!f->action_field)
     return 0;
   f->action_field = 0;
-  if (strcmp(line, "/quit") == 0 || strcmp(line, "/exit") == 0) {
-    rc = goodbye(f);
-    f->quit = 1;
+  if (cai_cli_command_quit(line) != 0) {
+    int mode = cai_cli_command_quit(line);
+    if (mode < 0)
+      return notice(f, "Usage: /quit [now|force|-f|--force] or /terminate");
+    f->group->force_quit = mode == 2;
+    request_quit(f);
   } else if (strncmp(line, "/theme ", 7U) == 0 ||
              strncmp(line, "/t ", 3U) == 0) {
     cai_cli_theme selected;
@@ -1235,6 +1262,16 @@ static int event_ready(sl_t *sl, const sl_watch_event_t *event, void *context) {
 static void editor_idle(sl_t *editor, void *context) {
   frontend *f = context;
   frontend *parked;
+  if (f->quit_deadline != 0U) {
+    int pending = queue_settling(f);
+    if (pending > 0 && clock_ms() < f->quit_deadline)
+      return; /* Do not announce next-turn delivery while preparing detach. */
+    if (pending < 0 || goodbye(f) != 0)
+      f->failed = 1;
+    f->quit = 1;
+    (void)sl_suspend(editor);
+    return;
+  }
   cai_cli_prompt_listener_idle(f->prompt_listener);
   if (f->queue != NULL &&
       cai_cli_input_socket_idle(f->queue, editor, &f->error) != CAI_OK) {
@@ -1331,6 +1368,8 @@ static int interests(frontend *f) {
   memset(&timer, 0, sizeof(timer));
   if (workspace_interests(f, &deadline) != 0)
     return -1;
+  if (f->quit_deadline != 0U && (deadline == 0U || f->quit_deadline < deadline))
+    deadline = f->quit_deadline;
   if (deadline != 0U) {
     uint64_t remaining = deadline > now ? deadline - now : 1U;
     timer.it_value.tv_sec = (time_t)(remaining / 1000U);
@@ -1610,10 +1649,8 @@ static int quit_key(sl_t *sl, sl_key_t key, void *context,
     *action = SL_KEY_ACTION_HANDLED;
     return SL_OK;
   }
-  if (goodbye(f) != 0)
-    return SL_ERROR_IO;
-  f->quit = 1;
-  *action = SL_KEY_ACTION_SUSPEND;
+  request_quit(f);
+  *action = SL_KEY_ACTION_HANDLED;
   return SL_OK;
 }
 /** Keep native forward-delete while editing; an empty Ctrl-D follows the
@@ -1671,21 +1708,20 @@ static int enter_key(sl_t *sl, sl_key_t key, void *context,
       return SL_OK;
     }
   }
-  if (!sl->history_search_active(sl) && (strcmp(sl_buffer(sl), "/quit") == 0 ||
-                                         strcmp(sl_buffer(sl), "/exit") == 0)) {
+  if (!sl->history_search_active(sl) &&
+      cai_cli_command_quit(sl_buffer(sl)) > 0) {
     sl_prompt_queue_entry_info_t draft;
     if (sl_prompt_queue_draft_info(sl, &draft) != SL_OK)
       return SL_ERROR_IO;
     if (!draft.id) {
+      f->group->force_quit = cai_cli_command_quit(sl_buffer(sl)) == 2;
       if (cai_cli_transcript_presenter_command(f->transcript, sl_buffer(sl)) !=
           0)
         return SL_ERROR_IO;
       if (sl_set_buffer(sl, "") != SL_OK)
         return SL_ERROR_IO;
-      if (goodbye(f) != 0)
-        return SL_ERROR_IO;
-      f->quit = 1;
-      *action = SL_KEY_ACTION_SUSPEND;
+      request_quit(f);
+      *action = SL_KEY_ACTION_HANDLED;
       return SL_OK;
     }
   }
@@ -3106,7 +3142,10 @@ done:
     frontend *next = f->next;
     if (f->client != NULL) {
       uint64_t until = close_deadline;
-      (void)cai_app_client_detach(f->client, NULL);
+      if (group.force_quit)
+        (void)cai_app_client_detach_now(f->client, NULL);
+      else
+        (void)cai_app_client_detach(f->client, NULL);
       while (clock_ms() < until) {
         struct pollfd descriptor;
         uint64_t deadline, now;

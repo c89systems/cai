@@ -410,6 +410,7 @@ static int receive(void *context, const cai_protocol_event *event,
     return cai_set_error(error, CAI_ERR_PROTOCOL,
                          "request attachment does not match its connection");
   control = header->kind == CAI_PROTOCOL_DETACH ||
+            header->kind == CAI_PROTOCOL_DETACH_NOW ||
             header->kind == CAI_PROTOCOL_TAKEOVER ||
             header->kind == CAI_PROTOCOL_SHUTDOWN ||
             header->kind == CAI_PROTOCOL_CANCEL;
@@ -425,8 +426,9 @@ static int receive(void *context, const cai_protocol_event *event,
     if (event->type == CAI_PROTOCOL_COMPLETE) {
       if (header->kind == CAI_PROTOCOL_CANCEL)
         return notify(peer, CAI_WORKSPACE_MESSAGE, event, NULL, error);
-      if (header->kind == CAI_PROTOCOL_DETACH)
-        peer->detach = 1;
+      if (header->kind == CAI_PROTOCOL_DETACH ||
+          header->kind == CAI_PROTOCOL_DETACH_NOW)
+        peer->detach = header->kind == CAI_PROTOCOL_DETACH_NOW ? 2 : 1;
       else if (header->kind == CAI_PROTOCOL_TAKEOVER) {
         uint64_t generation;
         cai_attachment_state state;
@@ -575,8 +577,12 @@ int cai_workspace_server_prepare(cai_workspace_server *server,
 static void drop(server_peer *peer, int announce) {
   cai_workspace_server *server = peer->server;
   if (peer->attachment != 0U) {
-    (void)cai_attachment_controller_detach(server->attachments,
-                                           peer->attachment, NULL);
+    if (peer->detach == 2)
+      (void)cai_attachment_controller_detach_now(server->attachments,
+                                                 peer->attachment, NULL);
+    else
+      (void)cai_attachment_controller_detach(server->attachments,
+                                             peer->attachment, NULL);
     if (announce)
       (void)notify(peer, CAI_WORKSPACE_DETACHED, NULL, NULL, NULL);
   }
@@ -729,6 +735,13 @@ int cai_workspace_server_stop(cai_workspace_server *server, cai_error *error) {
   int rc = valid(server, error);
   return rc == CAI_OK
              ? cai_attachment_controller_stop(server->attachments, error)
+             : rc;
+}
+int cai_workspace_server_busy(cai_workspace_server *server, int busy,
+                              cai_error *error) {
+  int rc = valid(server, error);
+  return rc == CAI_OK
+             ? cai_attachment_controller_busy(server->attachments, busy, error)
              : rc;
 }
 int cai_workspace_server_pending(cai_workspace_server *server,

@@ -304,8 +304,9 @@ static int receive(void *context, const cai_protocol_event *event,
       h->generation < client->state.generation ||
       h->kind == CAI_PROTOCOL_HELLO || h->kind == CAI_PROTOCOL_WELCOME ||
       h->kind == CAI_PROTOCOL_REQUEST || h->kind == CAI_PROTOCOL_SYNCHRONIZE ||
-      h->kind == CAI_PROTOCOL_DETACH || h->kind == CAI_PROTOCOL_TAKEOVER ||
-      h->kind == CAI_PROTOCOL_SHUTDOWN || h->kind == CAI_PROTOCOL_SUBSCRIBE ||
+      h->kind == CAI_PROTOCOL_DETACH || h->kind == CAI_PROTOCOL_DETACH_NOW ||
+      h->kind == CAI_PROTOCOL_TAKEOVER || h->kind == CAI_PROTOCOL_SHUTDOWN ||
+      h->kind == CAI_PROTOCOL_SUBSCRIBE ||
       h->kind == CAI_PROTOCOL_UNSUBSCRIBE || h->kind == CAI_PROTOCOL_PROBE ||
       h->kind == CAI_PROTOCOL_IDENTITY || h->kind == CAI_PROTOCOL_CANCEL ||
       h->kind == CAI_PROTOCOL_REJECT || h->kind == CAI_PROTOCOL_HISTORY_GET ||
@@ -550,8 +551,7 @@ int cai_workspace_client_pump(cai_workspace_client *client, uint64_t now,
     return failed(client,
                   cai_set_error(error, CAI_ERR_TRANSPORT,
                                 "workspace closed before greeting completed"));
-  if (eof || (client->state.phase == CAI_WORKSPACE_DETACHING &&
-              cai_wire_peer_pending(client->wire) == 0U)) {
+  if (eof) {
     client->state.phase = CAI_WORKSPACE_DISCONNECTED;
     client->state.deadline_ms = 0U;
     release_transport(client);
@@ -635,7 +635,8 @@ static int control(cai_workspace_client *client, cai_protocol_kind kind,
   if (!client->state.has_welcome || client->writing ||
       (client->state.phase != CAI_WORKSPACE_CONNECTED &&
        client->state.phase != CAI_WORKSPACE_GREETING) ||
-      (kind != CAI_PROTOCOL_DETACH && generation != client->state.generation) ||
+      (kind != CAI_PROTOCOL_DETACH && kind != CAI_PROTOCOL_DETACH_NOW &&
+       generation != client->state.generation) ||
       (kind == CAI_PROTOCOL_SHUTDOWN &&
        (client->state.phase != CAI_WORKSPACE_CONNECTED ||
         client->state.controller != client->state.attachment)))
@@ -663,8 +664,8 @@ int cai_workspace_client_shutdown(cai_workspace_client *client,
                                   cai_error *error) {
   return control(client, CAI_PROTOCOL_SHUTDOWN, request, generation, error);
 }
-int cai_workspace_client_detach(cai_workspace_client *client,
-                                cai_error *error) {
+static int detach(cai_workspace_client *client, cai_protocol_kind kind,
+                  cai_error *error) {
   int rc = valid(client, error);
   if (rc != CAI_OK)
     return rc;
@@ -684,13 +685,24 @@ int cai_workspace_client_detach(cai_workspace_client *client,
     release_transport(client);
     return CAI_OK;
   }
-  rc =
-      control(client, CAI_PROTOCOL_DETACH, 0U, client->state.generation, error);
+  rc = control(client, kind, 0U, client->state.generation, error);
   if (rc == CAI_OK) {
+    /* Keep the receive side open until the peer consumes the detach.
+     * Otherwise an eager server write can fail first and discard the unread
+     * control and preceding edits as an ordinary lost connection. The peer
+     * closes this attachment immediately, independently of turn completion. */
     client->state.phase = CAI_WORKSPACE_DETACHING;
     client->state.deadline_ms = 0U;
   }
   return rc;
+}
+int cai_workspace_client_detach(cai_workspace_client *client,
+                                cai_error *error) {
+  return detach(client, CAI_PROTOCOL_DETACH, error);
+}
+int cai_workspace_client_detach_now(cai_workspace_client *client,
+                                    cai_error *error) {
+  return detach(client, CAI_PROTOCOL_DETACH_NOW, error);
 }
 const char *cai_workspace_client_directory(const cai_workspace_client *client) {
   return client != NULL ? cai_workspace_endpoint_directory(client->endpoint)

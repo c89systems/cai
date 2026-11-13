@@ -33,6 +33,8 @@ typedef struct cai_attachment_config {
 } cai_attachment_config;
 typedef struct cai_attachment_state {
   cai_attachment_phase phase;
+  /** READY with LAST_DETACHED means shutdown awaits host-owned work. A new
+   * attachment cancels that pending shutdown. STOPPING is irreversible. */
   cai_attachment_stop_reason stop_reason;
   size_t count;
   int persist;
@@ -60,10 +62,19 @@ int cai_attachment_controller_attach(cai_attachment_controller *controller,
                                      uint64_t now_ms, uint64_t *id,
                                      cai_error *error);
 /** Graceful and abrupt disconnects use this same method. The last disconnect
- * stops a nonpersistent server immediately. It cannot subsequently be revived.
- * Already accepted work is owned by the runtime, not this attachment handle. */
+ * stops a nonpersistent server after host-owned work finishes. Until then a
+ * new attachment cancels shutdown. Hosts report work through busy(). */
 int cai_attachment_controller_detach(cai_attachment_controller *controller,
                                      uint64_t id, cai_error *error);
+/** Detach this attachment with immediate last-client shutdown, even if busy.
+ * Other attachments and persistent servers retain their normal lifetime. */
+int cai_attachment_controller_detach_now(cai_attachment_controller *, uint64_t,
+                                         cai_error *);
+/** Report actual work, including durable completion. Clearing busy commits a
+ * pending last-client shutdown only if no attachment has arrived meanwhile.
+ * No polling or background worker is introduced. */
+int cai_attachment_controller_busy(cai_attachment_controller *, int busy,
+                                   cai_error *);
 /** Explicit takeover advances generation, revoking the previous controller.
  * Idempotent when already controlling. Returns the current generation. */
 int cai_attachment_controller_takeover(cai_attachment_controller *controller,

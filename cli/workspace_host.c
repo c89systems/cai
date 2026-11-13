@@ -337,6 +337,25 @@ static int publish(cai_cli_workspace_host *host, cai_error *error) {
                           cai_workspace_server_instance(host->server));
   return rc;
 }
+int cai_cli_workspace_host_activity(cai_cli_workspace_host *host, int busy,
+                                    cai_attachment_state *out,
+                                    cai_error *error) {
+  int rc;
+  memset(out, 0, sizeof(*out));
+  if (host == NULL)
+    return CAI_OK;
+  rc = cai_workspace_server_busy(host->server, busy, error);
+  if (rc == CAI_OK)
+    rc = cai_workspace_server_get_state(host->server, out, error);
+  return rc == CAI_OK ? publish(host, error) : rc;
+}
+int cai_cli_workspace_host_draining(cai_cli_workspace_host *host) {
+  cai_attachment_state state;
+  return host != NULL &&
+         cai_workspace_server_get_state(host->server, &state, NULL) == CAI_OK &&
+         state.phase == CAI_ATTACHMENT_READY &&
+         state.stop_reason == CAI_ATTACHMENT_LAST_DETACHED;
+}
 int cai_cli_workspace_host_status(cai_cli_workspace_host *host,
                                   const cai_app_view *source,
                                   cai_error *error) {

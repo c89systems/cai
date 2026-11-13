@@ -522,8 +522,37 @@ static int test_observer_commands(void) {
       return 1;
   return 0;
 }
+static int test_quit_commands(void) {
+  static const struct {
+    const char *text;
+    int mode;
+  } cases[] = {{NULL, 0},
+               {"/quit", 1},
+               {"/exit\t", 1},
+               {"/quit now", 2},
+               {"/quit\tforce\t", 2},
+               {"/quit  -f ", 2},
+               {"/quit --force", 2},
+               {"/exit now", 2},
+               {"/terminate", 2},
+               {"/terminate\t", 2},
+               {"/quit later", -1},
+               {"/quit now extra", -1},
+               {"/terminate now", -1},
+               {"/quitnow", 0},
+               {"/status", 0}};
+  size_t i;
+  for (i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    if (cai_cli_command_quit(cases[i].text) != cases[i].mode)
+      return 1;
+    if (cases[i].mode > 0 && (!cai_cli_command_frontend(cases[i].text) ||
+                              !cai_cli_command_observer(cases[i].text)))
+      return 1;
+  }
+  return 0;
+}
 int main(void) {
-  return test_command_tokens() || test_observer_commands() ||
-         test_command_queue_modes() || test_goal_handoff() ||
-         test_shared_auth() || test_event_logging();
+  return test_quit_commands() || test_command_tokens() ||
+         test_observer_commands() || test_command_queue_modes() ||
+         test_goal_handoff() || test_shared_auth() || test_event_logging();
 }

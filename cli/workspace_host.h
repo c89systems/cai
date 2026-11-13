@@ -21,6 +21,11 @@ int cai_cli_workspace_host_open(const char *runtime_directory,
                                 struct pslog_logger *logger,
                                 cai_cli_workspace_host **out, cai_error *error);
 int cai_cli_workspace_host_ready(cai_cli_workspace_host *, cai_error *);
+/** Owner work remains busy through its durable terminal record and settlement.
+ * Returns the current lifetime, including a reconnect-cancellable drain. */
+int cai_cli_workspace_host_activity(cai_cli_workspace_host *, int busy,
+                                    cai_attachment_state *, cai_error *);
+int cai_cli_workspace_host_draining(cai_cli_workspace_host *);
 /** Borrow a synchronous owner action through close/unbind. Authorization is
  * checked immediately before invocation, never in a later trusted mailbox. */
 void cai_cli_workspace_host_cancel(cai_cli_workspace_host *,

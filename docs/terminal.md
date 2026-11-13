@@ -7,6 +7,7 @@ It resumes the newest session there; `cai -N` starts another.
 `cai -D --all` lists closed sessions eligible for deletion across that store. `cai -D ID` deletes one by its store-wide identity from any directory; numeric choices remain local.
 Startup selection does not submit a `/resume` command or replay a different session first.
 Ctrl-D on an empty draft follows the same goodbye and detach path as `/quit` and Alt-Q; with a nonempty draft it retains the editor's forward-delete behavior.
+Before detaching, the frontend lets pending queue receipts and deferred native edits settle, with a two-second grace for an unresponsive owner. This waits for queue operations, independently of the backend's current turn.
 First-time workspaces require `cai -y` to save approval for that directory and its descendants.
 `-k` bypasses approval for this invocation only.
 Use `cai --login` for ChatGPT authentication if no usable imported or stored credentials exist.
@@ -39,7 +40,8 @@ cai -n -i 'Explain the failing tests'
 | `/tools`, `/skills`, `/mcp` | Inspect tools/skills and manage configured MCP connections. |
 | `/export [BASENAME]` | Export the active session; see [format selection](sessions.md#export-and-import). |
 | `/log`, `/log -p` | Show the log path or inspect the log in a pager. |
-| `/quit` | Detach this frontend; the last detach stops a nonpersistent owner. |
+| `/quit`, `/exit` | Detach this frontend. A nonpersistent last-client server finishes its current turn before stopping. Reconnecting cancels pending shutdown. |
+| `/quit now`, `/quit force`, `/quit -f`, `/quit --force`, `/terminate` | Detach immediately; cancel work when this is the last client of a nonpersistent server. |
 
 ## Input and queue
 
@@ -275,6 +277,7 @@ Drafts, accepted input and recall stay with their original workspace and session
 One attachment controls the owner; other attachments observe until explicit `/takeover`.
 `/shutdown` stops the selected server; `/quit` detaches all visited workspaces.
 A persistent server continues after the last detach.
+An ordinary last detach from a nonpersistent server waits for durable completion of the current turn, including an active review or export. It does not start another queued turn or automatic goal continuation. The frontend exits immediately; a new authenticated attachment cancels pending shutdown. Alt-Q and Ctrl-D on an empty draft use this same path. Force quit skips the wait but leaves persistent servers and servers with other attachments running.
 See [terminal attachment](terminal-attachment.md) and [server architecture](workspace-server.md) for lifecycle and SDK details.
 
 ## More guides

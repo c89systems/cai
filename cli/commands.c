@@ -19,8 +19,9 @@ static const struct cli_command_definition {
     {"/tools", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 1},
     {"/mcp", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 1},
     {"/skills", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 1},
-    {"/quit", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 1},
-    {"/exit", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 1},
+    {"/quit", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 2},
+    {"/exit", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 2},
+    {"/terminate", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 2},
     {"/new", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
     {"/resume", CLI_COMMAND_FEED, CLI_COMMAND_TURN, 1},
     {"/review", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
@@ -96,6 +97,25 @@ int cai_cli_command_is_theme(const char *line) {
          cli_word_is(name, length, "/subagent-theme-offset") ||
          cli_word_is(name, length, "/review-theme-offset");
 }
+int cai_cli_command_quit(const char *line) {
+  cai_cli_command_tokens tokens;
+  if (line == NULL)
+    return 0;
+  cai_cli_command_parse(line, &tokens);
+  if (cli_word_is(tokens.name, tokens.name_length, "/terminate"))
+    return tokens.arguments_length == 0U ? 2 : -1;
+  if (!cli_word_is(tokens.name, tokens.name_length, "/quit") &&
+      !cli_word_is(tokens.name, tokens.name_length, "/exit"))
+    return 0;
+  if (tokens.arguments_length == 0U)
+    return 1;
+  if (cli_word_is(tokens.arguments, tokens.arguments_length, "now") ||
+      cli_word_is(tokens.arguments, tokens.arguments_length, "force") ||
+      cli_word_is(tokens.arguments, tokens.arguments_length, "-f") ||
+      cli_word_is(tokens.arguments, tokens.arguments_length, "--force"))
+    return 2;
+  return -1;
+}
 
 int cai_cli_command_pager(const char *line) {
   size_t n = strcspn(line, " \t"), length;
@@ -118,6 +138,7 @@ int cai_cli_command_frontend(const char *line) {
          cli_word_is(name, length, "/output") ||
          cli_word_is(name, length, "/quit") ||
          cli_word_is(name, length, "/exit") ||
+         cli_word_is(name, length, "/terminate") ||
          cli_word_is(name, length, "/shell") ||
          cli_word_is(name, length, "/shellshare") || strcmp(line, "!sh") == 0 ||
          strcmp(line, "!sh+") == 0;

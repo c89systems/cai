@@ -53,7 +53,9 @@ typedef enum cai_protocol_kind {
    */
   CAI_PROTOCOL_TERMINAL_OUTPUT,
   /** Typed attachment endpoint metadata and correlated frontend TCP actions. */
-  CAI_PROTOCOL_NETWORK
+  CAI_PROTOCOL_NETWORK,
+  /** Detach with immediate nonpersistent last-client shutdown. */
+  CAI_PROTOCOL_DETACH_NOW
 } cai_protocol_kind;
 /** Each record is a definite eight-pair map, with ascending integer keys:
  * 0 kind, 1 request, 2 session epoch, 3 generation, 4 sequence, 5 stream,

@@ -1948,7 +1948,7 @@ static void workspace_server(int argc, char **argv, const char *mode) {
     if (strcmp(mode, "server_active") == 0) {
       int started = 0;
       size_t ticks;
-      control(&h, CAI_APP_QUEUE_PROMPT, "WORK CANCELLED ON LAST DETACH");
+      control(&h, CAI_APP_QUEUE_PROMPT, "WORK CANCELLED ON LAST FORCE DETACH");
       for (ticks = 0U; ticks < 10000U; ++ticks) {
         pthread_mutex_lock(&h.lock);
         started = h.starts != 0;
@@ -1979,7 +1979,9 @@ static void workspace_server(int argc, char **argv, const char *mode) {
       cai_workspace_client_close(b);
       b = NULL;
     } else {
-      assert(cai_workspace_client_detach(b, NULL) == CAI_OK);
+      assert((strcmp(mode, "server_active") == 0
+                  ? cai_workspace_client_detach_now(b, NULL)
+                  : cai_workspace_client_detach(b, NULL)) == CAI_OK);
       socket_wait(b, CAI_WORKSPACE_DISCONNECTED);
     }
     if (persistent) {

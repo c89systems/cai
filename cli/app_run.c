@@ -700,6 +700,11 @@ static int cli_sync_queue(cli_state *state, int at_boundary, cai_error *error) {
     if (rc == CAI_OK)
       rc =
           cli_prompt_ready(state, entry.text, mode, at_boundary, &ready, error);
+    /* Last-client drain preserves the current turn, not a future queued
+     * turn. Existing steers may still reach that current response boundary. */
+    if (rc == CAI_OK && mode != CAI_INPUT_STEERING &&
+        cai_cli_workspace_host_draining(state->workspace_host))
+      ready = 0;
     if (rc == CAI_OK && ready) {
       int settled = 0;
       rc = cai_input_controller_producer_ready(
@@ -1112,7 +1117,9 @@ static int cli_messages_process(cli_state *state, int at_boundary,
   cai_input_claim claim;
   size_t index = 0U, applied = 0U;
   int rc;
-  if (state->exit_requested || state->input_admin == NULL)
+  if (state->exit_requested || state->input_admin == NULL ||
+      (cai_cli_workspace_host_draining(state->workspace_host) &&
+       !state->awaiting_turn))
     return CAI_OK;
   rc = cai_input_controller_pump(state->input_controller, 32U, error);
   if (rc == CAI_OK)
@@ -2369,7 +2376,8 @@ static int cli_host_process(cli_state *state, cai_error *error) {
   cai_app_command *command;
   size_t count;
   int rc;
-  if (cai_app_bridge_frontend_ended(state->bridge)) {
+  if (cai_app_bridge_frontend_ended(state->bridge) &&
+      cai_app_bridge_stopping(state->bridge)) {
     rc = cli_stop_owned(state, error);
     /* Detaching this run's frontend ends its owned controller; it is not an
      * explicit host STOP and must preserve failure/cancellation semantics. */
@@ -2472,6 +2480,20 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
   struct pollfd descriptors[11U + CAI_CLI_WORKSPACE_HOST_FDS];
   size_t server_count = 0U;
   int fd, rc, stopping;
+  int quiet = 1, busy;
+  cai_attachment_state lifetime;
+  rc = cai_agent_runtime_is_quiescent(state->runtime, &quiet, error);
+  if (rc != CAI_OK)
+    return rc;
+  busy = !quiet || state->awaiting_turn || state->settlement_pending ||
+         state->batch_pending_turns > 0U || state->review_runtime != NULL ||
+         state->shell.pid > 0 || cai_cli_export_job_active(state->export_job);
+  rc = cai_cli_workspace_host_activity(state->workspace_host, busy, &lifetime,
+                                       error);
+  if (rc != CAI_OK)
+    return rc;
+  if (lifetime.phase == CAI_ATTACHMENT_STOPPING)
+    timeout = 0L;
   rc = cai_cli_pouch_ownership_check(&state->pouch, error);
   if (rc != CAI_OK) {
     (void)cai_agent_runtime_cancel_turn(state->runtime, NULL);
@@ -3968,7 +3990,8 @@ static int cli_advance_automation(cli_state *state, cai_error *error) {
   const char *next;
   int rc;
 
-  if (cai_cli_export_job_active(state->export_job) || state->awaiting_turn ||
+  if (cai_cli_workspace_host_draining(state->workspace_host) ||
+      cai_cli_export_job_active(state->export_job) || state->awaiting_turn ||
       state->batch_pending_turns > 0U || state->exit_requested ||
       state->review_runtime != NULL || state->shell.pid > 0)
     return CAI_OK;
@@ -4052,7 +4075,10 @@ static int cli_publish_settlement(cli_state *state, cai_error *error) {
   if (rc != CAI_OK || !quiet)
     return rc;
   rc = cai_input_queue_get_state(state->input, &queue, error);
-  for (i = 0U; rc == CAI_OK && i < queue.count; ++i) {
+  for (i = 0U; rc == CAI_OK &&
+               !cai_cli_workspace_host_draining(state->workspace_host) &&
+               i < queue.count;
+       ++i) {
     rc = cai_input_queue_entry_at(state->input_admin, i, &entry, error);
     if (rc == CAI_OK && entry.ready && !entry.held && !entry.stopped)
       return CAI_OK;

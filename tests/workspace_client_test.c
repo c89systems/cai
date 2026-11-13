@@ -929,6 +929,55 @@ static void adversarial(const char *runtime, const char *workspace) {
     cai_workspace_endpoint_close(endpoint);
   }
 }
+/** Exercise normal/forced lifetime controls through actual socket framing on
+ * the default worker stack. Reattachment must cancel a pending last detach. */
+static void delayed_detach(const char *root, int persist, int force) {
+  cai_workspace_server_config config;
+  cai_workspace_server *server = NULL;
+  cai_workspace_client *client;
+  cai_attachment_state state;
+  observer out = {0};
+  cai_workspace_server_config_init(&config);
+  config.runtime_directory = config.workspace = root;
+  config.lifetime.persist = persist;
+  assert(cai_workspace_server_open(&config, &server, NULL) == CAI_OK);
+  assert(cai_workspace_server_ready(server, 0U, NULL) == CAI_OK);
+  assert(cai_workspace_server_busy(server, 1, NULL) == CAI_OK);
+  client = open_client(root, root, 0U, &out);
+  exchange(server, client, NULL, 0U);
+  assert(snapshot(client).has_welcome);
+  assert((force ? cai_workspace_client_detach_now(client, NULL)
+                : cai_workspace_client_detach(client, NULL)) == CAI_OK);
+  assert(cai_workspace_client_pump(client, 1U, NULL) == CAI_OK);
+  assert(snapshot(client).phase == CAI_WORKSPACE_DETACHING);
+  exchange(server, client, NULL, 1U);
+  assert(snapshot(client).phase == CAI_WORKSPACE_DISCONNECTED);
+  assert(cai_workspace_server_get_state(server, &state, NULL) == CAI_OK);
+  assert(state.count == 0U);
+  assert(state.phase ==
+         (!persist && force ? CAI_ATTACHMENT_STOPPING : CAI_ATTACHMENT_READY));
+  cai_workspace_client_close(client);
+  if (!persist && !force) {
+    assert(state.stop_reason == CAI_ATTACHMENT_LAST_DETACHED);
+    memset(&out, 0, sizeof(out));
+    client = open_client(root, root, 0U, &out);
+    exchange(server, client, NULL, 2U);
+    assert(snapshot(client).has_welcome);
+    assert(cai_workspace_server_busy(server, 0, NULL) == CAI_OK);
+    assert(cai_workspace_server_get_state(server, &state, NULL) == CAI_OK);
+    assert(state.phase == CAI_ATTACHMENT_READY && state.count == 1U &&
+           state.stop_reason == CAI_ATTACHMENT_NOT_STOPPED);
+    assert(cai_workspace_server_busy(server, 1, NULL) == CAI_OK);
+    assert(cai_workspace_client_detach(client, NULL) == CAI_OK);
+    exchange(server, client, NULL, 3U);
+    cai_workspace_client_close(client);
+  }
+  assert(cai_workspace_server_busy(server, 0, NULL) == CAI_OK);
+  assert(cai_workspace_server_get_state(server, &state, NULL) == CAI_OK);
+  assert(state.phase ==
+         (persist ? CAI_ATTACHMENT_READY : CAI_ATTACHMENT_STOPPING));
+  cai_workspace_server_close(server);
+}
 static void *run(void *unused) {
   char root[] = "/tmp/cai-client-XXXXXX", path[256];
   DIR *directory;
@@ -937,6 +986,10 @@ static void *run(void *unused) {
   assert(mkdtemp(root) != NULL);
   integration(root, root, 0);
   integration(root, root, 1);
+  delayed_detach(root, 0, 0);
+  delayed_detach(root, 0, 1);
+  delayed_detach(root, 1, 0);
+  delayed_detach(root, 1, 1);
   instance_guard(root, 0);
   instance_guard(root, 1);
   discovery(root, 0);

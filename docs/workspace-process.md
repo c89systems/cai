@@ -32,7 +32,9 @@ eventually be submitted once through the bound producer, not forwarded as
 both backend startup instructions and frontend input.
 
 Automatic launches pass the resolved `--no-persist`/`--persist` policy to the
-child app. The normal default exits after its last client disconnects;
+child app. The normal default exits after its last client disconnects and the
+current turn completes durably; reconnecting before completion cancels that
+pending shutdown. `/terminate` and `/quit now` skip the completion wait;
 explicit `cai -x` defaults to persistent. Both use the same native server lifecycle.
 With `--persist`, a forked server survives the launching client's exit and accepts
 later attachments independently.

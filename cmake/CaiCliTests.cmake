@@ -118,6 +118,19 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_spawn_test.sh"
       "$<TARGET_FILE:cai_cli>" "$<TARGET_FILE:cai_cli_spawn_test>")
     set_tests_properties(cai_cli_spawn PROPERTIES TIMEOUT 30)
+    foreach(_quit_mode socket durable)
+      if(_quit_mode STREQUAL "socket")
+        set(_quit_target cai_cli)
+      else()
+        set(_quit_target cai_cli_mock_fixture)
+      endif()
+      add_test(NAME cai_cli_delayed_quit_${_quit_mode} COMMAND bash
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_delayed_quit_test.sh"
+        "$<TARGET_FILE:${_quit_target}>" "${_quit_mode}")
+      set_tests_properties(cai_cli_delayed_quit_${_quit_mode} PROPERTIES
+        TIMEOUT 45 LABELS "cli;local;offline"
+        ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+    endforeach()
     target_link_libraries(cai_cli_headless_client_test PRIVATE cai_app_static)
     target_link_options(cai_cli_headless_client_test PRIVATE -Wl,--wrap=lc_client_open
       -Wl,--wrap=sl_output_stream_write)

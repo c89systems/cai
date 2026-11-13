@@ -248,9 +248,13 @@ int cai_app_client_subscribe(cai_app_client *, uint64_t request,
 /** End only this transcript subscription, keeping input and attachment alive.
  * The terminal ERROR span targets its original stream identity. */
 int cai_app_client_unsubscribe(cai_app_client *, cai_error *);
-/** Drain DETACH using prepare/pump. Default nonpersistent servers stop after
- * their last attachment leaves; persistent servers keep running. */
+/** Drain DETACH using prepare/pump. A nonpersistent last-client server finishes
+ * its current turn before stopping; reconnecting cancels that pending stop.
+ * Persistent servers keep running. */
 int cai_app_client_detach(cai_app_client *, cai_error *);
+/** Immediate last-client detach; skips waiting for an active turn to finish.
+ * Persistent servers and other attachments retain their existing lifetime. */
+int cai_app_client_detach_now(cai_app_client *, cai_error *);
 /** Borrow the canonical workspace path until close. */
 const char *cai_app_client_directory(const cai_app_client *);
 /** Immediate local release; never flushes, retries or submits a draft. */

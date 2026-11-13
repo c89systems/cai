@@ -238,7 +238,10 @@ int cai_app_bridge_stopping(cai_app_bridge *b) {
   if (b == NULL)
     return 0;
   pthread_mutex_lock(&b->lock);
-  stopping = b->stop_requested || b->frontend_done;
+  stopping =
+      b->stop_requested ||
+      (b->frontend_done && (!b->status.has_server || b->status.server.persist ||
+                            b->status.server.phase != CAI_ATTACHMENT_READY));
   pthread_mutex_unlock(&b->lock);
   return stopping;
 }

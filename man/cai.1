@@ -765,8 +765,9 @@ pending. Approval and active edits remain under Softline's control. Inspecting
 state does not restart FIFO delivery stopped by Escape.
 Model, reasoning, tier, goal and theme changes stay editable until the next
 response/tool boundary with either Enter or Alt-Enter. Commands execute locally
-and never become model steering text. /quit and /exit use the native queue but
-can shut down an active turn; Alt-Q saves the draft and exits directly.
+and never become model steering text. /quit and /exit detach the frontend;
+a nonpersistent last-client server finishes its current turn before stopping.
+Alt-Q saves the draft and detaches directly. An empty-draft Ctrl-D also detaches.
 Typed slash and shell commands enter the native queue even while idle.
 Execution readiness is separate from approval, editing and cancellation.
 A fresh /goal resume can run after Escape while the old backlog remains stopped.
@@ -1129,7 +1130,15 @@ files or making model requests. Disabled and empty catalogs are reported
 explicitly; restart to discover installed or changed skills.
 .TP
 .BR /quit , " " /exit
-Exit the agent.
+Detach the frontend. A nonpersistent last-client server finishes its current
+turn through durable completion before stopping. Queued turns and automatic
+goal continuations do not start while shutdown is pending. An authenticated
+reattachment cancels pending shutdown. Persistent servers continue running.
+.TP
+.BR "/quit now" , " " "/quit force" , " " "/quit -f" , " " "/quit --force" , " " /terminate
+Detach immediately. Cancel active work when this is the last client of a
+nonpersistent server. Persistent servers and servers with other attached
+clients continue running.
 .SH STATUS LINE
 Before the first turn, the thinking line reports session readiness,
 including after replaying a resumed session.
