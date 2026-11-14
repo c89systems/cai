@@ -75,13 +75,22 @@ tui_themes() {
   done
   send '/theme  RICED:IOSVKEM  \r'; expect 'Theme changed to riced:iosvkem.'
   send '/theme\r'; expect 'Current: riced:iosvkem'
+  send '/theme :AYU-MIRAGE\r'; expect 'Theme changed to riced:ayu-mirage.'
+  send '\033[200~/t\t DEFAULT:  \033[201~\r'; expect 'Theme changed to default:ayu-mirage.'
+  send '/theme :\r'; expect 'Theme changed to default:ayu-mirage.'
+  send '/theme default\r'; expect 'Theme changed to default:default.'
+  send '/theme riced:iosvkem\r'; expect 'Theme changed to riced:iosvkem.'
+  send '/theme riced:\r'; expect 'Theme changed to riced:iosvkem.'
   send '/theme unknown\r'; expect 'unknown softline theme'
-  send '/theme riced:\r'; expect 'theme requires a softline name'
+  send '/theme bogus:\r'; expect 'unknown softline theme'
+  send '/theme :bogus\r'; expect 'unknown libmdf theme'
+  send '/theme ::\r'; expect "theme must contain at most one ':'"
   send '/theme riced:bogus\r'; expect 'unknown libmdf theme'
   send '/theme dracula extra\r'; expect 'unknown softline theme'
   send '/theme\r'; expect 'Current: riced:iosvkem'
   [[ $(requests) == "$count" ]]
   send '/theme plain\r'; expect 'Theme changed to plain:ascii.'
+  send '/theme default:\r'; expect 'Theme changed to default:ascii.'
   printf 'THEME TOOL CONTENT\n' >"$work/theme.txt"
   plan "$(jq -n --arg sample "$sample" '{plan:[{tool:"read_file",arguments:{path:"theme.txt"}},$sample]}')"
   offset=$(wc -c <"$term/raw")
@@ -122,6 +131,8 @@ tui_themes() {
   terminal_close
   export NO_COLOR=1
   terminal_start -N -t monogreen
+  send '/t :ayu-mirage\r'; expect 'Theme changed to monogreen:ayu-mirage.'
+  expect 'NO_COLOR keeps the prompt plain'
   send '/theme synthwave\r'; expect 'Theme changed to synthwave:synthwave-84.'
   expect 'NO_COLOR keeps the prompt plain'
   send '/theme\r'; expect 'Current: synthwave:synthwave-84'

@@ -52,6 +52,7 @@ Accepted input belongs to the backend queue for that session; Softline provides 
 `/new` and `/resume` switch queues along with sessions.
 Read-only commands can run between feeds.
 Changes to model, reasoning, tier and theme wait for a safe response/tool boundary.
+For `/theme SOFTLINE:LIBMDF`, an empty side retains its current component: `/theme :ayu-mirage` changes only libmdf, and `/theme default:` changes only Softline. `/theme default` still selects `default:default`; `/theme :` retains both. The `/t` alias accepts the same forms. Invalid names leave both components unchanged. Startup `--theme` and INI values still require a complete alias or pair.
 Whole-turn operations such as `/review`, `/compact` and `/yolo on|off` wait until idle.
 Unsupported steering commands become ordinary queued entries.
 See [command policies](interactive-command-audit.md) for the complete boundary inventory.

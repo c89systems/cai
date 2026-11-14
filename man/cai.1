@@ -885,7 +885,12 @@ Alt-Y/Alt-N approves/rejects it. See /help for shell, layout and exit shortcuts.
 Alias /t accepts the same arguments.
 With no argument, show the current pair, all softline pairings and all libmdf
 themes through the Markdown feed. Accepts the same aliases and explicit pairs
-as --theme. Enter and Alt-Enter apply changes at the next safe response/tool
+as --theme. In this runtime command, an empty colon side keeps its current
+component: /theme :ayu-mirage changes only libmdf, and /theme default: changes
+only Softline. /theme default selects default:default; /theme : keeps both.
+Invalid names leave the whole pair unchanged. Startup --theme and INI values
+still require a complete alias or pair.
+Enter and Alt-Enter apply changes at the next safe response/tool
 boundary during a turn. Changes affect future output in
 this app invocation, including after /new and /resume. Configuration and
 session history are not rewritten. NO_COLOR continues to override styling.

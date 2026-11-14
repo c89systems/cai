@@ -16,6 +16,12 @@ typedef struct cai_cli_theme {
 /* Borrowed canonical names; NULL means success, otherwise a static diagnostic.
  */
 const char *cai_cli_theme_parse(const char *text, cai_cli_theme *out);
+/** Resolve a runtime change against the current base pair. Empty colon sides
+ * retain that component, including Markdown's ASCII policy. Bare aliases
+ * still select both components. Failures leave out unchanged; aliasing the
+ * current pair and output is supported. Startup parsing stays absolute. */
+const char *cai_cli_theme_change(const char *text, const cai_cli_theme *current,
+                                 cai_cli_theme *out);
 /** Frontend-only validation after the common configuration loader. */
 int cai_cli_theme_validate(const cai_cli_options *, cai_error *);
 const char *cai_cli_theme_prompt_name(const cai_cli_theme *theme);

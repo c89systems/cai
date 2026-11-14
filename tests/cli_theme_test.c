@@ -106,6 +106,57 @@ static void test_tool_palettes(capture *out, cai_sink *sink, cai_error *error) {
   cai_tool_display_close(display);
 }
 
+static void test_changes(void) {
+  static const char *const invalid[] = {
+      "",          ":no-such-theme",   "no-such-theme:",  "::",
+      "default::", ":ascii:",          "default:unknown", " default:",
+      "default :", ":ayu-mirage extra"};
+  cai_cli_theme current, result, saved;
+  char text[128];
+  size_t i;
+  assert(cai_cli_theme_parse("riced:iosvkem", &current) == NULL);
+  for (i = 0U; i < mdf_theme_count(); ++i) {
+    assert(snprintf(text, sizeof(text), ":%s", mdf_theme_name(i)) <
+           (int)sizeof(text));
+    assert(cai_cli_theme_change(text, &current, &result) == NULL);
+    assert(result.prompt == current.prompt && !result.ascii &&
+           strcmp(result.markdown, mdf_theme_name(i)) == 0);
+  }
+  assert(cai_cli_theme_change(":AYU-MIRAGE", &current, &current) == NULL);
+  assert(current.prompt == SL_PROMPT_THEME_RICED && !current.ascii &&
+         strcmp(current.markdown, "ayu-mirage") == 0);
+  assert(cai_cli_theme_change("DEFAULT:", &current, &current) == NULL);
+  assert(current.prompt == SL_PROMPT_THEME_DEFAULT && !current.ascii &&
+         strcmp(current.markdown, "ayu-mirage") == 0);
+  saved = current;
+  assert(cai_cli_theme_change(":", &current, &current) == NULL);
+  assert(current.prompt == saved.prompt && current.markdown == saved.markdown &&
+         current.ascii == saved.ascii);
+  assert(cai_cli_theme_change("default", &current, &current) == NULL);
+  assert(strcmp(current.markdown, "default") == 0 && !current.ascii);
+  assert(cai_cli_theme_change(":ascii", &current, &current) == NULL);
+  assert(current.prompt == SL_PROMPT_THEME_DEFAULT && current.ascii &&
+         current.markdown == NULL);
+  assert(cai_cli_theme_change("monogreen:", &current, &current) == NULL);
+  assert(current.prompt == SL_PROMPT_THEME_MONOGREEN && current.ascii &&
+         current.markdown == NULL);
+  /* ASCII keeps its policy even when a rotation has selected a palette. */
+  cai_cli_theme_offset(&current, 1LL, &current);
+  saved = current;
+  assert(cai_cli_theme_change("default:", &current, &current) == NULL);
+  assert(current.prompt == SL_PROMPT_THEME_DEFAULT &&
+         current.markdown == saved.markdown && current.ascii);
+  for (i = 0U; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+    saved = current;
+    assert(cai_cli_theme_change(invalid[i], &current, &current) != NULL);
+    assert(current.prompt == saved.prompt &&
+           current.markdown == saved.markdown && current.ascii == saved.ascii);
+  }
+  assert(cai_cli_theme_change(":default", NULL, &current) != NULL);
+  assert(current.prompt == saved.prompt && current.markdown == saved.markdown &&
+         current.ascii == saved.ascii);
+  assert(cai_cli_theme_change("default", &current, NULL) != NULL);
+}
 int main(void) {
   static const struct {
     const char *alias, *markdown;
@@ -139,6 +190,7 @@ int main(void) {
   char pair[128];
   size_t i;
   test_offsets();
+  test_changes();
   for (i = 0U; i < sizeof(pairs) / sizeof(pairs[0]); i++) {
     assert(cai_cli_theme_parse(pairs[i].alias, &theme) == NULL);
     assert(theme.prompt == pairs[i].prompt);

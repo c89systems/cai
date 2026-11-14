@@ -1107,20 +1107,23 @@ static int theme_write(void *context, const void *bytes, size_t length,
 }
 static int actions(frontend *f) {
   const char *line = f->action;
+  cai_cli_command_tokens tokens;
   int rc = 0;
   if (!f->action_field)
     return 0;
   f->action_field = 0;
+  cai_cli_command_parse(line, &tokens);
   if (cai_cli_command_quit(line) != 0) {
     int mode = cai_cli_command_quit(line);
     if (mode < 0)
       return notice(f, "Usage: /quit [now|force|-f|--force] or /terminate");
     f->group->force_quit = mode == 2;
     request_quit(f);
-  } else if (strncmp(line, "/theme ", 7U) == 0 ||
-             strncmp(line, "/t ", 3U) == 0) {
+  } else if (tokens.name_length == 6U &&
+             memcmp(tokens.name, "/theme", 6U) == 0 &&
+             tokens.arguments_length != 0U) {
     cai_cli_theme selected;
-    char *argument = strchr(f->action, ' ') + 1U;
+    char *argument = f->action + (tokens.arguments - line);
     char *end;
     const char *why;
     /* Slash arguments allow surrounding whitespace; theme identifiers do not.
@@ -1129,7 +1132,7 @@ static int actions(frontend *f) {
     end = argument + strlen(argument);
     while (end > argument && (end[-1] == ' ' || end[-1] == '\t'))
       *--end = '\0';
-    why = cai_cli_theme_parse(argument, &selected);
+    why = cai_cli_theme_change(argument, &f->theme, &selected);
     if (why != NULL)
       rc = notice(f, why);
     else if (cai_cli_presenter_set_theme(f->ui, &selected, &f->error) != CAI_OK)
@@ -1147,7 +1150,8 @@ static int actions(frontend *f) {
     }
     if (why == NULL && rc == 0)
       f->theme = selected;
-  } else if (strcmp(line, "/theme") == 0 || strcmp(line, "/t") == 0) {
+  } else if (tokens.name_length == 6U &&
+             memcmp(tokens.name, "/theme", 6U) == 0) {
     cai_sink_callbacks callbacks;
     cai_sink *sink = NULL;
     memset(&callbacks, 0, sizeof(callbacks));

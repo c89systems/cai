@@ -7,12 +7,12 @@ base+=(--config "$root/protocol.ini")
 chat=false
 [[ "$protocol" != chat_completions ]] || chat=true
 terminal_start -N
-for selection in gruvbox:rose-pine-dawn no-such-theme plain queued parent-offset child-offset review-offset; do
+for selection in gruvbox:rose-pine-dawn :ayu-mirage default: no-such-theme plain queued parent-offset child-offset review-offset; do
   theme=$selection
   command=/theme
   intent=S key='\033\r'
   if [[ "$selection" == queued ]]; then theme=dracula; intent=Q; key='\r'; fi
-  if [[ "$selection" == queued || "$selection" == gruvbox:rose-pine-dawn ]]; then command=/t; fi
+  if [[ "$selection" == queued || "$selection" == gruvbox:rose-pine-dawn || "$selection" == default: ]]; then command=/t; fi
   case "$selection" in
     parent-offset) command=/theme-offset; theme=-300 ;;
     child-offset) command=/subagent-theme-offset; theme=1234 ;;
@@ -42,5 +42,10 @@ for selection in gruvbox:rose-pine-dawn no-such-theme plain queued parent-offset
     contains "$term/feed" 'Theme changed to'
   fi
   absent "$term/feed" 'Change themes between turns'
+  if [[ $selection == :ayu-mirage ]]; then
+    send '/theme\r'; expect 'Current: gruvbox:ayu-mirage'
+  elif [[ $selection == default: ]]; then
+    send '/theme\r'; expect 'Current: default:ayu-mirage'
+  fi
 done
 terminal_close

@@ -40,26 +40,42 @@ int cai_cli_theme_validate(const cai_cli_options *options, cai_error *error) {
                         : CAI_OK;
 }
 
-const char *cai_cli_theme_parse(const char *text, cai_cli_theme *out) {
+static const char *parse(const char *text, const cai_cli_theme *current,
+                         cai_cli_theme *out) {
   const char *separator, *markdown;
   size_t length, i;
   cai_cli_theme selected;
+  if (out == NULL)
+    return "theme output is required";
   if (text == NULL)
     text = "default";
   separator = strchr(text, ':');
   length = separator != NULL ? (size_t)(separator - text) : strlen(text);
-  if (length == 0U || (separator != NULL && separator[1] == '\0'))
+  if ((length == 0U && separator == NULL) ||
+      (current == NULL && separator != NULL &&
+       (length == 0U || separator[1] == '\0')))
     return "theme requires a softline name or SOFTLINE:LIBMDF; use "
            "--list-themes";
   if (separator != NULL && strchr(separator + 1U, ':') != NULL)
     return "theme must contain at most one ':'; use SOFTLINE:LIBMDF";
-  for (i = 0U; i < sizeof(themes) / sizeof(themes[0]); i++)
-    if (theme_equal(text, length, themes[i].name))
-      break;
-  if (i == sizeof(themes) / sizeof(themes[0]))
-    return "unknown softline theme; use --list-themes";
-  selected.prompt = themes[i].prompt;
-  markdown = separator != NULL ? separator + 1U : themes[i].markdown;
+  if (length != 0U) {
+    for (i = 0U; i < sizeof(themes) / sizeof(themes[0]); i++)
+      if (theme_equal(text, length, themes[i].name))
+        break;
+    if (i == sizeof(themes) / sizeof(themes[0]))
+      return "unknown softline theme; use --list-themes";
+    selected.prompt = themes[i].prompt;
+    markdown = separator != NULL ? separator + 1U : themes[i].markdown;
+  } else {
+    selected.prompt = current->prompt;
+    markdown = separator + 1U;
+  }
+  if (markdown[0] == '\0') {
+    selected.markdown = current->markdown;
+    selected.ascii = current->ascii;
+    *out = selected;
+    return NULL;
+  }
   selected.ascii = theme_equal(markdown, strlen(markdown), "ascii");
   selected.markdown = NULL;
   if (!selected.ascii) {
@@ -75,6 +91,15 @@ const char *cai_cli_theme_parse(const char *text, cai_cli_theme *out) {
   }
   *out = selected;
   return NULL;
+}
+
+const char *cai_cli_theme_parse(const char *text, cai_cli_theme *out) {
+  return parse(text, NULL, out);
+}
+const char *cai_cli_theme_change(const char *text, const cai_cli_theme *current,
+                                 cai_cli_theme *out) {
+  return current != NULL ? parse(text, current, out)
+                         : "current theme is required";
 }
 
 void cai_cli_theme_markdown(const cai_cli_theme *theme, mdf_options *options) {
@@ -150,7 +175,9 @@ int cai_cli_theme_describe(const cai_cli_theme *theme, cai_sink *sink,
                theme->ascii ? "ascii" : theme->markdown);
   rc = cai_sink_write(sink, row, (size_t)n, error);
   text = "Use `/theme NAME` or `/theme SOFTLINE:LIBMDF` at a safe "
-         "response/tool boundary. "
+         "response/tool boundary. Empty colon sides keep that component: "
+         "`/theme :ayu-mirage` changes only libmdf; `/theme default:` changes "
+         "only Softline. `/theme default` selects the complete default pair. "
          "Changes affect future output in this app invocation.\n\n";
   if (rc == CAI_OK)
     rc = cai_sink_write(sink, text, strlen(text), error);

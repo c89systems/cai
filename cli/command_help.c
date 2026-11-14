@@ -28,6 +28,7 @@ static const char *const help[] = {
     "| `/theme [NAME or SOFTLINE:LIBMDF]`, `/t` | Show the current pair "
     "and all "
     "themes, or change themes at the next safe response/tool boundary. "
+    "Empty colon sides keep their theme: `:ayu-mirage` or `default:`. "
     "|\n",
     "| `/theme-offset [N]` | Show/set the parent libmdf rotation (default "
     "0). |\n"
