@@ -19,6 +19,47 @@ static const struct {
               {"riced", SL_PROMPT_THEME_RICED, "catppuccin-mocha"},
               {"synthwave", SL_PROMPT_THEME_SYNTHWAVE, "synthwave-84"}};
 
+int cai_cli_theme_completions(sl_completion_emit_t emit, void *context) {
+  static const char *const commands[] = {"/theme", "/t"};
+  size_t i, j, k, prompt_max = 0U, markdown_max = strlen("ascii");
+  size_t count = sizeof(themes) / sizeof(themes[0]), capacity;
+  char *candidate;
+  int rc = SL_OK;
+  if (emit == NULL)
+    return SL_ERROR_INVALID;
+  for (i = 0U; i < count; ++i)
+    if (strlen(themes[i].name) > prompt_max)
+      prompt_max = strlen(themes[i].name);
+  for (i = 0U; i < mdf_theme_count(); ++i)
+    if (strlen(mdf_theme_name(i)) > markdown_max)
+      markdown_max = strlen(mdf_theme_name(i));
+  capacity = strlen(commands[0]) + prompt_max + markdown_max + 3U;
+  candidate = malloc(capacity);
+  if (candidate == NULL)
+    return SL_ERROR_NOMEM;
+  /* Softline retains one phrase list per activation, so a typed space or
+   * colon filters these candidates without another resolver or editor path. */
+  for (k = 0U; k < sizeof(commands) / sizeof(commands[0]) && rc == SL_OK; ++k) {
+    for (i = 0U; i <= count && rc == SL_OK; ++i) {
+      const char *prompt = i < count ? themes[i].name : "";
+      if (i < count) {
+        snprintf(candidate, capacity, "%s %s", commands[k], prompt);
+        rc = emit(candidate, context);
+      }
+      for (j = 0U; j < mdf_theme_count() + 2U && rc == SL_OK; ++j) {
+        const char *markdown = j == 0U   ? ""
+                               : j == 1U ? "ascii"
+                                         : mdf_theme_name(j - 2U);
+        snprintf(candidate, capacity, "%s %s:%s", commands[k], prompt,
+                 markdown);
+        rc = emit(candidate, context);
+      }
+    }
+  }
+  free(candidate);
+  return rc;
+}
+
 static int theme_equal(const char *a, size_t length, const char *b) {
   size_t i;
   if (strlen(b) != length)

@@ -75,6 +75,7 @@ An unsubmitted draft remains local.
 Editing an accepted entry holds it in the backend; cancelling an edit does not duplicate or execute it.
 Escape stops automatic delivery of the existing backlog; an explicit new `/goal resume` does not release unrelated stopped entries.
 `@` and `$` completion remove the trigger before submission; slash command prefixes remain.
+`/theme` and `/t` complete theme aliases, every `SOFTLINE:LIBMDF` pair, and partial pairs such as `:ayu-mirage` or `default:`. Type a space after the command and a theme prefix, then use Tab to accept or cycle matches.
 Tab cycles files and directories in the current list without entering a directory. Right or Ctrl-F commits the selected directory and previews its children; Tab accepts that preview. Repeated forward keys at the end of a completed file keep its name intact.
 Enter sends actual draft text, not an unaccepted suggestion.
 See [completion limitations](troubleshooting.md#completion-triggers).

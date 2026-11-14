@@ -199,6 +199,8 @@ static int completion_catalog(void *context, char trigger,
       rc = emit("/shutdown", emit_context);
     if (rc == SL_OK)
       rc = emit("/workspace", emit_context);
+    if (rc == SL_OK)
+      rc = cai_cli_theme_completions(emit, emit_context);
   } else if (trigger == '$' && f->skills_ready && f->bound &&
              !f->pending_context &&
              f->skill_conversation == f->state.conversation) {

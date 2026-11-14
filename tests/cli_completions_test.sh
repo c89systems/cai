@@ -53,6 +53,31 @@ fi
 send '/stat\t\r'; expect_table 1 'Session ID'
 send '/ski\t\r'; expect 'completion-skill'
 [[ $(requests) == 0 ]]
+# Theme phrases use the same slash activation for both command names. Tab
+# accepts a candidate without submitting it or changing the active theme.
+send '/theme gru\t'; expect_prompt '/theme gruvbox'
+[[ $(requests) == 0 ]]
+send '\r'; expect 'Theme changed to gruvbox:gruvbox.'
+send '/t :ayu-m\t'; expect_prompt '/t :ayu-mirage'
+send '\r'; expect 'Theme changed to gruvbox:ayu-mirage.'
+send '/theme riced:rose-pine-d\t'; expect_prompt '/theme riced:rose-pine-dawn'
+send '\r'; expect 'Theme changed to riced:rose-pine-dawn.'
+send '/t default:'; expect_prompt '/t default:'
+send '\t'; expect_prompt '/t default:'
+send '\r'; expect 'Theme changed to default:rose-pine-dawn.'
+send '/theme :asc\t'; expect_prompt '/theme :ascii'
+send '\r'; expect 'Theme changed to default:ascii.'
+# A single alias remains first; subsequent Tab cycles its pair variants.
+send '/t gru\t'; expect_prompt '/t gruvbox'
+send '\t'; expect_prompt '/t gruvbox:'
+send '\t'; expect_prompt '/t gruvbox:ascii'
+send '\025'
+# An unknown prefix is left untouched, and an unaccepted ghost is not sent.
+send '/t no-such-theme\t'; expect_prompt '/t no-such-theme'
+send '\025'
+send '/theme :ayu-m\r'; expect 'unknown libmdf theme'
+send '/t def\t\r'; expect 'Theme changed to default:default.'
+[[ $(requests) == 0 ]]
 last_input() {
   tail -1 "$root/peer/requests.jsonl" >"$root/request"
   jq -er '[.input[]? | select(.role=="user") | .content[]? | .text?] | last' "$root/request"
@@ -129,6 +154,8 @@ prompt 'inspect @fresh-\t' 'FRESH COMPLETED'
 # Catalog completion remains available during a live provider response.
 plan '{"plan":[{"pause":true,"text":"STREAM COMPLETED"}]}'
 send 'hold a response\r'; expect 'STREAM in flight'
+send '/t :ayu-m\t'; expect_prompt '/t :ayu-mirage'
+send '\025'
 send 'Use $comple\t'; expect_prompt 'Use $completion-skill'
 send '\025'
 release; expect 'STREAM COMPLETED'; expect 'Worked for'

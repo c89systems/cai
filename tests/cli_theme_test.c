@@ -157,6 +157,85 @@ static void test_changes(void) {
          current.ascii == saved.ascii);
   assert(cai_cli_theme_change("default", &current, NULL) != NULL);
 }
+
+typedef struct completion_capture {
+  char **names;
+  size_t count, capacity, fail_at;
+} completion_capture;
+
+static int collect_completion(const char *text, void *context) {
+  completion_capture *out = context;
+  cai_cli_theme base, result;
+  const char *argument = strchr(text, ' ');
+  size_t i, length = strlen(text);
+  if (out->count == out->fail_at)
+    return SL_ERROR_IO;
+  assert(out->count < out->capacity && argument != NULL);
+  assert(cai_cli_theme_parse("default", &base) == NULL);
+  assert(cai_cli_theme_change(argument + 1U, &base, &result) == NULL);
+  for (i = 0U; i < out->count; ++i)
+    assert(strcmp(out->names[i], text) != 0);
+  out->names[out->count] = malloc(length + 1U);
+  assert(out->names[out->count] != NULL);
+  memcpy(out->names[out->count++], text, length + 1U);
+  return SL_OK;
+}
+
+static void expect_completion(const completion_capture *out,
+                              const char *command, const char *prompt,
+                              const char *markdown) {
+  char expected[128];
+  size_t i;
+  int n =
+      snprintf(expected, sizeof(expected), "%s %s%s%s", command, prompt,
+               markdown != NULL ? ":" : "", markdown != NULL ? markdown : "");
+  assert(n > 0 && (size_t)n < sizeof(expected));
+  for (i = 0U; i < out->count; ++i)
+    if (strcmp(out->names[i], expected) == 0)
+      return;
+  assert(!"missing theme completion");
+}
+
+static void clear_completions(completion_capture *out) {
+  while (out->count != 0U)
+    free(out->names[--out->count]);
+}
+
+static void test_completions(void) {
+  static const char *const aliases[] = {
+      "default",    "plain",     "accent", "dracula", "gruvbox",
+      "monochrome", "monogreen", "outrun", "riced",   "synthwave"};
+  static const char *const commands[] = {"/theme", "/t"};
+  size_t i, j, k, n = sizeof(aliases) / sizeof(aliases[0]);
+  completion_capture out = {0};
+  out.capacity = 2U * (n + (n + 1U) * (mdf_theme_count() + 2U));
+  out.fail_at = (size_t)-1;
+  out.names = calloc(out.capacity, sizeof(*out.names));
+  assert(out.names != NULL);
+  assert(cai_cli_theme_completions(collect_completion, &out) == SL_OK);
+  assert(out.count == out.capacity);
+  for (k = 0U; k < sizeof(commands) / sizeof(commands[0]); ++k)
+    for (i = 0U; i <= n; ++i) {
+      const char *prompt = i < n ? aliases[i] : "";
+      if (i < n)
+        expect_completion(&out, commands[k], prompt, NULL);
+      expect_completion(&out, commands[k], prompt, "");
+      expect_completion(&out, commands[k], prompt, "ascii");
+      for (j = 0U; j < mdf_theme_count(); ++j)
+        expect_completion(&out, commands[k], prompt, mdf_theme_name(j));
+    }
+  clear_completions(&out);
+  /* Fail immediately and partway through each command's candidates. */
+  for (i = 0U; i < 3U; ++i) {
+    out.fail_at = i == 0U ? 0U : i == 1U ? 7U : out.capacity - 1U;
+    assert(cai_cli_theme_completions(collect_completion, &out) == SL_ERROR_IO);
+    assert(out.count == out.fail_at);
+    clear_completions(&out);
+  }
+  assert(cai_cli_theme_completions(NULL, &out) == SL_ERROR_INVALID);
+  free(out.names);
+}
+
 int main(void) {
   static const struct {
     const char *alias, *markdown;
@@ -191,6 +270,7 @@ int main(void) {
   size_t i;
   test_offsets();
   test_changes();
+  test_completions();
   for (i = 0U; i < sizeof(pairs) / sizeof(pairs[0]); i++) {
     assert(cai_cli_theme_parse(pairs[i].alias, &theme) == NULL);
     assert(theme.prompt == pairs[i].prompt);

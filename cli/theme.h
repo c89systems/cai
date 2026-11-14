@@ -25,6 +25,11 @@ const char *cai_cli_theme_change(const char *text, const cai_cli_theme *current,
 /** Frontend-only validation after the common configuration loader. */
 int cai_cli_theme_validate(const cai_cli_options *, cai_error *);
 const char *cai_cli_theme_prompt_name(const cai_cli_theme *theme);
+/** Emit /theme and /t phrases from the same registries as the parser,
+ * including aliases, full pairs and pairs retaining either component.
+ * The synchronous emitter copies borrowed text and failures stop enumeration.
+ */
+int cai_cli_theme_completions(sl_completion_emit_t emit, void *context);
 void cai_cli_theme_markdown(const cai_cli_theme *theme, mdf_options *options);
 /* Public libmdf palette: H3 activity, H2 labels; display owns copied colors. */
 int cai_cli_theme_tools(const cai_cli_theme *theme, cai_tool_display *display,
