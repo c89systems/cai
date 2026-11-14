@@ -4,6 +4,8 @@
 cli_fixture_parent=$(dirname "$(dirname "$(realpath "$1")")")
 source "$(dirname "$0")/cli_test_common.sh"
 peer_start
+# Exact base-file comparisons below intentionally omit optional renderer help.
+base+=(--no-chart-instructions)
 mkdir -p "$root/cfg" "$root/offline"
 printf 'CONFIG AGENT\n' >"$root/cfg/agent.md"
 printf 'CONFIG REVIEWER\n' >"$root/cfg/reviewer.md"

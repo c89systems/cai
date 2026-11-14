@@ -699,6 +699,15 @@ words; at least one letter or digit is required. No leading/trailing spaces.
 .BR \-I , " " \-\-add-developer-instructions " " TEXT
 Add developer instructions before automatic capability and discovery additions.
 .TP
+.BR \-\-chart-instructions , " " \-\-no-chart-instructions
+Include or omit the short libmdf chart guide (included by default). It supplies
+horizontal-bar, vertical-bar and part-of-whole tile-chart CSV fence examples.
+Charts are requested explicitly or through standing user instructions, rather
+than added to ordinary numeric results. The guide follows the base prompt and
+precedes -I additions, appears in dumps and reconstructed exports, and is
+inherited by children. Configure [agent] disable_chart_instructions=true or
+CAI_DISABLE_CHART_INSTRUCTIONS=true to omit it. This is a server startup policy.
+.TP
 .BR \-z , " " \-\-developer-instructions " " FILE
 Replace the initial agent's base developer instructions with literal file
 contents. With --review, replaces the initially started reviewer. Does not

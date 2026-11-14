@@ -305,6 +305,14 @@ static int cli_read_options(int argc, char *const *argv,
       options->no_banner = strcmp(flag, "--no-banner") == 0;
       continue;
     }
+    if (strcmp(flag, "--chart-instructions") == 0 ||
+        strcmp(flag, "--no-chart-instructions") == 0) {
+      options->disable_chart_instructions =
+          strcmp(flag, "--no-chart-instructions") == 0;
+      cai_cli_options_mark_owner(
+          options, offsetof(cai_cli_options, disable_chart_instructions));
+      continue;
+    }
     if (strcmp(flag, "--prefer-native-pager") == 0 ||
         strcmp(flag, "--no-prefer-native-pager") == 0) {
       options->prefer_native_pager = strcmp(flag, "--prefer-native-pager") == 0;

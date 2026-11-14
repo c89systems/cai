@@ -1,14 +1,15 @@
-/** @file Instruction-file ownership and offline base-prompt export. */
+/** @file Application instruction policy and offline base-prompt export. */
 #ifndef CAI_CLI_INSTRUCTIONS_H
 #define CAI_CLI_INSTRUCTIONS_H
 #include "options.h"
 #include <cai/agent_runtime.h>
 
 typedef struct cai_cli_instruction_files {
-  char *agent, *reviewer, *initial;
+  char *agent, *reviewer, *initial, *extension;
 } cai_cli_instruction_files;
 
-/** Load explicit regular files (up to 1 MiB each). All outputs are owned even
+/** Load explicit regular files (up to 1 MiB each), then compose the optional
+ * chart guide and user additions into extension. All outputs are owned even
  * on failure; close before reuse. No auth, discovery or workspace reads occur.
  */
 int cai_cli_instruction_files_open(const cai_cli_options *,

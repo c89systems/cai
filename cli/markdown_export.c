@@ -405,7 +405,6 @@ int cai_cli_markdown_export(cai_cli_journal_view *view, cai_cli_pouch *pouch,
     config.global_agents_md_path = options->agents_md;
     config.agent_identity =
         options->identity != NULL ? options->identity : pouch->program_name;
-    config.developer_instructions_extension = options->developer_instructions;
     config.codex_compat_agents_md = options->codex_agents_md;
     config.disable_terminal = !options->terminal;
     cai_skill_config_init(&skills);
@@ -430,6 +429,7 @@ int cai_cli_markdown_export(cai_cli_journal_view *view, cai_cli_pouch *pouch,
     preset.developer_instructions = m->files.agent;
     preset.developer_instructions_literal = m->files.agent != NULL;
     config.developer_instructions_override = m->files.initial;
+    config.developer_instructions_extension = m->files.extension;
     if (options->insecure)
       config.workspace_instructions_root = config.workspace_directory;
     else if (m->rc == CAI_OK) {

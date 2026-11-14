@@ -11,6 +11,60 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+/* Renderer guidance belongs to libcai_app. The runtime's existing instruction
+ * extension carries it to children and model changes without a libmdf
+ * dependency in libcai. Keep each C89 string below its required 509 bytes. */
+static const char *const chart_guide[] = {
+    "## Markdown charts (on request)\n\n"
+    "Use these libmdf chart fences when the user requests charts, including a "
+    "standing request, and the required output format permits them. Otherwise "
+    "use prose or tables; do not turn ordinary numeric results into charts. "
+    "Bodies are two-column CSV: label,value followed by nonnegative raw "
+    "numbers. Use normal CSV quoting for labels. Use tables for negative "
+    "values; never alter data to fit.\n\n",
+    "Horizontal bars (`mdf-bar-chart` is an alias):\n"
+    "```mdf-horizontal-bar-chart\nlabel,value\nBuild,40\nTest,25\n```\n\n"
+    "Vertical bars:\n"
+    "```mdf-vertical-bar-chart\nlabel,value\nBuild,40\nTest,25\n```\n\n",
+    "Part-of-whole (\"bar pie\"): tile charts render a single 100% stacked "
+    "bar, not a circular pie. Percentages are calculated from raw values.\n"
+    "```mdf-tile-chart\nlabel,value\nUsed,60\nFree,40\n```"};
+
+/** One owned extension for live runtime construction, prompt dumps and offline
+ * export. Explicit user additions follow the optional renderer guide. */
+static int extension(const cai_cli_options *o, char **out, cai_error *error) {
+  const char *user = o->developer_instructions;
+  size_t i, guide = 0U, added = user != NULL ? strlen(user) : 0U, used = 0U;
+  if (!o->disable_chart_instructions)
+    for (i = 0U; i < sizeof(chart_guide) / sizeof(chart_guide[0]); ++i)
+      guide += strlen(chart_guide[i]);
+  if (guide == 0U && user == NULL)
+    return CAI_OK;
+  if (added > (size_t)-1 - guide - 3U)
+    return cai_cli_error(error, CAI_ERR_LIMIT,
+                         "instruction additions too large");
+  *out = malloc(guide + added + 3U);
+  if (*out == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate instruction additions");
+  if (guide != 0U)
+    for (i = 0U; i < sizeof(chart_guide) / sizeof(chart_guide[0]); ++i) {
+      size_t n = strlen(chart_guide[i]);
+      memcpy(*out + used, chart_guide[i], n);
+      used += n;
+    }
+  if (guide != 0U && added != 0U) {
+    memcpy(*out + used, "\n\n", 2U);
+    used += 2U;
+  }
+  if (added != 0U) {
+    memcpy(*out + used, user, added);
+    used += added;
+  }
+  (*out)[used] = '\0';
+  return CAI_OK;
+}
+
 static int instruction_error(cai_error *error, const char *path,
                              const char *why) {
   char message[1024];
@@ -94,6 +148,8 @@ int cai_cli_instruction_files_open(const cai_cli_options *o,
     rc = load(o->reviewer_instructions_file, &files->reviewer, error);
   if (rc == CAI_OK)
     rc = load(o->developer_instructions_override_file, &files->initial, error);
+  if (rc == CAI_OK)
+    rc = extension(o, &files->extension, error);
   return rc;
 }
 
@@ -101,6 +157,7 @@ void cai_cli_instruction_files_close(cai_cli_instruction_files *files) {
   free(files->agent);
   free(files->reviewer);
   free(files->initial);
+  free(files->extension);
   memset(files, 0, sizeof(*files));
 }
 
@@ -175,7 +232,7 @@ int cai_cli_dump_instructions(const cai_cli_options *o, cai_error *error) {
         files.initial != NULL && ((i == 1U) == !!o->review)
             ? files.initial
             : (i == 0U ? files.agent : files.reviewer);
-    config.developer_instructions_extension = o->developer_instructions;
+    config.developer_instructions_extension = files.extension;
     rc = cai_sink_file(outputs[i], 0, &sink, error);
     if (rc == CAI_OK)
       rc = cai_agent_preset_write_base_instructions(&preset, &config, (int)i,

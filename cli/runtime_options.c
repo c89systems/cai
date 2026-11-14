@@ -49,7 +49,6 @@ void cai_cli_apply_runtime_options(const cai_cli_options *options,
     config->global_agents_md_path = options->agents_md;
   config->skills = options->skills_dir != NULL ? skills : NULL;
   config->agent_identity = options->identity;
-  config->developer_instructions_extension = options->developer_instructions;
   config->codex_compat_agents_md = options->codex_agents_md;
   config->insecure = options->insecure;
   config->shell_context_max_lines = options->shell_context_max_lines;

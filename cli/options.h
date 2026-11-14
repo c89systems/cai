@@ -132,6 +132,7 @@ typedef struct cai_cli_options {
   int utc;
   const char *identity;
   const char *developer_instructions;
+  int disable_chart_instructions;
   const char *developer_instructions_file;
   const char *reviewer_instructions_file;
   const char *developer_instructions_override_file;

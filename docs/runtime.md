@@ -89,6 +89,10 @@ Changing the current model retains the override.
 `-I` remains an addition, including when `-z` is selected; automatic capability and discovery instructions still follow.
 The long spelling for `-I` is now `--add-developer-instructions`.
 
+libcai_app includes a short libmdf chart guide after the base prompt and before `-I` additions and automatic discovery. It gives CSV-fence examples for horizontal bars (`mdf-horizontal-bar-chart`, also `mdf-bar-chart`), vertical bars (`mdf-vertical-bar-chart`) and part-of-whole stacked bars (`mdf-tile-chart`). The agent is instructed to use charts on request, including standing user instructions, rather than charting ordinary numeric results. The guide also appears in instruction dumps and reconstructed exports, and is inherited by child agents.
+
+Use `--no-chart-instructions`, `CAI_DISABLE_CHART_INSTRUCTIONS=true`, or `[agent] disable_chart_instructions = true` to omit it. The default is false (include the guide); `--chart-instructions` explicitly includes it. This controls developer guidance, while libmdf can still render chart fences. The setting belongs to the workspace server's startup policy.
+
 Configure reusable defaults separately for ordinary agents and reviewers:
 
 ```ini

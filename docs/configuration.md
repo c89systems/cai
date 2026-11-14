@@ -24,6 +24,7 @@ Configuration precedence is explicit command line, environment, INI, then built-
 Saved model/reasoning settings are restored on resume unless explicitly overridden.
 Use the generated template for the complete current setting descriptions; this guide does not duplicate that catalog.
 Base prompt files, offline dumps and parent-only overrides are described in [developer instructions](runtime.md#base-developer-instructions).
+The optional chart guide is included by default. Set `[agent] disable_chart_instructions = true`, `CAI_DISABLE_CHART_INSTRUCTIONS=true` or `--no-chart-instructions` to omit it; `--chart-instructions` explicitly includes it. Charts remain on demand unless the user requests ongoing chart use.
 
 ```sh
 cai --dump-config

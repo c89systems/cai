@@ -183,6 +183,14 @@
     set_tests_properties(cai_cli_developer_instructions PROPERTIES TIMEOUT 45
       LABELS "cli;local;offline"
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+    foreach(_chart_protocol responses chat_completions)
+      add_test(NAME cai_cli_chart_instructions_${_chart_protocol} COMMAND bash
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_chart_instructions_test.sh"
+        "$<TARGET_FILE:cai_cli>" "${_chart_protocol}")
+      set_tests_properties(cai_cli_chart_instructions_${_chart_protocol} PROPERTIES
+        TIMEOUT 45 LABELS "cli;local;offline"
+        ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+    endforeach()
     add_executable(cai_cli_progress_owner tests/cli_catalog_client_fixture.c tests/export_gate_fixture.c
       cli/main.c cli/feed_tcp.c cli/process.c cli/bootstrap.c cli/spawn.c cli/attach.c)
     target_link_libraries(cai_cli_progress_owner PRIVATE cai_app_static)

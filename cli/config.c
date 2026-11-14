@@ -67,6 +67,9 @@ static const cli_field fields[] = {
       CAI_CONFIG_PATH,
       "Literal base instructions file for ordinary agents; empty uses model "
       "defaults. Maximum 1 MiB."),
+    B("agent", "disable_chart_instructions", disable_chart_instructions,
+      "Omit the short libmdf chart guide from developer instructions. Default "
+      "false; charts are suggested only on user request."),
     S("review", "developer_instructions_file", reviewer_instructions_file,
       CAI_CONFIG_PATH,
       "Literal base instructions file for reviewers; empty uses the built-in "
@@ -887,6 +890,7 @@ static int tool_environment(cai_config *cfg, const char *prefix,
         {"MODEL_METADATA", "paths", "model_metadata"},
         {"AUTH_JSON", "paths", "auth_json"},
         {"DEVELOPER_INSTRUCTIONS_FILE", "agent", "developer_instructions_file"},
+        {"DISABLE_CHART_INSTRUCTIONS", "agent", "disable_chart_instructions"},
         {"REVIEWER_INSTRUCTIONS_FILE", "review", "developer_instructions_file"},
         {"LOCKD", "store.default", "endpoint"},
         {"SESSIONS_STORE", "storage", "sessions_store"},

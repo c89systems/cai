@@ -1563,6 +1563,7 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
   preset.review_developer_instructions_literal =
       instruction_files.reviewer != NULL;
   config.developer_instructions_override = instruction_files.initial;
+  config.developer_instructions_extension = instruction_files.extension;
   if (rc == CAI_OK && state->normal_options.review &&
       instruction_files.initial != NULL) {
     state->initial_review_instructions = instruction_files.initial;

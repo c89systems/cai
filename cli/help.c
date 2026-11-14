@@ -301,6 +301,8 @@ static const cai_app_option options[] = {
      0},
     {"--add-developer-instructions", 'I', CAI_APP_STRING, "TEXT",
      "Append developer instructions", 0, 0},
+    {"--chart-instructions", '\0', CAI_APP_FLAG, NULL,
+     "Include the on-request libmdf chart guide (default on)", 0, 1},
     {"--developer-instructions", 'z', CAI_APP_STRING, "FILE",
      "Replace the initial agent's base instructions (not inherited)", 0, 0},
     {"--dump-developer-instructions", 'd', CAI_APP_STRING, "DIR",

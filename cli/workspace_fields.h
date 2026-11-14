@@ -48,6 +48,7 @@
   X("revgeo", "base_url", revgeo_url, 's') \
   X("agent", "identity", identity, 's') \
   X("agent", "developer_instructions", developer_instructions, 's') \
+  X("agent", "disable_chart_instructions", disable_chart_instructions, 'b') \
   X("agent", "developer_instructions_file", developer_instructions_file, 's') \
   X("review", "developer_instructions_file", reviewer_instructions_file, 's') \
   X("agent", "initial_developer_instructions_file", developer_instructions_override_file, 's') \
