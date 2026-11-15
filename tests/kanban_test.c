@@ -264,6 +264,16 @@ int main(int argc, char **argv) {
   assert(request(file, "{\"operation\":\"snapshot_board\"}", &out, &error) ==
              CAI_OK &&
          strstr(out.text, "\"truncated\":true"));
+  /* Direct calls generate cai-owned strings/arrays, while decoded arguments
+   * and description spools retain lonejson ownership. Exercise both cleanup
+   * paths repeatedly, including result lists and an error response. */
+  assert(file->select(file, "visible", 1, &error) == CAI_OK);
+  assert(request(file, "{\"operation\":\"list_boards\"}", &out, &error) ==
+             CAI_OK &&
+         strstr(out.text, "visible"));
+  assert(request(file, "{\"operation\":\"get_item\",\"item_id\":\"DEF-999\"}",
+                 &out, &error) == CAI_OK &&
+         strstr(out.text, "\"ok\":false"));
   assert(file->select(file, "bad\300\200utf8", 1, &error) == CAI_ERR_INVALID);
   reset(&error);
   {

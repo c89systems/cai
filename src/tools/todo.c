@@ -389,6 +389,40 @@ static void cai_todo_result_init(cai_todo_result *result) {
   result->boards.elem_size = sizeof(cai_todo_result_board);
 }
 
+/** Generated result strings use cai_alloc, unlike parsed records owned by
+ * lonejson. Match the registry's generated-result ownership on direct calls.
+ * Nested result arrays and the library-owned spool are handled separately. */
+static void cai_todo_result_strings_cleanup(const lonejson_map *map,
+                                            void *record) {
+  size_t i;
+  for (i = 0U; i < map->field_count; ++i) {
+    const lonejson_field *field = &map->fields[i];
+    if (field->kind == LONEJSON_FIELD_KIND_STRING &&
+        field->storage == LONEJSON_STORAGE_DYNAMIC) {
+      char **value = (char **)((unsigned char *)record + field->struct_offset);
+      cai_free_mem(NULL, *value);
+      *value = NULL;
+    }
+  }
+}
+
+static void cai_todo_result_cleanup(cai_todo_result *result) {
+  size_t i;
+  cai_todo_result_strings_cleanup(&cai_todo_result_map, result);
+  for (i = 0U; i < result->items.count; ++i)
+    cai_todo_result_strings_cleanup(
+        &cai_todo_result_item_map,
+        (cai_todo_result_item *)result->items.items + i);
+  for (i = 0U; i < result->boards.count; ++i)
+    cai_todo_result_strings_cleanup(
+        &cai_todo_result_board_map,
+        (cai_todo_result_board *)result->boards.items + i);
+  cai_free_mem(NULL, result->items.items);
+  cai_free_mem(NULL, result->boards.items);
+  result->description.cleanup(&result->description);
+  memset(result, 0, sizeof(*result));
+}
+
 static const lonejson_field cai_todo_board_fields[] = {
     LONEJSON_FIELD_STRING_ALLOC_REQ(cai_todo_board, id, "id"),
     LONEJSON_FIELD_STRING_ALLOC(cai_todo_board, key, "key"),
@@ -1489,9 +1523,8 @@ static int cai_todo_add_result_item(cai_todo_result *result,
   if (rc == CAI_OK) {
     rc = cai_todo_spool_to_string(&record->title, 4096U, &item->title, error);
   }
-  if (rc == CAI_OK) {
-    result->items.count++;
-  }
+  /* Count a partial slot too so generated-result cleanup owns every field. */
+  result->items.count++;
   return rc;
 }
 
@@ -1526,9 +1559,7 @@ static int cai_todo_add_result_board(cai_todo_result *result,
     result_board->wip_limit = board->wip_limit;
     result_board->has_wip_limit = 1;
   }
-  if (rc == CAI_OK) {
-    result->boards.count++;
-  }
+  result->boards.count++;
   return rc;
 }
 
@@ -3627,7 +3658,7 @@ int cai_todo_select(cai_todo *self, const char *name, int create,
     rc = cai_todo_run_locked(ctx, &args, &result, error);
     if (rc == CAI_OK && !result.ok)
       rc = cai_set_error(error, CAI_ERR_INVALID, result.message);
-    CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result, NULL);
+    cai_todo_result_cleanup(&result);
     cai_todo_result_init(&result);
   }
   if (rc == CAI_OK) {
@@ -3648,7 +3679,7 @@ int cai_todo_select(cai_todo *self, const char *name, int create,
                              : cai_status_string(rc));
   }
   pthread_mutex_unlock(&ctx->lock);
-  CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result, NULL);
+  cai_todo_result_cleanup(&result);
   cai_free_mem(NULL, args.board_name);
   return rc;
 }
@@ -3725,7 +3756,7 @@ int cai_todo_http_snapshot(cai_todo *self, const char *board, int head,
       lonejson_free(json);
     }
   }
-  CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result, NULL);
+  cai_todo_result_cleanup(&result);
   cai_free_mem(NULL, args.board_name);
   return written != CAI_OK ? written : rc;
 }
@@ -3766,7 +3797,7 @@ int cai_todo_call(cai_todo *self, cai_source *arguments, cai_sink *output,
                                       "write kanban result", local.message);
   }
   lonejson_cleanup(&cai_todo_args_map, &args, NULL);
-  CAI_LJ->cleanup(CAI_LJ, &cai_todo_result_map, &result, NULL);
+  cai_todo_result_cleanup(&result);
   lonejson_free(json);
   return rc;
 }
