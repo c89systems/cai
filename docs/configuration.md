@@ -10,7 +10,7 @@ Leaving them commented retains automatic lookup on subsequent starts; an empty v
 Existing files are never rewritten.
 `-c FILE`/`--config FILE` selects another file; `--no-config` skips disk bootstrap/seed loading while retaining stored-agent resolution.
 `--config-dir DIR` also selects `DIR/config.ini`.
-Agent startup loads `<namespace-prefix>.agents/agent.default` through liblockdc. Metadata identifies the agent; its `config.ini` attachment holds agent behavior. If the agent is absent, CAI initializes it once from the valid seed configuration without triggering provider login. Concurrent initializers publish one complete definition. Later disk edits do not replace stored agent behavior.
+Agent startup loads `<namespace-prefix>.agents/agent.NAME` through liblockdc. New sessions use `default`; resuming restores the last selected agent, and `-u NAME` / `--use NAME` selects explicitly. Metadata identifies the agent; its `config.ini` attachment holds agent behavior. If the agent is absent, CAI initializes it once from the valid seed configuration without triggering provider login. Concurrent initializers publish one complete definition. Later disk edits do not replace stored agent behavior.
 
 Bootstrap fields stay local: named store definitions and selections, storage namespaces/compression, application paths needed before opening storage, workspace-server settings, temporary-run selection, and runtime session identity/ownership settings. A stored attachment containing these fields is rejected. Agent and session stores default to `default` and share one client when they identify the same backend. Selecting a different agent store leaves session history in its configured session store.
 
@@ -18,7 +18,7 @@ An explicit `-s` attachment uses the running backend's agent and opens no local 
 
 Explicit CLI and embedding settings override stored agent behavior without being persisted into the initial definition. Only declared INI values seed the attachment; automatic optional paths are rediscovered at startup. Explicit seed paths are resolved against their original file before publication. Application-prefixed environment settings select bootstrap fields only; they no longer override stored model, reasoning, themes, tools or other agent behavior. Explicit API-key environment lookup and the stored `[env]` block remain available. `LOG_*` stays independent; local `[env] LOG_*` entries configure logging without becoming agent behavior.
 
-The bootstrap file must remain valid INI. Its non-bootstrap values are seeds, not live overrides. This is the first storage milestone: named-agent creation/selection, the builder, editing utilities, bundled instruction/resources and moving native provider credentials into agent objects are specified in [stored agents](stored-agents.md) and are not implemented yet. Existing provider authentication continues to use the configured authentication store.
+The bootstrap file must remain valid INI. Its non-bootstrap values seed `default` once. Named-agent publication, selection and resource packaging are described below; the broader builder/live-activation design remains in [stored agents](stored-agents.md).
 Global instruction files are loaded again when a session runtime opens, including on replay; saved session state does not replace those files.
 Resuming restores the saved model and reasoning settings unless explicitly overridden by startup flags.
 Paths accept `~/` and are relative to the configuration file.
@@ -45,6 +45,32 @@ Omit FILE to write to stdout.
 An existing output file is overwritten; its parent directory must exist.
 This utility does not load the selected config, copy secrets or explicit settings, create the normal config, or open storage.
 Application identity/path defaults still apply, including `--home` and embedding path overrides.
+
+## Stored-agent workflow
+
+Create editable source files, change the name and settings, then publish:
+
+```sh
+cai --build agents/engineer
+# Edit agents/engineer/config.ini and SYSTEM_PROMPT.md.
+cai --make agents/engineer
+cai --use engineer
+cai --use engineer -R SESSION_ID
+```
+
+`--build [DIR]` defaults to cwd and creates missing output parents; the destination must be empty. Add `--use NAME` to start from another stored agent. It writes `config.ini`, `SYSTEM_PROMPT.md`, a coding-agent `EXAMPLE_SYSTEM_PROMPT.md`, and available bundled resources. Explicitly configured bootstrap instructions, tools and skills are copied into the source directory. The example removes model-specific self-identification and becomes active only if copied to `SYSTEM_PROMPT.md`.
+
+`[agent] name` is editable. A nonempty value wins at publication; an empty or missing name falls back to the source directory basename. Canonical names are lowercase ASCII letters, digits, `_` and `-`; spaces become `_`, other characters are removed, and names must contain 1–64 usable characters. Metadata and the file inventory live in the lockd object, not in an `agent.json` file.
+
+`--make [DIR]` validates configuration, instructions and bundled tool manifests, then publishes metadata and attachments under one object lease. Existing names require `--yes` / `--force`. Failed publication preserves the previous agent. Resources under `tools/`, `skills/` and `files/` are streamed; symlinks and special files are rejected. Tool validation prepares handlers without invoking them. Instructions must be NUL-free text of at most 1 MiB; whitespace-only `AGENTS.md` is omitted.
+
+`SYSTEM_PROMPT.md` containing `{{runtime_default}}` anywhere uses the normal model-dependent base prompt. Otherwise its entire text becomes the literal base. Reviewer settings, explicit parent-only overrides and automatic tools/skills/MCP additions retain their ordinary composition rules.
+
+API keys can be set directly in `[client] api_key` and are retained in encrypted lockd configuration. `--dump-agent NAME` writes `NAME/` below the selected directory; `--dump-agents [DIR]` writes one directory per agent (default root `agents/`). These exports and `--build` omit declared secret configuration fields and native credentials by default. `--include-credentials` explicitly includes them; native authentication is written as `AUTH.json`. Prompts, scripts and arbitrary environment assignments are ordinary bundled content, so inspect them before sharing an export.
+
+`--make DIR --from-auth-json FILE` explicitly imports ChatGPT credentials without login. Imported credentials are consumed and refreshed in the selected agent object, even when another provider performs inference and ChatGPT supplies MCP apps. Replacing the definition without a new import preserves its current credentials. An explicit `--auth-json` overrides this selection; agents without imported credentials retain existing authentication-store/external-file discovery.
+
+Runtime configuration and native credentials stay out of the disk cache. Bundled resources use private revision-specific directories under `cache_dir/agents/NAME/REVISION`. Session IDs, journals and recall stay in the configured session store when changing agents at startup. `/status` identifies the selected definition. An explicit selection that differs from an already-running owner's agent is rejected; acknowledged live activation through `/use` is a subsequent milestone.
 
 ## One application root
 

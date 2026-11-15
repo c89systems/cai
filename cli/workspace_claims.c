@@ -5,6 +5,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #include "workspace_claims.h"
+#include "agent_package.h"
 #include "error.h"
 #include <limits.h>
 #include <locale.h>
@@ -312,6 +313,15 @@ int cai_cli_workspace_claims_build(const cai_cli_options *options,
       int flag;
       memcpy(&flag, p, sizeof(flag));
       value = flag ? "true" : "false";
+    }
+    if (i == CAI_CLI_OWNER_agent_use) {
+      const char *name = value != NULL ? value : options->source_agent_name;
+      if (cai_cli_agent_name(name != NULL ? name : "default", canonical,
+                             error) != CAI_OK) {
+        ok = 0;
+        break;
+      }
+      value = canonical;
     }
     /* Non-custom providers accept these through the core INI schema, while
      * CLI endpoint/key-variable flags remain custom-provider-only. */

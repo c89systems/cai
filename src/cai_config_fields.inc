@@ -1,6 +1,6 @@
 /* section, key, storage, target, member, flags, choices, description */
 F("client", "api_key", STR, CLIENT, api_key, CAI_CONFIG_SECRET, NULL,
-  "Explicit API key; prefer api_key_env.")
+  "Explicit API key (secret).")
 F("client", "api_key_env", STR, CLIENT, api_key_env, 0, NULL,
   "API key variable; provider presets select their standard name.")
 F("client", "base_url", STR, CLIENT, base_url, 0, NULL,

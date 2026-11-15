@@ -80,7 +80,7 @@ contains "$config" '# enabled = false'
 contains "$config" '# enable_auto_enqueue = false'
 contains "$config" '# ack_timeout_ms = 300000'
 contains "$config" '# queue_name = ""'
-contains "$config" '## Empty checks ~/.codex/auth.json first, then encrypted application auth.'
+contains "$config" '## Empty uses native agent credentials, then ~/.codex/auth.json and application auth.'
 contains "$config" '## Empty optionally loads config_dir/models.json;'
 contains "$config" '## Remote lockd mTLS client PEM; empty supplies no client certificate.'
 ! grep -E '^# [^=]*$' "$config"

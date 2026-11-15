@@ -1,6 +1,8 @@
-#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 #include "agents.h"
+#include "agent_package.h"
 #include "pouch.h"
+#include "session_commands.h"
 #include "stores.h"
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +12,8 @@ typedef struct agent_configuration {
   cai_config *base;
   cai_cli_pouch *repository;
   cai_cli_log *log;
+  char *resources, *origin;
+  char name[65], revision[21];
 } agent_configuration;
 
 int cai_cli_agent_bootstrap_field(const char *section, const char *key) {
@@ -45,8 +49,84 @@ static void configuration_close(cai_config *self) {
     free(owned->repository);
   }
   cai_config_close(owned->base);
+  free(owned->resources);
+  free(owned->origin);
   (void)cai_cli_log_release(owned->log);
   free(owned);
+}
+
+int cai_cli_agent_configuration_identity(cai_config *configuration,
+                                         char name[65], char revision[21]) {
+  name[0] = revision[0] = '\0';
+  if (configuration != NULL && configuration->close == configuration_close) {
+    agent_configuration *owned = (agent_configuration *)configuration;
+    strcpy(name, owned->name);
+    strcpy(revision, owned->revision);
+    return 1;
+  }
+  return 0;
+}
+
+/** Resolve only the small session header. Context restoration remains the
+ * runtime's single read, and registry/session stores may be independent. */
+static int selected_name(cai_config *bootstrap, const cai_cli_options *options,
+                         pslog_logger *logger, char name[65],
+                         cai_error *error) {
+  cai_cli_pouch *sessions = NULL;
+  cai_cli_session *session = NULL;
+  cai_cli_options *store = NULL;
+  char *workspace = NULL;
+  char id[CAI_AGENT_SESSION_ID_MAX];
+  const char *selector =
+      options->export_id != NULL ? options->export_id : options->resume_id;
+  int rc, present = 0;
+  if (options->agent_use != NULL)
+    return cai_cli_agent_name(options->agent_use, name, error);
+  strcpy(name, "default");
+  if (options->new_session || options->temporary || options->review ||
+      options->review_and_fix ||
+      (cai_cli_options_utility(options) && options->export_id == NULL))
+    return CAI_OK;
+  sessions = calloc(1U, sizeof(*sessions));
+  session = calloc(1U, sizeof(*session));
+  store = calloc(1U, sizeof(*store));
+  workspace =
+      realpath(options->directory != NULL ? options->directory
+                                          : cai_config_directory(bootstrap),
+               NULL);
+  rc = sessions != NULL && session != NULL && store != NULL && workspace != NULL
+           ? CAI_OK
+           : cai_cli_error(error, CAI_ERR_NOMEM,
+                           "allocate session agent selection");
+  if (rc == CAI_OK)
+    rc = cai_cli_store_options(bootstrap, options, options->sessions_store,
+                               store, error);
+  if (rc == CAI_OK)
+    rc = cai_cli_pouch_store_present(store, &present, error);
+  if (rc == CAI_OK && !present) {
+    if (selector != NULL)
+      rc =
+          cai_cli_error(error, CAI_ERR_INVALID, "session store does not exist");
+    goto done;
+  }
+  if (rc == CAI_OK)
+    rc = cai_cli_pouch_open_options(sessions, store, logger, error);
+  if (rc == CAI_OK && selector != NULL)
+    rc = cai_cli_session_select(sessions, workspace, selector, id, error);
+  if (rc == CAI_OK)
+    rc = selector != NULL ? cai_cli_pouch_session(sessions, id, session, error)
+                          : cai_cli_pouch_latest_session(sessions, workspace,
+                                                         session, error);
+  if (rc == CAI_OK && session->agent_name[0] != '\0')
+    rc = cai_cli_agent_name(session->agent_name, name, error);
+done:
+  if (sessions != NULL)
+    cai_cli_pouch_close(sessions);
+  free(sessions);
+  free(session);
+  free(store);
+  free(workspace);
+  return rc;
 }
 
 cai_cli_log *cai_cli_agent_configuration_log(cai_config *configuration,
@@ -79,6 +159,7 @@ void cai_cli_agent_configuration_detach(cai_config *configuration) {
 typedef struct configuration_writer {
   cai_sink *sink;
   int globals;
+  int secrets, package;
 } configuration_writer;
 
 static int write_text(cai_sink *sink, const char *text, cai_error *error) {
@@ -93,7 +174,11 @@ static int write_entry(void *context, const char *section, const char *key,
   configuration_writer *writer = context;
   size_t i;
   int rc = CAI_OK;
-  (void)field;
+  if ((!writer->secrets && field != NULL &&
+       (field->flags & CAI_CONFIG_SECRET) != 0U) ||
+      (writer->package && strcmp(section, "agent") == 0 &&
+       strcmp(key, "name") == 0))
+    return CAI_OK;
   if (cai_cli_agent_bootstrap_field(section, key))
     return CAI_OK;
   if ((section[0] == '\0') != writer->globals)
@@ -156,10 +241,36 @@ int cai_cli_agent_configuration_write(void *context, cai_sink *sink,
   configuration_writer writer;
   int rc;
   writer.sink = sink;
+  writer.secrets = 1;
+  writer.package = 0;
   writer.globals = 1;
   rc = cai_config_visit(context, write_entry, &writer, error);
   writer.globals = 0;
   return rc == CAI_OK ? cai_config_visit(context, write_entry, &writer, error)
+                      : rc;
+}
+
+int cai_cli_agent_configuration_export(cai_config *config, const char *name,
+                                       int include_credentials, cai_sink *sink,
+                                       cai_error *error) {
+  configuration_writer writer;
+  int rc;
+  writer.sink = sink;
+  writer.secrets = include_credentials;
+  writer.package = 1;
+  writer.globals = 1;
+  rc = cai_config_visit(config, write_entry, &writer, error);
+  if (rc == CAI_OK)
+    rc = write_text(sink,
+                    "[agent]\n# Edit this name before --make; empty uses the "
+                    "source directory basename.\nname = \"",
+                    error);
+  if (rc == CAI_OK)
+    rc = write_text(sink, name, error);
+  if (rc == CAI_OK)
+    rc = write_text(sink, "\"\n", error);
+  writer.globals = 0;
+  return rc == CAI_OK ? cai_config_visit(config, write_entry, &writer, error)
                       : rc;
 }
 
@@ -284,6 +395,9 @@ int cai_cli_agent_configuration(cai_config *bootstrap, cai_config *seed,
   if (rc == CAI_OK)
     rc = cai_cli_pouch_open_options(owned->repository, &selected,
                                     owned->log->logger, error);
+  if (rc == CAI_OK)
+    rc = selected_name(bootstrap, options, owned->log->logger, owned->name,
+                       error);
   /* Persist declared paths against their source, not incidental startup
    * defaults such as an optional models.json discovered on this invocation. */
   for (i = 0U; rc == CAI_OK && i < cai_config_field_count(seed); ++i) {
@@ -296,18 +410,31 @@ int cai_cli_agent_configuration(cai_config *bootstrap, cai_config *seed,
       rc = cai_config_resolve_path(seed, field->section, field->key, &resolved,
                                    error);
   }
+  if (rc == CAI_OK && strcmp(owned->name, "default") == 0)
+    rc = cai_cli_pouch_ensure_default_agent(
+        owned->repository, cai_cli_agent_configuration_write, seed, error);
   if (rc == CAI_OK)
-    rc = cai_cli_pouch_default_agent(owned->repository,
-                                     cai_cli_agent_configuration_write, seed,
-                                     &source, error);
+    rc = cai_cli_agent_package_load(owned->repository, owned->name,
+                                    options->cache_dir, &source,
+                                    &owned->resources, owned->revision, error);
+  if (rc == CAI_OK && owned->resources != NULL &&
+      asprintf(&owned->origin, "%s/config.ini", owned->resources) < 0)
+    rc = cai_cli_error(error, CAI_ERR_NOMEM,
+                       "allocate agent configuration origin");
   if (rc == CAI_OK)
-    rc = cai_config_load(owned->base, source, cai_config_origin(bootstrap),
+    rc = cai_config_load(owned->base, source,
+                         owned->origin != NULL ? owned->origin
+                                               : cai_config_origin(bootstrap),
                          error);
   cai_source_close(source);
   if (rc == CAI_OK)
     rc = cai_config_visit(owned->base, validate_agent, NULL, error);
   if (rc == CAI_OK)
     rc = cai_config_visit(bootstrap, copy_host, owned->base, error);
+  if (rc == CAI_OK && owned->resources != NULL)
+    rc = cai_cli_agent_package_configure(owned->base, owned->resources, error);
+  if (rc == CAI_OK)
+    rc = cai_config_set(owned->base, "agent", "name", owned->name, error);
 done:
   cai_environment_close(logging_environment);
   cai_environment_close(context.environment);
@@ -318,6 +445,8 @@ done:
       free(owned->repository);
     }
     cai_config_close(owned->base);
+    free(owned->resources);
+    free(owned->origin);
     (void)cai_cli_log_release(owned->log);
     free(owned);
     return rc;

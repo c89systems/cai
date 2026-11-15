@@ -1,6 +1,6 @@
 /** @file agents.h
- * Stored-agent configuration and bootstrap ownership. No session selection,
- * inference, authentication login or frontend state belongs to this adapter.
+ * Stored-agent configuration, bootstrap ownership and metadata-only session
+ * selection. Inference, login and frontend state belong to their adapters.
  */
 #ifndef CAI_CLI_AGENTS_H
 #define CAI_CLI_AGENTS_H
@@ -25,6 +25,10 @@ int cai_cli_agent_configuration(cai_config *bootstrap, cai_config *seed,
                                 const cai_app_config *application,
                                 const cai_config_context *startup,
                                 cai_config **out, cai_error *error);
+/** Copy selected provenance for parent journal commits. Returns zero for
+ * ordinary configurations without a stored definition. */
+int cai_cli_agent_configuration_identity(cai_config *, char name[65],
+                                         char revision[21]);
 /** Retain the bootstrap logger so the store and runtime share one live sink. */
 cai_cli_log *cai_cli_agent_configuration_log(cai_config *, int interactive);
 /** End preflight storage ownership before an executable forks. Configuration
@@ -33,4 +37,10 @@ cai_cli_log *cai_cli_agent_configuration_log(cai_config *, int interactive);
 void cai_cli_agent_configuration_detach(cai_config *configuration);
 /** Internal streaming producer for the configuration attachment. */
 int cai_cli_agent_configuration_write(void *, cai_sink *, cai_error *);
+/** Editable package config, with canonical name and optional secret fields.
+ * Runtime serialization above always retains secret values in encrypted
+ * storage. */
+int cai_cli_agent_configuration_export(cai_config *, const char *name,
+                                       int include_credentials, cai_sink *,
+                                       cai_error *);
 #endif

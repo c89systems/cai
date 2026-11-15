@@ -37,6 +37,7 @@ cai_cli_configure_at
 cai_cli_configure_agent_at
 cai_cli_configure_bootstrap_at
 cai_cli_agent_configuration_detach
+cai_cli_agent_package_run
 cai_cli_documents_begin
 cai_cli_documents_bind
 cai_cli_documents_close

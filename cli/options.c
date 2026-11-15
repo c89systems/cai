@@ -115,6 +115,7 @@ static int cai_cli_short_value_option(const char *flag) {
   case 's':
   case 'd':
   case 'z':
+  case 'u':
   case 'I':
     return flag[length - 1U];
   default:
@@ -582,6 +583,25 @@ static int cli_read_options(int argc, char *const *argv,
         options->dump_config_file = argv[++i];
       continue;
     }
+    if (strcmp(flag, "--build") == 0 || strcmp(flag, "--make") == 0 ||
+        strcmp(flag, "--dump-agents") == 0) {
+      const char *directory = ".";
+      if (strcmp(flag, "--dump-agents") == 0)
+        directory = "agents";
+      if (i + 1 < argc && argv[i + 1][0] != '-')
+        directory = argv[++i];
+      if (strcmp(flag, "--build") == 0)
+        options->agent_build = directory;
+      else if (strcmp(flag, "--make") == 0)
+        options->agent_make = directory;
+      else
+        options->agent_dump_all = directory;
+      continue;
+    }
+    if (strcmp(flag, "--include-credentials") == 0) {
+      options->include_credentials = 1;
+      continue;
+    }
     if (strcmp(flag, "-N") == 0 || strcmp(flag, "--new") == 0) {
       options->new_session = 1;
       continue;
@@ -787,6 +807,12 @@ static int cli_read_options(int argc, char *const *argv,
       field = &options->lockd;
     else if (strcmp(flag, "--agents-store") == 0)
       field = &options->agents_store;
+    else if (strcmp(flag, "--use") == 0 || strcmp(flag, "-u") == 0)
+      field = &options->agent_use;
+    else if (strcmp(flag, "--dump-agent") == 0)
+      field = &options->agent_dump;
+    else if (strcmp(flag, "--from-auth-json") == 0)
+      field = &options->agent_auth_import;
     else if (strcmp(flag, "--sessions-store") == 0)
       field = &options->sessions_store;
     else if (strcmp(flag, "--auth-store") == 0)
@@ -964,7 +990,9 @@ int cai_cli_options_utility(const cai_cli_options *o) {
          o->delete_list || o->delete_id != NULL || o->export_id != NULL ||
          o->import_file != NULL || o->install_skill != NULL ||
          o->context_export != NULL || o->message != NULL ||
-         o->dump_developer_instructions != NULL;
+         o->dump_developer_instructions != NULL || o->agent_build != NULL ||
+         o->agent_make != NULL || o->agent_dump != NULL ||
+         o->agent_dump_all != NULL;
 }
 
 int cai_cli_store_name_valid(const char *name) {
@@ -976,6 +1004,37 @@ int cai_cli_store_name_valid(const char *name) {
 int cai_cli_validate_options(cai_cli_options *options) {
   static const char *const providers[] = {"chatgpt", "openai", "openrouter",
                                           "berget",  "custom", NULL};
+  if ((options->agent_build != NULL) + (options->agent_make != NULL) +
+              (options->agent_dump != NULL) +
+              (options->agent_dump_all != NULL) >
+          1 ||
+      (options->agent_auth_import != NULL && options->agent_make == NULL) ||
+      (options->include_credentials && options->agent_build == NULL &&
+       options->agent_dump == NULL && options->agent_dump_all == NULL)) {
+    cai_cli_option_error(
+        options,
+        "select one agent package operation; credential import requires --make "
+        "and credential export requires --build or --dump-agent(s)");
+    return -1;
+  }
+  if ((options->agent_build != NULL || options->agent_make != NULL ||
+       options->agent_dump != NULL || options->agent_dump_all != NULL) &&
+      (options->headless || options->terminate_headless ||
+       options->server != NULL || options->temporary || options->review ||
+       options->review_and_fix || options->instruction_count != 0U ||
+       options->goal != NULL || options->list || options->list_all ||
+       options->resume_list || options->resume_id != NULL ||
+       options->new_session || options->delete_id != NULL ||
+       options->delete_list || options->export_id != NULL ||
+       options->import_file != NULL ||
+       options->dump_developer_instructions != NULL ||
+       options->context_export != NULL || options->install_skill != NULL ||
+       options->login || options->message != NULL || options->chrome_setup ||
+       options->chrome_remove)) {
+    cai_cli_option_error(options, "agent package operations cannot be combined "
+                                  "with runtime or other utility operations");
+    return -1;
+  }
   if (!cai_cli_store_name_valid(options->agents_store) ||
       !cai_cli_store_name_valid(options->sessions_store) ||
       !cai_cli_store_name_valid(options->auth_store) ||

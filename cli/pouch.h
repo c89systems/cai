@@ -21,6 +21,7 @@ typedef struct cai_cli_session {
   char workspace[PATH_MAX];
   char first_prompt[512];
   char history_backend[16];
+  char agent_name[65], agent_revision[21];
   lonejson_uint64 commit_position;
   lonejson_uint64 commit_ns;
   lonejson_uint64 applied_sequence;
@@ -71,6 +72,8 @@ typedef struct cai_cli_pouch {
   char sessions_namespace[129], auth_namespace[129], scopes_namespace[129];
   char agents_namespace[129];
   char todo_namespace[129], messages_namespace[129];
+  /** Selected definition for subsequent parent commits; never child scope. */
+  char active_agent_name[65], active_agent_revision[21];
   cai_agent_session_store store;
   cai_blob_store credentials;
   pslog_logger *logger;
@@ -199,6 +202,14 @@ int cai_cli_pouch_seed_auth(cai_cli_pouch *pouch, const char *path,
                             cai_error *error);
 int cai_cli_pouch_list(cai_cli_pouch *pouch, const char *scope,
                        cai_cli_session **out, size_t *count, cai_error *error);
+/** Inspect a local root/key without creating either or opening an SDK client.
+ */
+int cai_cli_pouch_store_present(const cai_cli_options *, int *, cai_error *);
+/** Read only the latest session metadata; never loads or replays context. */
+int cai_cli_pouch_latest_session(cai_cli_pouch *, const char *workspace,
+                                 cai_cli_session *, cai_error *);
+/** Stream the object currently held by a publication lease. */
+int cai_cli_pouch_agent_private(lc_lease *, cai_source **, cai_error *);
 int cai_cli_pouch_session(cai_cli_pouch *pouch, const char *id,
                           cai_cli_session *out, cai_error *error);
 int cai_cli_pouch_publish(cai_cli_pouch *pouch, const char *id, int published,
@@ -241,6 +252,20 @@ int cai_cli_pouch_export(cai_cli_pouch *pouch, const char *id, cai_sink *sink,
  * fail closed. */
 int cai_cli_pouch_default_agent(cai_cli_pouch *, cai_cli_producer, void *,
                                 cai_source **, cai_error *);
+int cai_cli_pouch_ensure_default_agent(cai_cli_pouch *, cai_cli_producer,
+                                       void *, cai_error *);
+/** One agent-object transaction. A callback may stream metadata and files;
+ * failure rolls back both. Existing names require explicit replacement. */
+typedef int (*cai_cli_agent_publish_fn)(void *, lc_lease *, cai_error *);
+int cai_cli_pouch_agent_publish(cai_cli_pouch *, const char *name, int replace,
+                                cai_cli_agent_publish_fn, void *, cai_error *);
+/** Public committed metadata (attachment NULL) or attachment bytes. */
+int cai_cli_pouch_agent_read(cai_cli_pouch *, const char *name,
+                             const char *attachment, cai_source **,
+                             cai_error *);
+typedef int (*cai_cli_agent_visit_fn)(void *, const char *, cai_error *);
+int cai_cli_pouch_agents_visit(cai_cli_pouch *, cai_cli_agent_visit_fn, void *,
+                               cai_error *);
 int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
                          const char *workspace, char *id, size_t capacity,
                          cai_error *error);

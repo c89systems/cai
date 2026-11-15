@@ -35,6 +35,7 @@
   X("messaging", "delay_seconds", message_delay_seconds, 'l') \
   X("agent", "shell_context_max_lines", shell_context_max_lines, 'z') \
   X("agent", "shell_context_max_bytes", shell_context_max_bytes, 'z') \
+  X("agent", "name", agent_use, 's') \
   X("client", "provider", provider, 's') \
   X("client", "base_url", endpoint, 's') \
   X("client", "api_key_env", api_key_env, 's') \

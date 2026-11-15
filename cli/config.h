@@ -31,4 +31,9 @@ int cai_cli_configure_agent_at(int argc, char *const *, cai_cli_options *,
 int cai_cli_configure_bootstrap_at(int argc, char *const *, cai_cli_options *,
                                    cai_config **, const cai_app_config *,
                                    const cai_config_context *, cai_error *);
+/** Parse source-package configuration without deriving host paths or opening
+ * storage. The returned schema is identical to the application schema. */
+int cai_cli_agent_source_configuration(const char *file, const char *directory,
+                                       cai_environment *, cai_config **,
+                                       cai_error *);
 #endif

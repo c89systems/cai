@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #include "utility.h"
+#include "agent_package.h"
 #include "config.h"
 #include "identity.h"
 #include "instructions.h"
@@ -516,7 +517,13 @@ int cai_cli_utility_run(int argc, char **argv,
         goto done;
       *paths[i] = u->paths[i];
     }
-    rc = dispatch(u);
+    if (u->options.agent_build != NULL || u->options.agent_make != NULL ||
+        u->options.agent_dump != NULL || u->options.agent_dump_all != NULL) {
+      u->operation = "agent package";
+      rc = cai_cli_agent_package_run(&u->options, u->configuration, application,
+                                     &u->startup, &u->error);
+    } else
+      rc = dispatch(u);
   }
   result = rc == CAI_OK ? 0 : 1;
 done:

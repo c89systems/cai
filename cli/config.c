@@ -11,6 +11,7 @@
 #include <cai/models.h>
 #include <cai/version.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -34,6 +35,9 @@ typedef struct cli_field {
 #define B(s, k, m, d)                                                          \
   {s, k, offsetof(cai_cli_options, m), CAI_CONFIG_BOOL, 0U, NULL, d}
 static const cli_field fields[] = {
+    S("agent", "name", source_agent_name, 0U,
+      "Editable source-package name; empty uses the --make directory "
+      "basename."),
     S("server", "event_multicast", event_multicast, 0U,
       "Empty disables publication; auto allocates a group; GROUP:PORT fixes "
       "it."),
@@ -190,8 +194,8 @@ static const cli_field fields[] = {
       "Empty uses the current working directory on each invocation; explicit "
       "-C wins."),
     S("paths", "auth_json", auth_json, CAI_CONFIG_PATH,
-      "Empty checks ~/.codex/auth.json first, then encrypted application auth. "
-      "An explicit file must exist and replaces that discovery."),
+      "Empty uses native agent credentials, then ~/.codex/auth.json and "
+      "application auth. An explicit existing file overrides that selection."),
     S("paths", "agents_md", agents_md, CAI_CONFIG_PATH,
       "Global AGENTS.md; empty uses config_dir/AGENTS.md, loaded if it "
       "exists."),
@@ -1577,7 +1581,8 @@ int cai_cli_configure_agent_at(int argc, char *const *argv,
                                          NULL, 1, &seed);
   if (rc <= 0 ||
       (cai_cli_options_utility(options) && options->export_id == NULL &&
-       options->dump_developer_instructions == NULL)) {
+       options->dump_developer_instructions == NULL &&
+       options->agent_build == NULL)) {
     *configuration = bootstrap;
     cai_config_close(seed);
     free(scratch);
@@ -1645,6 +1650,45 @@ int cai_cli_configure_bootstrap_at(int argc, char *const *argv,
   } else
     *configuration = bootstrap;
   free(scratch);
+  return rc;
+}
+
+int cai_cli_agent_source_configuration(const char *file, const char *directory,
+                                       cai_environment *environment,
+                                       cai_config **out, cai_error *error) {
+  cai_config_context context;
+  int rc;
+  context.directory = directory;
+  context.environment = environment;
+  rc = app_schema(&context, out, error);
+  if (rc < 0)
+    return error->code;
+  rc = CAI_OK;
+  if (file != NULL) {
+    cai_source *source = NULL;
+    FILE *stream = NULL;
+    struct stat status;
+    int fd = open(file, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0 || fstat(fd, &status) != 0 || !S_ISREG(status.st_mode))
+      rc = cai_cli_error(
+          error, CAI_ERR_INVALID,
+          "source config.ini must be a regular file without symlinks");
+    if (rc == CAI_OK && (stream = fdopen(fd, "rb")) == NULL)
+      rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "open source configuration");
+    if (stream == NULL && fd >= 0)
+      close(fd);
+    if (rc == CAI_OK)
+      rc = cai_source_file(stream, 1, &source, error);
+    if (stream != NULL && source == NULL)
+      fclose(stream);
+    if (rc == CAI_OK)
+      rc = cai_config_load(*out, source, file, error);
+    cai_source_close(source);
+  }
+  if (rc != CAI_OK) {
+    cai_config_close(*out);
+    *out = NULL;
+  }
   return rc;
 }
 

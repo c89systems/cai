@@ -2,6 +2,7 @@
  * The storage fixture removes fsync waits only; production CLI e2e retains
  * them. */
 #define _POSIX_C_SOURCE 200809L
+#include "../cli/agent_package.h"
 #include "../cli/agents.h"
 #include "../cli/config.h"
 #include "../cli/pouch.h"
@@ -73,6 +74,69 @@ static void *initialize(void *context) {
   cai_source_close(source);
   cai_error_cleanup(&error);
   return NULL;
+}
+
+typedef struct auth_input {
+  const char *text;
+  size_t offset;
+  int fail;
+} auth_input;
+static size_t auth_read(void *context, void *buffer, size_t count,
+                        cai_error *error) {
+  auth_input *input = context;
+  size_t left = strlen(input->text) - input->offset;
+  if (input->fail && input->offset != 0U) {
+    cai_cli_error(error, CAI_ERR_TRANSPORT,
+                  "injected credential source failure");
+    return 0U;
+  }
+  if (count > left)
+    count = left;
+  if (input->fail && count > 8U)
+    count = 8U;
+  memcpy(buffer, input->text + input->offset, count);
+  input->offset += count;
+  return count;
+}
+static void check_auth(cai_cli_pouch *pouch, cai_error *error) {
+  static const char saved[] =
+      "{\"tokens\":{\"refresh_token\":\"native-secret\"}}";
+  cai_cli_agent_auth auth;
+  cai_source_callbacks callbacks = {0};
+  cai_source *source = NULL;
+  auth_input input;
+  char bytes[256];
+  size_t used = 0U, n;
+  assert(cai_cli_agent_auth_init(&auth, pouch, "default", error) == CAI_OK);
+  assert(auth.storage.load(&auth, "auth.json", &source, error) == CAI_OK);
+  assert(source == NULL);
+  input.text = saved;
+  input.offset = 0U;
+  input.fail = 0;
+  callbacks.context = &input;
+  callbacks.read = auth_read;
+  assert(cai_source_from_callbacks(&callbacks, &source, error) == CAI_OK);
+  assert(auth.storage.replace(&auth, "auth.json", source, error) == CAI_OK);
+  cai_source_close(source);
+  source = NULL;
+  input.offset = 0U;
+  input.fail = 1;
+  assert(cai_source_from_callbacks(&callbacks, &source, error) == CAI_OK);
+  assert(auth.storage.replace(&auth, "auth.json", source, error) != CAI_OK);
+  cai_source_close(source);
+  cai_error_cleanup(error);
+  cai_error_init(error);
+  source = NULL;
+  assert(auth.storage.load(&auth, "auth.json", &source, error) == CAI_OK);
+  assert(source != NULL);
+  while ((n = cai_source_read(source, bytes + used, sizeof(bytes) - used - 1U,
+                              error)) != 0U) {
+    used += n;
+    assert(used < sizeof(bytes) - 1U);
+  }
+  bytes[used] = '\0';
+  assert(error->code == CAI_OK && strcmp(bytes, saved) == 0);
+  cai_source_close(source);
 }
 
 static void *run(void *context) {
@@ -165,6 +229,18 @@ static void *run(void *context) {
   assert(pthread_join(one, NULL) == 0 && pthread_join(two, NULL) == 0);
   assert(a.rc == CAI_OK && b.rc == CAI_OK && input.calls == 1);
   assert(strcmp(a.bytes, input.text) == 0 && strcmp(a.bytes, b.bytes) == 0);
+  check_auth(&f->left, &error);
+  /* Credential refresh preserves the definition and its configuration bytes. */
+  assert(cai_cli_pouch_default_agent(&f->left, produce, &input, &source,
+                                     &error) == CAI_OK);
+  {
+    char bytes[128];
+    size_t n = cai_source_read(source, bytes, sizeof(bytes) - 1U, &error);
+    bytes[n] = '\0';
+    assert(strcmp(bytes, input.text) == 0);
+  }
+  cai_source_close(source);
+  source = NULL;
   cai_cli_pouch_close(&f->left);
   cai_cli_pouch_close(&f->right);
 

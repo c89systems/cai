@@ -790,6 +790,16 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_stored_agents_test.sh"
       "$<TARGET_FILE:cai_cli>")
     set_tests_properties(cai_cli_stored_agents PROPERTIES TIMEOUT 60)
+    add_test(NAME cai_cli_agent_packages COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_agent_packages_test.sh"
+      "$<TARGET_FILE:cai_cli>")
+    set_tests_properties(cai_cli_agent_packages PROPERTIES TIMEOUT 90)
+    add_test(NAME cai_app_agent_packages COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_agent_packages_test.sh"
+      "$<TARGET_FILE:cai_app_worker_stack_host>")
+    set_tests_properties(cai_app_agent_packages PROPERTIES TIMEOUT 90
+      LABELS "cli;local;offline"
+      ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
     add_executable(cai_stored_agents_test tests/stored_agents_test.c
       $<TARGET_OBJECTS:cai_cli_storage_fixture>)
     target_link_libraries(cai_stored_agents_test PRIVATE cai_cli_support)

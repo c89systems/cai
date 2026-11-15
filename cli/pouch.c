@@ -170,6 +170,10 @@ static const lonejson_field session_fields[] = {
                                 LONEJSON_OVERFLOW_FAIL),
     LONEJSON_FIELD_STRING_FIXED(cai_cli_session, history_backend,
                                 "history_backend", LONEJSON_OVERFLOW_FAIL),
+    LONEJSON_FIELD_STRING_FIXED(cai_cli_session, agent_name, "agent_name",
+                                LONEJSON_OVERFLOW_FAIL),
+    LONEJSON_FIELD_STRING_FIXED(cai_cli_session, agent_revision,
+                                "agent_revision", LONEJSON_OVERFLOW_FAIL),
     LONEJSON_FIELD_U64(cai_cli_session, commit_position, "commit_position"),
     LONEJSON_FIELD_U64(cai_cli_session, commit_ns, "commit_ns"),
     LONEJSON_FIELD_U64(cai_cli_session, applied_sequence, "applied_sequence"),
@@ -230,6 +234,7 @@ LONEJSON_MAP_DEFINE(scope_map, scope_query, scope_fields);
 
 typedef struct cli_record {
   char record_type[24];
+  char agent_name[65], agent_revision[21];
   lonejson_uint64 sequence;
   lonejson_uint64 timestamp_ns;
   lonejson_int64 utc_offset_seconds;
@@ -260,6 +265,10 @@ static const lonejson_field commit_fields[] = {
                            "commit_created_at_ns"),
     LONEJSON_FIELD_U64_REQ(cli_record, applied_event_sequence,
                            "applied_event_sequence"),
+    LONEJSON_FIELD_STRING_FIXED(cli_record, agent_name, "agent_name",
+                                LONEJSON_OVERFLOW_FAIL),
+    LONEJSON_FIELD_STRING_FIXED(cli_record, agent_revision, "agent_revision",
+                                LONEJSON_OVERFLOW_FAIL),
     LONEJSON_FIELD_JSON_VALUE_REQ(cli_record, state, "state")};
 LONEJSON_MAP_DEFINE(commit_map, cli_record, commit_fields);
 
@@ -1187,6 +1196,12 @@ commit_mode_with_scratch(void *context, const char *scope, const char *id,
              (unsigned long long)scratch->session.commit_ns, sequence);
     memset(&record, 0, sizeof(record));
     strcpy(record.record_type, "commit");
+    if (scope_indexed(scope) && pouch->active_agent_name[0] != '\0') {
+      strcpy(scratch->session.agent_name, pouch->active_agent_name);
+      strcpy(scratch->session.agent_revision, pouch->active_agent_revision);
+    }
+    strcpy(record.agent_name, scratch->session.agent_name);
+    strcpy(record.agent_revision, scratch->session.agent_revision);
     record.commit_created_at_ns = scratch->session.commit_ns;
     record.applied_event_sequence = sequence;
     lonejson_json_value_init(NULL, &record.state);
@@ -1631,21 +1646,16 @@ static int latest_open(cai_cli_pouch *pouch, const char *scope, lc_lease **out,
 typedef struct load_latest_mode_scratch {
   latest_index index;
 } load_latest_mode_scratch;
-static int load_latest_mode_with_scratch(void *context, const char *scope,
-                                         char *id, size_t capacity,
-                                         cai_source **out,
-                                         unsigned long long *sequence,
-                                         int writable, cai_error *error,
-                                         load_latest_mode_scratch *scratch) {
-  cai_cli_pouch *pouch = context;
+/** Shared small lookup for definition selection and runtime restoration. */
+static int latest_metadata(cai_cli_pouch *pouch, const char *scope,
+                           latest_index *index, cai_error *error) {
   lc_lease *directory = NULL;
   cai_source *source = NULL;
 
   char key[65];
   int has_body = 0;
   int rc;
-  *out = NULL;
-  memset(&scratch->index, 0, sizeof(scratch->index));
+  memset(index, 0, sizeof(*index));
   rc = history_supported(pouch, error);
   if (rc != CAI_OK || !scope_indexed(scope))
     return rc;
@@ -1655,8 +1665,8 @@ static int load_latest_mode_with_scratch(void *context, const char *scope,
     rc = download_source_ns(pouch->sessions, pouch->scopes_namespace, key, NULL,
                             &source, error);
   if (rc == CAI_OK)
-    rc = parse_source_optional(source, &latest_map, &scratch->index, &has_body,
-                               NULL, error);
+    rc = parse_source_optional(source, &latest_map, index, &has_body, NULL,
+                               error);
   cai_source_close(source);
   if (rc != CAI_OK && error->http_status == 404) {
     cai_error_cleanup(error);
@@ -1664,21 +1674,20 @@ static int load_latest_mode_with_scratch(void *context, const char *scope,
     rc = CAI_OK;
     has_body = 0;
   }
-  if (rc == CAI_OK && has_body && strcmp(scope, scratch->index.workspace) != 0)
+  if (rc == CAI_OK && has_body && strcmp(scope, index->workspace) != 0)
     rc =
         cai_cli_error(error, CAI_ERR_INVALID, "directory index scope mismatch");
-  if (rc == CAI_OK && has_body && !scratch->index.dirty &&
-      scratch->index.latest.id[0] != '\0') {
+  if (rc == CAI_OK && has_body && !index->dirty &&
+      index->latest.id[0] != '\0') {
     int available;
-    rc = session_available(pouch, scratch->index.latest.id, &available, error);
+    rc = session_available(pouch, index->latest.id, &available, error);
     if (rc == CAI_OK && !available)
-      scratch->index.dirty = 1;
+      index->dirty = 1;
   }
-  if (rc == CAI_OK && (!has_body || scratch->index.dirty)) {
+  if (rc == CAI_OK && (!has_body || index->dirty)) {
     cai_error optional;
     cai_error_init(&optional);
-    rc = latest_open_wait(pouch, scope, 0L, &directory, &scratch->index,
-                          &optional);
+    rc = latest_open_wait(pouch, scope, 0L, &directory, index, &optional);
     rc = release(directory, rc, &optional);
     /* A concurrent/interrupted writer must not delay prompt readiness. If its
      * guard is held, select authoritative committed metadata without changing
@@ -1693,12 +1702,39 @@ static int load_latest_mode_with_scratch(void *context, const char *scope,
         pouch->logger->debug(pouch->logger,
                              "Selecting newest session from metadata", fields,
                              2U);
-      memset(&scratch->index, 0, sizeof(scratch->index));
-      strcpy(scratch->index.workspace, scope);
-      rc = latest_rebuild(pouch, &scratch->index, error);
+      memset(index, 0, sizeof(*index));
+      strcpy(index->workspace, scope);
+      rc = latest_rebuild(pouch, index, error);
     }
     cai_error_cleanup(&optional);
   }
+  return rc;
+}
+
+int cai_cli_pouch_latest_session(cai_cli_pouch *pouch, const char *scope,
+                                 cai_cli_session *out, cai_error *error) {
+  latest_index *index = calloc(1U, sizeof(*index));
+  int rc;
+  memset(out, 0, sizeof(*out));
+  if (index == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate latest metadata");
+  rc = latest_metadata(pouch, scope, index, error);
+  if (rc == CAI_OK)
+    *out = index->latest;
+  free(index);
+  return rc;
+}
+
+static int load_latest_mode_with_scratch(void *context, const char *scope,
+                                         char *id, size_t capacity,
+                                         cai_source **out,
+                                         unsigned long long *sequence,
+                                         int writable, cai_error *error,
+                                         load_latest_mode_scratch *scratch) {
+  cai_cli_pouch *pouch = context;
+  int rc;
+  *out = NULL;
+  rc = latest_metadata(pouch, scope, &scratch->index, error);
   if (rc == CAI_OK && scratch->index.latest.id[0] != '\0') {
     if (strlen(scratch->index.latest.id) >= capacity)
       rc = cai_cli_error(error, CAI_ERR_INVALID, "session ID output too small");
@@ -2104,6 +2140,8 @@ static int commit_refresh_boundary(void *context,
   if (read->rc == CAI_OK) {
     refresh->session->commit_position = metadata->position;
     refresh->session->applied_sequence = read->record.applied_event_sequence;
+    strcpy(refresh->session->agent_name, read->record.agent_name);
+    strcpy(refresh->session->agent_revision, read->record.agent_revision);
     if (read->record.commit_created_at_ns > refresh->session->commit_ns)
       refresh->session->commit_ns = read->record.commit_created_at_ns;
   }
@@ -2583,6 +2621,85 @@ int cai_cli_pouch_open_at(cai_cli_pouch *pouch, const char *state_directory,
   return cai_cli_pouch_open_options(pouch, &options, logger, error);
 }
 
+/** Decode once for both read-only existence checks and normal opens. */
+static int endpoint_root(const char *endpoint, char *root, size_t capacity,
+                         cai_error *error) {
+  char *decoded_root;
+  /* Unlike HTTP, pouch:// has no authority component. Match the SDK's
+   * documented root syntax and use libcurl only for percent-decoding. */
+  const char *encoded = endpoint + 8U;
+  size_t length = strcspn(encoded, "?#"), i;
+  int decoded_length = 0;
+  if (length == 0U || length > INT_MAX)
+    return cai_cli_error(error, CAI_ERR_INVALID, "invalid pouch root URL");
+  for (i = 0U; i < length; i++) {
+    if (encoded[i] == '%') {
+      if (length - i < 3U ||
+          strchr("0123456789abcdefABCDEF", encoded[i + 1U]) == NULL ||
+          strchr("0123456789abcdefABCDEF", encoded[i + 2U]) == NULL)
+        return cai_cli_error(error, CAI_ERR_INVALID,
+                             "invalid pouch root percent escape");
+      i += 2U;
+    }
+  }
+  decoded_root =
+      curl_easy_unescape(NULL, encoded, (int)length, &decoded_length);
+  if (decoded_root == NULL || decoded_length <= 0 || decoded_root[0] != '/' ||
+      (size_t)decoded_length >= capacity ||
+      memchr(decoded_root, '\0', (size_t)decoded_length) != NULL) {
+    curl_free(decoded_root);
+    return cai_cli_error(error, CAI_ERR_INVALID, "invalid pouch root URL");
+  }
+  strcpy(root, decoded_root);
+  curl_free(decoded_root);
+  return CAI_OK;
+}
+
+int cai_cli_pouch_store_present(const cai_cli_options *options, int *present,
+                                cai_error *error) {
+  char *root = malloc(PATH_MAX);
+  struct stat status;
+  int rc = CAI_OK;
+  *present = 1;
+  if (root == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate store existence lookup");
+  if (options->lockd != NULL && strncmp(options->lockd, "pouch://", 8U) != 0)
+    goto done;
+  if (options->lockd != NULL)
+    rc = endpoint_root(options->lockd, root, PATH_MAX, error);
+  else if (options->state_dir == NULL ||
+           snprintf(root, PATH_MAX, "%s/pouch", options->state_dir) >= PATH_MAX)
+    rc = cai_cli_error(error, CAI_ERR_INVALID, "invalid session store path");
+  if (rc == CAI_OK && lstat(root, &status) != 0) {
+    if (errno == ENOENT || errno == ENOTDIR)
+      *present = 0;
+    else
+      rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "inspect session store");
+  }
+  /* Selection is optional preflight. Let owner compatibility reject a changed
+   * key before an SDK open; an actual owner open still reports missing keys. */
+  if (rc == CAI_OK && *present) {
+    const char *key = options->pouch_key_file;
+    if (key == NULL) {
+      if (options->state_dir == NULL ||
+          snprintf(root, PATH_MAX, "%s/pouch.key", options->state_dir) >=
+              PATH_MAX)
+        rc = cai_cli_error(error, CAI_ERR_INVALID, "invalid session key path");
+      key = root;
+    }
+    if (rc == CAI_OK && lstat(key, &status) != 0) {
+      if (errno == ENOENT || errno == ENOTDIR)
+        *present = 0;
+      else
+        rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "inspect session key");
+    }
+  }
+done:
+  free(root);
+  return rc;
+}
+
 /** Per-invocation scratch belongs to the heap, including callback reentry. */
 typedef struct cai_cli_pouch_open_options_scratch {
   char path[PATH_MAX];
@@ -2609,7 +2726,6 @@ static int cai_cli_pouch_open_options_with_scratch(
   int lock_fd;
   int root_exists;
   int local_pouch;
-  char *decoded_root;
   int rc;
   memset(pouch, 0, sizeof(*pouch));
   pouch->logger = logger;
@@ -2691,33 +2807,10 @@ static int cai_cli_pouch_open_options_with_scratch(
   local_pouch = selected_endpoint == NULL ||
                 strncmp(selected_endpoint, "pouch://", 8U) == 0;
   if (selected_endpoint != NULL && local_pouch) {
-    /* Unlike HTTP, pouch:// has no authority component. Match the SDK's
-     * documented root syntax and use libcurl only for percent-decoding. */
-    const char *encoded = selected_endpoint + 8U;
-    size_t length = strcspn(encoded, "?#"), i;
-    int decoded_length = 0;
-    if (length == 0U || length > INT_MAX)
-      return cai_cli_error(error, CAI_ERR_INVALID, "invalid pouch root URL");
-    for (i = 0U; i < length; i++) {
-      if (encoded[i] == '%') {
-        if (length - i < 3U ||
-            strchr("0123456789abcdefABCDEF", encoded[i + 1U]) == NULL ||
-            strchr("0123456789abcdefABCDEF", encoded[i + 2U]) == NULL)
-          return cai_cli_error(error, CAI_ERR_INVALID,
-                               "invalid pouch root percent escape");
-        i += 2U;
-      }
-    }
-    decoded_root =
-        curl_easy_unescape(NULL, encoded, (int)length, &decoded_length);
-    if (decoded_root == NULL || decoded_length <= 0 || decoded_root[0] != '/' ||
-        (size_t)decoded_length >= sizeof(scratch->root) ||
-        memchr(decoded_root, '\0', (size_t)decoded_length) != NULL) {
-      curl_free(decoded_root);
-      return cai_cli_error(error, CAI_ERR_INVALID, "invalid pouch root URL");
-    }
-    strcpy(scratch->root, decoded_root);
-    curl_free(decoded_root);
+    rc = endpoint_root(selected_endpoint, scratch->root, sizeof(scratch->root),
+                       error);
+    if (rc != CAI_OK)
+      return rc;
   }
   lock_fd =
       open(scratch->init_path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);

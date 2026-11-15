@@ -6,6 +6,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 
+#include "agent_package.h"
 #include "agents.h"
 #include "app_internal.h"
 #include "app_startup.h"
@@ -95,6 +96,7 @@ typedef struct cli_state {
   cai_context *context;
   cai_network_tools_config network_tools;
   cai_chatgpt_auth *auth;
+  cai_cli_agent_auth agent_auth;
   cai_chatgpt_auth shared_auth;
   pthread_mutex_t auth_lock;
   int has_auth_lock;
@@ -1436,6 +1438,9 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     resume_id = selected_id;
   }
 
+  (void)cai_cli_agent_configuration_identity(
+      state->configuration, state->pouch.active_agent_name,
+      state->pouch.active_agent_revision);
   if (!state->suppress_replay)
     state->has_review_metrics = 0;
   cai_agent_runtime_config_init(&config);
@@ -3722,7 +3727,7 @@ static int cli_handle_command(cli_state *state, const char *line,
     cai_agent_runtime_settings settings;
     cai_agent_runtime_metrics metrics;
     cai_error optional_error;
-    char markdown[2048], mailbox_row[320], policy_row[256];
+    char markdown[2048], mailbox_row[320], policy_row[256], agent_row[256];
     int yolo, pending_yolo, has_pending_yolo;
     const char *model = state->options.model;
     const char *effort = state->options.reasoning_effort;
@@ -3756,6 +3761,15 @@ static int cli_handle_command(cli_state *state, const char *line,
              has_pending_yolo ? "| Pending execution mode | " : "",
              has_pending_yolo ? (pending_yolo ? "YOLO" : "Restricted") : "",
              has_pending_yolo ? " (queued) |\n" : "");
+    if (state->pouch.active_agent_name[0] != '\0')
+      snprintf(agent_row, sizeof(agent_row),
+               "| Agent | `%s` |\n| Agent revision | `%s` |\n",
+               state->pouch.active_agent_name,
+               state->pouch.active_agent_revision[0] != '\0'
+                   ? state->pouch.active_agent_revision
+                   : "bootstrap");
+    else
+      agent_row[0] = '\0';
     cli_refresh_quota(state, 1);
     snprintf(mailbox_row, sizeof(mailbox_row),
              "| Message queue | `%s` |\n| Autoqueue | %s |\n",
@@ -3770,6 +3784,7 @@ static int cli_handle_command(cli_state *state, const char *line,
             state->auth != NULL ? &state->quota : NULL, &instructions) != 0 ||
         cli_text(state, markdown, strlen(markdown)) != 0 ||
         cli_tools_write(state, policy_row, strlen(policy_row)) != 0 ||
+        cli_tools_write(state, agent_row, strlen(agent_row)) != 0 ||
         cai_cli_status_ids_markdown(&ids, cli_tools_write, state) != 0 ||
         cai_cli_status_log_markdown(
             state->log != NULL && state->log->fd >= 0 ? state->log->path : NULL,
@@ -4124,6 +4139,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   cai_client_config client_config;
   cai_chatgpt_auth_config auth_config;
   cai_cli_pouch *auth_store = NULL;
+  const cai_blob_store *native_auth = NULL;
   cai_error error;
   char auth_path[PATH_MAX];
   const char *auth_file;
@@ -4336,31 +4352,55 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
   auth_file = state->options.auth_json;
   if (strcmp(state->options.provider, "chatgpt") == 0 ||
       (!state->options.review && state->options.mcp)) {
-    auth_store =
-        cli_named_store(state, state->normal_options.auth_store, &error);
-    if (auth_store == NULL) {
-      cli_print_error(state, "open authentication store", &error);
-      goto cleanup;
-    }
-    if (auth_file == NULL &&
-        cai_environment_get(state->environment, "HOME") != NULL) {
-      rc = snprintf(auth_path, sizeof(auth_path), "%s/.codex/auth.json",
-                    cai_environment_get(state->environment, "HOME"));
-      if (rc > 0 && (size_t)rc < sizeof(auth_path) &&
-          access(auth_path, F_OK) == 0)
-        auth_file = auth_path;
-    }
-    if (auth_file != NULL) {
-      rc = cai_cli_pouch_seed_auth(auth_store, auth_file, &error);
+    if (state->options.source_agent_name != NULL && auth_file == NULL) {
+      cai_cli_pouch *repository =
+          cli_named_store(state, state->normal_options.agents_store, &error);
+      cai_source *saved = NULL;
+      rc = repository != NULL
+               ? cai_cli_agent_auth_init(&state->agent_auth, repository,
+                                         state->options.source_agent_name,
+                                         &error)
+               : error.code;
+      if (rc == CAI_OK)
+        rc = state->agent_auth.storage.load(&state->agent_auth, "auth.json",
+                                            &saved, &error);
+      if (rc == CAI_OK && saved != NULL)
+        native_auth = &state->agent_auth.storage;
+      cai_source_close(saved);
       if (rc != CAI_OK) {
-        if (strcmp(state->options.provider, "chatgpt") == 0) {
-          cli_print_error(state, "import ChatGPT auth", &error);
-          goto cleanup;
+        cli_print_error(state, "open agent credentials", &error);
+        goto cleanup;
+      }
+    }
+    /* Explicit/previous global authentication remains available for agents
+     * without imported native credentials. */
+    if (native_auth == NULL) {
+      auth_store =
+          cli_named_store(state, state->normal_options.auth_store, &error);
+      if (auth_store == NULL) {
+        cli_print_error(state, "open authentication store", &error);
+        goto cleanup;
+      }
+      if (auth_file == NULL &&
+          cai_environment_get(state->environment, "HOME") != NULL) {
+        rc = snprintf(auth_path, sizeof(auth_path), "%s/.codex/auth.json",
+                      cai_environment_get(state->environment, "HOME"));
+        if (rc > 0 && (size_t)rc < sizeof(auth_path) &&
+            access(auth_path, F_OK) == 0)
+          auth_file = auth_path;
+      }
+      if (auth_file != NULL) {
+        rc = cai_cli_pouch_seed_auth(auth_store, auth_file, &error);
+        if (rc != CAI_OK) {
+          if (strcmp(state->options.provider, "chatgpt") == 0) {
+            cli_print_error(state, "import ChatGPT auth", &error);
+            goto cleanup;
+          }
+          cai_cli_log_error(cli_logger(state), "ChatGPT apps auth import",
+                            &error);
+          cai_error_cleanup(&error);
+          cai_error_init(&error);
         }
-        cai_cli_log_error(cli_logger(state), "ChatGPT apps auth import",
-                          &error);
-        cai_error_cleanup(&error);
-        cai_error_init(&error);
       }
     }
   }
@@ -4391,10 +4431,11 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     goto cleanup;
   }
   client_config.model_metadata_json = metadata_json;
-  if (auth_store != NULL) {
+  if (auth_store != NULL || native_auth != NULL) {
     cai_chatgpt_auth_config_init(&auth_config);
     auth_config.logger = state->log->logger;
-    auth_config.storage = &auth_store->credentials;
+    auth_config.storage =
+        native_auth != NULL ? native_auth : &auth_store->credentials;
     rc = cai_chatgpt_auth_open(&auth_config, &state->auth, &error);
     if (rc != CAI_OK) {
       if (strcmp(state->options.provider, "chatgpt") == 0) {
