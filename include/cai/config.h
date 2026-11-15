@@ -92,6 +92,8 @@ struct cai_config {
                        cai_error *error);
   int (*apply_terminal)(const cai_config *self, cai_terminal_tool_config *out,
                         cai_error *error);
+  /** Close this receiver, including any host-owned lifetime decoration.
+   * cai_config_close() dispatches through this method too. */
   void (*close)(cai_config *self);
   void *impl;
 };
@@ -109,6 +111,11 @@ int cai_config_open(const cai_config_field *extensions, size_t count,
 int cai_config_open_schema(const cai_config_field *fields, size_t count,
                            const cai_config_context *context, cai_config **out,
                            cai_error *error);
+/** Independently copy schema defaults, explicit values, source origin and
+ * captured environment. Does not resolve paths or retain lifetime decorations.
+ * The caller owns the result, which remains valid after closing self. */
+int cai_config_clone(const cai_config *self, cai_config **out,
+                     cai_error *error);
 /** Borrow the captured absolute base directory until close. */
 const char *cai_config_directory(const cai_config *self);
 /** Last successfully loaded source origin, borrowed until the next successful

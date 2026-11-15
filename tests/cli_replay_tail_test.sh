@@ -152,13 +152,15 @@ run --resume "$id" --replay-turns 0 -ni 'context check'; ok
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
 contains "$root/request" PROMPT00; contains "$root/request" ANSWER00
 contains "$root/request" PROMPT24; contains "$root/request" ANSWER24
-# INI, environment alias, argv precedence, and numbering reset on /resume.
+# Stored settings ignore later disk edits and env aliases; explicit flags and
+# numbering reset on /resume remain supported.
+mkdir -p "$(dirname "$config")"
 printf '\n[ui]\nreplay_turns = 1\n' >>"$config"
-terminal_start --resume "$id"
+terminal_start --resume "$id" --replay-turns 1
 expect 'CONTEXT RETAINED'; absent "$term/text" PROMPT24
 terminal_close
 export CAI_REPLAY_TURNS=0
-terminal_start --resume "$id"
+terminal_start --resume "$id" --replay-turns 0
 absent "$term/text" 'CONTEXT RETAINED'
 send "/resume\r"; expect "$id"
 send '/resume 1\r'; expect '$ /resume 1'
@@ -172,4 +174,4 @@ send '/resume\r'; expect "$id"
 send '/resume 2\r'; expect 'CONTEXT RETAINED'
 terminal_close
 export CAI_REPLAY_TURNS=-2
-run --list; bad
+run --list; ok

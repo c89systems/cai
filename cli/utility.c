@@ -445,11 +445,12 @@ int cai_cli_utility_run(int argc, char **argv,
                     "Invalid Chrome native host arguments");
       goto done;
     }
-    parsed = cai_cli_configure_at(1, argv, &u->options, &u->configuration,
-                                  application, &u->startup, &u->error);
+    parsed = cai_cli_configure_agent_at(1, argv, &u->options, &u->configuration,
+                                        application, &u->startup, &u->error);
   } else
-    parsed = cai_cli_configure_at(argc, argv, &u->options, &u->configuration,
-                                  application, &u->startup, &u->error);
+    parsed =
+        cai_cli_configure_agent_at(argc, argv, &u->options, &u->configuration,
+                                   application, &u->startup, &u->error);
   if (parsed <= 0) {
     result = parsed == 0 ? 0 : 2;
     if (parsed == 0 && u->options.list_themes) {

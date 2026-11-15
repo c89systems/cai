@@ -16,8 +16,16 @@ printf 'ANCESTOR_MARKER\n' >"$work/AGENTS.md"
 printf 'WORKSPACE_MARKER\n' >"$work/nested/AGENTS.md"
 unset CODEX_HOME
 base=("$cli" -C "$work/nested")
+agent_generation=0
 write_config() {
+  # A new definition can operate the same session without changing its store.
+  # Disk edits alone do not replace a previously initialized agent.
+  agent_generation=$((agent_generation+1))
+  base=("$cli" -C "$work/nested" --agents-store "instructions_$agent_generation")
   cat >"$config" <<INI
+[store.instructions_$agent_generation]
+endpoint = pouch://$root/instructions-$agent_generation
+key_file = $root/instructions-$agent_generation.key
 [client]
 provider = custom
 base_url = "$endpoint"
@@ -75,8 +83,8 @@ turn --codex-agents-md -ni 'explicit compatibility flag'
 contains "$root/instructions" CODEX_CUSTOM_MARKER
 (
   export CAI_CODEX_AGENTS_MD=true
-  turn -ni 'environment enables current global instructions'
-  contains "$root/instructions" CODEX_CUSTOM_MARKER
+  turn -ni 'environment does not enable compatibility'
+  absent "$root/instructions" CODEX_CUSTOM_MARKER
   turn --no-codex-agents-md -ni 'explicit opt out overrides the environment'
   absent "$root/instructions" CODEX_CUSTOM_MARKER
 )

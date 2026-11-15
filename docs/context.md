@@ -69,7 +69,7 @@ An empty store inherits the active session store and reuses its existing client.
 
 | Flag | Environment | Meaning |
 |---|---|---|
-| `--context` / `--no-context` | `CAI_CONTEXT` | Enable/disable tools; default enabled. |
+| `--context` / `--no-context` | — | Enable/disable tools; default enabled. |
 | `--context-store NAME` | `CAI_CONTEXT_STORE` | Select a configured `[store.NAME]`; empty inherits history. |
 | `--context-namespace NAME` | `CAI_CONTEXT_NAMESPACE` | Override the shared namespace. |
 

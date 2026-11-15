@@ -375,6 +375,13 @@ static int log_write(void *context, const char *data, size_t count,
   size_t i;
   log = (cai_cli_log *)context;
   pthread_mutex_lock(&log->lock);
+  /* Configuration preflight may open storage before the session file sink.
+   * Interactive diagnostics belong to that sink or explicit UI errors. */
+  if (log->interactive && log->fd < 0) {
+    *written = count;
+    pthread_mutex_unlock(&log->lock);
+    return 0;
+  }
   do {
     n = write(log->fd >= 0 ? log->fd : STDERR_FILENO, data, count);
   } while (n < 0 && errno == EINTR);
@@ -399,9 +406,13 @@ static int log_write(void *context, const char *data, size_t count,
 
 static int log_isatty(void *context) {
   cai_cli_log *log;
+  int result;
   log = (cai_cli_log *)context;
   /* The interactive sink is a file, even before its startup file is opened. */
-  return !log->interactive && isatty(log->fd >= 0 ? log->fd : STDERR_FILENO);
+  pthread_mutex_lock(&log->lock);
+  result = !log->interactive && isatty(log->fd >= 0 ? log->fd : STDERR_FILENO);
+  pthread_mutex_unlock(&log->lock);
+  return result;
 }
 
 int cai_cli_cache_directory(char *directory, size_t capacity,
@@ -471,8 +482,8 @@ int cai_cli_log_interactive_at(cai_cli_log *log, const char *directory,
                                cai_error *error) {
   return cai_cli_log_file_at(log, directory, 1, error);
 }
-int cai_cli_log_file_at(cai_cli_log *log, const char *directory,
-                        int capture_notices, cai_error *error) {
+static int file_at_locked(cai_cli_log *log, const char *directory,
+                          int capture_notices, cai_error *error) {
   int rc;
   if (log->borrowed)
     return CAI_OK;
@@ -504,6 +515,17 @@ int cai_cli_log_file_at(cai_cli_log *log, const char *directory,
                            "create logging wakeup descriptor");
   }
   return CAI_OK;
+}
+
+int cai_cli_log_file_at(cai_cli_log *log, const char *directory,
+                        int capture_notices, cai_error *error) {
+  int rc;
+  if (log->borrowed)
+    return CAI_OK;
+  pthread_mutex_lock(&log->lock);
+  rc = file_at_locked(log, directory, capture_notices, error);
+  pthread_mutex_unlock(&log->lock);
+  return rc;
 }
 
 /** Per-invocation scratch belongs to the heap, including callback reentry. */

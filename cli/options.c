@@ -65,8 +65,8 @@ void cai_cli_options_init(cai_cli_options *options) {
   options->ip_multicast_ttl = 1L;
   options->review_theme_offset = 1LL;
   options->status_fields = CAI_CLI_STATUS_DEFAULT_FIELDS;
-  options->sessions_store = options->auth_store = options->messaging_store =
-      "default";
+  options->agents_store = options->sessions_store = options->auth_store =
+      options->messaging_store = "default";
   options->image_generation = 1;
   options->terminal = 1;
   options->yield_time_ms = CAI_TERMINAL_DEFAULT_YIELD_TIME_MS;
@@ -785,6 +785,8 @@ static int cli_read_options(int argc, char *const *argv,
       field = &options->import_file;
     else if (strcmp(flag, "--lockd") == 0)
       field = &options->lockd;
+    else if (strcmp(flag, "--agents-store") == 0)
+      field = &options->agents_store;
     else if (strcmp(flag, "--sessions-store") == 0)
       field = &options->sessions_store;
     else if (strcmp(flag, "--auth-store") == 0)
@@ -965,9 +967,24 @@ int cai_cli_options_utility(const cai_cli_options *o) {
          o->dump_developer_instructions != NULL;
 }
 
+int cai_cli_store_name_valid(const char *name) {
+  return name != NULL && name[0] != '\0' && strlen(name) <= 64U &&
+         strspn(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123"
+                      "456789_-") == strlen(name);
+}
+
 int cai_cli_validate_options(cai_cli_options *options) {
   static const char *const providers[] = {"chatgpt", "openai", "openrouter",
                                           "berget",  "custom", NULL};
+  if (!cai_cli_store_name_valid(options->agents_store) ||
+      !cai_cli_store_name_valid(options->sessions_store) ||
+      !cai_cli_store_name_valid(options->auth_store) ||
+      !cai_cli_store_name_valid(options->messaging_store) ||
+      (options->context_store != NULL &&
+       !cai_cli_store_name_valid(options->context_store))) {
+    cai_cli_option_error(options, "invalid store name");
+    return -1;
+  }
   if (options->prompt_listener_explicit &&
       (options->headless || options->non_interactive || options->review ||
        options->review_and_fix || cai_cli_options_utility(options))) {

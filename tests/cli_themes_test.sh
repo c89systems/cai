@@ -18,11 +18,13 @@ if [[ "$scope" == full ]]; then
     [[ ! -e "$root/state/cai" ]]
   done
   run -t; bad; contains "$root/stderr" 'requires a value'
+  mkdir -p "$root/config/cai"
+  run --dump-config "$root/config/cai/config.ini"; ok
   contains "$root/config/cai/config.ini" '# theme = "default"'
   printf '[ui]\ntheme = bogus\n' >"$root/config/cai/config.ini"
   run --list; bad
   export CAI_THEME=plain
-  run --list; ok
+  run --list; bad
   export CAI_THEME=bogus
   run --list -t default; ok
   unset CAI_THEME
@@ -36,6 +38,10 @@ else
   export CAI_TEST_APP_INTRODUCTION='## Introduction theme'
 fi
 
+if [[ ! -f "$root/config/cai/config.ini" ]]; then
+  mkdir -p "$root/config/cai"
+  run --dump-config "$root/config/cai/config.ini"; ok
+fi
 peer_start
 sample='## Theme sample
 
@@ -155,7 +161,7 @@ if [[ "$scope" != full ]]; then
   plain_styles "$root/style-override"
   unset CAI_TEST_APP_THEME
   export CAI_TEST_APP_NAME=smith SMITH_THEME=bogus
-  run --list; bad; contains "$root/stderr" 'unknown softline theme'
+  run --list; ok
   export SMITH_THEME=riced:iosvkem
   run --list; ok
   unset CAI_TEST_APP_NAME SMITH_THEME

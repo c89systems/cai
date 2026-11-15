@@ -44,14 +44,13 @@ count=$(requests)
 run -Nn --goal 'Finish the task'; bad
 [[ $(requests) == "$((count+11))" && ! -s "$root/stdout" ]]
 contains "$root/stderr" 'retrying in 240 seconds (10/10)'
-# All supported configuration sources can disable/re-enable the default.
-for source in flag env ini; do
+# Explicit flags and initial stored configuration can disable the default.
+for source in flag ini; do
   unset CAI_CAPACITY_RETRY
   extra=()
   case "$source" in
     flag) extra+=(--no-capacity-retry) ;;
-    env) export CAI_CAPACITY_RETRY=false ;;
-    ini) printf '[agent]\ncapacity_retry=false\n' >>"$root/protocol.ini" ;;
+    ini) printf '[agent]\ncapacity_retry=false\n' >>"$root/protocol.ini"; extra+=(--state-dir "$root/disabled-state") ;;
   esac
   plan "{\"chat\":$chat,\"plan\":[$failure]}"
   count=$(requests)

@@ -5,12 +5,11 @@ peer_start
 # goal timeout. Correct validation must not send any request at all.
 plan '{"plan":["__api_error__"]}'
 printf '[agent]\ngoals = false\n' >"$root/no-goals.ini"
-for mode in flag config env; do
+for mode in flag config; do
   flags=()
   case "$mode" in
     flag) flags+=(--no-goals) ;;
-    config) flags+=(--config "$root/no-goals.ini") ;;
-    env) export CAI_GOALS=false ;;
+    config) flags+=(--state-dir "$root/config-state" --config "$root/no-goals.ini") ;;
   esac
   run "${flags[@]}" --goal 'Do not start'; bad
   contains "$root/stderr" 'require goal tools'

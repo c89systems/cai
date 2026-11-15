@@ -43,15 +43,16 @@ run --no-chart-instructions -z base.md -I USER_ADDITION -d "$root/disabled"; ok
 { cat "$work/base.md"; printf '\n\nUSER_ADDITION'; } >"$root/expected"
 cmp "$root/expected" "$root/disabled/cai_developer_instructions.md"
 absent "$root/disabled/cai_reviewer_instructions.md" "$marker"
-run --config "$root/disabled.ini" -d "$root/ini"; ok
+run --state-dir "$root/disabled-state" --config "$root/disabled.ini" -d "$root/ini"; ok
 absent "$root/ini/cai_developer_instructions.md" "$marker"
-CAI_DISABLE_CHART_INSTRUCTIONS=false run --config "$root/disabled.ini" -d "$root/env"; ok
-guide "$root/env/cai_developer_instructions.md"
+CAI_DISABLE_CHART_INSTRUCTIONS=false run --state-dir "$root/disabled-state" --config "$root/disabled.ini" -d "$root/env"; ok
+absent "$root/env/cai_developer_instructions.md" "$marker"
 CAI_DISABLE_CHART_INSTRUCTIONS=false run --no-chart-instructions -d "$root/cli"; ok
 absent "$root/cli/cai_developer_instructions.md" "$marker"
 CAI_DISABLE_CHART_INSTRUCTIONS=true run --chart-instructions -d "$root/explicit-on"; ok
 guide "$root/explicit-on/cai_developer_instructions.md"
-CAI_DISABLE_CHART_INSTRUCTIONS=invalid run -d "$root/invalid"; bad
+CAI_DISABLE_CHART_INSTRUCTIONS=invalid run -d "$root/invalid"; ok
+guide "$root/invalid/cai_developer_instructions.md"
 run --dump-config "$root/defaults.ini"; ok
 contains "$root/defaults.ini" 'disable_chart_instructions = false'
 [[ $(requests) == 0 ]]

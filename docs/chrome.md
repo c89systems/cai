@@ -102,7 +102,7 @@ provider credentials. Normal startup never installs/removes a registration.
 ## Connections and browser tools
 
 Smith runtimes and CAI enable Chrome tools by default, connecting only on the
-first browser request. Use `--no-chrome`, `CAI_CHROME=false`, or
+first browser request. Use `--no-chrome` or the stored
 `[chrome] enabled=false` to disable them. No registration or browser is needed
 for an ordinary turn. Setup remains explicit. An unavailable host fails the
 tool call with setup guidance; a later call may discover a newly connected

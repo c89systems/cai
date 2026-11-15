@@ -45,7 +45,7 @@ Omit NAME or use `all` for every connection.
 These commands use Softline's editable queue and never write `config.ini`.
 Their changes last for this application invocation, including `/new` and `/resume`.
 Utility commands and isolated `--review` runs do not connect MCP servers.
-`[agent] mcp = false`, `CAI_MCP=false` or `--no-mcp` disables configured servers; `--mcp` explicitly enables them.
+The stored `[agent] mcp = false` setting or `--no-mcp` disables configured servers; `--mcp` explicitly enables them.
 The generated template contains a commented `[mcp.example]` section to copy.
 
 Authenticated ChatGPT accounts also expose their connected apps through the `chatgpt` connection, enabled by default.

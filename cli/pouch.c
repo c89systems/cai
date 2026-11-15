@@ -2297,6 +2297,7 @@ int cai_cli_pouch_transcript_open(cai_cli_pouch *pouch, const char *scope,
     *out = reader;
   return rc;
 }
+#include "pouch_agents.inc"
 #include "pouch_delete.inc"
 
 static int auth_load(void *context, const char *key, cai_source **out,
@@ -2646,6 +2647,9 @@ static int cai_cli_pouch_open_options_with_scratch(
   NAMESPACE(sessions);
   NAMESPACE(auth);
   NAMESPACE(scopes);
+  if (snprintf(pouch->agents_namespace, sizeof(pouch->agents_namespace),
+               "%s.agents", prefix) >= (int)sizeof(pouch->agents_namespace))
+    return cai_cli_error(error, CAI_ERR_INVALID, "agent namespace too long");
   NAMESPACE(todo);
   NAMESPACE(messages);
 #undef NAMESPACE

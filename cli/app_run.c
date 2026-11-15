@@ -6,6 +6,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 
+#include "agents.h"
 #include "app_internal.h"
 #include "app_startup.h"
 #include "command_help.h"
@@ -4172,9 +4173,9 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     }
     parsed = 1;
   } else
-    parsed =
-        cai_cli_configure_at(argc, argv, &state->options, &state->configuration,
-                             application, startup, &error);
+    parsed = cai_cli_configure_agent_at(argc, argv, &state->options,
+                                        &state->configuration, application,
+                                        startup, &error);
   if (parsed > 0 && state->options.headless && server == NULL) {
     cai_cli_error(&error, CAI_ERR_INVALID,
                   "--headless is an executable process mode; native hosts "
@@ -4222,7 +4223,10 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
     state->options.non_interactive = 0;
     state->options.out = NULL;
   }
-  if (cai_cli_log_new_at(&state->log, PSLOG_LEVEL_TRACE, server != NULL,
+  state->log =
+      cai_cli_agent_configuration_log(state->configuration, server != NULL);
+  if (state->log == NULL &&
+      cai_cli_log_new_at(&state->log, PSLOG_LEVEL_TRACE, server != NULL,
                          application != NULL ? application->logger : NULL,
                          state->environment, state->options.directory,
                          &error) != CAI_OK)

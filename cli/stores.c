@@ -33,9 +33,7 @@ int cai_cli_store_options(cai_config *config, const cai_cli_options *defaults,
   *out = *defaults;
   if (name != NULL && strcmp(name, "default") == 0)
     return CAI_OK;
-  if (name == NULL || name[0] == '\0' || strlen(name) > 64U ||
-      strspn(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                   "0123456789_-") != strlen(name))
+  if (!cai_cli_store_name_valid(name))
     return cai_cli_error(error, CAI_ERR_INVALID, "invalid store name");
   snprintf(section, sizeof(section), "store.%s", name);
   endpoint = config->get(config, section, "endpoint");

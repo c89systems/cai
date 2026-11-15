@@ -22,8 +22,8 @@ Theme selection belongs to `libcai_app`, including its C and Lua embedders.
 For example, `cai -t synthwave` selects its pairing; `cai -t riced:iosvkem` mixes the two libraries' themes.
 Names are case-insensitive.
 The startup default is `default:default`.
-Set `CAI_THEME` or `[ui] theme = "synthwave"` in `config.ini`; argv overrides both.
-Embedders use the same `ui.theme` setting, and their configured environment prefix replaces `CAI_`.
+Set `[ui] theme = "synthwave"` in the initial agent configuration; argv overrides the stored value.
+Embedders use the same `ui.theme` setting.
 In the TUI, `/theme` shows the current pair, all softline pairings, and all libmdf themes.
 `/theme synthwave` or `/theme riced:iosvkem` changes future output at the next safe response/tool boundary with either submission key.
 The selection survives `/new` and `/resume` within the app invocation; it does not rewrite `config.ini` or session history.
@@ -37,11 +37,11 @@ Both model-invoked reviews and `/review` show standalone **Review started** and 
 Review output uses the next libmdf theme by default and restores the parent theme when it ends.
 These offsets affect Markdown and tool headings; Softline's theme stays unchanged:
 
-| Context | INI setting | Flag and TUI command | Environment | Default |
-| --- | --- | --- | --- | --- |
-| Parent | `[ui] theme_offset` | `--theme-offset N`, `/theme-offset [N]` | `CAI_THEME_OFFSET` | 0 |
-| Ordinary child | `[subagent] theme_offset` | `--subagent-theme-offset N`, `/subagent-theme-offset [N]` | `CAI_SUBAGENT_THEME_OFFSET` | 0 |
-| Reviewer | `[review] theme_offset` | `--review-theme-offset N`, `/review-theme-offset [N]` | `CAI_REVIEW_THEME_OFFSET` | 1 |
+| Context | INI setting | Flag and TUI command | Default |
+| --- | --- | --- | --- |
+| Parent | `[ui] theme_offset` | `--theme-offset N`, `/theme-offset [N]` | 0 |
+| Ordinary child | `[subagent] theme_offset` | `--subagent-theme-offset N`, `/subagent-theme-offset [N]` | 0 |
+| Reviewer | `[review] theme_offset` | `--review-theme-offset N`, `/review-theme-offset [N]` | 1 |
 
 Child offsets are relative to the effective parent theme.
 Signed offsets wrap through libmdf's listed themes, excluding `boring`; `-300` and `1234` are valid.
@@ -53,7 +53,7 @@ Settings and slash-command changes apply to this invocation without rewriting hi
 
 ## Status fields
 
-Configure the status order with `--status-fields FIELDS`, `CAI_STATUS_FIELDS`, or `[ui] status_fields` in `config.ini` (also available through libcai_app's C/Lua settings).
+Configure the status order with `--status-fields FIELDS` or the stored `[ui] status_fields` setting (also available through libcai_app's C/Lua settings).
 The default is `model:ctx:dir:branch:weekly:crd:yolo:goal`.
 The Git branch appears after the directory and is omitted when unavailable, including outside Git repositories or with detached HEAD.
 Discovery reads Git metadata in-process, including ancestor repositories and linked worktrees; it does not launch Git.
@@ -92,7 +92,7 @@ Months are JAN through DEC; years are always two digits.
 Local zones follow the [USNO/HMNAO chart](https://aa.usno.navy.mil/downloads/TimeZoneMap_2021.pdf), using ASCII letters and star codes (`E*` for +05:30, `M*` for +13:00).
 Offsets requiring Unicode chart symbols, or having no listed code, use `J` (local time); exact UTC offsets remain in event metadata.
 Time is never rounded.
-`CAI_UTC=true`, `[ui] utc=true`, or the application `ui.utc` setting selects Zulu time; `--no-utc` restores local display.
+`[ui] utc=true` or the application `ui.utc` setting selects Zulu time; `--no-utc` restores local display.
 Batch stdout stays unchanged.
 Replay uses original event times; entries without recorded times stay unstamped.
 Submitted prompts use libmdf's `write_literal` method inside blockquote tokens; Softline receives the rendered bytes and owns the editor and queue.

@@ -1,6 +1,6 @@
 # Stored agents and agent builder
 
-Status: draft specification, not implemented. This consolidates the original notes in `stash/TODO.md` and `stash/agent_builder.md` with the requirement that different agents can continue the same session. Open decisions are listed explicitly below. Existing user guides describe current behavior until implementation lands.
+Status: draft specification with the initial bootstrap/default-configuration milestone implemented. This consolidates the original notes in `stash/TODO.md` and `stash/agent_builder.md` with the requirement that different agents can continue the same session. Open decisions are listed explicitly below. See [configuration](configuration.md) for the implemented surface; builder and named-agent selection commands remain proposed.
 
 ## Purpose and terminology
 
@@ -120,7 +120,7 @@ Required tests include:
 ## Open decisions
 
 1. **Selection when `-u` is omitted on resume.** The old notes say `default`. The current recommendation is to restore the agent selected by the session's last successful activation, using `default` for new sessions. This recommendation has not yet been accepted.
-2. **Store bootstrap configuration.** The current recommendation is a minimal disk configuration containing store location/authentication settings only. The alternative is standard local storage or explicit flags. Agent behavior remains in liblockdc either way. This recommendation has not yet been accepted.
+2. **Store bootstrap configuration: accepted.** Keep the existing local `config.ini` for bootstrap storage/host settings. Its agent settings seed `default` once; later startups use the liblockdc configuration attachment. `agents_store` selects the repository independently of `sessions_store`, both defaulting to `default`. Do not automatically generate or rewrite the disk file. The initial implementation stores configuration only; complete resource packaging and credential ownership remain later work.
 3. **Package and credential transfer contract.** Define `agent.json`, resource inclusion, credential import, and whether/how an explicitly requested agent dump can contain secrets before implementing round-trip import/export. Credentials must never appear in ordinary session export or model context.
 4. **Agent-associated context and todo defaults.** The original notes suggest storing these beside the agent, but do not settle shared versus agent-specific namespaces and selection rules. These must remain independent of session history.
 

@@ -150,7 +150,11 @@ int main(int argc, char **argv) {
   cai_environment_close(after);
   assert(cai_app_get_status(r.app, &status, NULL) == CAI_OK);
   assert(!status.running && !status.runtime_ready && status.has_server);
-  assert(r.registrations == 1 && cai_test_storage_open_count() == 1U);
+  /* Temporary sessions keep their private journal store separate from the
+   * persistent stored-agent repository. Ordinary roles still share one. */
+  assert(r.registrations == 1 &&
+         cai_test_storage_open_count() ==
+             (getenv("CAI_RUN_TEMP") != NULL ? 2U : 1U));
   if (getenv("CAI_RUN_FAIL_START") == NULL)
     assert(r.rc == CAI_OK && r.code == 0 && ready && observations > 1 &&
            status.outcome == CAI_APP_COMPLETED && r.events > 0);

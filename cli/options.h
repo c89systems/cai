@@ -39,7 +39,7 @@ typedef struct cai_cli_options {
   const char *namespace_prefix, *queue_prefix;
   const char *sessions_namespace, *auth_namespace, *scopes_namespace;
   const char *todo_namespace, *messages_namespace;
-  const char *sessions_store, *auth_store, *messaging_store;
+  const char *agents_store, *sessions_store, *auth_store, *messaging_store;
   const char *context_store, *context_namespace, *context_export;
   int context;
   const char *home_dir, *runtime_dir;
@@ -189,6 +189,7 @@ int cai_cli_read_options(int argc, char *const *argv,
                          const cai_cli_options *defaults,
                          cai_cli_options *options);
 int cai_cli_validate_options(cai_cli_options *options);
+int cai_cli_store_name_valid(const char *name);
 /** Maintenance selections never open an agent owner or terminal frontend.
  * Help/version/invalid argv and raw Chrome entry points are classified by the
  * invocation dispatcher before there is a valid options object. */

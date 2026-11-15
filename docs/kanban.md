@@ -4,14 +4,13 @@ CAI's optional `todo_kanban` tool stores named boards in the same encrypted
 Pouch backend as sessions, under namespace `cai.todo`, document `kanban`.
 Independent CAI applications sharing the endpoint and encryption key see the
 same cards. Each session has its own selected board. Tool registration
-remains off by default: enable `--todo`, `CAI_TODO=true`, or `[agent] todo=true`.
+remains off by default: enable `--todo` or the stored `[agent] todo=true` setting.
 
 ## Selection
 
 | Setting | Purpose |
 | --- | --- |
 | `--board NAME` | Select/create this board at startup, overriding the resumed selection once. Does not enable the tool. |
-| `CAI_BOARD` | Initial board for new sessions; overrides INI. |
 | `[todo] default_board` | Initial board for new sessions; defaults to `default`. |
 | `/todo` | Show the selected board, including completed cards. |
 | `/todo list` | List the boards shared on this backend. |
@@ -20,7 +19,7 @@ remains off by default: enable `--todo`, `CAI_TODO=true`, or `[agent] todo=true`
 | `/todo new NAME` | Create or select a board between turns. |
 | `/todo help` | Show command help. |
 
-The usual `[env]` precedence policy applies to `CAI_BOARD`. Explicit flags win.
+Explicit flags override the stored initial board.
 The selected board is committed with the session. Resume restores it;
 `/new` uses the configured initial board. Changing one session's selection
 does not change another's. `/status` includes the selected board or `disabled`.
@@ -62,8 +61,7 @@ description as the body. Lanes display as TODO, DOING and DONE. Lists and board
 layouts never include descriptions. Inspecting an item leaves board selection
 and layout unchanged and makes no model request.
 
-Startup defaults can be set with `[ui] todo_layout = board|list`,
-`CAI_TODO_LAYOUT` (or the configured application prefix), and
+Startup defaults can be set with the stored `[ui] todo_layout = board|list` setting and
 `--todo-layout board|list`. Forwarded flags take precedence. Embedders use
 the same setting through C `cai_app_setting` or Lua
 `settings = {ui = {todo_layout = "list"}}`. Layout selection does not enable the

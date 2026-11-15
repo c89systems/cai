@@ -90,14 +90,14 @@ pager_close
 # environment/config without mutating the configured file or owner settings.
 printf '[ui]\nprefer_native_pager = true\n' >"$root/pager.ini"
 cp "$root/pager.ini" "$root/pager-original.ini"
-terminal_start -N --config "$root/pager.ini"
+terminal_start -N --state-dir "$root/native-state" --config "$root/pager.ini"
 native_log
 pager_close
 export CAI_PREFER_NATIVE_PAGER=false
-terminal_start -N --config "$root/pager.ini"
+terminal_start -N --state-dir "$root/native-state" --config "$root/pager.ini" --no-prefer-native-pager
 external_log
 pager_close
-terminal_start -N --config "$root/pager.ini" --prefer-native-pager
+terminal_start -N --state-dir "$root/native-state" --config "$root/pager.ini" --prefer-native-pager
 native_log
 pager_close
 export CAI_PREFER_NATIVE_PAGER=true

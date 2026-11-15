@@ -12,38 +12,36 @@ Setup refuses conflicting registrations; `--chrome-remove` removes only cai's ve
 No OpenAI native executable is required.
 See [Chrome setup, API, and compatibility](chrome.md).
 
-Tool policy uses CLI > environment > `config.ini` > built-in defaults.
-`[env]` is applied first with its documented environment precedence rule.
-All boolean environment settings accept the INI boolean syntax.
+Tool policy uses explicit CLI/embedding settings, stored agent configuration, then built-in defaults. Agent settings in the local INI seed the definition once; see [configuration](configuration.md).
 The following controls apply at startup, including when resuming a session:
 
-| Tool | CLI (also `--no-NAME`) | Environment | INI | Default |
-| --- | --- | --- | --- | --- |
-| Hosted search (Responses only) | `--web-search` | `CAI_WEB_SEARCH` | `[agent] web_search` | on |
-| Chrome extension | `--chrome` | `CAI_CHROME` | `[chrome] enabled` | on |
-| Kanban | `--todo` | `CAI_TODO` | `[agent] todo` | off |
-| SearXNG function search | `--searxng` | `CAI_SEARXNG` | `[agent] searxng` | off |
-| Reverse geocoding | `--revgeo` | `CAI_REVGEO` | `[agent] revgeo` | off |
-| File reading | `--read-file` | `CAI_READ_FILE` | `[agent] read_file` | on |
-| File listing | `--list-files` | `CAI_LIST_FILES` | `[agent] list_files` | on |
-| Workspace patching | `--apply-patch` | `CAI_APPLY_PATCH` | `[agent] apply_patch` | on |
-| Local images | `--view-image` | `CAI_VIEW_IMAGE` | `[agent] view_image` | model dependent |
-| Goal tools | `--goals` | `CAI_GOALS` | `[agent] goals` | on |
-| Skills | `--skills` | `CAI_SKILLS` | `[agent] skills` | on when installed |
-| Managed commands | `--terminal` | `CAI_TERMINAL` | `[agent] terminal` | on |
-| Image generation | `--image-generation` | `CAI_IMAGE_GENERATION` | `[agent] image_generation` | on |
-| Review subagent | `--review-subagent` | `CAI_REVIEW_SUBAGENT` | `[agent] review_subagent` | on |
-| Review/fix loop tool | `--review-and-fix-tool` | `CAI_REVIEW_AND_FIX_TOOL` | `[agent] review_and_fix_tool` | off |
-| Foreground child steering | `--subagent-steering` | `CAI_SUBAGENT_STEERING` | `[agent] subagent_steering` | on |
-| Codex global/ancestor instructions | `--codex-agents-md` | `CAI_CODEX_AGENTS_MD` | `[agent] codex_agents_md` | off |
+| Tool | CLI (also `--no-NAME`) | INI | Default |
+| --- | --- | --- | --- |
+| Hosted search (Responses only) | `--web-search` | `[agent] web_search` | on |
+| Chrome extension | `--chrome` | `[chrome] enabled` | on |
+| Kanban | `--todo` | `[agent] todo` | off |
+| SearXNG function search | `--searxng` | `[agent] searxng` | off |
+| Reverse geocoding | `--revgeo` | `[agent] revgeo` | off |
+| File reading | `--read-file` | `[agent] read_file` | on |
+| File listing | `--list-files` | `[agent] list_files` | on |
+| Workspace patching | `--apply-patch` | `[agent] apply_patch` | on |
+| Local images | `--view-image` | `[agent] view_image` | model dependent |
+| Goal tools | `--goals` | `[agent] goals` | on |
+| Skills | `--skills` | `[agent] skills` | on when installed |
+| Managed commands | `--terminal` | `[agent] terminal` | on |
+| Image generation | `--image-generation` | `[agent] image_generation` | on |
+| Review subagent | `--review-subagent` | `[agent] review_subagent` | on |
+| Review/fix loop tool | `--review-and-fix-tool` | `[agent] review_and_fix_tool` | off |
+| Foreground child steering | `--subagent-steering` | `[agent] subagent_steering` | on |
+| Codex global/ancestor instructions | `--codex-agents-md` | `[agent] codex_agents_md` | off |
 
-Startup flags, environment and `config.ini` determine instruction settings; editing the INI requires a restart.
+Startup flags and the stored agent definition determine instruction settings. Editing the bootstrap INI does not replace an existing agent definition.
 `/resume` keeps those startup settings and reads the instruction files again.
-Session storage never supplies configuration or an old global instruction snapshot.
+Session journals never supply agent configuration or an old global instruction snapshot; the separate agent object supplies configuration.
 Logs identify each global file's resolved path and loaded byte count, or explicitly report disabled Codex compatibility.
 
-`--searxng-url`/`CAI_SEARXNG_URL` override `[searxng] base_url`; `--revgeo-url`/`CAI_REVGEO_URL` override `[revgeo] base_url`.
-`--chrome-socket`/`CAI_CHROME_SOCKET` select `[chrome] socket`.
+`--searxng-url` overrides `[searxng] base_url`; `--revgeo-url` overrides `[revgeo] base_url`.
+`--chrome-socket` selects `[chrome] socket`.
 The generated template documents service timeouts, result limits and language settings.
 SearXNG is available to Chat Completions providers without hosted search.
 CAI's optional kanban uses one shared encrypted `cai.todo` document, with bounded streaming reads/writes and transaction commit/rollback; it creates no `todo.json` file.
@@ -69,7 +67,7 @@ The model uses `write_stdin` to send input and poll output from the active comma
 
 Background mode waits up to the configured interval before yielding a still-running handle; yielding does not require the command to print output.
 The default interval is 10000 ms. `--foreground` or `--yield-time-ms 0` waits for completion or cancellation instead; `--background` re-enables yielding.
-The equivalent configuration is `[terminal] foreground` and `yield_time_ms`, or `CAI_FOREGROUND` and `CAI_YIELD_TIME_MS`.
+The equivalent stored configuration is `[terminal] foreground` and `yield_time_ms`.
 
 In the terminal, `/foreground` (`/fg`) selects foreground waits, `/background` (`/bg`) enables yielding, and `/yield_time_ms [MS]` inspects or sets the interval from 0 through 30000 ms.
 If yielding was disabled, `/background` restores the libcai default interval; otherwise it keeps the selected interval.

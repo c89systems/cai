@@ -63,7 +63,7 @@ cai --home ./agent-home
 ```
 
 The generated template documents every supported setting and its default.
-Explicit CLI settings override environment settings, which override INI values and built-in defaults.
+Agent behavior is initialized once into liblockdc and subsequently loaded from the stored `default` agent. Explicit CLI settings override it; the local INI and environment select bootstrap storage and host settings.
 A unified home groups default config, state, cache, data and runtime directories; explicitly selected paths still win.
 See [configuration and storage locations](docs/configuration.md) and [provider authentication](docs/providers.md).
 

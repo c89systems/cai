@@ -26,16 +26,16 @@ grep -Eq '^\* [0-9]{6}Z Read source.txt$' "$term/text"
 grep -Eq '^  [0-9]{6}Z$' "$term/text"
 terminal_close
 [[ $(requests) == "$before" ]]
-# INI, environment and argv use the same setting; explicit argv wins.
+# A fresh stored agent seeds the INI setting; env aliases do not override it.
 printf '[ui]\nutc=true\n' >"$root/utc.ini"
-terminal_start -N --config "$root/utc.ini"
+terminal_start -N --state-dir "$root/utc-state" --config "$root/utc.ini"
 send '/status\r'; expect 'Status'
 grep -Eq '^\$ [0-9]{6}Z /status$' "$term/feed"
 terminal_close
 export CAI_UTC=true
 terminal_start -N
 send '/status\r'; expect 'Status'
-grep -Eq '^\$ [0-9]{6}Z /status$' "$term/feed"
+grep -Eq '^\$ [0-9]{6} /status$' "$term/feed"
 terminal_close
 terminal_start -N --no-utc
 send '/status\r'; expect 'Status'

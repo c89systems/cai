@@ -32,10 +32,10 @@ run --context-export "$root/export"; ok
 printf '%s' "$text" >"$root/expected.md"
 cmp "$root/expected.md" "$root/export/$id/$id.md"
 json "$root/export/$id.context.json" ".metadata.id == \"$id\" and .metadata.kind == \"text\""
-# Namespace and feature switches obey environment/INI/flag precedence.
+# Namespace and feature switches use bootstrap storage and explicit flags.
 : >"$root/peer/requests.jsonl"
 plan "$(jq -n --argjson chat "$chat" '{chat:$chat,plan:["CONTEXT_OFF"]}')"
-CAI_CONTEXT=false run -Nni 'No context tools'; ok
+run --no-context -Nni 'No context tools'; ok
 jq -se '.[0] | all(.tools[]; ((.name // .function.name // "") | startswith("context_")) | not)' "$root/peer/requests.jsonl" >/dev/null
 : >"$root/peer/requests.jsonl"
 plan "$(jq -n --argjson chat "$chat" '{chat:$chat,plan:["CONTEXT_ON"]}')"

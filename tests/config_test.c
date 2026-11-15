@@ -201,6 +201,64 @@ static void visitor_test(void) {
          v.calls == 1U);
   cai_config_close(cfg);
 }
+static void clone_test(void) {
+  cai_config *original = NULL, *copy = NULL;
+  cai_environment *environment = NULL;
+  const char *const captured[] = {"CAPTURED=original", "HOME=/captured", NULL};
+  cai_config_context context = {0};
+  cai_config_field field = {"host",
+                            "file",
+                            CAI_CONFIG_STRING,
+                            "default.md",
+                            "A relative file",
+                            NULL,
+                            CAI_CONFIG_PATH};
+  cai_error error;
+  const char *resolved, *const *list;
+  size_t count, i;
+  cai_error_init(&error);
+  assert(cai_environment_open(captured, &environment, &error) == CAI_OK);
+  context.directory = "/startup";
+  context.environment = environment;
+  assert(cai_config_open(&field, 1U, &context, &original, &error) == CAI_OK);
+  cai_environment_close(environment);
+  assert(cai_config_set_default(original, "agent", "model", "seed-default",
+                                &error) == CAI_OK);
+  assert(load(original,
+              "[host]\nfile=relative.md\n[review]\n"
+              "allowed_models=first\nallowed_models=second\n"
+              "[env]\nASSIGNED=stored\n",
+              3U, 0, &error) == CAI_OK);
+  assert(cai_config_clone(original, &copy, &error) == CAI_OK);
+  assert(cai_config_field_count(copy) == cai_config_field_count(original));
+  for (i = 0U; i < cai_config_field_count(copy); ++i) {
+    const cai_config_field *a = cai_config_field_at(original, i);
+    const cai_config_field *b = cai_config_field_at(copy, i);
+    assert(a->default_value == NULL
+               ? b->default_value == NULL
+               : b->default_value != NULL &&
+                     strcmp(a->default_value, b->default_value) == 0);
+  }
+  assert(cai_config_set(original, "host", "file", "changed", &error) == CAI_OK);
+  cai_config_close(original);
+  assert(strcmp(cai_config_get(copy, "host", "file"), "relative.md") == 0);
+  assert(cai_config_get(copy, "agent", "model") == NULL);
+  assert(strcmp(cai_config_directory(copy), "/startup") == 0);
+  assert(strcmp(cai_config_origin(copy), "/configuration/sample.ini") == 0);
+  assert(strcmp(cai_config_getenv(copy, "CAPTURED"), "original") == 0);
+  assert(strcmp(cai_config_getenv(copy, "ASSIGNED"), "stored") == 0);
+  list = cai_config_get_list(copy, "review", "allowed_models", &count);
+  assert(count == 2U && strcmp(list[0], "first") == 0 &&
+         strcmp(list[1], "second") == 0);
+  assert(cai_config_resolve_path(copy, "host", "file", &resolved, &error) ==
+         CAI_OK);
+  assert(strcmp(resolved, "/configuration/relative.md") == 0);
+  cai_config_close(copy);
+  assert(cai_config_clone(NULL, &copy, &error) == CAI_ERR_INVALID &&
+         copy == NULL);
+  cai_error_cleanup(&error);
+}
+
 int main(int argc, char **argv) {
   cai_config *config, *again;
   cai_error error;
@@ -268,6 +326,7 @@ int main(int argc, char **argv) {
   }
   origin_test();
   visitor_test();
+  clone_test();
   cai_error_init(&error);
   assert(cai_config_open(NULL, 0U, NULL, &config, &error) == CAI_OK);
   for (i = 1U; i <= 16U; i *= 2U) {

@@ -52,7 +52,7 @@ terminal_close
 if [[ "$scope" == host ]]; then
   unset CAI_TEST_APP_STATUS_FIELDS
   export CAI_TEST_APP_NAME=smith SMITH_STATUS_FIELDS=bogus
-  run --no-config --list; bad; contains "$root/stderr" status_fields
+  run --no-config --list; ok
   run --no-config --status-fields model --list; ok
   run --dump-config "$root/smith-defaults.ini"; ok
   contains "$root/smith-defaults.ini" '# status_fields = "model:ctx:dir:branch:weekly:crd:yolo:goal"'

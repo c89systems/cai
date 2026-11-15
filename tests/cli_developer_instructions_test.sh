@@ -18,11 +18,12 @@ printf '[agent]\ndeveloper_instructions_file=agent.md\n[review]\ndeveloper_instr
 absent "$root/dump/deep/cai_developer_instructions.md" '{{agent_'
 absent "$root/dump/deep/cai_developer_instructions.md" '# CAI agent-mode'
 contains "$root/dump/deep/cai_reviewer_instructions.md" 'You are cai, a code reviewer'
-[[ ! -d "$root/offline/state/pouch" && $(requests) == 0 ]]
+[[ -d "$root/offline/state/pouch" && $(requests) == 0 ]]
+"$cli" --no-config --home "$root/offline" -C "$work" -d "$root/default-dump"
 CAI_AGENT_MODEL=gpt-6.1-sol CAI_AGENT_REASONING_EFFORT=low "$cli" --no-config --home "$root/offline" -C "$work" -d "$root/env-dump"
-cmp "$root/dump/deep/cai_developer_instructions.md" "$root/env-dump/cai_developer_instructions.md"
+cmp "$root/default-dump/cai_developer_instructions.md" "$root/env-dump/cai_developer_instructions.md"
 mkdir -m 0755 "$root/existing-directory"
-run -d "$root/existing-directory"; ok
+run --config "$root/cfg/config.ini" -d "$root/existing-directory"; ok
 [[ $(stat -c %a "$root/existing-directory") == 755 ]]
 [[ -s "$root/existing-directory/cai_developer_instructions.md" ]]
 run -d "$work/root.md"; bad
@@ -41,12 +42,12 @@ run --config "$root/cfg/config.ini" --review -z root.md -d "$root/review-root"; 
 cmp "$work/root.md" "$root/review-root/cai_reviewer_instructions.md"
 cmp "$root/cfg/agent.md" "$root/review-root/cai_developer_instructions.md"
 CAI_DEVELOPER_INSTRUCTIONS_FILE="$work/root.md" CAI_REVIEWER_INSTRUCTIONS_FILE="$work/root.md" run --config "$root/cfg/config.ini" -d "$root/env-files"; ok
-cmp "$work/root.md" "$root/env-files/cai_developer_instructions.md"
-cmp "$work/root.md" "$root/env-files/cai_reviewer_instructions.md"
+cmp "$root/cfg/agent.md" "$root/env-files/cai_developer_instructions.md"
+cmp "$root/cfg/reviewer.md" "$root/env-files/cai_reviewer_instructions.md"
 
 # Existing outputs and symlinks are never truncated, including partial pairs.
 run --config "$root/cfg/config.ini" -d "$root/env-files"; bad
-cmp "$work/root.md" "$root/env-files/cai_developer_instructions.md"
+cmp "$root/cfg/agent.md" "$root/env-files/cai_developer_instructions.md"
 mkdir "$root/collision"
 ln -s "$work/root.md" "$root/collision/cai_reviewer_instructions.md"
 run -d "$root/collision"; bad

@@ -3,6 +3,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #include "config.h"
+#include "agents.h"
 #include "app_internal.h"
 #include "identity.h"
 #include "status.h"
@@ -216,6 +217,9 @@ static const cli_field fields[] = {
       "explicit values are lockd endpoint URLs."),
     S("storage", "sessions_store", sessions_store, 0U,
       "Named store for sessions. --temp uses its own private store."),
+    S("storage", "agents_store", agents_store, 0U,
+      "Named stored-agent repository; default default, independent of "
+      "sessions."),
     B("storage", "disable_compression", disable_compression,
       "Disable streaming zlib compression for Pouch roots. Default false. "
       "Changing an existing root's mode converts it synchronously with "
@@ -777,7 +781,7 @@ static int environment_error(const char *prefix, const char *suffix,
                   : "invalid environment setting");
 }
 static int tool_environment(cai_config *cfg, const char *prefix,
-                            cai_error *error) {
+                            int bootstrap_only, cai_error *error) {
   static const char *const env[] = {"WEB_SEARCH",
                                     "CHROME",
                                     "TODO",
@@ -894,6 +898,7 @@ static int tool_environment(cai_config *cfg, const char *prefix,
         {"REVIEWER_INSTRUCTIONS_FILE", "review", "developer_instructions_file"},
         {"LOCKD", "store.default", "endpoint"},
         {"SESSIONS_STORE", "storage", "sessions_store"},
+        {"AGENTS_STORE", "storage", "agents_store"},
         {"AUTH_STORE", "storage", "auth_store"},
         {"MESSAGING_STORE", "storage", "messaging_store"},
         {"CONTEXT_STORE", "storage", "context_store"},
@@ -912,6 +917,9 @@ static int tool_environment(cai_config *cfg, const char *prefix,
     for (i = 0U; i < sizeof(aliases) / sizeof(aliases[0]); i++) {
       const char *v = app_environment(cfg, prefix, aliases[i][0]);
       char home[PATH_MAX];
+      if (bootstrap_only &&
+          !cai_cli_agent_bootstrap_field(aliases[i][1], aliases[i][2]))
+        continue;
       if (v != NULL && strcmp(aliases[i][0], "HOME") == 0) {
         if (absolute_path(home, sizeof(home), v, NULL, cfg, error) < 0)
           return environment_error(prefix, aliases[i][0], error);
@@ -928,6 +936,8 @@ static int tool_environment(cai_config *cfg, const char *prefix,
     char home[PATH_MAX];
     size_t j;
     const char *v;
+    if (bootstrap_only && !cai_cli_agent_bootstrap_field(f->section, f->key))
+      continue;
     if (f->section[0] == '\0' || strcmp(f->section, "env") == 0 ||
         strchr(f->section, '*') != NULL || strchr(f->section, '.') != NULL)
       continue;
@@ -946,6 +956,8 @@ static int tool_environment(cai_config *cfg, const char *prefix,
     if (v != NULL && cfg->set(cfg, f->section, f->key, v, error) != CAI_OK)
       return -1;
   }
+  if (bootstrap_only)
+    return 1;
   if (app_environment(cfg, prefix, "BOARD") != NULL &&
       cai_config_set(cfg, "todo", "default_board",
                      app_environment(cfg, prefix, "BOARD"), error) != CAI_OK)
@@ -1031,7 +1043,8 @@ static int cai_cli_configure_at_with_scratch(
     int argc, char *const *argv, cai_cli_options *options,
     cai_config **configuration, const cai_app_config *application,
     const cai_config_context *startup, cai_error *error,
-    cai_cli_configure_at_scratch *scratch) {
+    cai_cli_configure_at_scratch *scratch, cai_config *loaded,
+    int repository_stage, cai_config **seed) {
 
   cai_config *cfg = NULL;
   const char *value, *resolved;
@@ -1143,7 +1156,11 @@ static int cai_cli_configure_at_with_scratch(
                    scratch->defaults.program_name, error) != CAI_OK)
       return -1;
   }
-  rc = app_schema(&context, &cfg, error);
+  if (loaded != NULL) {
+    cfg = loaded;
+    rc = 1;
+  } else
+    rc = app_schema(&context, &cfg, error);
   if (rc < 0) {
     cai_config_close(cfg);
     return -1;
@@ -1181,7 +1198,7 @@ static int cai_cli_configure_at_with_scratch(
                 "cannot close configuration template output");
     return rc == CAI_OK ? 0 : -1;
   }
-  if (!scratch->early.no_config) {
+  if (loaded == NULL && !scratch->early.no_config) {
     if (scratch->early.config_file != NULL)
       rc = absolute_path(scratch->selected, sizeof(scratch->selected),
                          scratch->early.config_file, scratch->workspace, cfg,
@@ -1201,10 +1218,19 @@ static int cai_cli_configure_at_with_scratch(
     if (application_defaults(cfg, &scratch->documented, application, 1,
                              error) != CAI_OK)
       return -1;
-    if (cfg->create_template_file(cfg, scratch->selected, error) != CAI_OK ||
-        cai_config_load_file(cfg, scratch->selected, error) != CAI_OK)
+    if (!repository_stage &&
+        cfg->create_template_file(cfg, scratch->selected, error) != CAI_OK)
+      return -1;
+    if (repository_stage && lstat(scratch->selected, &workspace_status) != 0 &&
+        errno == ENOENT && scratch->early.config_file == NULL) {
+      /* Built-in bootstrap paths work without creating a disk agent config. */
+    } else if (cai_config_load_file(cfg, scratch->selected, error) != CAI_OK)
       return -1;
   }
+  /* Capture only declared initialization settings. CLI/embedding overrides
+   * and automatic paths belong to this invocation, not the stored agent. */
+  if (seed != NULL && cai_config_clone(cfg, seed, error) != CAI_OK)
+    return -1;
   /* Host environment entries participate in the normal explicit env policy. */
   if (scratch->early.headless) {
     scratch->defaults.server_persist = 1;
@@ -1217,7 +1243,9 @@ static int cai_cli_configure_at_with_scratch(
         cfg->set(cfg, s->section, s->key, s->value, error) != CAI_OK)
       return -1;
   }
-  if (tool_environment(cfg, scratch->defaults.environment_prefix, error) < 0)
+  if (loaded == NULL &&
+      tool_environment(cfg, scratch->defaults.environment_prefix,
+                       repository_stage, error) < 0)
     return -1;
   if (app_environment(cfg, scratch->defaults.environment_prefix,
                       "CONFIG_DIR") != NULL &&
@@ -1231,17 +1259,30 @@ static int cai_cli_configure_at_with_scratch(
       return -1;
   }
   scratch->defaults.config_file = scratch->early.config_file;
-  if (cfg->get(cfg, "ui", "todo_layout") != NULL)
+  if (!repository_stage && cfg->get(cfg, "ui", "todo_layout") != NULL)
     scratch->defaults.control_explicit |= CAI_CLI_CONTROL_TODO_LAYOUT;
+  for (i = 0U; application != NULL && i < application->setting_count; ++i)
+    if (strcmp(application->settings[i].section, "ui") == 0 &&
+        strcmp(application->settings[i].key, "todo_layout") == 0)
+      scratch->defaults.control_explicit |= CAI_CLI_CONTROL_TODO_LAYOUT;
   if (scratch->early.config_file != NULL)
     scratch->defaults.owner_explicit[CAI_CLI_OWNER_config_file] = 1U;
   /* Capture explicit INI/environment/host settings before derived automatic
    * paths are stored. Defaults alone never constrain an existing owner. */
 #define CAI_CLI_OWNER_CONFIG(section, key, member, type)                       \
-  if (cfg->get(cfg, section, key) != NULL)                                     \
+  if (cfg->get(cfg, section, key) != NULL &&                                   \
+      (!repository_stage || cai_cli_agent_bootstrap_field(section, key)))      \
     scratch->defaults.owner_explicit[CAI_CLI_OWNER_##member] = 1U;
   CAI_CLI_OWNER_FIELDS(CAI_CLI_OWNER_CONFIG)
 #undef CAI_CLI_OWNER_CONFIG
+  for (i = 0U; application != NULL && i < application->setting_count; ++i) {
+    const cai_app_setting *setting = &application->settings[i];
+#define CAI_CLI_OWNER_SETTING(s, k, member, type)                              \
+  if (strcmp(setting->section, s) == 0 && strcmp(setting->key, k) == 0)        \
+    scratch->defaults.owner_explicit[CAI_CLI_OWNER_##member] = 1U;
+    CAI_CLI_OWNER_FIELDS(CAI_CLI_OWNER_SETTING)
+#undef CAI_CLI_OWNER_SETTING
+  }
   if (cfg->get(cfg, "runtime", "shell_context_max_lines") != NULL)
     scratch->defaults.owner_explicit[CAI_CLI_OWNER_shell_context_max_lines] =
         1U;
@@ -1513,7 +1554,96 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
   if (scratch == NULL)
     return nomem(error, "allocate application configuration");
   rc = cai_cli_configure_at_with_scratch(argc, argv, options, configuration,
-                                         application, startup, error, scratch);
+                                         application, startup, error, scratch,
+                                         NULL, 0, NULL);
+  free(scratch);
+  return rc;
+}
+
+int cai_cli_configure_agent_at(int argc, char *const *argv,
+                               cai_cli_options *options,
+                               cai_config **configuration,
+                               const cai_app_config *application,
+                               const cai_config_context *startup,
+                               cai_error *error) {
+  cai_cli_configure_at_scratch *scratch = calloc(1U, sizeof(*scratch));
+  cai_config *bootstrap = NULL, *stored = NULL, *seed = NULL;
+  int rc;
+  *configuration = NULL;
+  if (scratch == NULL)
+    return nomem(error, "allocate stored agent configuration");
+  rc = cai_cli_configure_at_with_scratch(argc, argv, options, &bootstrap,
+                                         application, startup, error, scratch,
+                                         NULL, 1, &seed);
+  if (rc <= 0 ||
+      (cai_cli_options_utility(options) && options->export_id == NULL &&
+       options->dump_developer_instructions == NULL)) {
+    *configuration = bootstrap;
+    cai_config_close(seed);
+    free(scratch);
+    return rc;
+  }
+  if (options->server == NULL &&
+      cai_cli_store_options(bootstrap, options, options->sessions_store,
+                            &scratch->early, error) != CAI_OK) {
+    cai_config_close(seed);
+    cai_config_close(bootstrap);
+    free(scratch);
+    return -1;
+  }
+  rc = options->server != NULL
+           ? cai_cli_agent_bootstrap_configuration(bootstrap, startup, &stored,
+                                                   error)
+           : cai_cli_agent_configuration(bootstrap, seed, options, application,
+                                         startup, &stored, error);
+  if (rc != CAI_OK) {
+    cai_config_close(seed);
+    cai_config_close(bootstrap);
+    free(scratch);
+    return -1;
+  }
+  cai_config_close(seed);
+  memset(scratch, 0, sizeof(*scratch));
+  rc = cai_cli_configure_at_with_scratch(argc, argv, options, configuration,
+                                         application, startup, error, scratch,
+                                         stored, 1, NULL);
+  if (*configuration == NULL)
+    *configuration = stored;
+  cai_config_close(bootstrap);
+  free(scratch);
+  return rc;
+}
+
+int cai_cli_configure_bootstrap_at(int argc, char *const *argv,
+                                   cai_cli_options *options,
+                                   cai_config **configuration,
+                                   const cai_app_config *application,
+                                   const cai_config_context *startup,
+                                   cai_error *error) {
+  cai_cli_configure_at_scratch *scratch = calloc(1U, sizeof(*scratch));
+  cai_config *bootstrap = NULL, *host = NULL;
+  int rc;
+  *configuration = NULL;
+  if (scratch == NULL)
+    return nomem(error, "allocate bootstrap configuration");
+  rc = cai_cli_configure_at_with_scratch(argc, argv, options, &bootstrap,
+                                         application, startup, error, scratch,
+                                         NULL, 1, NULL);
+  if (rc == 1) {
+    if (cai_cli_agent_bootstrap_configuration(bootstrap, startup, &host,
+                                              error) != CAI_OK)
+      rc = -1;
+    else {
+      memset(scratch, 0, sizeof(*scratch));
+      rc = cai_cli_configure_at_with_scratch(argc, argv, options, configuration,
+                                             application, startup, error,
+                                             scratch, host, 1, NULL);
+      if (*configuration == NULL)
+        *configuration = host;
+    }
+    cai_config_close(bootstrap);
+  } else
+    *configuration = bootstrap;
   free(scratch);
   return rc;
 }

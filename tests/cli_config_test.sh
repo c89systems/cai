@@ -57,6 +57,10 @@ run --no-config --pouch-key-file local.key --lockd "pouch://$root/key-local" --l
 run --config "$root/key-config/config.ini" --pouch-key-file "$root/absolute.key" --lockd "pouch://$root/key-absolute" --list; ok
 [[ -s "$root/absolute.key" ]]
 run --list; ok
+[[ ! -e "$config" ]]
+mkdir -p -m 700 "$(dirname "$config")"
+run --dump-config "$config"; ok
+chmod 600 "$config"
 [[ $(stat -c %a "$config") == 600 && $(stat -c %a "$(dirname "$config")") == 700 ]]
 contains "$config" '# model = "gpt-6-luna"'
 contains "$config" '# config_env_has_precedence = false'
@@ -88,18 +92,19 @@ absent "$config" '[response]'; absent "$config" '[session_limits]'
 printf '[paths]\n' >"$root/uncommented.ini"
 sed -n 's/^# \(config_dir\|agents_md\|skills_dir\|export_dir\) = /\1 = /p' "$config" >>"$root/uncommented.ini"
 run --config "$root/uncommented.ini" --list; ok
-run --config-dir "$root/custom-config" --list; ok
+mkdir -m 700 "$root/custom-config"
+run --config-dir "$root/custom-config" --dump-config "$root/custom-config/config.ini"; ok
 contains "$root/custom-config/config.ini" "# agents_md = \"$root/custom-config/AGENTS.md\""
 contains "$root/custom-config/config.ini" "# skills_dir = \"$root/custom-config/skills\""
 (
   unset XDG_CONFIG_HOME XDG_DATA_HOME
-  run --config "$root/fallback.ini" --list; ok
+  run --dump-config "$root/fallback.ini"; ok
   contains "$root/fallback.ini" "# agents_md = \"$root/.config/cai/AGENTS.md\""
   contains "$root/fallback.ini" "# export_dir = \"$root/.local/share/cai/exports\""
 )
 (
   export XDG_CONFIG_HOME=relative XDG_DATA_HOME=relative
-  run --config "$root/relative-xdg.ini" --list; ok
+  run --dump-config "$root/relative-xdg.ini"; ok
   contains "$root/relative-xdg.ini" "# config_dir = \"$root/.config/cai\""
   contains "$root/relative-xdg.ini" "# export_dir = \"$root/.local/share/cai/exports\""
 )
@@ -108,12 +113,13 @@ base=("$cli" -C "$work")
 # Empty store selectors must fail before model requests, never at strcmp().
 (
   ulimit -c 0
-  for selector in sessions_store auth_store messaging_store; do
+  for selector in agents_store sessions_store auth_store messaging_store; do
     printf '[storage]\n%s = ""\n' "$selector" >"$root/empty-store.ini"
     extra=(-p custom --endpoint "$endpoint" -m fixture)
     if [[ "$selector" == auth_store ]]; then extra=(-p chatgpt); fi
     run --config "$root/empty-store.ini" "${extra[@]}" --messaging -Nni never
-    [[ "$rc" == 1 ]]; contains "$root/stderr" 'invalid store name'
+    [[ $rc == 2 ]]
+    contains "$root/stderr" 'invalid store name'
     [[ ! -s "$root/stdout" && $(requests) == 0 ]]
   done
 )
@@ -148,7 +154,7 @@ tail -1 "$root/peer/headers.jsonl" >"$root/header"
 json "$root/header" '.["Authorization"] == "Bearer normal-env-key"'
 write_config true
 plan '{"plan":["ConfigPriorityDone"]}'
-run -Nni first; ok
+run --state-dir "$root/priority-state" -Nni first; ok
 tail -1 "$root/peer/headers.jsonl" >"$root/header"
 json "$root/header" '.["Authorization"] == "Bearer config-key-secret"'
 plan '{"plan":["CliOverridesDone","SavedSettingsDone"]}'
@@ -183,5 +189,5 @@ run --config "$root/alternate.ini" --export "$id"; ok
 run --no-config --config "$root/alternate.ini" --list
 [[ "$rc" == 2 ]]; contains "$root/stderr" 'mutually exclusive'
 rm -rf "$root/strict"
-(umask 222; run --config "$root/strict/config.ini" --list; ok)
-[[ $(stat -c %a "$root/strict/config.ini") == 600 && $(stat -c %a "$root/strict") == 700 ]]
+run --config "$root/strict/config.ini" --list; bad
+[[ ! -e "$root/strict" ]]

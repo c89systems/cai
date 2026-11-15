@@ -46,6 +46,7 @@ peer_rc=0; wait "$terminal_pid" || peer_rc=$?; terminal_pid=
 [[ -z $(find "$runtime_root" -name 'ws-*.info' -print -quit) ]]
 
 # A temporary interactive run uses this same public owner/socket composition.
+export CAI_RUN_TEMP=1
 # The caller retains the original configuration/environment; private storage
 # and discovery disappear only after the terminal and owner have both ended.
 unset CAI_RUN_FAIL_START

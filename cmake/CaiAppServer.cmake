@@ -14,7 +14,7 @@ add_library(cai_app_server_objects OBJECT cli/server.c cli/identity.c cli/app_co
   cli/export_job.c
   cli/quota_refresh.c cli/session_commands.c cli/workspace_claims.c cli/log.c
   cli/log_environment.c cli/documents.c cli/messages.c cli/message_names.c
-  cli/todo.c cli/stores.c cli/temp.c cli/replay.c)
+  cli/todo.c cli/stores.c cli/agents.c cli/temp.c cli/replay.c)
 foreach(target cai_app_owner_objects cai_app_server_objects)
   target_link_libraries(${target} PRIVATE ${_cai_internal_link_target} lockdc::static pslog::pslog_static)
   if(TARGET cai_context_static)

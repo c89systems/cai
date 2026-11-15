@@ -20,4 +20,15 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
                          cai_config **configuration,
                          const cai_app_config *application,
                          const cai_config_context *startup, cai_error *error);
+/** Production bootstrap + stored-agent resolution. The parser above remains
+ * usable independently for bootstrap diagnostics and configuration utilities.
+ * Agent behavior is loaded from the repository; only host settings use env. */
+int cai_cli_configure_agent_at(int argc, char *const *, cai_cli_options *,
+                               cai_config **, const cai_app_config *,
+                               const cai_config_context *, cai_error *);
+/** Host/attachment configuration only: no repository or session store opens,
+ * no automatic INI creation, and seed values do not constrain a live owner. */
+int cai_cli_configure_bootstrap_at(int argc, char *const *, cai_cli_options *,
+                                   cai_config **, const cai_app_config *,
+                                   const cai_config_context *, cai_error *);
 #endif

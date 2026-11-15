@@ -8,8 +8,9 @@ fixture=$(mktemp -d "$build_dir/cli-providers.XXXXXX")
 trap 'rm -rf "$fixture"' EXIT
 mkdir -p "$fixture/home/.codex" "$fixture/state" "$fixture/work"
 export HOME="$fixture/home" XDG_STATE_HOME="$fixture/state" XDG_CACHE_HOME="$fixture/cache"
-export XDG_CONFIG_HOME="$fixture/config" CAI_INSECURE=true
+export XDG_CONFIG_HOME="$fixture/config"
 mkdir -p "$XDG_CONFIG_HOME/cai"
+printf '[agent]\ninsecure=true\n' >"$XDG_CONFIG_HOME/cai/config.ini"
 cat > "$XDG_CONFIG_HOME/cai/models.json" <<'JSON'
 {"models":[{"provider":"berget","id":"zai-org/GLM-5.3-Flash","context_window_tokens":131072}]}
 JSON

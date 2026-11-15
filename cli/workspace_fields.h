@@ -24,6 +24,7 @@
   X("storage", "todo_namespace", todo_namespace, 's') \
   X("storage", "messages_namespace", messages_namespace, 's') \
   X("storage", "sessions_store", sessions_store, 's') \
+  X("storage", "agents_store", agents_store, 's') \
   X("storage", "auth_store", auth_store, 's') \
   X("storage", "messaging_store", messaging_store, 's') \
   X("storage", "context_store", context_store, 's') \

@@ -106,7 +106,7 @@ terminal_close
 # A saturated runtime queue leaves additional steering in Softline, rather
 # than losing the input or aborting the active stream.
 printf '[client]\napi_protocol=%s\n[runtime]\nsteering_queue_limit=1\n' "$protocol" >"$root/protocol.ini"
-terminal_start -N
+terminal_start -N --state-dir "$root/steering-limited"
 before=$(requests)
 plan "$(jq -n --argjson chat "$chat" '{chat:$chat,plan:[
   {pause:true,pause_text:"CapacityBegin\n\n",text:"CapacityEnd"},"CapacityNext","CapacityDone"
@@ -210,19 +210,18 @@ if [[ "$protocol" == responses ]]; then
   [[ $(requests) == $((before+4)) ]]
   terminal_close
 
-  # Disable through INI, env, or CLI; input stays a parent turn. An explicit
-  # enabling flag overrides both inherited settings.
-  for setting in ini env flag override; do
+  # Disable through stored configuration or CLI; input stays a parent turn.
+  # An explicit enabling flag overrides stored settings.
+  for setting in ini flag override; do
     printf '[client]\napi_protocol=responses\n[agent]\nsubagent_steering=%s\n' \
       "$([[ "$setting" == ini || "$setting" == override ]] && echo false || echo true)" >"$root/protocol.ini"
     unset CAI_SUBAGENT_STEERING
     extra=()
     case "$setting" in
-      env) export CAI_SUBAGENT_STEERING=false ;;
       flag) extra=(--no-subagent-steering) ;;
       override) export CAI_SUBAGENT_STEERING=false; extra=(--subagent-steering) ;;
     esac
-    terminal_start -N "${extra[@]}"
+    terminal_start -N --state-dir "$root/steering-$setting" "${extra[@]}"
     before=$(requests)
     result=ParentSettingsDone
     if [[ "$setting" == override ]]; then result=$report; fi

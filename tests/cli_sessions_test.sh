@@ -18,7 +18,9 @@ session_cleanup() {
 }
 trap session_cleanup EXIT
 mkdir -p "$fixture/home" "$fixture/work-a" "$fixture/work-b" "$fixture/state"
-export HOME="$fixture/home" XDG_CONFIG_HOME="$fixture/config" XDG_STATE_HOME="$fixture/state" XDG_CACHE_HOME="$fixture/cache" XDG_DATA_HOME="$fixture/data" OPENAI_API_KEY=fixture CAI_INSECURE=true CAI_MCP=false
+export HOME="$fixture/home" XDG_CONFIG_HOME="$fixture/config" XDG_STATE_HOME="$fixture/state" XDG_CACHE_HOME="$fixture/cache" XDG_DATA_HOME="$fixture/data" OPENAI_API_KEY=fixture
+mkdir -p "$XDG_CONFIG_HOME/cai"
+printf '[agent]\ninsecure=true\nmcp=false\n' >"$XDG_CONFIG_HOME/cai/config.ini"
 
 first=$(printf '/status\n/resume\n/quit\n' | "$cli" -p openai -N -C "$fixture/work-a")
 [[ "$first" == *"Status"* ]]

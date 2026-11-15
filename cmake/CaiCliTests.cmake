@@ -786,6 +786,18 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_completions_test.sh"
       "$<TARGET_FILE:cai_cli_mock_fixture>")
     set_tests_properties(cai_cli_completions PROPERTIES TIMEOUT 30)
+    add_test(NAME cai_cli_stored_agents COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_stored_agents_test.sh"
+      "$<TARGET_FILE:cai_cli>")
+    set_tests_properties(cai_cli_stored_agents PROPERTIES TIMEOUT 60)
+    add_executable(cai_stored_agents_test tests/stored_agents_test.c
+      $<TARGET_OBJECTS:cai_cli_storage_fixture>)
+    target_link_libraries(cai_stored_agents_test PRIVATE cai_cli_support)
+    target_link_options(cai_stored_agents_test PRIVATE "-Wl,--wrap=lc_client_open")
+    cai_configure_cli_target(cai_stored_agents_test)
+    target_compile_options(cai_stored_agents_test PRIVATE -UNDEBUG)
+    add_test(NAME cai_stored_agents COMMAND cai_stored_agents_test "${CMAKE_CURRENT_BINARY_DIR}")
+    set_tests_properties(cai_stored_agents PROPERTIES TIMEOUT 15 LABELS "unit;local;offline")
     add_test(NAME cai_cli_remote_completions COMMAND bash
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_completions_test.sh"
       "$<TARGET_FILE:cai_cli>" remote "$<TARGET_FILE:cai_app_terminal_host>")
@@ -1029,6 +1041,7 @@
     get_property(_cai_cli_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
     list(FILTER _cai_cli_targets INCLUDE REGEX "^cai_cli($|_)|^cai_terminal_peer$")
     add_custom_target(cai_cli_tests DEPENDS ${_cai_cli_targets})
+    add_dependencies(cai_cli_tests cai_stored_agents_test)
     add_dependencies(cai_cli_tests cai_instruction_writer_test)
     add_dependencies(cai_cli_tests cai_handover_test)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

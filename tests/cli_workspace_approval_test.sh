@@ -41,13 +41,12 @@ run -C "$work/sub/deep" -Nni descendant; ok
 run -C "$work-sibling" -Nni denied_sibling; bad
 ln -s "$work-sibling" "$work/escape"
 run -C "$work/escape" -Nni denied_symlink; bad
-plan '{"plan":["ENV BYPASS"]}'
-CAI_INSECURE=true run -C "$work-sibling" -Nni env_bypass; ok
+CAI_INSECURE=true run -C "$work-sibling" -Nni env_bypass; bad
 run -C "$work-sibling" -ni still_unapproved; bad
 printf '[agent]\ninsecure=true\n' >"$root/insecure.ini"
 plan '{"plan":["INI BYPASS"]}'
-run --config "$root/insecure.ini" -C "$work-sibling" -Nni ini_bypass; ok
-run --config "$root/insecure.ini" --no-insecure -C "$work-sibling" -ni denied_override; bad
+run --state-dir "$root/insecure-state" --config "$root/insecure.ini" -C "$work-sibling" -Nni ini_bypass; ok
+run --state-dir "$root/insecure-state" --config "$root/insecure.ini" --no-insecure -C "$work-sibling" -ni denied_override; bad
 # --yes and --force are interchangeable; -k dominates and never saves approval.
 plan '{"plan":["FORCE BYPASS"]}'
 run --force -k -C "$work-sibling" -Nni no_save; ok

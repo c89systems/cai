@@ -76,7 +76,7 @@ network_tools = false
 disable_event_stream_listener = false
 ```
 
-Each setting has an application-prefixed environment variable, such as `CAI_PROMPT_LISTENER`, `CAI_SIMULATE_TYPING_MS`, `CAI_EVENT_MULTICAST` and `CAI_NETWORK_TOOLS`. The corresponding flags use hyphens; the delay flag is `--simulate-typing [MS]`. Boolean settings have the ordinary positive/negative flag forms. `cai --dump-config` describes the complete settings. An empty listener or multicast destination disables it; use `auto` in configuration to request automatic group allocation. Headless backends ignore inherited UI listener settings; explicit listener flags require a Softline frontend.
+Server bootstrap settings accept application-prefixed environment variables, including `CAI_EVENT_MULTICAST`. Listener, typing and network-tool settings belong to the stored agent definition. The corresponding flags use hyphens; the delay flag is `--simulate-typing [MS]`. Boolean settings have the ordinary positive/negative flag forms. `cai --dump-config` describes the complete settings. An empty listener or multicast destination disables it; use `auto` in configuration to request automatic group allocation. Headless backends ignore inherited UI listener settings; explicit listener flags require a Softline frontend.
 
 ## Embedding
 

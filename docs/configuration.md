@@ -2,16 +2,23 @@
 
 ## Configuration sources
 
-CAI creates `${XDG_CONFIG_HOME:-$HOME/.config}/cai/config.ini` on first startup (help/version do not create it).
-The private file is the configuration reference: each supported setting includes its description and commented default.
+The local `${XDG_CONFIG_HOME:-$HOME/.config}/cai/config.ini` is bootstrap configuration and the initial seed for the stored `default` agent. Normal startup does not create or rewrite this file. Without it, existing XDG storage defaults apply.
+Use `--dump-config FILE` to explicitly generate a reference template: each supported setting includes its description and commented default.
 Explanatory comments start with `##`; setting assignments start with `#` so removing one marker selects the value explicitly.
 Automatic global instruction, skills and export paths are shown as resolved at template creation.
 Leaving them commented retains automatic lookup on subsequent starts; an empty value has the field-specific discovery, inheritance or unset meaning documented beside that setting.
 Existing files are never rewritten.
-`-c FILE`/`--config FILE` selects another file; `--no-config` skips creation and loading.
+`-c FILE`/`--config FILE` selects another file; `--no-config` skips disk bootstrap/seed loading while retaining stored-agent resolution.
 `--config-dir DIR` also selects `DIR/config.ini`.
-Startup configuration is read from these files and CLI/environment inputs, not from pouch storage.
-Restart CAI after editing the configuration.
+Agent startup loads `<namespace-prefix>.agents/agent.default` through liblockdc. Metadata identifies the agent; its `config.ini` attachment holds agent behavior. If the agent is absent, CAI initializes it once from the valid seed configuration without triggering provider login. Concurrent initializers publish one complete definition. Later disk edits do not replace stored agent behavior.
+
+Bootstrap fields stay local: named store definitions and selections, storage namespaces/compression, application paths needed before opening storage, workspace-server settings, temporary-run selection, and runtime session identity/ownership settings. A stored attachment containing these fields is rejected. Agent and session stores default to `default` and share one client when they identify the same backend. Selecting a different agent store leaves session history in its configured session store.
+
+An explicit `-s` attachment uses the running backend's agent and opens no local agent or session store. Attachment adapters project only bootstrap settings from disk; agent seed values cannot become requirements on an existing owner. Explicit invocation/embedding overrides still participate in compatibility checks. Temporary runs keep using the persistent agent repository while placing their journals in the private temporary session store.
+
+Explicit CLI and embedding settings override stored agent behavior without being persisted into the initial definition. Only declared INI values seed the attachment; automatic optional paths are rediscovered at startup. Explicit seed paths are resolved against their original file before publication. Application-prefixed environment settings select bootstrap fields only; they no longer override stored model, reasoning, themes, tools or other agent behavior. Explicit API-key environment lookup and the stored `[env]` block remain available. `LOG_*` stays independent; local `[env] LOG_*` entries configure logging without becoming agent behavior.
+
+The bootstrap file must remain valid INI. Its non-bootstrap values are seeds, not live overrides. This is the first storage milestone: named-agent creation/selection, the builder, editing utilities, bundled instruction/resources and moving native provider credentials into agent objects are specified in [stored agents](stored-agents.md) and are not implemented yet. Existing provider authentication continues to use the configured authentication store.
 Global instruction files are loaded again when a session runtime opens, including on replay; saved session state does not replace those files.
 Resuming restores the saved model and reasoning settings unless explicitly overridden by startup flags.
 Paths accept `~/` and are relative to the configuration file.
@@ -20,11 +27,11 @@ Existing process variables, including empty ones, win unless the global `config_
 Environment values are applied before authentication, logging and worker startup; templates do not copy credentials or environment assignments.
 Path defaults may reflect the current XDG roots, HOME or explicit `--config-dir`.
 
-Configuration precedence is explicit command line, environment, INI, then built-in defaults.
+For agent behavior, precedence is explicit command line/embedding settings, stored configuration, then built-in defaults. For bootstrap fields, explicit command line overrides the bootstrap environment and INI configuration.
 Saved model/reasoning settings are restored on resume unless explicitly overridden.
 Use the generated template for the complete current setting descriptions; this guide does not duplicate that catalog.
 Base prompt files, offline dumps and parent-only overrides are described in [developer instructions](runtime.md#base-developer-instructions).
-The optional chart guide is included by default. Set `[agent] disable_chart_instructions = true`, `CAI_DISABLE_CHART_INSTRUCTIONS=true` or `--no-chart-instructions` to omit it; `--chart-instructions` explicitly includes it. Charts remain on demand unless the user requests ongoing chart use.
+The optional chart guide is included by default. Set `[agent] disable_chart_instructions = true` in the seed configuration or use `--no-chart-instructions` to omit it; `--chart-instructions` explicitly includes it. Charts remain on demand unless the user requests ongoing chart use.
 
 ```sh
 cai --dump-config
@@ -33,7 +40,7 @@ cai -c ./config.ini
 cai --no-config
 ```
 
-`cai --dump-config [FILE]` writes the same documented, commented defaults template generated at startup.
+`cai --dump-config [FILE]` writes a documented, commented defaults template without starting an agent.
 Omit FILE to write to stdout.
 An existing output file is overwritten; its parent directory must exist.
 This utility does not load the selected config, copy secrets or explicit settings, create the normal config, or open storage.
@@ -55,7 +62,7 @@ cai --home ./agent-home -c ./policies/cai.ini
 `[paths] home_dir` selects the same root from an INI file.
 CLI/environment/home embedding fields can select the root before config discovery; a home value read from INI affects derived paths without moving, rewriting or loading another config file.
 `-c FILE` and `CAI_CONFIG` keep their explicit selection.
-`--no-config` still honors `--home` while skipping config creation/loading.
+`--no-config` still honors `--home` while skipping disk bootstrap loading. It does not disable the stored-agent repository.
 `--runtime-dir`, `CAI_RUNTIME_DIR` or `[paths] runtime_dir` overrides the runtime root.
 Without a unified home, existing XDG defaults apply.
 Relative CLI home paths are anchored to the workspace selected by `-C`; INI paths remain relative to their config file.
@@ -64,7 +71,7 @@ An embedding app named `smith` uses `SMITH_HOME` and the same directory layout, 
 
 ## Named stores
 
-Named stores separate session, authentication, and messaging backends:
+Named stores separate agent definitions, session history, authentication, and messaging backends:
 
 ```ini
 [store.default]
@@ -77,12 +84,13 @@ key_file = "/srv/agents/pouch.key"
 
 [storage]
 sessions_store = default
+agents_store = default
 auth_store = default
 messaging_store = team
 ```
 
 All role selections default to `default`.
-The matching flags are `--sessions-store`, `--auth-store`, and `--messaging-store`; environment aliases are `CAI_SESSIONS_STORE`, `CAI_AUTH_STORE`, and `CAI_MESSAGING_STORE`.
+The matching flags are `--agents-store`, `--sessions-store`, `--auth-store`, and `--messaging-store`; environment aliases are `CAI_AGENTS_STORE`, `CAI_SESSIONS_STORE`, `CAI_AUTH_STORE`, and `CAI_MESSAGING_STORE`.
 `--lockd` / `CAI_LOCKD` and `--pouch-key-file` / `CAI_POUCH_KEY_FILE` override the default store.
 Each named pouch store requires its own explicit `key_file`; new roots generate it, while existing roots require their existing key.
 HTTP(S) stores accept `client_pem` and do not use a local pouch key.
@@ -110,7 +118,7 @@ Imports and model output cannot grant approval.
 Help, listing, export, login, and standalone message delivery do not require approval.
 
 `-k` / `--insecure` bypasses this gate for one invocation and allows automatic local instruction loading without saving approval, even with `--yes`.
-It also accepts `[agent] insecure = true` or `CAI_INSECURE=true` (using the configured application environment prefix).
+It also accepts `[agent] insecure = true` in the stored agent definition.
 `--no-insecure` overrides those defaults.
 This setting does not change TLS verification or the execution sandbox.
 Approval follows canonical directory ancestry: siblings and symlinks resolving outside the approved tree do not inherit it.
@@ -121,9 +129,8 @@ An old session does not implicitly approve its workspace.
 ## Execution policy
 
 `--yolo` disables local tool confinement and command environment filtering; `--no-yolo` restores the default restricted mode.
-Set `CAI_YOLO=true` or `[agent] yolo = true` in config.ini for the same behavior.
-Precedence is CLI, environment, configuration, then the built-in default `false`.
-Embedded apps use their configured environment prefix (for example, `SMITH_YOLO`).
+Set `[agent] yolo = true` in the initial agent configuration for the same behavior.
+Precedence is explicit CLI/embedding settings, stored agent configuration, then the built-in default `false`.
 In the TUI, `/yolo` reports the current policy and `/yolo on` or `/yolo off` changes it once active turns, subagents and terminal commands finish.
 Pending changes remain editable in Softline and appear in `/status`.
 This does not write configuration or save the policy in session history.

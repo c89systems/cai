@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "run_frontend.h"
+#include "agents.h"
 #include "batch.h"
 #include "config.h"
 #include "error.h"
@@ -134,8 +135,9 @@ int cai_cli_run_frontend(const cai_app_config *application,
     r->configuration = resolved->configuration;
     parsed = 1;
   } else
-    parsed = cai_cli_configure_at(argc, argv, &r->options, &r->configuration,
-                                  application, &r->startup, &r->error);
+    parsed =
+        cai_cli_configure_agent_at(argc, argv, &r->options, &r->configuration,
+                                   application, &r->startup, &r->error);
   if (parsed > 0 && cai_cli_theme_validate(&r->options, &r->error) != CAI_OK)
     parsed = -1;
   if (parsed <= 0 || !agent_mode(&r->options)) {
@@ -215,6 +217,9 @@ int cai_cli_run_frontend(const cai_app_config *application,
                                                 : "terminal attachment failed");
   *exit_code = code != 0 ? code : r->code;
 done:
+  /* A plain temporary-workspace confirmation must not retain the persistent
+   * repository's SDK workers after the controller and terminal have ended. */
+  cai_cli_agent_configuration_detach(r->configuration);
   if (r->temporary.parent_fd >= 0) {
     cai_error cleanup;
     int kept = 0, cleanup_rc, stopped;

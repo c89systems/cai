@@ -19,7 +19,7 @@ Saved prompts, assistant text and concise execution summaries replay without rep
 Interactive prompt recall uses Softline's custom backend hooks and encrypted `prompts.<session-id>` collections in the configured sessions namespace, beside the session journal.
 It shares the session store's Pouch client and key; there are no plaintext `.history` files or separate history-directory settings.
 Recall loads only the newest 200 entries by default, oldest first, through a bounded collection range.
-Configure recall and the native stored-entry cap with `--prompt-history-limit`, `CAI_PROMPT_HISTORY_LIMIT`, or `[ui] prompt_history_limit` (also accepted through C/Lua application settings).
+Configure recall and the native stored-entry cap with `--prompt-history-limit` or the stored `[ui] prompt_history_limit` setting (also accepted through C/Lua application settings).
 Zero disables recall and recording and clears the stored count cap without deleting saved prompts.
 `/history` shows the current window; `/history COUNT` changes it for this app invocation.
 Liblockdc's existing maintenance worker lazily removes the oldest entries beyond `max_entries`; appends never scan or trim prompts synchronously.
@@ -38,7 +38,7 @@ Empty drafts add nothing; an identical last entry is not duplicated.
 If saving fails, CAI stays open with the draft intact and reports the error.
 
 Console replay defaults to the newest 10 whole turns.
-Use `--replay-turns N`, `CAI_REPLAY_TURNS` or `[ui] replay_turns`; `0` hides replay and `-1` displays all history.
+Use `--replay-turns N` or the stored `[ui] replay_turns` setting; `0` hides replay and `-1` displays all history.
 Replay does not repeat tool effects.
 This display limit does not remove model context or export data.
 
@@ -46,7 +46,7 @@ This display limit does not remove model context or export data.
 
 Session journals have a default **30-day inactivity retention**, enforced by liblockdc on the whole `events.<session-id>` collection and its session metadata.
 Every successful append renews the deadline; individual journal entries have no separate expiry.
-Configure the default through `--conversation-retention-days`, `CAI_CONVERSATION_RETENTION_DAYS`, or `[storage] conversation_retention_days` (also accepted through C/Lua settings).
+Configure the default through `--conversation-retention-days` or the stored `[storage] conversation_retention_days` setting (also accepted through C/Lua settings).
 Zero disables expiry.
 `/retention` shows the active session's policy; `/retention DAYS` persists its override, and `/retention 0` or `/retention off` keeps it forever.
 Changing it waits for a whole-turn boundary through Softline.

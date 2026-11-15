@@ -69,6 +69,7 @@ typedef struct cai_cli_pouch {
   char ownership_error[512];
   char program_name[33], queue_prefix[33];
   char sessions_namespace[129], auth_namespace[129], scopes_namespace[129];
+  char agents_namespace[129];
   char todo_namespace[129], messages_namespace[129];
   cai_agent_session_store store;
   cai_blob_store credentials;
@@ -235,6 +236,11 @@ const cai_todo_store_callbacks *cai_cli_pouch_todo_callbacks(void);
  * Trimmed content is excluded; no inference or tool execution. */
 int cai_cli_pouch_export(cai_cli_pouch *pouch, const char *id, cai_sink *sink,
                          cai_error *error);
+/** Atomically initialize default once, then stream its configuration
+ * attachment. Normal reads acquire no state lease. Existing malformed agents
+ * fail closed. */
+int cai_cli_pouch_default_agent(cai_cli_pouch *, cai_cli_producer, void *,
+                                cai_source **, cai_error *);
 int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
                          const char *workspace, char *id, size_t capacity,
                          cai_error *error);

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "attach.h"
+#include "agents.h"
 #include "batch.h"
 #include "config.h"
 #include "error.h"
@@ -229,8 +230,8 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
   int rc;
   *exit_code = 1;
   *diagnostic_presented = 0;
-  rc = cai_cli_configure(argc, argv, &options, &configuration, application,
-                         error);
+  rc = cai_cli_configure_agent_at(argc, argv, &options, &configuration,
+                                  application, NULL, error);
   if (rc > 0 && cai_cli_theme_validate(&options, error) != CAI_OK)
     rc = -1;
   if (rc <= 0) {
@@ -264,6 +265,9 @@ int cai_cli_attach_run(const cai_app_config *application, int argc, char **argv,
     }
     goto done;
   }
+  /* A fresh child constructs its own app/client. Never fork with bootstrap
+   * liblockdc maintenance or lease-renewal workers still alive. */
+  cai_cli_agent_configuration_detach(configuration);
   if (rc == CAI_OK)
     rc = cai_cli_private_directory(options.runtime_dir, error);
   if (rc == CAI_OK)

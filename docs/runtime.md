@@ -79,7 +79,7 @@ cai -p chatgpt -m gpt-6.1-sol -r high -d ./new_agent
 The filename prefix comes from the identity: ASCII letters are lowercased, spaces become underscores, and characters other than letters, digits and underscores are removed.
 For example, `--identity 'My Agent (Rev)'` produces `my_agent_rev_developer_instructions.md`.
 Existing files are refused rather than overwritten; a failed pair is removed without changing existing files.
-Provider, model and reasoning selection follows normal CLI/environment/config/default precedence; the dump does not restore a saved session's settings.
+Provider, model and reasoning selection follows explicit CLI/embedding settings, stored configuration, then built-in defaults; the dump does not restore a saved session's settings.
 Current base templates are reasoning-neutral.
 Configured prompt files, `-z` and `-I` are reflected, but automatic capability contracts, AGENTS.md, skills, MCP and subagent discovery are excluded.
 
@@ -91,7 +91,7 @@ The long spelling for `-I` is now `--add-developer-instructions`.
 
 libcai_app includes a short libmdf chart guide after the base prompt and before `-I` additions and automatic discovery. It gives CSV-fence examples for horizontal bars (`mdf-horizontal-bar-chart`, also `mdf-bar-chart`), vertical bars (`mdf-vertical-bar-chart`) and part-of-whole stacked bars (`mdf-tile-chart`). The agent is instructed to use charts on request, including standing user instructions, rather than charting ordinary numeric results. The guide also appears in instruction dumps and reconstructed exports, and is inherited by child agents.
 
-Use `--no-chart-instructions`, `CAI_DISABLE_CHART_INSTRUCTIONS=true`, or `[agent] disable_chart_instructions = true` to omit it. The default is false (include the guide); `--chart-instructions` explicitly includes it. This controls developer guidance, while libmdf can still render chart fences. The setting belongs to the workspace server's startup policy.
+Use `--no-chart-instructions` or `[agent] disable_chart_instructions = true` to omit it. The default is false (include the guide); `--chart-instructions` explicitly includes it. This controls developer guidance, while libmdf can still render chart fences. The setting belongs to the workspace server's startup policy.
 
 Configure reusable defaults separately for ordinary agents and reviewers:
 
@@ -104,11 +104,10 @@ developer_instructions = Additional developer guidance
 developer_instructions_file = ./reviewer.md
 ```
 
-`CAI_DEVELOPER_INSTRUCTIONS_FILE` and `CAI_REVIEWER_INSTRUCTIONS_FILE` override those defaults.
-The section-qualified spellings `CAI_AGENT_DEVELOPER_INSTRUCTIONS_FILE` and `CAI_REVIEW_DEVELOPER_INSTRUCTIONS_FILE` also work.
+These values are retained in the stored agent configuration. Explicit `-z` and embedding settings can override them for an invocation.
 INI filenames resolve against the configuration directory; `-z` resolves against the selected original workspace, including with `--temp`.
 Explicit files must be regular, NUL-free text of at most 1 MiB; an empty file selects an empty base.
-`[agent] initial_developer_instructions_file` (or `CAI_AGENT_INITIAL_DEVELOPER_INSTRUCTIONS_FILE`) supplies the same initial-parent-only setting as `-z`.
+`[agent] initial_developer_instructions_file` supplies the same initial-parent-only setting as `-z`.
 Running owners retain their startup instruction policy; incompatible explicit startup overrides are rejected rather than silently ignored.
 `--review -z FILE` requires a new workspace owner; when a server is already running, stop it and retry so the initial reviewer override cannot be silently lost or reused for later reviews.
 

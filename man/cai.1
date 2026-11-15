@@ -37,7 +37,7 @@ Receive one UTF-8 prompt per TCP connection in the Softline frontend.
 Normal EOF submits; invalid input, reset or cancellation discards the receipt.
 An existing local draft is preserved and complete input enters the turn queue.
 PORT, :PORT and HOST:PORT are supported; omitted hosts bind only to loopback.
-Disabled by default. Configure [ui] prompt_listener or CAI_PROMPT_LISTENER.
+Disabled by default. Configure the stored [ui] prompt_listener setting.
 .TP
 .BI \-\-prompt-advertise " ADDRESS"
 Advertise a usable reply endpoint. Wildcard binds require this explicit setting
@@ -84,7 +84,7 @@ Disable local multicast loopback. Default false.
 .TP
 .B \-\-network-tools
 Enable network_list, prompt_listener_info and frontend-owned prompt_send.
-Disabled by default. Configure [agent] network_tools or CAI_NETWORK_TOOLS.
+Disabled by default. Configure the stored [agent] network_tools setting.
 .TP
 .B \-\-disable-event-stream-listener
 Disable the otherwise available on-demand event_stream_listen agent tool.
@@ -128,7 +128,7 @@ prepends the provider. Aliases: context=ctx,
 directory/folder/workspace=dir, w=weekly, credits=crd. Duplicate fields keep
 their first position. Names are lowercase. Unavailable values are hidden;
 yolo displays only YOLO while enabled. weekly includes shorter quota windows
-or the API cost estimate. Also CAI_STATUS_FIELDS or [ui] status_fields.
+or the API cost estimate. Also the stored [ui] status_fields setting.
 .TP
 .B \-\-dump-config [FILE]
 Write the documented, commented defaults template to FILE, or stdout if
@@ -155,7 +155,7 @@ without a home it uses XDG_RUNTIME_DIR/cai, falling back to cache_dir.
 .BI \-\-replay-turns " N"
 Limit console replay to the newest N whole turns or standalone shell entries
 (default 10). Steering and tools do not count separately. Zero suppresses
-console replay; -1 shows all history. Also CAI_REPLAY_TURNS or [ui] replay_turns.
+console replay; -1 shows all history. Also the stored [ui] replay_turns setting.
 Applies to startup and /resume. A notice indicates omitted earlier turns.
 The complete retained session still loads into the agent; exports, logs
 and host replay callbacks are unaffected.
@@ -176,10 +176,11 @@ Equivalent explicit approval flags. Delete a temporary workspace without
 asking, including on failure; with --install-skill replace an existing package.
 Requires --temp or --install-skill. Replaces the former --replace spelling.
 .TP
-.BR \-\-sessions-store " NAME, " \-\-auth-store " NAME, " \-\-messaging-store " NAME"
+.BR \-\-agents-store " NAME, " \-\-sessions-store " NAME, " \-\-auth-store " NAME, " \-\-messaging-store " NAME"
 Select named stores independently (default default). INI keys are
-[storage] sessions_store, auth_store and messaging_store; environment aliases
-are CAI_SESSIONS_STORE, CAI_AUTH_STORE and CAI_MESSAGING_STORE.
+[storage] agents_store, sessions_store, auth_store and messaging_store;
+environment aliases are CAI_AGENTS_STORE, CAI_SESSIONS_STORE, CAI_AUTH_STORE
+and CAI_MESSAGING_STORE. Selecting agents_store never redirects session history.
 [store.NAME] defines endpoint, key_file for Pouch, and optional HTTP client_pem.
 --lockd and --pouch-key-file override store.default. Different roots select
 their own keys; existing encrypted roots require the original key. Store
@@ -197,7 +198,7 @@ Aliases are synthwave:synthwave-84, plain:ascii, accent:night-owl,
 dracula:dracula, gruvbox:gruvbox, monochrome:horizon, monogreen:everforest,
 outrun:outrun-electric, riced:catppuccin-mocha, and default:default.
 For example, -t synthwave selects its pair, while -t riced:iosvkem mixes themes.
-Also configurable through CAI_THEME or [ui] theme in config.ini.
+Also configurable through the stored [ui] theme setting.
 The ascii selection is escape-free UTF-8 Markdown, not a color theme.
 NO_COLOR selects the plain prompt and disables Markdown ANSI styling.
 Themes apply to the introduction and session feed; host-supplied raw
@@ -207,9 +208,8 @@ banners stay verbatim and LOG_ settings remain independent.
 Rotate only the libmdf theme. Defaults are parent 0, ordinary child 0, reviewer 1.
 Child offsets are relative to the effective parent. Signed 64-bit integers wrap
 through the listed libmdf themes, excluding boring. Softline, ASCII and NO_COLOR
-policies are preserved. INI keys are theme_offset in [ui], [subagent], [review];
-environment aliases are CAI_THEME_OFFSET, CAI_SUBAGENT_THEME_OFFSET,
-CAI_REVIEW_THEME_OFFSET. Review exit and replay restore the parent theme.
+policies are preserved. Stored keys are theme_offset in [ui], [subagent],
+[review]. Review exit and replay restore the parent theme.
 .TP
 .BR \-\-state-dir " DIR, " \-\-cache-dir " DIR, " \-\-data-dir " DIR"
 Override individual application roots. Defaults use the matching XDG home and
@@ -230,14 +230,14 @@ encrypted Pouch root requires sharing the same key.
 .BI \-\-prompt-history-limit " COUNT"
 Prompt recall and native stored-entry cap, default 200; zero disables recall
 and recording and clears the stored count cap without deleting saved prompts.
-Configured by CAI_PROMPT_HISTORY_LIMIT or [ui] prompt_history_limit, also exposed
+Configured by the stored [ui] prompt_history_limit setting, also exposed
 through C/Lua settings. Storage maintenance prunes oldest excess entries
 asynchronously; appends do not trim synchronously. This does not set age expiry.
 .TP
 .BI \-\-conversation-retention-days " DAYS"
 Whole session collection retention since its last append, default 30 days.
-Zero disables expiry. CAI_CONVERSATION_RETENTION_DAYS and
-[storage] conversation_retention_days configure the same default through C/Lua
+Zero disables expiry. The stored [storage] conversation_retention_days setting
+configures the same default through C/Lua
 settings as well. Individual journal entries never expire separately.
 .TP
 .BI \-\-namespace-prefix " NAME"
@@ -248,17 +248,18 @@ flags override complete namespaces; matching keys are in [storage].
 .BI \-\-queue-prefix " NAME"
 Prefix for automatic mailbox and receipt queue names (default cai). A single
 lowercase identifier, at most 32 bytes. --message-queue overrides the complete
-public mailbox name instead. Also [messaging] queue_prefix or CAI_QUEUE_PREFIX.
+public mailbox name instead. Also [messaging] queue_prefix.
 .TP
 .BR \-c , " " \-\-config " " FILE
-Load another INI configuration file, creating a documented, commented template
+Load another bootstrap/initial-agent INI configuration file. No template is created
 if it is missing. Defaults to home_dir/config/config.ini with --home;
 otherwise $XDG_CONFIG_HOME/cai/config.ini, or ~/.config/cai/config.ini.
 An explicit selection is retained even if that file configures home_dir.
 Existing files are never rewritten.
 .TP
 .B \-\-no-config
-Skip configuration loading and template creation. Incompatible with --config.
+Skip disk bootstrap/seed loading. Stored agent behavior still loads.
+Incompatible with --config.
 .TP
 .B \-\-chrome
 Enable Chrome browser tools (Smith default) through the installed ChatGPT
@@ -266,7 +267,7 @@ extension and CAI's native messaging host. Connection is lazy; an ordinary turn
 needs no connected browser. Does not install or change a host registration.
 .TP
 .B \-\-no-chrome
-Disable Chrome tools. Also configurable with CAI_CHROME or [chrome] enabled.
+Disable Chrome tools. Also configurable with the stored [chrome] enabled setting.
 .TP
 .BR \-\-web-search " / " \-\-no-web-search
 Enable/disable hosted web_search on Responses providers (default on).
@@ -279,10 +280,10 @@ document, with streamed transactional updates, rather than a todo.json file.
 .BI \-\-todo-layout " board|list"
 Kanban display layout (default board). Board columns contain bold IDs above
 italic titles capped at 28 Unicode characters, including an ellipsis when
-truncated. List retains full titles. Also CAI_TODO_LAYOUT or [ui] todo_layout.
+truncated. List retains full titles. Also the stored [ui] todo_layout setting.
 .TP
 .BI \-\-board " NAME"
-Initial kanban board (CAI_BOARD or [todo] default_board; default "default").
+Initial kanban board ([todo] default_board; default "default").
 The flag selects or creates a board and overrides the resumed selection once.
 It does not enable the optional todo tool. Each session saves its selection.
 .TP
@@ -302,7 +303,7 @@ name. Delivery ACK means durable acceptance, not user
 approval or model completion. Isolated review does not enable messaging.
 .TP
 .BI \-\-message-queue " NAME"
-Override the derived workspace mailbox name. Also CAI_MESSAGE_QUEUE or
+Override the derived workspace mailbox name. Also
 [messaging] queue_name. Names are lowercased, allow ASCII letters, digits,
 dot, underscore and hyphen, and have at most 128 characters. Empty keeps
 automatic naming. /status shows the name. The newest app start claims new
@@ -335,9 +336,8 @@ but leave incoming prompts pending for an interactive run.
 .BI \-\-message-ack-timeout-ms " MS"
 Deadline from sending to delivery ACK, default 300000 (five minutes), range
 1..86400000. Unaccepted messages expire; a missing ACK is a tool error.
-Configuration keys are [messaging] enabled, enable_auto_enqueue, ack_timeout_ms;
-environment variables are CAI_MESSAGING, CAI_ENABLE_AUTO_ENQUEUE and
-CAI_MESSAGE_ACK_TIMEOUT_MS.
+Stored configuration keys are [messaging] enabled, enable_auto_enqueue and
+ack_timeout_ms.
 .TP
 .BR \-\-searxng " / " \-\-no-searxng
 Enable/disable function-based SearXNG search (default off).
@@ -358,14 +358,10 @@ Enable/disable individual file capabilities (default on).
 Enable/disable image inspection, model goal tools and skill discovery (default
 on when the model/catalog permits). These policies also narrow review tools.
 .PP
-Tool settings use CLI > environment > INI > built-in defaults. Boolean variables
-are CAI_WEB_SEARCH, CAI_CHROME, CAI_TODO, CAI_SEARXNG, CAI_REVGEO,
-CAI_READ_FILE, CAI_LIST_FILES, CAI_APPLY_PATCH, CAI_VIEW_IMAGE, CAI_GOALS,
-CAI_SKILLS, CAI_TERMINAL, CAI_IMAGE_GENERATION, CAI_REVIEW_SUBAGENT and
-CAI_CODEX_AGENTS_MD, using true/false values. INI keys live under [agent]
-(lowercase names without CAI_) except [chrome] enabled. The existing [env]
-precedence rule is applied before resolving settings.
-CAI_SEARXNG_URL, CAI_REVGEO_URL and CAI_CHROME_SOCKET select service endpoints.
+Tool settings use explicit CLI/embedding settings, stored agent configuration,
+then built-in defaults. Boolean keys live under [agent], except [chrome]
+enabled. Service URLs are [searxng] base_url, [revgeo] base_url and [chrome]
+socket, with matching explicit flags.
 The default template documents tool-specific timeouts and limits. Isolated
 reviews omit hosted search, browser, kanban and optional service tools.
 .TP
@@ -542,7 +538,7 @@ Failed imports are not published in session lists.
 .B \-\-no-shell-context
 Keep future !COMMAND results out of model context.
 Terminal handoffs (!sh and /shell) always remain local and are never recorded.
-The positive --shell-context enables sharing. CAI_SHELL_CONTEXT and
+The positive --shell-context enables sharing. The stored
 [ui] shell_context supply startup defaults. Commands still execute with
 normal user permissions, display literal output and save only the newest
 sanitized tail that fits the replay parser limit.
@@ -550,11 +546,11 @@ Earlier shared results remain in context.
 .TP
 .BI \-\-shell-context-max-lines " N"
 Retain the last N sanitized logical lines of shell output (default 5000).
-Overrides CAI_SHELL_CONTEXT_MAX_LINES and [runtime] shell_context_max_lines.
+Overrides the stored [runtime] shell_context_max_lines setting.
 .TP
 .BI \-\-shell-context-max-bytes " N"
 Bound retained sanitized UTF-8 bytes (default 4194304, minimum 4).
-Overrides CAI_SHELL_CONTEXT_MAX_BYTES and [runtime] shell_context_max_bytes.
+Overrides the stored [runtime] shell_context_max_bytes setting.
 Old complete lines are discarded first; oversized lines retain a bounded suffix.
 .TP
 .BR \-p , " " \-\-provider " " NAME
@@ -632,11 +628,11 @@ receipt is retained for replay and export, but never sent to the model.
 .TP
 .BI \-\-normal-reasoning-effort " LEVEL"
 Normal tool mapping, default medium, independent of -r. Also
-CAI_NORMAL_REASONING_EFFORT or [agent] normal_reasoning_effort.
+the stored [agent] normal_reasoning_effort setting.
 .TP
 .BI \-\-high-reasoning-effort " LEVEL"
-High tool mapping, default high. Also CAI_HIGH_REASONING_EFFORT or
-[agent] high_reasoning_effort. CAI_REASONING_TOOL and [agent] reasoning_tool
+High tool mapping, default high. Also the stored
+[agent] high_reasoning_effort setting. [agent] reasoning_tool
 control whether the tool is enabled. Unsupported or unadvertised choices
 warn the user and return a successful no-op to the model. The task continues;
 the model is not asked to diagnose CAI. Configure valid mappings and model
@@ -645,7 +641,7 @@ metadata when the provider does not advertise its choices.
 .BI \-\-service-tier " NAME"
 Select provider routing, for example default (explicit normal), priority
 (Fast), or flex. With no selection, a saved tier resumes; new sessions leave
-routing unset. Environment CAI_SERVICE_TIER and [agent] service_tier
+routing unset. The stored [agent] service_tier setting
 configure the same setting. Account/model availability is provider-controlled.
 .TP
 .BI \-\-reasoning-summary " MODE"
@@ -705,8 +701,8 @@ horizontal-bar, vertical-bar and part-of-whole tile-chart CSV fence examples.
 Charts are requested explicitly or through standing user instructions, rather
 than added to ordinary numeric results. The guide follows the base prompt and
 precedes -I additions, appears in dumps and reconstructed exports, and is
-inherited by children. Configure [agent] disable_chart_instructions=true or
-CAI_DISABLE_CHART_INSTRUCTIONS=true to omit it. This is a server startup policy.
+inherited by children. Configure [agent] disable_chart_instructions=true
+to omit it. This is a server startup policy.
 .TP
 .BR \-z , " " \-\-developer-instructions " " FILE
 Replace the initial agent's base developer instructions with literal file
@@ -715,12 +711,12 @@ propagate to subagents or subsequent session selections. Automatic tools,
 skills and discovery additions remain enabled. Files must be regular, NUL-free
 text of at most 1 MiB. Relative CLI paths use the selected original workspace.
 Reusable defaults are [agent] developer_instructions_file and [review]
-developer_instructions_file, with CAI_DEVELOPER_INSTRUCTIONS_FILE and
-CAI_REVIEWER_INSTRUCTIONS_FILE environment overrides. INI paths are config-relative.
+developer_instructions_file in the stored definition. Seed INI paths are config-relative.
 .TP
 .BR \-d , " " \-\-dump-developer-instructions " " DIR
 Resolve provider/model/reasoning and dump both base prompts, including configured
-overrides, -z and -I, without auth, storage or automatic discovery. Creates DIR
+overrides, -z and -I, without inference, auth or automatic discovery. Loads the
+configured agent repository. Creates DIR
 recursively. Writes identity_developer_instructions.md and
 identity_reviewer_instructions.md; the filename identity is lowercase, spaces
 become underscores, and punctuation except underscores is removed. Existing
@@ -751,7 +747,7 @@ Disable the built-in reviewer.
 .TP
 .BR \-\-review-and-fix-tool " / " \-\-no-review-and-fix-tool
 Enable or disable the model's run_review_and_fix tool (default off).
-CAI_REVIEW_AND_FIX_TOOL and [agent] review_and_fix_tool configure the same
+The stored [agent] review_and_fix_tool key configures the same
 setting. Requires reviewer and goal tools. Call only when the user explicitly
 requests or permits a review/fix loop. An ordinary review request, even
 followed by a request to fix findings, does not authorize a loop. The tool
@@ -760,8 +756,8 @@ review/fix/verification as /review-and-fix; it does not launch a fixing subagent
 .TP
 .B \-\-no-subagent-steering
 Queue input for the parent instead of steering the foreground reviewer or
-subagent. Child steering is enabled by default; CAI_SUBAGENT_STEERING and
-[agent] subagent_steering configure the same policy. Steering appears in the
+subagent. Child steering is enabled by default;
+[agent] subagent_steering configures the same policy. Steering appears in the
 feed at its delivery boundary after a response or tool round, including on
 replay, rather than in the middle of streamed text.
 Softline owns pending input: Enter queues a normal next turn while busy,
@@ -1196,8 +1192,8 @@ minutes thereafter.
 .SH EXECUTION POLICY
 .B --yolo
 disables local workspace confinement, command environment filtering, and OS
-sandboxing in tools that provide it. Set CAI_YOLO=true or [agent] yolo=true in
-config.ini for the same behavior. The default is false;
+sandboxing in tools that provide it. Set [agent] yolo=true in the stored
+definition for the same behavior. The default is false;
 .B --no-yolo
 overrides configuration back to restricted mode. Reviewers and subagents
 inherit the policy. HOME and all XDG_* variables are preserved in both modes.
@@ -1281,7 +1277,7 @@ Interactive recall uses Softline's custom load/append hooks with encrypted
 prompts.<session-id> collections in the configured sessions namespace. It uses
 the same Pouch client, root and key as session storage. Recall loads the
 newest 200 prompts and commands by default through a bounded ordered range.
-Use --prompt-history-limit, CAI_PROMPT_HISTORY_LIMIT or [ui] prompt_history_limit
+Use --prompt-history-limit or the stored [ui] prompt_history_limit setting
 to change recall and the native stored-entry cap. Zero disables recall and
 recording and clears the cap without deleting saved prompts. Accepted input
 appends immediately, including steering; replay and Ctrl-R selection do not
@@ -1372,6 +1368,22 @@ Default cai global instructions when
 is set; otherwise
 .IR ~/.config/cai/AGENTS.md .
 .SH CONFIGURATION
+The local INI supplies host bootstrap settings and seeds the default agent
+once. Agent behavior then comes from agent.default in the configured agents
+store, normally the shared default liblockdc store. The metadata object owns
+a streamed config.ini attachment. Explicit flags and embedding settings
+override stored behavior; they are not saved into the initial definition.
+Automatically resolved optional paths are not saved either.
+.PP
+Bootstrap fields include store definitions/selections, storage namespaces,
+host paths, workspace-server settings and runtime session ownership. Only
+these fields accept application-prefixed environment overrides. Agent model,
+reasoning, tools and presentation settings do not. Explicit provider API-key
+lookup, LOG_ settings and stored [env] assignments retain their own policies.
+No disk configuration is automatically generated or rewritten; --dump-config
+explicitly writes a template. Named-agent builders and resource packaging
+remain separate future work.
+.PP
 Agent inference retries the provider code server_is_overloaded by default.
 The initial wait is 30 seconds, then 60, 120, and 240 seconds, capped at
 240 seconds for the remaining retries. At most ten retries are made per turn.
@@ -1379,7 +1391,7 @@ The pending request is reused without a continuation prompt or tool reruns.
 Escape, host cancellation and shutdown interrupt the wait. Exhaustion stops
 the turn with the provider error. Disable with
 .BR \-\-no-capacity-retry ,
-CAI_CAPACITY_RETRY=false, or [agent] capacity_retry=false.
+or the stored [agent] capacity_retry=false setting.
 Other provider errors and standalone compaction requests do not use this policy.
 .PP
 The --mcp and --no-mcp flags control configured MCP servers (default enabled).
@@ -1395,7 +1407,7 @@ mcp_LENGTH_NAME_TOOL, where LENGTH is the byte length of NAME. This keeps
 server and tool names distinct even when either contains underscores. The
 complete alias must fit 64 bytes, including the prefix.
 .PP
---no-mcp, CAI_MCP=false or [agent] mcp=false disables configured servers;
+--no-mcp or the stored [agent] mcp=false setting disables configured servers;
 --mcp enables them. Utility commands and isolated --review skip MCP discovery.
 The generated template includes a commented [mcp.example] section.
 .PP

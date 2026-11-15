@@ -76,13 +76,13 @@ terminal_close
 export CAI_BOARD=environment-board CAI_UI_TODO_LAYOUT=list
 terminal_start
 send '/todo\r'; expect 'second board'
-send '/todo layout\r'; expect 'list'
+send '/todo layout\r'; expect 'board'
 [[ $(requests) == 2 ]]
 terminal_close
 unset CAI_BOARD CAI_UI_TODO_LAYOUT
 terminal_start
 send '/todo\r'; expect 'second board'
-send '/todo layout\r'; expect 'list'
+send '/todo layout\r'; expect 'board'
 send '/yield_time_ms\r'; expect 'Foreground commands'
 send '/reasoning-summary\r'; expect 'Reasoning summary: detailed.'
 [[ $(requests) == 2 ]]

@@ -44,7 +44,7 @@ jq -se '.[0] | all(.tools[]; (.name // .function.name) != "reload_tools")' "$roo
 : >"$root/peer/requests.jsonl"
 plan "$(jq -n --argjson chat "$chat" '{chat:$chat,plan:["ENVIRONMENT"]}')"
 CAI_PLUGINS=false run -Nni test; ok
-jq -se '.[0] | all(.tools[]; (.name // .function.name) != "reload_tools")' "$root/peer/requests.jsonl" >/dev/null
+jq -se '.[0] | any(.tools[]; (.name // .function.name) == "reload_tools")' "$root/peer/requests.jsonl" >/dev/null
 : >"$root/peer/requests.jsonl"
 plan "$(jq -n --argjson chat "$chat" '{chat:$chat,plan:["RELATIVEPATH"]}')"
 run --tools-dir .cai/tools --workspace-tools-dir "$root/missing" -Nni test; ok

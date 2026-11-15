@@ -8,15 +8,15 @@ as both `.a` and `.so`; the dependency direction is Lua adapter → libcai.
 
 ## Application configuration
 
-File packages are enabled by default. `--no-plugins`, `CAI_PLUGINS=false`, or
+File packages are enabled by default. `--no-plugins` or
 `[plugins] enabled=false` disables both file and host-supplied catalogs.
-The application name changes environment prefixes and default paths as usual.
+The application name changes default paths as usual. These settings belong to the stored agent definition.
 
-| INI setting | Flag | Environment | Empty/default meaning |
-| --- | --- | --- | --- |
-| `[plugins] enabled` | `--[no-]plugins` | `CAI_PLUGINS` | true |
-| `[plugins] directory` | `--tools-dir DIR` | `CAI_TOOLS_DIR` | `data_dir/tools` |
-| `[plugins] workspace_directory` | `--workspace-tools-dir DIR` | `CAI_WORKSPACE_TOOLS_DIR` | `workspace/.program_name/tools` |
+| INI setting | Flag | Empty/default meaning |
+| --- | --- | --- |
+| `[plugins] enabled` | `--[no-]plugins` | true |
+| `[plugins] directory` | `--tools-dir DIR` | `data_dir/tools` |
+| `[plugins] workspace_directory` | `--workspace-tools-dir DIR` | `workspace/.program_name/tools` |
 
 INI paths are relative to the configuration file; CLI paths use the selected
 workspace, following the application's normal path rules. Package roots must

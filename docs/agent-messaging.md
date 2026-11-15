@@ -1,7 +1,7 @@
 # Session messaging
 
 CAI and `libcai_app` enable messaging only when explicitly configured with
-`--messaging`, `CAI_MESSAGING=true`, or `[messaging] enabled = true`. The
+`--messaging` or the stored `[messaging] enabled = true` setting. The
 `agent_message` tool and queue listeners are disabled by default. Workspaces
 using the same encrypted Pouch root can exchange messages, including across
 processes and working directories. Core `libcai` has no liblockdc or softline
@@ -82,8 +82,7 @@ or paths with no distinguishing component selection require an explicit override
 `/status` shows the active queue name and whether incoming prompts require
 manual approval or are automatically approved. `/new` includes the active queue
 in its Markdown session summary when messaging is enabled.
-Override it with `--message-queue NAME`,
-`CAI_MESSAGE_QUEUE`, or `[messaging] queue_name`. Empty keeps automatic naming.
+Override it with `--message-queue NAME` or `[messaging] queue_name`. Empty keeps automatic naming.
 Overrides replace the entire name; no prefix or path hash is appended.
 Explicit names are lowercased and must contain only ASCII letters, digits,
 `.`, `_` or `-`, with at most 128 characters. Deliberately using the same
@@ -193,16 +192,15 @@ The generated `config.ini` contains these commented defaults:
 # delay_seconds = 0
 ```
 
-| INI key | Environment | Command line |
-| --- | --- | --- |
-| `messaging.enabled` | `CAI_MESSAGING` | `--messaging` / `--no-messaging` |
-| `messaging.queue_name` | `CAI_MESSAGE_QUEUE` | `--message-queue NAME` |
-| `messaging.enable_auto_enqueue` | `CAI_ENABLE_AUTO_ENQUEUE` | `--autoqueue` / `--no-autoqueue` |
-| `messaging.ack_timeout_ms` | `CAI_MESSAGE_ACK_TIMEOUT_MS` | `--message-ack-timeout-ms MS` |
-| `messaging.delay_seconds` | `CAI_MESSAGE_DELAY_SECONDS` | `--message-delay-seconds SECONDS` |
+| INI key | Command line |
+| --- | --- |
+| `messaging.enabled` | `--messaging` / `--no-messaging` |
+| `messaging.queue_name` | `--message-queue NAME` |
+| `messaging.enable_auto_enqueue` | `--autoqueue` / `--no-autoqueue` |
+| `messaging.ack_timeout_ms` | `--message-ack-timeout-ms MS` |
+| `messaging.delay_seconds` | `--message-delay-seconds SECONDS` |
 
-CLI overrides environment, which overrides INI defaults, with the existing
-`[env]` precedence rule. The deadline range is 1–86400000 ms. Delays must be
+Explicit CLI/embedding settings override stored agent settings. The deadline range is 1–86400000 ms. Delays must be
 nonnegative integer seconds representable by the backend's Unix timestamp;
 overflow is rejected without scheduling a message. `/autoqueue`
 changes the live TUI setting; it does not rewrite configuration.

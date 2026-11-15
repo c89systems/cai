@@ -10,8 +10,11 @@ run --home "$unified" --help; ok
 [[ ! -e "$unified" ]]
 contains "$root/stdout" '-c, --config'
 run --home "$unified" --list; ok
-[[ -f "$unified/config/config.ini" && -s "$unified/state/pouch.key" ]]
+[[ ! -e "$unified/config/config.ini" && -s "$unified/state/pouch.key" ]]
 [[ ! -e "$root/config/cai" && ! -e "$root/state/cai" ]]
+mkdir -m700 "$unified/config"
+run --home "$unified" --dump-config "$unified/config/config.ini"; ok
+chmod 600 "$unified/config/config.ini"
 contains "$unified/config/config.ini" "# config_dir = \"$unified/config\""
 contains "$unified/config/config.ini" "# runtime_dir = \"$unified/run\""
 contains "$unified/config/config.ini" "# agents_md = \"$unified/config/AGENTS.md\""
@@ -25,7 +28,7 @@ run -c "$root/policies/chosen.ini" --list; ok
 (
   export CAI_HOME="$root/environment-home"
   run --list; ok
-  [[ -f "$CAI_HOME/config/config.ini" ]]
+  [[ ! -e "$CAI_HOME/config/config.ini" ]]
   run -c "$root/policies/chosen.ini" --list; ok
   [[ -s "$CAI_HOME/state/pouch.key" ]]
   run --home "$root/cli-home" -c "$root/policies/chosen.ini" --state-dir "$root/override-state" --list; ok
@@ -55,7 +58,7 @@ cmp "$unified/state/pouch.key" "$root/original.key"
 if [[ "$mode" == host ]]; then
   export CAI_TEST_APP_HOME_DIRECTORY="$root/host-home"
   run --list; ok
-  [[ -s "$root/host-home/state/pouch.key" && -f "$root/host-home/config/config.ini" ]]
+  [[ -s "$root/host-home/state/pouch.key" && ! -e "$root/host-home/config/config.ini" ]]
   terminal_start -N
   send '/status\r'; expect '## Status'
   terminal_close

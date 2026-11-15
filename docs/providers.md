@@ -50,7 +50,7 @@ Completed tool calls are not repeated.
 The pending request is reused without adding a user prompt such as "Proceed." Incomplete attempt captures are discarded; any partial text already displayed can appear again when the model resamples.
 Quota, rate-limit, policy and other errors do not trigger this capacity policy.
 
-Disable it with `--no-capacity-retry`, `CAI_CAPACITY_RETRY=false`, or `[agent] capacity_retry = false`.
+Disable it with `--no-capacity-retry` or `[agent] capacity_retry = false` in the stored agent definition.
 C/Lua runtime config accepts `disable_capacity_retry = true`; libcai_app accepts the normal agent setting.
 The same policy applies to child runtimes and both wire protocols.
 Low-level standalone client requests and explicit compaction endpoints do not use it.

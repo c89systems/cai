@@ -15,7 +15,7 @@ See [configuration](configuration.md) and [providers](providers.md) for other se
 
 Interactive startup prints the application's banner and introduction before attachment or replay.
 Any welcome text belongs to that banner; the library generates no separate greeting.
-`--no-banner`, `[ui] no_banner = true`, or `CAI_NO_BANNER=true` suppress this startup text; `--banner` overrides that setting.
+`--no-banner` or the stored `[ui] no_banner = true` setting suppresses this startup text; `--banner` overrides that setting.
 Attachment readiness still appears, and utilities and batch/headless runs do not print the banner.
 
 ```sh
@@ -148,7 +148,7 @@ Changes apply at the next safe model/tool boundary and persist with the session.
 Enter and Alt-Enter both use this next-request boundary for tier changes, even during an active turn.
 The command remains editable in Softline until applied; the request already in flight keeps its original tier.
 Routing commands are independent of queued session prompts and do not submit model input.
-`--service-tier NAME`, `CAI_SERVICE_TIER`, and `[agent] service_tier` provide startup overrides.
+`--service-tier NAME` and the stored `[agent] service_tier` setting provide startup overrides.
 An unset value restores saved routing, or leaves new-session routing to the provider.
 CAI never opts into a paid tier from a catalog default automatically.
 Explicit normal routing omits the tier on ChatGPT requests, matching Codex; the public OpenAI API receives `"service_tier":"default"`.
@@ -234,7 +234,7 @@ It does not start inference, steer the agent or advance a goal turn.
 A rolling buffer retains up to 5,000 logical lines and the configured byte ceiling (4 MiB by default), further limited by the replay parser's dynamic-string bound (currently 128 KiB), including completion metadata and a truncation notice.
 The newest text that fits is kept; earlier text falls out of the buffer.
 The saved tail, logged output and model copy use that same text.
-`--shell-context-max-lines N` and `--shell-context-max-bytes N` override `CAI_SHELL_CONTEXT_MAX_LINES` / `CAI_SHELL_CONTEXT_MAX_BYTES`, which override `[runtime] shell_context_max_lines` / `shell_context_max_bytes` in `config.ini`.
+`--shell-context-max-lines N` and `--shell-context-max-bytes N` override the stored `[runtime] shell_context_max_lines` / `shell_context_max_bytes` settings.
 Zero in SDK/INI selects the default; CLI values must be positive (bytes >=4).
 An oversized line keeps its newest UTF-8-aligned suffix.
 ANSI/VT colors, CSI and OSC/DCS/control strings are removed before retention; CR, backspace and horizontal cursor/erase controls update the current logical line.
@@ -243,7 +243,7 @@ This is a text transcript, not a full screen or alternate-screen emulator.
 JSONL contains only the retained tail.
 Markdown export uses the existing libcai exporter of retained model context.
 
-`--no-shell-context`, `CAI_SHELL_CONTEXT=false`, `[ui] shell_context=false`, or `/shell-context off` keeps future `!COMMAND` results out of model context while still executing, displaying and saving them.
+`--no-shell-context`, the stored `[ui] shell_context=false` setting, or `/shell-context off` keeps future `!COMMAND` results out of model context while still executing, displaying and saving them.
 `/shell-context on` enables sharing; `/shell-context` shows the setting.
 These controls never enable recording or sharing for `/shell` or `!sh`; `/shellshare` and `!sh+` explicitly opt in for one invocation.
 The setting is captured when each command starts.

@@ -3255,9 +3255,9 @@ int cai_app_terminal_run(const cai_app_config *application,
   memset(&context, 0, sizeof(context));
   context.directory = target->workspace;
   if (rc == CAI_OK) {
-    int configured =
-        cai_cli_configure_at(argc + 1, arguments, &options, &configuration,
-                             application, &context, error);
+    int configured = cai_cli_configure_bootstrap_at(
+        argc + 1, arguments, &options, &configuration, application, &context,
+        error);
     if (configured == 1 && cai_cli_theme_validate(&options, error) != CAI_OK)
       configured = -1;
     if (configured != 1)

@@ -54,8 +54,7 @@ and its descendants, or `-k` / `--insecure` for an invocation-only bypass.
 Saved approval applies to other sessions in that tree. Utility modes remain
 available without approval. The same argv parser is used by C and Lua hosts.
 Hosts may configure the bypass through the `agent.insecure` application setting;
-its default is false. Environment aliases follow `program_name`, such as
-`SMITH_INSECURE` for Smith. This is independent of `agent.yolo` and TLS settings.
+its default is false. This setting belongs to the stored agent definition and is independent of `agent.yolo` and TLS settings.
 
 The explicit approval is durably journaled before its small authorization record
 is published in the configured scopes namespace. It is not stored in the derived
@@ -513,7 +512,7 @@ The equivalent invocation settings are `--home DIR`, `SMITH_HOME`, or
 `home/config/config.ini` before startup configuration is read. An INI home
 value changes derived defaults without reopening configuration elsewhere.
 `-c FILE`/`--config FILE` remains authoritative. `--no-config` suppresses only
-configuration creation/loading; it does not disable home-derived paths.
+disk bootstrap/seed loading; it does not disable home-derived paths or stored-agent resolution.
 `runtime_directory`, `--runtime-dir`, `SMITH_RUNTIME_DIR`, or `[paths] runtime_dir`
 can override the runtime root independently. These settings never change the
 host process's `HOME` or relocate explicit external inputs or endpoints.
@@ -539,15 +538,11 @@ journal append; zero disables expiry. `/retention` shows that policy and
 persists an override for the active session (0/off means forever).
 Liblockdc maintenance removes the whole journal collection and its session
 metadata. Individual journal records never expire separately. Both defaults
-are available through C/Lua `settings`, prefixed environment variables and
-forwarded flags; there is no separate prompt-history filesystem path.
+are available through stored agent configuration, C/Lua `settings` and forwarded flags; there is no separate prompt-history filesystem path.
 
 Environment keys use the selected prefix plus uppercased section and key,
 for example `SMITH_PATHS_STATE_DIR` and `SMITH_STORAGE_AUTH_NAMESPACE`.
-Convenience aliases include `SMITH_MODEL`, `SMITH_PROVIDER`,
-`SMITH_REASONING_EFFORT`, `SMITH_HOME`, `SMITH_RUNTIME_DIR`, `SMITH_STATE_DIR`, `SMITH_CACHE_DIR`, `SMITH_DATA_DIR`,
-`SMITH_LOCKD`, `SMITH_NAMESPACE_PREFIX`, `SMITH_QUEUE_PREFIX`, and the existing
-tool/messaging names with the new prefix. `SMITH_CONFIG` and `SMITH_CONFIG_DIR`
+Bootstrap aliases include `SMITH_HOME`, `SMITH_RUNTIME_DIR`, `SMITH_STATE_DIR`, `SMITH_CACHE_DIR`, `SMITH_DATA_DIR`, `SMITH_AGENTS_STORE`, `SMITH_LOCKD`, `SMITH_NAMESPACE_PREFIX`. Agent behavior is resolved from the stored definition without prefixed environment overrides. `SMITH_CONFIG` and `SMITH_CONFIG_DIR`
 select the startup config file/root before loading INI. An explicitly supplied
 `environment_prefix`, e.g. `"VECTIS_SMITH_"`, replaces `SMITH_` entirely; there
 is no fallback to `CAI_`. Custom-provider API keys default to `SMITH_API_KEY`.
@@ -603,11 +598,10 @@ their own owner-thread dispatch rather than calling the VM from a tool worker.
 Registration errors abort startup. Help and utility commands do not call the
 hook. It is not inherited by child agents and is rejected in isolated review,
 matching the core runtime's extension policy.
-Precedence is defaults, file/environment, explicit settings, then arguments.
+Agent precedence is built-in defaults, stored configuration, explicit embedding settings, then arguments. Bootstrap fields retain file/environment resolution; see [configuration](configuration.md).
 Environment entries retain the normal `config_env_has_precedence` policy.
 
-Interactive DTG timestamps use `ui.utc` (default `false`), `--utc`/`--no-utc`,
-and the application's environment prefix plus `UTC` (`CAI_UTC` by default).
+Interactive DTG timestamps use `ui.utc` (default `false`) and `--utc`/`--no-utc`.
 Runtime events, journal events and execution records expose `timestamp_ns`
 (UTC Unix nanoseconds; zero means unknown) and `utc_offset_seconds` (seconds
 east of UTC on the originating host). These are presentation/diagnostic
@@ -655,8 +649,7 @@ Prompt and Markdown themes use the application setting `ui.theme` (default
 `default`). For example, pass `{"ui", "theme", "synthwave"}` in the C
 `config.settings` array, or `settings = {ui = {theme = "synthwave"}}` in Lua.
 Aliases select paired softline/libmdf themes; `riced:iosvkem` selects them
-independently. The same setting accepts `--theme` / `-t`, `CAI_THEME` (rebased
-to the host's environment prefix), and `[ui] theme` in INI. `--list-themes`
+independently. The same setting accepts `--theme` / `-t` and the stored `[ui] theme` setting. `--list-themes`
 lists both libraries' themes before configuration, authentication or storage
 startup. See the [pairing table](appearance.md#themes) for aliases. `plain:ascii`
 disables Markdown ANSI styling while preserving UTF-8. `NO_COLOR` overrides
@@ -694,9 +687,7 @@ retain their existing independent treatment.
 C hosts pass these keys in `cai_app_setting`; Lua uses, for example,
 `settings = {ui = {theme_offset = -300}, review = {theme_offset = 1}}`.
 The matching flags are `--theme-offset`, `--subagent-theme-offset`, and
-`--review-theme-offset`. Environment aliases are `CAI_THEME_OFFSET`,
-`CAI_SUBAGENT_THEME_OFFSET`, and `CAI_REVIEW_THEME_OFFSET`, using the host's
-configured prefix. Matching slash commands query without an argument and set
+`--review-theme-offset`. Matching slash commands query without an argument and set
 with one. Changes apply at a safe response/tool boundary through Softline's
 editable queue. These presentation settings belong to libcai_app; the core
 runtime continues to emit renderer-independent lifecycle events.
@@ -705,7 +696,7 @@ The optional `run_review_and_fix` model tool is disabled by default. Native
 runtime hosts set `cai_agent_runtime_config.enable_review_and_fix = 1`; Lua
 runtime hosts use `enable_review_and_fix = true`. Application hosts set
 `[agent] review_and_fix_tool = true` through INI or their C/Lua settings, or use
-`--review-and-fix-tool` / `CAI_REVIEW_AND_FIX_TOOL`. It requires reviewer and
+`--review-and-fix-tool`. It requires reviewer and
 goal tools. A user must explicitly authorize repeated review/fix work; normal
 review requests and follow-up fixes do not grant that permission. The tool
 replaces the current session's goal and returns after queueing it.
@@ -783,8 +774,7 @@ methods, but must not reenter `run`, close the app, or operate on its runtime.
 
 Console replay defaults to 10 whole turns or standalone shell entries. Set
 `ui.replay_turns` through `cai_app_setting` or Lua
-`settings = {ui = {replay_turns = 10}}`; `--replay-turns` and the application
-environment prefix plus `REPLAY_TURNS` also apply. Zero hides replay and -1
+`settings = {ui = {replay_turns = 10}}`; `--replay-turns` also applies. Zero hides replay and -1
 shows all. This affects console output only: C `replay_callback` and Lua
 `on_replay` still receive each retained journal event once, including omitted
 console turns. Logs, exports, and the full restored agent context are unchanged.
@@ -794,10 +784,9 @@ events and replayed through the live renderer: headings use the status line,
 and multiline bodies use Markdown blockquotes. They follow the same turn limit
 as replies and tools. These journal events add no synthetic model input.
 
-Local execution policy is configured with `[agent] yolo`, `CAI_YOLO`, or
+Local execution policy is configured with the stored `[agent] yolo` setting or
 `--yolo`/`--no-yolo`, defaulting to false. An embedded application supplies
-`{ "agent", "yolo", "true" }` as an application setting; its program-specific
-environment prefix applies normally. C runtime/preset configurations and Lua
+`{ "agent", "yolo", "true" }` as an application setting. C runtime/preset configurations and Lua
 runtime/Smith tables expose `yolo`. Standalone C tool configurations and Lua's
 exec/read/list registration tables expose the same opt-out. It is inherited by
 reviewers and other child runtimes. `HOME` and every `XDG_*` value are preserved
@@ -844,11 +833,10 @@ Lua exposes `runtime:yield_time_ms([milliseconds])`; Smith/runtime constructor
 tables accept `yield_time_ms` and `foreground`. Low-level C terminal registration
 uses `default_yield_time_ms` (zero selects the 10000 ms default) and `foreground`.
 
-For libcai_app, `[terminal] yield_time_ms`, `CAI_YIELD_TIME_MS`, and
+For libcai_app, `[terminal] yield_time_ms` and
 `--yield-time-ms N` select the interval; **zero means foreground** at this
-application boundary. `[terminal] foreground`, `CAI_FOREGROUND`, or
-`--foreground` also force foreground execution. Program-specific environment
-prefixes and `cai_app_setting` overrides apply normally. `/foreground` (`/fg`)
+application boundary. `[terminal] foreground` or
+`--foreground` also force foreground execution. `cai_app_setting` overrides apply normally. `/foreground` (`/fg`)
 enables it; `/background` (`/bg`) restores the libcai 10000 ms default if yielding
 was disabled, otherwise preserving the current positive interval.
 `--background` has the same startup behavior. `/yield_time_ms` queries the
@@ -1015,11 +1003,10 @@ final callbacks delivered after process restoration. Close after `run` returns.
 
 The optional model-controlled `set_reasoning` tool accepts just
 `{"mode":"normal"}` and `{"mode":"high"}`. Enable it with
-`[agent] reasoning_tool = true`, `CAI_REASONING_TOOL=true`, or
+`[agent] reasoning_tool = true` or
 `--reasoning-tool`. Independent `normal_reasoning_effort` and
 `high_reasoning_effort` settings default to `medium` and `high`; the
-corresponding `CAI_NORMAL_REASONING_EFFORT` / `CAI_HIGH_REASONING_EFFORT`
-variables and `--normal-reasoning-effort` / `--high-reasoning-effort` flags
+corresponding `--normal-reasoning-effort` / `--high-reasoning-effort` flags
 override them. The generated INI template includes these settings.
 The model is instructed to raise effort for complex tasks and only return to
 normal when explicitly told. A high request never lowers a higher current

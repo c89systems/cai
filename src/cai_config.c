@@ -161,6 +161,10 @@ void cai_config_close(cai_config *self) {
   size_t i;
   if (self == NULL)
     return;
+  if (self->close != NULL && self->close != cai_config_close) {
+    self->close(self);
+    return;
+  }
   impl = IMPL(self);
   if (impl != NULL) {
     entries_cleanup(impl);
@@ -1037,6 +1041,41 @@ int cai_config_open_schema(const cai_config_field *fields, size_t count,
                            const cai_config_context *context, cai_config **out,
                            cai_error *error) {
   return config_open(fields, count, 0, context, out, error);
+}
+int cai_config_clone(const cai_config *self, cai_config **out,
+                     cai_error *error) {
+  const config_impl *original;
+  cai_config *copy = NULL;
+  cai_config_context context;
+  size_t i, j;
+  int rc;
+  if (out != NULL)
+    *out = NULL;
+  if (self == NULL || out == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "configuration and clone output are required");
+  original = IMPL(self);
+  context.directory = original->directory;
+  context.environment = original->environment;
+  rc = config_open(NULL, 0U, 0, &context, &copy, error);
+  for (i = 0U; rc == CAI_OK && i < original->field_count; ++i)
+    rc = add_field(IMPL(copy), &original->fields[i].field, error);
+  if (rc == CAI_OK && original->origin != NULL) {
+    IMPL(copy)->origin = cai_strdup(NULL, original->origin);
+    if (IMPL(copy)->origin == NULL)
+      rc = cai_set_error(error, CAI_ERR_NOMEM, "copy configuration origin");
+  }
+  for (i = 0U; rc == CAI_OK && i < original->count; ++i) {
+    const config_entry *entry = &original->entries[i];
+    for (j = 0U; rc == CAI_OK && j < entry->count; ++j)
+      rc = put_value(IMPL(copy), entry->section, entry->key, entry->values[j],
+                     entry->line, 0, error);
+  }
+  if (rc != CAI_OK)
+    cai_config_close(copy);
+  else
+    *out = copy;
+  return rc;
 }
 const char *cai_config_directory(const cai_config *self) {
   return self != NULL ? IMPL(self)->directory : NULL;
