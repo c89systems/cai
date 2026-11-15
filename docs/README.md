@@ -68,6 +68,7 @@ Source examples live under `examples/` in the repository; [the examples guide](h
 - [Initial transport baseline](benchmark-baseline.md) and [presentation attribution / CBOR optimization](performance-cbor-presentation.md).
 - [Historical startup/CPU measurements](startup-responsiveness.md), taken before the workspace-server cutover.
 - [Network prompt and event transport specification](network-prompt-events.md).
+- [Stored agents and agent builder](stored-agents.md): draft design, including shared-session continuity and open decisions; not implemented.
 
 Design proposals and dependency incident reports that have been superseded are not current API documentation.
 Their history remains available in Git.
