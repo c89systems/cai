@@ -40,6 +40,9 @@ terminal_close
 # A genuinely short configured deadline still applies, produces one notice,
 # and can be retried immediately without waiting through the failure cooldown.
 printf '[client]\ntimeout_ms = 100\n' >"$config"
+# A fresh registry definition seeds the new deadline; disk edits do not
+# overwrite the agent already used by the preceding scenario.
+base+=(--namespace-prefix short-deadline)
 catalog_plan 350 200
 terminal_start -N
 send '/model\r'; expect 'Model list unavailable'; expect 'Timeout was reached'

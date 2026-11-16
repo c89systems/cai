@@ -23,6 +23,8 @@ Frontend attachment lifetime, rendering, editor state and network exposure
 belong to the caller. An HTML adapter can use this same client against the
 workspace owner without linking a terminal UI into its process.
 
+Before binding a producer, `cai_app_client_select_agent` selects a destination session and optional stored-agent override. A NULL agent restores the saved selection, or `default` for a new session. Selection requires controller authority and settles through the ordinary input baseline; rejected preparation leaves the previous owner context usable. It sends no synthetic `/resume` prompt. Live `/use` goes through the backend command queue at a whole-turn boundary; see [stored agents](stored-agents.md).
+
 Existing socket tests now link the actual standalone archive. Compile-boundary
 and shared-export checks guard the product boundary. The install test relocates
 only core/client components and builds/runs public-header consumers through both

@@ -149,12 +149,27 @@ run --dump-agents "$root/all-agents"; ok
 [[ -f "$root/all-agents/engineer_name/config.ini" && -f "$root/all-agents/other/config.ini" ]]
 absent "$root/all-agents/engineer_name/config.ini" agent-package-private-key
 
-# A running owner must never silently ignore a conflicting --use selection.
+# Attaching with --use activates through the owner, preserving the live
+# session and terminal transcript cursor instead of silently ignoring it.
 terminal_start --use engineer_name -R "$id"
 send '/status\r'; expect 'engineer_name'
 before=$(requests)
-run --use other -ni 'must not run under the wrong agent'; bad
+run --use other -ni 'observer must not change the active agent'; bad
 [[ $(requests) == "$before" ]]
+send '/use other\r'; expect 'other is active'
+plan '{"plan":["LIVE_OTHER_AGENT"]}'
+prompt 'continue in the existing owner' LIVE_OTHER_AGENT
+[[ $(requests) == $((before+1)) ]]
+tail -1 "$root/peer/requests.jsonl" >"$root/request"
+contains "$root/request" OTHER_PACKAGE_INSTRUCTIONS
+absent "$root/request" ENGINEER_PACKAGE_INSTRUCTIONS
+send '/status\r'; expect_table 1 Agent; expect 'other'
+send '/use engineer_name\r'; expect 'engineer_name is active'
+plan '{"plan":["LIVE_ENGINEER_AGAIN"]}'
+prompt 'continue after changing back' LIVE_ENGINEER_AGAIN
+tail -1 "$root/peer/requests.jsonl" >"$root/request"
+contains "$root/request" ENGINEER_PACKAGE_INSTRUCTIONS
+contains "$root/request" LIVE_OTHER_AGENT
 terminal_close
 
 # Publication validates manifests and rejects special files without blocking.
@@ -188,6 +203,16 @@ skills_dir = "$root/seed-skills"
 [plugins]
 directory = "$root/seed-tools"
 INI
+# Failed initialization publishes neither a partial definition nor resources.
+cp "$root/seed-tools/echo/tool.json" "$root/seed-tool-valid.json"
+printf '{invalid json\n' >"$root/seed-tools/echo/tool.json"
+run -c "$root/seed.ini" --agents-store seed --build "$root/invalid-seed"; bad
+[[ ! -e "$root/invalid-seed" ]]
+cp "$root/seed-tool-valid.json" "$root/seed-tools/echo/tool.json"
+printf '\0' >>"$root/seed-prompt.md"
+run -c "$root/seed.ini" --agents-store seed --build "$root/invalid-seed"; bad
+contains "$root/stderr" NUL-free
+printf 'SEEDED_LITERAL_INSTRUCTIONS\n' >"$root/seed-prompt.md"
 run -c "$root/seed.ini" --agents-store seed --build "$root/portable"; ok
 contains "$root/portable/SYSTEM_PROMPT.md" SEEDED_LITERAL_INSTRUCTIONS
 contains "$root/portable/AGENTS.md" SEEDED_GLOBAL_INSTRUCTIONS
@@ -206,11 +231,12 @@ if rg --text -l 'agent-package-private-key|package-refresh-secret' "$root/state/
   fail 'Agent credentials are present as plaintext in the encrypted store'
 fi
 
-# Fail after SYSTEM_PROMPT.md is copied, before a missing global instruction.
-printf 'SEEDED_LITERAL_INSTRUCTIONS\n' >"$root/seed-prompt.md"
-# Failed source exports remove partial owned files, preserving other outputs.
-run -c "$root/seed.ini" --agents-store seed --build "$root/failed-export"; bad
-[[ -z $(find "$root/failed-export" -mindepth 1 -print -quit) ]]
-printf 'USER_OWNED_FILE\n' >"$root/failed-export/keep.txt"
-run -c "$root/seed.ini" --agents-store seed --build "$root/failed-export"; bad
-contains "$root/failed-export/keep.txt" USER_OWNED_FILE
+# The initialized default captures its resources once as well. Source edits
+# and removal cannot change a later export or runtime behind its revision.
+run -c "$root/seed.ini" --agents-store seed --build "$root/default-copy"; ok
+contains "$root/default-copy/SYSTEM_PROMPT.md" SEEDED_LITERAL_INSTRUCTIONS
+contains "$root/default-copy/AGENTS.md" SEEDED_GLOBAL_INSTRUCTIONS
+contains "$root/default-copy/tools/echo/tool.json" seed_echo
+printf 'USER_OWNED_FILE\n' >"$root/default-copy/keep.txt"
+run -c "$root/seed.ini" --agents-store seed --build "$root/default-copy"; bad
+contains "$root/default-copy/keep.txt" USER_OWNED_FILE

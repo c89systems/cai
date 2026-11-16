@@ -271,6 +271,8 @@
     target_link_libraries(cai_cli_messages_test PRIVATE cai_static
       softline::softline_static lockdc::static)
     cai_configure_cli_target(cai_cli_messages_test)
+    add_dependencies(cai_cli_messages_test cai_smith_prompt_asset)
+    target_include_directories(cai_cli_messages_test PRIVATE "${CAI_SMITH_PRIVATE_INCLUDE_DIR}")
     target_compile_options(cai_cli_messages_test PRIVATE -UNDEBUG)
     cai_cli_use_storage_fixture(cai_cli_messages_test)
     add_test(NAME cai_cli_message_names COMMAND cai_cli_messages_test --names-only)
@@ -798,6 +800,30 @@
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_agent_packages_test.sh"
       "$<TARGET_FILE:cai_app_worker_stack_host>")
     set_tests_properties(cai_app_agent_packages PROPERTIES TIMEOUT 90
+      LABELS "cli;local;offline"
+      ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
+    add_test(NAME cai_cli_agent_edit COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_agent_edit_test.sh"
+      "$<TARGET_FILE:cai_cli>")
+    add_test(NAME cai_app_agent_edit COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_agent_edit_test.sh"
+      "$<TARGET_FILE:cai_app_worker_stack_host>")
+    set_tests_properties(cai_cli_agent_edit cai_app_agent_edit PROPERTIES
+      TIMEOUT 45 LABELS "cli;local;offline")
+    add_test(NAME cai_cli_prompt_catalog COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_prompt_catalog_test.sh"
+      "$<TARGET_FILE:cai_cli>")
+    set_tests_properties(cai_cli_prompt_catalog PROPERTIES TIMEOUT 15
+      LABELS "cli;local;offline")
+    add_test(NAME cai_cli_agent_builder COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_agent_builder_test.sh"
+      "$<TARGET_FILE:cai_cli>")
+    set_tests_properties(cai_cli_agent_builder PROPERTIES TIMEOUT 30
+      LABELS "cli;local;offline")
+    add_test(NAME cai_cli_agent_activation COMMAND bash
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_agent_activation_test.sh"
+      "$<TARGET_FILE:cai_cli>")
+    set_tests_properties(cai_cli_agent_activation PROPERTIES TIMEOUT 90
       LABELS "cli;local;offline"
       ENVIRONMENT "CAI_TERMINAL_PEER=$<TARGET_FILE:cai_terminal_peer>")
     add_executable(cai_stored_agents_test tests/stored_agents_test.c

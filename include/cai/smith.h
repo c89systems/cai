@@ -319,6 +319,16 @@ int cai_agent_preset_write_base_instructions(
     const cai_agent_preset *preset, const cai_agent_preset_config *config,
     int review, cai_sink *sink, cai_error *error);
 
+/** Built-in base-instruction profiles, followed by the reviewer rubric.
+ * Names are immutable, borrowed for process lifetime; out-of-range is NULL. */
+size_t cai_agent_builtin_instructions_count(void);
+const char *cai_agent_builtin_instructions_name(size_t index);
+/** Stream a named built-in profile with the supplied readable identity.
+ * No files, environment, tools, authentication or runtime are opened. Unknown
+ * names fail; writes use the normal instruction compiler's bounded chunks. */
+int cai_agent_builtin_instructions_write(const char *name, const char *identity,
+                                         cai_sink *sink, cai_error *error);
+
 /** Construct an isolated reviewer from a preset that supports review. client
  * remains borrowed and must outlive the returned agent; preset/config are
  * consumed during the call. */

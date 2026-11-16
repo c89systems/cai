@@ -66,6 +66,7 @@ jq -L "$support/fixtures" -cs '
     {record_type:"event", sequence:($start+4), type:"assistant_text_delta", data:" PARTB"},
     {record_type:"event", sequence:($start+5), type:"assistant_text_end", data:null}),
   ($commit | .applied_event_sequence=151 |
+    del(.state.metadata.agent_binding) |
     .state.revision=1 | .state.base_bytes=0 | .state.end_bytes=($context|utf8bytelength) |
     .state.blocks_keep=0 | .state.hidden_keep=0 | .state.owned_keep=0 |
     .state.history_append=$context |
@@ -90,8 +91,9 @@ expect ANSWER24; expect PARTB
 contains "$term/text" 'Showing the latest 10 turns.'
 absent "$term/text" PROMPT14; absent "$term/text" ANSWER14
 contains "$term/text" PROMPT15; contains "$term/text" ANSWER15
-replay_output="$term/text"
-if [[ $scope == remote || $scope == embed ]]; then replay_output="$term/feed"; fi
+# Sticky status redraws may interrupt terminal-screen text between deltas.
+# The rendered feed is the authoritative output for exact replay counts.
+replay_output="$term/feed"
 [[ $(grep -c 'ANSWER[0-9][0-9] PARTA PARTB' "$replay_output") == 10 ]]
 terminal_close
 [[ $(requests) == "$before" ]]

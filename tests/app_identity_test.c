@@ -69,7 +69,6 @@ int main(void) {
   assert(strcmp(o.model, "right-model") == 0);
   assert(strcmp(o.queue_prefix, "smith") == 0);
   assert(strcmp(o.sessions_namespace, "smith.sessions") == 0);
-  assert(strcmp(o.auth_namespace, "smith.auth") == 0);
   assert(strcmp(o.todo_namespace, "smith.todo") == 0);
   assert(strcmp(o.scopes_namespace, "smith.scopes") == 0);
   assert(strcmp(o.messages_namespace, "smith.messages") == 0);
@@ -130,7 +129,6 @@ int main(void) {
   assert(access(path, F_OK) != 0 && cai_test_storage_open_count() == 1U);
   cai_error_cleanup(&error);
   other.pouch_key_file = key;
-  other.auth_namespace = o.auth_namespace;
   other.sessions_namespace = o.sessions_namespace;
   other.scopes_namespace = o.scopes_namespace;
   assert(cai_cli_pouch_open_options(&shared, &other, NULL, &error) == CAI_OK);
@@ -180,11 +178,11 @@ int main(void) {
   assert(setenv("BOT_MODEL", "bot-model", 1) == 0);
   assert(setenv("BOT_CACHE_DIR", getenv("XDG_CACHE_HOME"), 1) == 0);
   assert(setenv("BOT_SESSIONS_STORE", "team", 1) == 0);
-  assert(setenv("BOT_AUTH_STORE", "team", 1) == 0);
+  assert(setenv("BOT_AGENTS_STORE", "team", 1) == 0);
   assert(setenv("BOT_MESSAGING_STORE", "team", 1) == 0);
   settings[0].section = "storage";
-  settings[0].key = "auth_namespace";
-  settings[0].value = "shared.auth";
+  settings[0].key = "scopes_namespace";
+  settings[0].value = "shared.scopes";
   settings[1].section = "paths";
   settings[1].key = "log_dir";
   settings[1].value = state;
@@ -195,10 +193,10 @@ int main(void) {
   assert(strcmp(o.model, "bot-model") == 0 &&
          strcmp(o.queue_prefix, "team") == 0);
   assert(strcmp(o.sessions_store, "team") == 0 &&
-         strcmp(o.auth_store, "team") == 0 &&
+         strcmp(o.agents_store, "team") == 0 &&
          strcmp(o.messaging_store, "team") == 0);
   assert(strcmp(o.sessions_namespace, "vectis.smith.sessions") == 0);
-  assert(strcmp(o.auth_namespace, "shared.auth") == 0);
+  assert(strcmp(o.scopes_namespace, "shared.scopes") == 0);
   assert(strcmp(o.log_dir, state) == 0 &&
          strcmp(o.cache_dir, getenv("XDG_CACHE_HOME")) == 0);
   ends(o.clipboard_dir, "/cache/clipboard");

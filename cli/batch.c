@@ -820,7 +820,7 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
       target.execution_context = b;
       b->startup.stage = ready == CAI_CLI_FRONTEND_STARTED
                              ? CAI_CLI_STARTUP_REVIEW_AND_FIX
-                             : CAI_CLI_STARTUP_MODEL;
+                             : CAI_CLI_STARTUP_AGENT;
       b->startup_select = ready != CAI_CLI_FRONTEND_STARTED &&
                           (options->resume_id != NULL || options->new_session);
       rc = cai_app_client_open(&target, now, &b->client, error);
@@ -873,13 +873,13 @@ int cai_cli_batch_run(const cai_app_config *app, const cai_cli_options *options,
         if (!b->state.bound && !b->awaiting_bind && view != NULL &&
             view->available &&
             (!b->handoff || view->conversation != b->old_conversation)) {
-          rc =
-              b->startup_select
-                  ? cai_app_client_select(
-                        b->client, ++b->binding,
-                        options->new_session ? NULL : options->resume_id, error)
-                  : cai_app_client_bind(b->client, ++b->binding, 0U, 0U, NULL,
-                                        error);
+          rc = b->startup_select
+                   ? cai_app_client_select_agent(
+                         b->client, ++b->binding,
+                         options->new_session ? NULL : options->resume_id,
+                         options->agent_use, error)
+                   : cai_app_client_bind(b->client, ++b->binding, 0U, 0U, NULL,
+                                         error);
           b->startup_select = 0;
           b->awaiting_bind = 1;
         }

@@ -24,6 +24,8 @@ static const struct cli_command_definition {
     {"/terminate", CLI_COMMAND_FEED, CLI_COMMAND_FEED, 2},
     {"/new", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
     {"/resume", CLI_COMMAND_FEED, CLI_COMMAND_TURN, 1},
+    {"/use", CLI_COMMAND_FEED, CLI_COMMAND_TURN, 1},
+    {"/builder", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
     {"/review", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
     {"/review-and-fix", CLI_COMMAND_TURN, CLI_COMMAND_TURN, 0},
     {"/model", CLI_COMMAND_FEED, CLI_COMMAND_REQUEST, 1},

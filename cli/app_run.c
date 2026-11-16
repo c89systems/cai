@@ -71,10 +71,42 @@ typedef cai_cli_session cli_session;
 typedef struct cli_extra_store {
   struct cli_extra_store *next;
   cai_cli_options selected;
+  char *endpoint, *key, *pem;
   cai_cli_pouch pouch;
 } cli_extra_store;
 
+/** One prepared execution environment. Its auth, tools and asynchronous
+ * receivers outlive their runtime; activation never copies mutexes or handles.
+ */
+typedef struct cli_agent_services {
+  cai_context *context;
+  cai_network_tools_config network_tools;
+  cai_chatgpt_auth *auth;
+  cai_cli_agent_auth agent_auth;
+  cai_chatgpt_auth shared_auth;
+  pthread_mutex_t auth_lock;
+  int has_auth_lock;
+  cai_client *client;
+  cai_client *model_client;
+  pslog_logger *model_log;
+  cai_client *quota_client;
+  cai_plugins *plugins;
+  int owns_plugins;
+#ifdef CAI_APP_LUA_TOOLS
+  cai_lua_tools *lua_tools;
+#endif
+  cai_cli_mcp mcp;
+  int mcp_initialized;
+  int mcp_notice_pending;
+  cai_cli_quota_refresh quota_refresh;
+} cli_agent_services;
+
 typedef struct cli_state {
+  cli_agent_services *services;
+  cai_config *bootstrap_configuration;
+  int invocation_argc;
+  char **invocation_argv;
+  cai_config_context startup;
   const cai_app_config *application;
   cai_app_bridge *bridge;
   cai_cli_workspace_host *workspace_host;
@@ -93,31 +125,12 @@ typedef struct cli_state {
   cai_agent_session_store store;
   cai_cli_pouch pouch;
   cli_extra_store *extra_stores;
-  cai_context *context;
-  cai_network_tools_config network_tools;
-  cai_chatgpt_auth *auth;
-  cai_cli_agent_auth agent_auth;
-  cai_chatgpt_auth shared_auth;
-  pthread_mutex_t auth_lock;
-  int has_auth_lock;
-  cai_client *client;
-  cai_client *model_client;
-  pslog_logger *model_log;
-  cai_client *quota_client;
   cai_agent_runtime *runtime;
-  cai_plugins *plugins;
-  int owns_plugins;
-#ifdef CAI_APP_LUA_TOOLS
-  cai_lua_tools *lua_tools;
-#endif
   cai_agent_runtime *review_runtime;
   char review_call[256];
   int foreground_subagent;
   cai_agent_runtime_metrics last_review_metrics;
   int has_review_metrics;
-  cai_cli_mcp mcp;
-  int mcp_initialized;
-  int mcp_notice_pending;
   cai_cli_messages *messages;
   cai_cli_documents documents;
   cai_cli_export_job *export_job;
@@ -146,7 +159,6 @@ typedef struct cli_state {
    * here. */
   unsigned int settings_notice_fields;
   cai_chatgpt_quota quota;
-  cai_cli_quota_refresh quota_refresh;
   int list_line_start;
   cai_cli_shell shell;
   unsigned long long shell_sequence, shell_offset;
@@ -190,7 +202,8 @@ static int cli_export_pump(cli_state *, cai_error *);
 static int cli_sync_queue(cli_state *state, int at_boundary, cai_error *error);
 static int cli_review_pump(void *);
 static int cli_sync_status(cli_state *state, cai_error *error);
-static int cli_select_startup(void *, const char *, cai_error *);
+static int cli_select_startup(void *, const char *, const char *, cai_error *);
+static int cli_close_runtime(cli_state *, cai_error *);
 static int cli_settings_notice(cli_state *state, cai_error *error);
 static int cli_review_event(void *context, const cai_agent_runtime_event *event,
                             cai_error *error);
@@ -298,33 +311,33 @@ static void cli_diagnostic(cli_state *state, pslog_level level,
  * serialized. Network requests use their own client and copied bearer token. */
 static int cli_auth_token(cai_chatgpt_auth *auth, char **out,
                           cai_error *error) {
-  cli_state *state = auth->impl;
+  cli_agent_services *services = auth->impl;
   int rc;
-  pthread_mutex_lock(&state->auth_lock);
-  rc = state->auth->access_token(state->auth, out, error);
-  pthread_mutex_unlock(&state->auth_lock);
+  pthread_mutex_lock(&services->auth_lock);
+  rc = services->auth->access_token(services->auth, out, error);
+  pthread_mutex_unlock(&services->auth_lock);
   return rc;
 }
 
 static int cli_auth_refresh(cai_chatgpt_auth *auth, cai_error *error) {
-  cli_state *state = auth->impl;
+  cli_agent_services *services = auth->impl;
   int rc;
-  pthread_mutex_lock(&state->auth_lock);
-  rc = state->auth->refresh(state->auth, error);
-  pthread_mutex_unlock(&state->auth_lock);
+  pthread_mutex_lock(&services->auth_lock);
+  rc = services->auth->refresh(services->auth, error);
+  pthread_mutex_unlock(&services->auth_lock);
   return rc;
 }
 
 static int cli_auth_account(cai_chatgpt_auth *auth, char **out,
                             cai_error *error) {
-  cli_state *state = auth->impl;
+  cli_agent_services *services = auth->impl;
   int rc;
-  pthread_mutex_lock(&state->auth_lock);
+  pthread_mutex_lock(&services->auth_lock);
   *out = NULL;
-  rc = state->auth->account_id != NULL
-           ? state->auth->account_id(state->auth, out, error)
+  rc = services->auth->account_id != NULL
+           ? services->auth->account_id(services->auth, out, error)
            : CAI_OK;
-  pthread_mutex_unlock(&state->auth_lock);
+  pthread_mutex_unlock(&services->auth_lock);
   return rc;
 }
 
@@ -334,8 +347,8 @@ static int cli_fetch_quota(void *context, cai_chatgpt_quota *out,
 }
 
 static void cli_refresh_quota(cli_state *state, int force) {
-  cai_cli_quota_request(&state->quota_refresh, force, force);
-  (void)cai_cli_quota_take(&state->quota_refresh, &state->quota);
+  cai_cli_quota_request(&state->services->quota_refresh, force, force);
+  (void)cai_cli_quota_take(&state->services->quota_refresh, &state->quota);
 }
 
 /** Command output is semantic Markdown journal data; only attachments render.
@@ -580,8 +593,8 @@ static int cli_prompt_ready(cli_state *state, const char *text,
   int rc;
   *ready = 0;
   if (cli_command_at_feed_boundary(text)) {
-    if (strcmp(text, "/tools") == 0 && state->mcp_initialized &&
-        !cai_cli_mcp_ready(&state->mcp))
+    if (strcmp(text, "/tools") == 0 && state->services->mcp_initialized &&
+        !cai_cli_mcp_ready(&state->services->mcp))
       return CAI_OK;
     *ready = 1;
     return CAI_OK;
@@ -983,9 +996,10 @@ static int cli_event_body(void *context, const cai_agent_runtime_event *event,
     return rc != CAI_OK ? rc : cli_messages_process(state, 1, error);
   }
   if (event->type == CAI_AGENT_EVENT_MCP_UPDATED) {
-    cai_cli_mcp_applied(&state->mcp);
-    if (cai_cli_mcp_ready(&state->mcp) && state->mcp_notice_pending) {
-      state->mcp_notice_pending = 0;
+    cai_cli_mcp_applied(&state->services->mcp);
+    if (cai_cli_mcp_ready(&state->services->mcp) &&
+        state->services->mcp_notice_pending) {
+      state->services->mcp_notice_pending = 0;
       return cli_markdown(state, event->data != NULL
                                      ? event->data
                                      : "MCP connections updated.") == 0
@@ -1301,12 +1315,13 @@ static int cli_register_agent_tools(void *context, cai_agent *agent,
                                     cai_error *error) {
   cli_state *state = context;
   int rc = CAI_OK;
-  if (state->messages != NULL)
+  if (state->options.messaging && state->messages != NULL)
     rc = cai_cli_messages_register(state->messages, agent, error);
-  if (rc == CAI_OK && state->context != NULL)
-    rc = cai_context_register(state->context, agent, error);
+  if (rc == CAI_OK && state->services->context != NULL)
+    rc = cai_context_register(state->services->context, agent, error);
   if (rc == CAI_OK)
-    rc = cai_network_tools_register(agent, &state->network_tools, error);
+    rc = cai_network_tools_register(agent, &state->services->network_tools,
+                                    error);
   if (rc == CAI_OK && state->application != NULL &&
       state->application->register_agent_tools != NULL)
     rc = state->application->register_agent_tools(
@@ -1346,16 +1361,213 @@ static cai_cli_pouch *cli_named_store(cli_state *state, const char *name,
     cai_cli_error(error, CAI_ERR_NOMEM, "allocate named store");
     return NULL;
   }
-  entry->selected = selected;
+  entry->endpoint = selected.lockd != NULL ? strdup(selected.lockd) : NULL;
+  entry->key =
+      selected.pouch_key_file != NULL ? strdup(selected.pouch_key_file) : NULL;
+  entry->pem = selected.lockd_client_pem != NULL
+                   ? strdup(selected.lockd_client_pem)
+                   : NULL;
+  if ((selected.lockd != NULL && entry->endpoint == NULL) ||
+      (selected.pouch_key_file != NULL && entry->key == NULL) ||
+      (selected.lockd_client_pem != NULL && entry->pem == NULL)) {
+    free(entry->endpoint);
+    free(entry->key);
+    free(entry->pem);
+    free(entry);
+    cai_cli_error(error, CAI_ERR_NOMEM, "retain named store identity");
+    return NULL;
+  }
+  entry->selected.lockd = entry->endpoint;
+  entry->selected.pouch_key_file = entry->key;
+  entry->selected.lockd_client_pem = entry->pem;
+  entry->selected.disable_compression = selected.disable_compression;
   if (cai_cli_pouch_open_options(&entry->pouch, &selected, cli_logger(state),
                                  error) != CAI_OK) {
     cai_cli_pouch_close(&entry->pouch);
+    free(entry->endpoint);
+    free(entry->key);
+    free(entry->pem);
     free(entry);
     return NULL;
   }
   entry->next = state->extra_stores;
   state->extra_stores = entry;
   return &entry->pouch;
+}
+
+/** Construct future clients without changing the active session or queue.
+ * Failures are returned to the caller; preparation cannot fail the host. */
+static int cli_agent_services_open(cli_state *state, cai_error *error) {
+  cai_client_config client_config;
+  cai_chatgpt_auth_config auth_config;
+  const cai_blob_store *native_auth = NULL;
+  const char *auth_file;
+  char *metadata_json = NULL;
+  int rc = CAI_OK;
+  auth_file = state->options.auth_json;
+  if (strcmp(state->options.provider, "chatgpt") == 0 ||
+      (!state->options.review && state->options.mcp)) {
+    if (auth_file == NULL) {
+      cai_source *saved = NULL;
+      cai_cli_pouch *repository =
+          cli_named_store(state, state->normal_options.agents_store, error);
+      rc = repository != NULL ? cai_cli_agent_auth_init(
+                                    &state->services->agent_auth, repository,
+                                    state->options.source_agent_name != NULL
+                                        ? state->options.source_agent_name
+                                        : "default",
+                                    error)
+                              : error->code;
+      if (rc == CAI_OK)
+        rc = state->services->agent_auth.storage.load(
+            &state->services->agent_auth, "auth.json", &saved, error);
+      if (rc == CAI_OK && saved != NULL)
+        native_auth = &state->services->agent_auth.storage;
+      if (rc == CAI_OK && saved == NULL &&
+          strcmp(state->options.provider, "chatgpt") == 0)
+        rc = cai_cli_error(error, CAI_ERR_INVALID,
+                           "selected agent has no native credentials; use "
+                           "--login or explicitly select --auth-json FILE");
+      cai_source_close(saved);
+      if (rc != CAI_OK) {
+        goto done;
+      }
+    }
+  }
+
+  cai_client_config_init(&client_config);
+  client_config.environment = state->environment;
+  client_config.logger = state->log->logger;
+  rc = cli_load_model_metadata(&state->options, &metadata_json, error);
+  if (rc != CAI_OK) {
+    goto done;
+  }
+  client_config.model_metadata_json = metadata_json;
+  if (native_auth != NULL || auth_file != NULL ||
+      strcmp(state->options.provider, "chatgpt") == 0) {
+    cai_chatgpt_auth_config_init(&auth_config);
+    auth_config.logger = state->log->logger;
+    auth_config.storage = native_auth;
+    auth_config.auth_json_path = auth_file;
+    rc = cai_chatgpt_auth_open(&auth_config, &state->services->auth, error);
+    if (rc != CAI_OK) {
+      if (strcmp(state->options.provider, "chatgpt") == 0) {
+
+        goto done;
+      }
+      cai_error_cleanup(error);
+      cai_error_init(error);
+    }
+  }
+  if (state->services->auth != NULL) {
+    if (pthread_mutex_init(&state->services->auth_lock, NULL) != 0) {
+      cai_cli_error(error, CAI_ERR_TRANSPORT, "initialize shared auth lock");
+      goto done;
+    }
+    state->services->has_auth_lock = 1;
+    state->services->shared_auth.access_token = cli_auth_token;
+    state->services->shared_auth.refresh = cli_auth_refresh;
+    state->services->shared_auth.account_id = cli_auth_account;
+    state->services->shared_auth.impl = state->services;
+  }
+  if (strcmp(state->options.provider, "chatgpt") == 0) {
+    client_config.chatgpt_auth = &state->services->shared_auth;
+  } else if (strcmp(state->options.provider, "openrouter") == 0) {
+    cai_client_config_use_openrouter(&client_config);
+  } else if (strcmp(state->options.provider, "berget") == 0) {
+    cai_client_config_use_berget(&client_config);
+  } else if (strcmp(state->options.provider, "custom") == 0) {
+    client_config.base_url = state->options.endpoint;
+    client_config.api_key_env = state->options.api_key_env;
+  }
+  client_config.metadata_provider = state->options.provider;
+  if (state->configuration != NULL &&
+      state->configuration->apply_client(state->configuration, &client_config,
+                                         error) != CAI_OK) {
+    goto done;
+  }
+  if (state->options.endpoint != NULL)
+    client_config.base_url = state->options.endpoint;
+  if (state->options.api_key_env != NULL)
+    client_config.api_key_env = state->options.api_key_env;
+  if (metadata_json != NULL)
+    client_config.model_metadata_json = metadata_json;
+  rc = cai_client_open(&client_config, &state->services->client, error);
+  if (rc != CAI_OK) {
+    goto done;
+  }
+  /* Explicit catalog commands inherit the configured request deadline. They
+   * are independent of the short, opportunistic quota-refresh timeout. */
+  {
+    pslog_field operation = pslog_str("operation", "model catalog");
+    state->services->model_log =
+        state->log->logger->with(state->log->logger, &operation, 1U);
+    if (state->services->model_log == NULL) {
+      cai_cli_error(error, CAI_ERR_NOMEM, "create model catalog logger");
+      goto done;
+    }
+    client_config.logger = state->services->model_log;
+  }
+  rc = cai_client_open(&client_config, &state->services->model_client, error);
+  if (rc != CAI_OK) {
+    goto done;
+  }
+  if (state->services->auth != NULL &&
+      strcmp(state->options.provider, "chatgpt") == 0) {
+    cai_error quota_error;
+    cai_client_config quota_config;
+    cai_error_init(&quota_error);
+    cai_client_config_init(&quota_config);
+    quota_config.environment = state->environment;
+    quota_config.logger = state->log->logger;
+    quota_config.chatgpt_auth = &state->services->shared_auth;
+    quota_config.ca_bundle_path = client_config.ca_bundle_path;
+    quota_config.ca_path = client_config.ca_path;
+    quota_config.insecure_skip_verify = client_config.insecure_skip_verify;
+    quota_config.http_2_disabled = client_config.http_2_disabled;
+    quota_config.timeout_ms =
+        client_config.timeout_ms > 0L ? client_config.timeout_ms : 10000L;
+    if (cai_client_open(&quota_config, &state->services->quota_client,
+                        &quota_error) == CAI_OK) {
+      if (cai_cli_quota_open(&state->services->quota_refresh, cli_fetch_quota,
+                             state->services->quota_client,
+                             &quota_error) == CAI_OK) {
+      }
+    }
+    if (quota_error.code != CAI_OK)
+      cai_cli_log_error(state->log->logger, "initialize quota updates",
+                        &quota_error);
+    cai_error_cleanup(&quota_error);
+  }
+done:
+  free(metadata_json);
+  return error != NULL && error->code != CAI_OK ? error->code : rc;
+}
+
+static void cli_agent_services_close(cli_agent_services *services) {
+  if (services == NULL)
+    return;
+  cai_cli_mcp_close(&services->mcp);
+  if (services->owns_plugins)
+    cai_plugins_close(services->plugins);
+#ifdef CAI_APP_LUA_TOOLS
+  cai_lua_tools_close(services->lua_tools);
+#endif
+  cai_cli_quota_close(&services->quota_refresh);
+  if (services->client != NULL)
+    services->client->close(services->client);
+  if (services->model_client != NULL)
+    services->model_client->close(services->model_client);
+  if (services->model_log != NULL)
+    services->model_log->destroy(services->model_log);
+  if (services->quota_client != NULL)
+    services->quota_client->close(services->quota_client);
+  if (services->auth != NULL)
+    services->auth->close(services->auth);
+  if (services->has_auth_lock)
+    pthread_mutex_destroy(&services->auth_lock);
+  cai_context_close(services->context);
+  free(services);
 }
 
 /** Per-invocation scratch belongs to the heap, including callback reentry. */
@@ -1369,10 +1581,10 @@ static int cli_open_plugins_with_scratch(cli_state *state, cai_error *error,
 
   int rc;
   if (!state->options.plugins || state->options.review ||
-      state->plugins != NULL)
+      state->services->plugins != NULL)
     return CAI_OK;
   if (state->application != NULL && state->application->plugins != NULL) {
-    state->plugins = state->application->plugins;
+    state->services->plugins = state->application->plugins;
     return CAI_OK;
   }
   if (snprintf(scratch->global, sizeof(scratch->global), "%s/tools",
@@ -1390,21 +1602,22 @@ static int cli_open_plugins_with_scratch(cli_state *state, cai_error *error,
   cai_plugins_config_init(&config);
   config.directories = roots;
   config.directory_count = 2U;
-  rc = cai_plugins_open(&config, &state->plugins, error);
+  rc = cai_plugins_open(&config, &state->services->plugins, error);
   if (rc != CAI_OK)
     return rc;
-  state->owns_plugins = 1;
+  state->services->owns_plugins = 1;
 #ifdef CAI_APP_LUA_TOOLS
   {
     cai_lua_tools_config adapter;
     cai_lua_tools_config_init(&adapter);
-    rc = cai_lua_tools_open(&adapter, &state->lua_tools, error);
+    rc = cai_lua_tools_open(&adapter, &state->services->lua_tools, error);
   }
   if (rc == CAI_OK)
-    rc = cai_lua_tools_attach(state->lua_tools, state->plugins, error);
+    rc = cai_lua_tools_attach(state->services->lua_tools,
+                              state->services->plugins, error);
 #endif
   if (rc == CAI_OK)
-    rc = cai_plugins_reload(state->plugins, error);
+    rc = cai_plugins_reload(state->services->plugins, error);
   return rc;
 }
 
@@ -1420,14 +1633,16 @@ static int cli_open_plugins(cli_state *state, cai_error *error) {
   return rc;
 }
 
-static int cli_open_runtime(cli_state *state, const char *resume_id,
-                            int new_session, cai_error *error) {
+static int cli_prepare_runtime(cli_state *state, const char *resume_id,
+                               int new_session, cai_agent_runtime *current,
+                               cai_error *error) {
   cai_agent_runtime_config config;
   cai_agent_preset preset;
   cai_skill_config skills;
   cai_cli_instruction_files instruction_files;
   cai_terminal_tool_config terminal;
   char selected_id[CAI_AGENT_SESSION_ID_MAX];
+  cai_agent_runtime *opened = NULL;
   int rc;
 
   if (resume_id != NULL) {
@@ -1469,7 +1684,7 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
   if (rc != CAI_OK)
     return rc;
   if (state->options.plugins && !state->options.review)
-    config.plugins = state->plugins;
+    config.plugins = state->services->plugins;
   terminal.default_yield_time_ms = state->options.yield_time_ms;
   terminal.foreground = state->options.foreground;
   if (state->suppress_replay) {
@@ -1480,7 +1695,8 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     config.reasoning_summary = NULL;
     config.service_tier = NULL;
   }
-  if (state->options.messaging && !state->options.review) {
+  if (state->options.messaging && !state->options.review &&
+      state->messages == NULL) {
     cai_cli_pouch *messaging =
         cli_named_store(state, state->normal_options.messaging_store, error);
     if (messaging == NULL)
@@ -1491,7 +1707,7 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     if (rc != CAI_OK)
       return rc;
   }
-  if (state->options.context && state->context == NULL) {
+  if (state->options.context && state->services->context == NULL) {
     cai_context_config context_config;
     cai_cli_pouch *store =
         state->options.context_store != NULL
@@ -1504,18 +1720,18 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     context_config.namespace_name = state->options.context_namespace;
     context_config.root_path = state->workspace;
     context_config.yolo = state->options.yolo;
-    rc = cai_context_open(&context_config, &state->context, error);
+    rc = cai_context_open(&context_config, &state->services->context, error);
     if (rc != CAI_OK)
       return rc;
   }
-  state->network_tools.network_tools = state->options.network_tools;
-  state->network_tools.disable_event_stream_listener =
+  state->services->network_tools.network_tools = state->options.network_tools;
+  state->services->network_tools.disable_event_stream_listener =
       state->options.disable_event_stream_listener;
-  state->network_tools.call = cai_cli_workspace_host_network_call;
-  state->network_tools.context = state->workspace_host;
+  state->services->network_tools.call = cai_cli_workspace_host_network_call;
+  state->services->network_tools.context = state->workspace_host;
   if (!state->options.disable_event_stream_listener ||
       state->options.network_tools || state->messages != NULL ||
-      state->context != NULL ||
+      state->services->context != NULL ||
       (state->application != NULL &&
        state->application->register_agent_tools != NULL)) {
     config.register_agent_tools = cli_register_agent_tools;
@@ -1539,28 +1755,30 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
   config.review_event_context = state;
   config.synchronize_input_boundaries = 1;
   config.event_context = state;
-  if (!state->options.review && !state->suppress_replay) {
+  if (current == NULL && !state->options.review && !state->suppress_replay) {
     state->pouch.replay_begin = cli_replay_begin;
     config.replay_callback = cli_replay_event;
     config.replay_context = state;
     state->pouch.replay_context = state;
     state->pouch.replay_scope = state->workspace;
   }
-  if (!state->mcp_initialized) {
-    rc = cai_cli_mcp_open(&state->mcp, state->configuration,
-                          state->options.program_name,
-                          state->options.mcp && !state->options.review,
-                          state->auth != NULL ? &state->shared_auth : NULL,
-                          cli_logger(state), error);
+  if (!state->services->mcp_initialized) {
+    rc = cai_cli_mcp_open(
+        &state->services->mcp, state->configuration,
+        state->options.program_name,
+        state->options.mcp && !state->options.review,
+        state->services->auth != NULL ? &state->services->shared_auth : NULL,
+        cli_logger(state), error);
     if (rc != CAI_OK)
       return rc;
-    state->mcp_initialized = 1;
+    state->services->mcp_initialized = 1;
   }
-  config.mcp_clients = state->mcp.clients;
-  config.mcp_options = state->mcp.options;
+  config.mcp_clients = state->services->mcp.clients;
+  config.mcp_options = state->services->mcp.options;
   config.mcp_client_count =
-      state->options.review ? 0U : state->mcp.client_count;
-  cai_cli_pouch_begin_use(&state->pouch);
+      state->options.review ? 0U : state->services->mcp.client_count;
+  if (current == NULL)
+    cai_cli_pouch_begin_use(&state->pouch);
   rc = cai_cli_instruction_files_open(&state->options, &instruction_files,
                                       error);
   preset.developer_instructions = instruction_files.agent;
@@ -1578,13 +1796,25 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
     state->options.developer_instructions_override_file = NULL;
   }
   if (rc == CAI_OK)
-    rc = cai_agent_runtime_open(state->client, &config, &state->runtime, error);
+    rc = current != NULL
+             ? cai_agent_runtime_activate(
+                   current, state->services->client, &config,
+                   state->pouch.active_agent_name,
+                   state->pouch.active_agent_revision, &opened, error)
+             : cai_agent_runtime_open_agent(state->services->client, &config,
+                                            state->pouch.active_agent_name,
+                                            state->pouch.active_agent_revision,
+                                            &opened, error);
+  if (rc == CAI_OK)
+    state->runtime = opened;
   cai_cli_instruction_files_close(&instruction_files);
+  if (current != NULL)
+    return rc;
   if (rc == CAI_OK)
     rc = cai_cli_documents_bind(&state->documents, state->runtime, error);
   if (rc == CAI_OK && !state->options.review) {
-    cai_cli_mcp_start(&state->mcp);
-    if (!cai_cli_mcp_ready(&state->mcp))
+    cai_cli_mcp_start(&state->services->mcp);
+    if (!cai_cli_mcp_ready(&state->services->mcp))
       rc = cai_agent_runtime_refresh_mcp(state->runtime, error);
   }
   state->pouch.capture_session = 0;
@@ -1686,6 +1916,13 @@ static int cli_open_runtime(cli_state *state, const char *resume_id,
   }
   return rc;
 }
+
+static int cli_open_runtime(cli_state *state, const char *resume_id,
+                            int new_session, cai_error *error) {
+  return cli_prepare_runtime(state, resume_id, new_session, NULL, error);
+}
+
+#include "agent_activation.inc"
 
 static int cli_prepare_clipboard(cli_state *state, cai_error *error) {
   const char *path = state->options.clipboard_dir;
@@ -2018,7 +2255,7 @@ static int cli_set_messaging(cli_state *state, int enabled, cai_error *error) {
 }
 
 static int cli_switch_session(cli_state *state, const char *id, int new_session,
-                              cai_error *error) {
+                              const char *agent, cai_error *error) {
   cai_agent_run_state run_state;
   const char *created_id;
   int rc;
@@ -2042,22 +2279,14 @@ static int cli_switch_session(cli_state *state, const char *id, int new_session,
   }
   if (cli_finish_response(state) != 0)
     return CAI_ERR_TRANSPORT;
-  rc = cai_cli_messages_flush_decisions(state->messages, state->input, error);
-  if (rc != CAI_OK)
-    return rc;
-  rc = cli_close_runtime(state, error);
+  rc = cli_reopen_agent_session(state, id, new_session, agent, error);
   if (rc != CAI_OK)
     return rc;
   state->awaiting_turn = 0;
   state->automation_done = 1;
   state->automation_failed = 0;
-  /* -z selects only the startup parent, never a subsequently selected agent. */
-  state->options.developer_instructions_override_file = NULL;
   free(state->initial_review_instructions);
   state->initial_review_instructions = NULL;
-  rc = cli_open_runtime(state, id, new_session, error);
-  if (rc != CAI_OK)
-    return rc;
   if (!new_session)
     return cli_advance_automation(state, error);
   created_id = cai_agent_runtime_session_id(state->runtime);
@@ -2100,16 +2329,18 @@ static int cli_session_destination(cli_state *state, const char *selector,
  * connection setup, so selecting the current session emits no command
  * receipt or transcript text and does not reopen its store/context. */
 static int cli_select_startup(void *context, const char *selector,
-                              cai_error *error) {
+                              const char *agent, cai_error *error) {
   cli_state *state = context;
   char id[CAI_AGENT_SESSION_ID_MAX];
   int rc;
   if (selector == NULL)
-    return cli_switch_session(state, NULL, 1, error);
+    return cli_switch_session(state, NULL, 1, agent, error);
   rc = cli_session_destination(state, selector, id, error);
   if (rc == CAI_OK &&
       strcmp(id, cai_agent_runtime_session_id(state->runtime)) != 0)
-    rc = cli_switch_session(state, id, 0, error);
+    rc = cli_switch_session(state, id, 0, agent, error);
+  else if (rc == CAI_OK && agent != NULL)
+    rc = cli_change_agent(state, agent, 0, error);
   return rc;
 }
 static int cli_reasoning_tool_command(cli_state *state, const char *arg,
@@ -2517,8 +2748,9 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
     descriptors[3].fd = cai_input_controller_fd(state->input_controller);
     descriptors[4].fd =
         state->messages != NULL ? cai_cli_messages_fd(state->messages) : -1;
-    descriptors[5].fd =
-        state->quota_refresh.started ? state->quota_refresh.fd : -1;
+    descriptors[5].fd = state->services->quota_refresh.started
+                            ? state->services->quota_refresh.fd
+                            : -1;
     descriptors[6].fd = -1;
     if (state->review_runtime != NULL) {
       rc = cai_agent_runtime_wakeup_fd(state->review_runtime,
@@ -2581,7 +2813,8 @@ static int cli_pump(cli_state *state, long timeout, cai_error *error) {
     rc = cli_export_pump(state, error);
   if (rc == CAI_OK)
     rc = cli_messages_process(state, 0, error);
-  if (rc == CAI_OK && cai_cli_quota_take(&state->quota_refresh, &state->quota))
+  if (rc == CAI_OK &&
+      cai_cli_quota_take(&state->services->quota_refresh, &state->quota))
     rc = cli_sync_status(state, error);
   return rc;
 }
@@ -2626,7 +2859,7 @@ static int cli_tier_command(cli_state *state, const char *arguments, int fast,
                                          : effective.service_tier;
   listing = argument != NULL && strcmp(argument, "list") == 0;
   choices[0] = "default";
-  rc = cai_client_list_models(state->model_client,
+  rc = cai_client_list_models(state->services->model_client,
                               CAI_MODEL_CATALOG_REFRESH_ONLINE_IF_UNCACHED,
                               &catalog, error);
   if (rc != CAI_OK) {
@@ -2828,7 +3061,7 @@ static int cli_settings_command(cli_state *state, const char *arguments,
    */
   if (listing || requested.reasoning_effort != NULL) {
     rc = cai_client_list_models(
-        state->model_client,
+        state->services->model_client,
         listing ? CAI_MODEL_CATALOG_REFRESH_ONLINE
                 : CAI_MODEL_CATALOG_REFRESH_ONLINE_IF_UNCACHED,
         &catalog, error);
@@ -2854,7 +3087,7 @@ static int cli_settings_command(cli_state *state, const char *arguments,
       cai_error_init(error);
       /* An explicit retry may fail while a previous successful catalog is
        * still useful. Offline lookup performs no further network request. */
-      (void)cai_client_list_models(state->model_client,
+      (void)cai_client_list_models(state->services->model_client,
                                    CAI_MODEL_CATALOG_REFRESH_OFFLINE, &catalog,
                                    error);
       cai_error_cleanup(error);
@@ -3387,6 +3620,33 @@ static int cli_handle_command(cli_state *state, const char *line,
   const char *arg;
   int rc;
   *handled = 1;
+  if (strcmp(line, "/use") == 0 || strncmp(line, "/use ", 5U) == 0 ||
+      strncmp(line, "/use\t", 5U) == 0 || strcmp(line, "/builder") == 0) {
+    char message[256];
+    char *selected;
+    size_t length;
+    int builder = strcmp(line, "/builder") == 0;
+    arg = builder ? state->pouch.active_agent_name : line + 4U;
+    arg += strspn(arg, " \t");
+    length = strlen(arg);
+    while (length != 0U &&
+           (arg[length - 1U] == ' ' || arg[length - 1U] == '\t'))
+      --length;
+    if (builder || length != 0U) {
+      selected = strndup(arg, length);
+      if (selected == NULL)
+        return cai_cli_error(error, CAI_ERR_NOMEM, "copy selected agent name");
+      rc = cli_change_agent(state, selected, builder, error);
+      free(selected);
+      if (rc != CAI_OK)
+        return rc;
+    }
+    snprintf(message, sizeof(message),
+             "Agent **%s** is active (revision `%s`)%s.",
+             state->pouch.active_agent_name, state->pouch.active_agent_revision,
+             state->options.agent_builder ? "; agent builder" : "");
+    return cli_markdown(state, message) == 0 ? CAI_OK : CAI_ERR_TRANSPORT;
+  }
   if (strncmp(line, "/history", 8U) == 0 &&
       (line[8] == '\0' || line[8] == ' ' || line[8] == '\t'))
     return cli_retention_command(state, line + 8U, 1, error);
@@ -3424,7 +3684,7 @@ static int cli_handle_command(cli_state *state, const char *line,
         return cai_cli_error(error, CAI_ERR_INVALID,
                              "YOLO change waits for an idle runtime and tools");
       state->options.yolo = enabled = requested;
-      cai_context_set_yolo(state->context, requested);
+      cai_context_set_yolo(state->services->context, requested);
       snprintf(
           message, sizeof(message),
           "**YOLO %s.** %s\n\nThis runtime only; configuration is unchanged.\n",
@@ -3485,7 +3745,7 @@ static int cli_handle_command(cli_state *state, const char *line,
         return rc;
       length = 0U;
     }
-    if (state->messages == NULL) {
+    if (!state->options.messaging || state->messages == NULL) {
       const char *hint = "Messaging is disabled. Use `/queue on` to enable "
                          "the message tool and incoming queue.\n";
       return cli_markdown(state, hint) == 0 ? CAI_OK : CAI_ERR_TRANSPORT;
@@ -3651,21 +3911,21 @@ static int cli_handle_command(cli_state *state, const char *line,
                          "less) in a terminal.");
   }
   if (strcmp(line, "/new") == 0) {
-    return cli_switch_session(state, NULL, 1, error);
+    return cli_switch_session(state, NULL, 1, NULL, error);
   }
   if (strncmp(line, "/tools ", 7U) == 0) {
     const char *action = line + 7U;
     const char *message = "Tool catalog updated for the next model request.\n";
-    if (state->plugins == NULL)
+    if (state->services->plugins == NULL)
       return cai_cli_error(
           error, CAI_ERR_INVALID,
           "Plugins are disabled; enable --plugins or [plugins] enabled.");
     if (strcmp(action, "reload") == 0)
-      rc = cai_plugins_reload(state->plugins, error);
+      rc = cai_plugins_reload(state->services->plugins, error);
     else if (strncmp(action, "reload ", 7U) == 0)
-      rc = cai_plugins_load(state->plugins, action + 7U, error);
+      rc = cai_plugins_load(state->services->plugins, action + 7U, error);
     else if (strncmp(action, "unload ", 7U) == 0)
-      rc = cai_plugins_unload(state->plugins, action + 7U, error);
+      rc = cai_plugins_unload(state->services->plugins, action + 7U, error);
     else
       return cai_cli_error(
           error, CAI_ERR_INVALID,
@@ -3680,13 +3940,13 @@ static int cli_handle_command(cli_state *state, const char *line,
       return CAI_ERR_TRANSPORT;
     arg = line + 4U;
     arg += strspn(arg, " \t");
-    rc = cai_cli_mcp_command(&state->mcp, arg, state->runtime, cli_tools_write,
-                             state, error);
+    rc = cai_cli_mcp_command(&state->services->mcp, arg, state->runtime,
+                             cli_tools_write, state, error);
     if (rc == CAI_OK &&
         (strncmp(arg, "enable", 6U) == 0 || strncmp(arg, "disable", 7U) == 0 ||
          strncmp(arg, "refresh", 7U) == 0) &&
-        !cai_cli_mcp_ready(&state->mcp))
-      state->mcp_notice_pending = 1;
+        !cai_cli_mcp_ready(&state->services->mcp))
+      state->services->mcp_notice_pending = 1;
     if (rc == CAI_OK && cli_finish_response(state) != 0)
       rc = CAI_ERR_TRANSPORT;
     return rc;
@@ -3697,8 +3957,8 @@ static int cli_handle_command(cli_state *state, const char *line,
     /* Full tables retain their layout; libmdf switches oversized tables to
      * its bounded row renderer automatically. Use the normal feed throughout.
      */
-    rc = cai_cli_tools_markdown(&state->mcp, state->runtime, 1, cli_tools_write,
-                                state, error);
+    rc = cai_cli_tools_markdown(&state->services->mcp, state->runtime, 1,
+                                cli_tools_write, state, error);
     if (rc == CAI_OK && cli_finish_response(state) != 0)
       rc = CAI_ERR_TRANSPORT;
     return rc;
@@ -3773,15 +4033,17 @@ static int cli_handle_command(cli_state *state, const char *line,
     cli_refresh_quota(state, 1);
     snprintf(mailbox_row, sizeof(mailbox_row),
              "| Message queue | `%s` |\n| Autoqueue | %s |\n",
-             state->messages != NULL ? cai_cli_messages_name(state->messages)
-                                     : "disabled",
-             state->messages == NULL              ? "disabled"
+             state->options.messaging && state->messages != NULL
+                 ? cai_cli_messages_name(state->messages)
+                 : "disabled",
+             !state->options.messaging || state->messages == NULL ? "disabled"
              : state->options.enable_auto_enqueue ? "on (automatic approval)"
                                                   : "off (manual approval)");
     if (cai_cli_status_markdown(
             markdown, sizeof(markdown), state->options.program_name, model,
             effort, state->options.provider, &metrics,
-            state->auth != NULL ? &state->quota : NULL, &instructions) != 0 ||
+            state->services->auth != NULL ? &state->quota : NULL,
+            &instructions) != 0 ||
         cli_text(state, markdown, strlen(markdown)) != 0 ||
         cli_tools_write(state, policy_row, strlen(policy_row)) != 0 ||
         cli_tools_write(state, agent_row, strlen(agent_row)) != 0 ||
@@ -3792,8 +4054,8 @@ static int cli_handle_command(cli_state *state, const char *line,
         cli_text(state, mailbox_row, strlen(mailbox_row)) != 0 ||
         cai_cli_todo_status(state->runtime, cli_tools_write, state, error) !=
             CAI_OK ||
-        cai_cli_tools_markdown(&state->mcp, state->runtime, 0, cli_tools_write,
-                               state, error) != CAI_OK ||
+        cai_cli_tools_markdown(&state->services->mcp, state->runtime, 0,
+                               cli_tools_write, state, error) != CAI_OK ||
         cli_finish_response(state) != 0) {
       return CAI_ERR_TRANSPORT;
     }
@@ -3848,7 +4110,8 @@ static int cli_handle_command(cli_state *state, const char *line,
     arg = line + 8U;
     arg += strspn(arg, " \t");
     rc = cli_session_destination(state, arg, selected, error);
-    return rc == CAI_OK ? cli_switch_session(state, selected, 0, error) : rc;
+    return rc == CAI_OK ? cli_switch_session(state, selected, 0, NULL, error)
+                        : rc;
   }
   if (line[0] == '/')
     return cai_cli_error(error, CAI_ERR_INVALID,
@@ -4136,26 +4399,24 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
                              const cai_attachment_config *server,
                              int lifetime_explicit, int frontend_startup,
                              const cai_cli_prepared *prepared) {
-  cai_client_config client_config;
-  cai_chatgpt_auth_config auth_config;
-  cai_cli_pouch *auth_store = NULL;
-  const cai_blob_store *native_auth = NULL;
   cai_error error;
-  char auth_path[PATH_MAX];
-  const char *auth_file;
-  char *metadata_json;
   int parsed;
   int rc;
   int result;
 
   memset(state, 0, sizeof(*state));
   cai_cli_temp_init(&state->temporary);
+  state->services = calloc(1U, sizeof(*state->services));
+  if (state->services == NULL)
+    return 1;
+  state->invocation_argc = argc;
+  state->invocation_argv = argv;
+  state->startup = *startup;
   state->application = application;
   state->bridge = bridge;
   state->frontend_startup = frontend_startup;
   cai_cli_shell_init(&state->shell);
   result = 1;
-  metadata_json = NULL;
   cai_error_init(&error);
   {
     cai_cli_options early;
@@ -4210,6 +4471,7 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
         cai_cli_temp_open(&state->temporary, &state->options, &error) != CAI_OK)
       parsed = -1;
   }
+  state->bootstrap_configuration = state->configuration;
   if (parsed <= 0) {
     if (parsed < 0 &&
         cai_cli_log_new(&state->log, PSLOG_LEVEL_WARN, 0,
@@ -4349,61 +4611,6 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       goto cleanup;
     }
   }
-  auth_file = state->options.auth_json;
-  if (strcmp(state->options.provider, "chatgpt") == 0 ||
-      (!state->options.review && state->options.mcp)) {
-    if (state->options.source_agent_name != NULL && auth_file == NULL) {
-      cai_cli_pouch *repository =
-          cli_named_store(state, state->normal_options.agents_store, &error);
-      cai_source *saved = NULL;
-      rc = repository != NULL
-               ? cai_cli_agent_auth_init(&state->agent_auth, repository,
-                                         state->options.source_agent_name,
-                                         &error)
-               : error.code;
-      if (rc == CAI_OK)
-        rc = state->agent_auth.storage.load(&state->agent_auth, "auth.json",
-                                            &saved, &error);
-      if (rc == CAI_OK && saved != NULL)
-        native_auth = &state->agent_auth.storage;
-      cai_source_close(saved);
-      if (rc != CAI_OK) {
-        cli_print_error(state, "open agent credentials", &error);
-        goto cleanup;
-      }
-    }
-    /* Explicit/previous global authentication remains available for agents
-     * without imported native credentials. */
-    if (native_auth == NULL) {
-      auth_store =
-          cli_named_store(state, state->normal_options.auth_store, &error);
-      if (auth_store == NULL) {
-        cli_print_error(state, "open authentication store", &error);
-        goto cleanup;
-      }
-      if (auth_file == NULL &&
-          cai_environment_get(state->environment, "HOME") != NULL) {
-        rc = snprintf(auth_path, sizeof(auth_path), "%s/.codex/auth.json",
-                      cai_environment_get(state->environment, "HOME"));
-        if (rc > 0 && (size_t)rc < sizeof(auth_path) &&
-            access(auth_path, F_OK) == 0)
-          auth_file = auth_path;
-      }
-      if (auth_file != NULL) {
-        rc = cai_cli_pouch_seed_auth(auth_store, auth_file, &error);
-        if (rc != CAI_OK) {
-          if (strcmp(state->options.provider, "chatgpt") == 0) {
-            cli_print_error(state, "import ChatGPT auth", &error);
-            goto cleanup;
-          }
-          cai_cli_log_error(cli_logger(state), "ChatGPT apps auth import",
-                            &error);
-          cai_error_cleanup(&error);
-          cai_error_init(&error);
-        }
-      }
-    }
-  }
   rc = cli_prepare_clipboard(state, &error);
   if (rc != CAI_OK) {
     cli_print_error(state, "initialize clipboard", &error);
@@ -4422,116 +4629,10 @@ static int cli_app_run_state(cli_state *state, int argc, char **argv,
       goto cleanup;
     }
   }
-  cai_client_config_init(&client_config);
-  client_config.environment = state->environment;
-  client_config.logger = state->log->logger;
-  rc = cli_load_model_metadata(&state->options, &metadata_json, &error);
+  rc = cli_agent_services_open(state, &error);
   if (rc != CAI_OK) {
-    cli_print_error(state, "load model metadata", &error);
+    cli_print_error(state, "open agent services", &error);
     goto cleanup;
-  }
-  client_config.model_metadata_json = metadata_json;
-  if (auth_store != NULL || native_auth != NULL) {
-    cai_chatgpt_auth_config_init(&auth_config);
-    auth_config.logger = state->log->logger;
-    auth_config.storage =
-        native_auth != NULL ? native_auth : &auth_store->credentials;
-    rc = cai_chatgpt_auth_open(&auth_config, &state->auth, &error);
-    if (rc != CAI_OK) {
-      if (strcmp(state->options.provider, "chatgpt") == 0) {
-        char hint[640];
-        cli_print_error(state, "open ChatGPT auth", &error);
-        snprintf(hint, sizeof(hint), "run %s --login to authenticate",
-                 state->options.invocation_name);
-        cli_diagnostic(state, PSLOG_LEVEL_ERROR, hint);
-        goto cleanup;
-      }
-      cai_error_cleanup(&error);
-      cai_error_init(&error);
-    }
-  }
-  if (state->auth != NULL) {
-    if (pthread_mutex_init(&state->auth_lock, NULL) != 0) {
-      cai_cli_error(&error, CAI_ERR_TRANSPORT, "initialize shared auth lock");
-      cli_print_error(state, "open ChatGPT auth", &error);
-      goto cleanup;
-    }
-    state->has_auth_lock = 1;
-    state->shared_auth.access_token = cli_auth_token;
-    state->shared_auth.refresh = cli_auth_refresh;
-    state->shared_auth.account_id = cli_auth_account;
-    state->shared_auth.impl = state;
-  }
-  if (strcmp(state->options.provider, "chatgpt") == 0) {
-    client_config.chatgpt_auth = &state->shared_auth;
-  } else if (strcmp(state->options.provider, "openrouter") == 0) {
-    cai_client_config_use_openrouter(&client_config);
-  } else if (strcmp(state->options.provider, "berget") == 0) {
-    cai_client_config_use_berget(&client_config);
-  } else if (strcmp(state->options.provider, "custom") == 0) {
-    client_config.base_url = state->options.endpoint;
-    client_config.api_key_env = state->options.api_key_env;
-  }
-  client_config.metadata_provider = state->options.provider;
-  if (state->configuration != NULL &&
-      state->configuration->apply_client(state->configuration, &client_config,
-                                         &error) != CAI_OK) {
-    cli_print_error(state, "apply client configuration", &error);
-    goto cleanup;
-  }
-  if (state->options.endpoint != NULL)
-    client_config.base_url = state->options.endpoint;
-  if (state->options.api_key_env != NULL)
-    client_config.api_key_env = state->options.api_key_env;
-  if (metadata_json != NULL)
-    client_config.model_metadata_json = metadata_json;
-  rc = cai_client_open(&client_config, &state->client, &error);
-  if (rc != CAI_OK) {
-    cli_print_error(state, "open client", &error);
-    goto cleanup;
-  }
-  /* Explicit catalog commands inherit the configured request deadline. They
-   * are independent of the short, opportunistic quota-refresh timeout. */
-  {
-    pslog_field operation = pslog_str("operation", "model catalog");
-    state->model_log =
-        state->log->logger->with(state->log->logger, &operation, 1U);
-    if (state->model_log == NULL) {
-      cai_cli_error(&error, CAI_ERR_NOMEM, "create model catalog logger");
-      cli_print_error(state, "open model catalog client", &error);
-      goto cleanup;
-    }
-    client_config.logger = state->model_log;
-  }
-  rc = cai_client_open(&client_config, &state->model_client, &error);
-  if (rc != CAI_OK) {
-    cli_print_error(state, "open model catalog client", &error);
-    goto cleanup;
-  }
-  if (state->auth != NULL && strcmp(state->options.provider, "chatgpt") == 0) {
-    cai_error quota_error;
-    cai_client_config quota_config;
-    cai_error_init(&quota_error);
-    cai_client_config_init(&quota_config);
-    quota_config.environment = state->environment;
-    quota_config.logger = state->log->logger;
-    quota_config.chatgpt_auth = &state->shared_auth;
-    quota_config.ca_bundle_path = client_config.ca_bundle_path;
-    quota_config.ca_path = client_config.ca_path;
-    quota_config.insecure_skip_verify = client_config.insecure_skip_verify;
-    quota_config.http_2_disabled = client_config.http_2_disabled;
-    quota_config.timeout_ms =
-        client_config.timeout_ms > 0L ? client_config.timeout_ms : 10000L;
-    if (cai_client_open(&quota_config, &state->quota_client, &quota_error) ==
-        CAI_OK) {
-      if (cai_cli_quota_open(&state->quota_refresh, cli_fetch_quota,
-                             state->quota_client, &quota_error) == CAI_OK) {
-      }
-    }
-    if (quota_error.code != CAI_OK)
-      cai_cli_log_error(state->log->logger, "initialize quota updates",
-                        &quota_error);
-    cai_error_cleanup(&quota_error);
   }
   rc = cli_open_runtime(state, state->options.resume_id,
                         state->options.new_session, &error);
@@ -4643,31 +4744,16 @@ cleanup:
     cai_cli_messages_close(state->messages);
     state->messages = NULL;
   }
-  cai_cli_mcp_close(&state->mcp);
-  if (state->owns_plugins)
-    cai_plugins_close(state->plugins);
-#ifdef CAI_APP_LUA_TOOLS
-  cai_lua_tools_close(state->lua_tools);
-#endif
-  cai_cli_quota_close(&state->quota_refresh);
-  if (state->client != NULL)
-    state->client->close(state->client);
-  if (state->model_client != NULL)
-    state->model_client->close(state->model_client);
-  if (state->model_log != NULL)
-    state->model_log->destroy(state->model_log);
-  if (state->quota_client != NULL)
-    state->quota_client->close(state->quota_client);
-  if (state->auth != NULL)
-    state->auth->close(state->auth);
-  if (state->has_auth_lock)
-    pthread_mutex_destroy(&state->auth_lock);
-  cai_context_close(state->context);
+  cli_agent_services_close(state->services);
+  state->services = NULL;
   cai_cli_workspace_host_network_close(state->workspace_host);
   while (state->extra_stores != NULL) {
     cli_extra_store *entry = state->extra_stores;
     state->extra_stores = entry->next;
     cai_cli_pouch_close(&entry->pouch);
+    free(entry->endpoint);
+    free(entry->key);
+    free(entry->pem);
     free(entry);
   }
   cai_cli_pouch_close(&state->pouch);
@@ -4700,9 +4786,10 @@ cleanup:
   free(state->normal_reasoning_override);
   free(state->high_reasoning_override);
   free(state->initial_review_instructions);
-  free(metadata_json);
-  if (!state->borrowed_configuration)
+  if (state->configuration != state->bootstrap_configuration)
     cai_config_close(state->configuration);
+  if (!state->borrowed_configuration)
+    cai_config_close(state->bootstrap_configuration);
   cai_environment_close(state->environment);
   cai_cli_workspace_host_close(state->workspace_host);
   cai_error_cleanup(&error);

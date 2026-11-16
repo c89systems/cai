@@ -41,6 +41,45 @@ static const char *cai_smith_model_prompt(const char *model) {
   }
   return (const char *)cai_smith_fallback_prompt;
 }
+
+size_t cai_agent_builtin_instructions_count(void) {
+  return sizeof(cai_smith_prompt_profiles) /
+             sizeof(cai_smith_prompt_profiles[0]) +
+         1U;
+}
+
+const char *cai_agent_builtin_instructions_name(size_t index) {
+  size_t count = cai_agent_builtin_instructions_count();
+  if (index >= count)
+    return NULL;
+  return index == count - 1U ? "reviewer"
+                             : cai_smith_prompt_profiles[index].model;
+}
+
+int cai_agent_builtin_instructions_write(const char *name, const char *identity,
+                                         cai_sink *sink, cai_error *error) {
+  cai_agent_preset preset;
+  cai_agent_preset_config config;
+  size_t i, count = cai_agent_builtin_instructions_count();
+  if (name == NULL || identity == NULL || sink == NULL)
+    return cai_set_error(
+        error, CAI_ERR_INVALID,
+        "built-in prompt name, identity and sink are required");
+  for (i = 0U; i < count; ++i)
+    if (strcmp(name, cai_agent_builtin_instructions_name(i)) == 0)
+      break;
+  if (i == count)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "unknown built-in instruction profile");
+  cai_agent_preset_from_smith(&preset);
+  cai_agent_preset_config_init(&config);
+  config.agent_identity = identity;
+  if (i != count - 1U)
+    preset.developer_instructions =
+        (const char *)cai_smith_prompt_profiles[i].instructions;
+  return cai_agent_preset_write_base_instructions(&preset, &config,
+                                                  i == count - 1U, sink, error);
+}
 static void cai_smith_skill_warning(void *context, const char *message) {
   cai_log_skill_warning((pslog_logger *)context, message);
 }

@@ -10,4 +10,8 @@ int cai_input_queue_admit(cai_input_queue_client *client,
 /** New owner recovery releases crashed editors without consuming request IDs.
  */
 int cai_input_queue_release_orphans(cai_input_queue *, cai_error *);
+/** Transfer a quiescent runtime receiver without replacing its queue, clients,
+ * edit tokens, pending entries or observations. Owner-thread only. */
+int cai_input_queue_rebind(cai_input_queue *, void *previous, void *next,
+                           cai_error *);
 #endif

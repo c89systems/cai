@@ -113,6 +113,9 @@ static const char *const help[] = {
     "| `/resume NUMBER` | Resume a listed session and replay prompts "
     "and assistant text. |\n"
     "| `/new` | Start a fresh session in this directory. |\n"
+    "| `/use [NAME]` | Show or activate a stored agent at a turn boundary, "
+    "keeping this session and queued input. |\n"
+    "| `/builder` | Activate agent-building instructions in this session. |\n"
     "| `/export [BASENAME]` | Export this session. `.md` or `.jsonl` "
     "selects one format; other names get both suffixes. No name uses the "
     "default export directory. |\n",

@@ -908,7 +908,7 @@ int cai_app_client_unsubscribe(cai_app_client *c, cai_error *error) {
 static int bind_client(cai_app_client *client, uint64_t request,
                        unsigned long long epoch, unsigned long long producer,
                        const char *session, int select_session,
-                       cai_error *error) {
+                       const char *agent, cai_error *error) {
   cai_cli_input_wire_message m;
   int rc = valid(client, error);
   size_t length = session != NULL ? strnlen(session, 129U) : 0U;
@@ -933,6 +933,7 @@ static int bind_client(cai_app_client *client, uint64_t request,
   m.session = session;
   m.managed_delivery = client->managed_delivery;
   m.select_session = select_session;
+  m.agent = agent;
   rc = send(client, &m, error);
   if (rc == CAI_OK) {
     client->binding_request = request;
@@ -950,13 +951,20 @@ static int bind_client(cai_app_client *client, uint64_t request,
 int cai_app_client_bind(cai_app_client *client, uint64_t request,
                         unsigned long long epoch, unsigned long long producer,
                         const char *session, cai_error *error) {
-  return bind_client(client, request, epoch, producer, session, 0, error);
+  return bind_client(client, request, epoch, producer, session, 0, NULL, error);
+}
+int cai_app_client_select_agent(cai_app_client *client, uint64_t request,
+                                const char *selector, const char *agent,
+                                cai_error *error) {
+  if ((selector != NULL && selector[0] == '\0') ||
+      (agent != NULL && (*agent == '\0' || strlen(agent) > 128U)))
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "invalid session or agent selector");
+  return bind_client(client, request, 0U, 0U, selector, 1, agent, error);
 }
 int cai_app_client_select(cai_app_client *client, uint64_t request,
                           const char *selector, cai_error *error) {
-  if (selector != NULL && selector[0] == '\0')
-    return cai_cli_error(error, CAI_ERR_INVALID, "empty session selector");
-  return bind_client(client, request, 0U, 0U, selector, 1, error);
+  return cai_app_client_select_agent(client, request, selector, NULL, error);
 }
 int cai_app_client_manage_delivery(cai_app_client *client, cai_error *error) {
   int rc = valid(client, error);

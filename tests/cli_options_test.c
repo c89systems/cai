@@ -884,7 +884,7 @@ int main(void) {
   if (cai_cli_parse_options(2, login, &options) != 1 || !options.login ||
       cai_cli_parse_options(5, missing_model, &options) != -1 ||
       cai_cli_parse_options(3, invalid_provider, &options) != -1 ||
-      cai_cli_parse_options(4, invalid_login, &options) != -1) {
+      cai_cli_parse_options(4, invalid_login, &options) != 1) {
     fputs("CLI provider options failed\n", stderr);
     return 1;
   }

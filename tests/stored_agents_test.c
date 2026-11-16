@@ -54,14 +54,23 @@ static int produce(void *context, cai_sink *sink, cai_error *error) {
              : rc;
 }
 
+static int default_agent(cai_cli_pouch *pouch, cai_cli_producer writer,
+                         void *context, cai_source **out, cai_error *error) {
+  int rc =
+      cai_cli_agent_package_initialize(pouch, writer, context, NULL, error);
+  *out = NULL;
+  return rc == CAI_OK ? cai_cli_pouch_agent_read(pouch, "default", "config.ini",
+                                                 out, error)
+                      : rc;
+}
+
 static void *initialize(void *context) {
   initializer *i = context;
   cai_source *source = NULL;
   cai_error error;
   size_t used = 0U, n;
   cai_error_init(&error);
-  i->rc =
-      cai_cli_pouch_default_agent(i->pouch, produce, i->input, &source, &error);
+  i->rc = default_agent(i->pouch, produce, i->input, &source, &error);
   while (i->rc == CAI_OK &&
          (n = cai_source_read(source, i->bytes + used,
                               sizeof(i->bytes) - used - 1U, &error)) != 0U) {
@@ -72,6 +81,9 @@ static void *initialize(void *context) {
     i->rc = error.code;
   i->bytes[used] = '\0';
   cai_source_close(source);
+  if (i->rc != CAI_OK)
+    fprintf(stderr, "initialize agent: %d: %s\n", i->rc,
+            error.message != NULL ? error.message : "");
   cai_error_cleanup(&error);
   return NULL;
 }
@@ -227,12 +239,14 @@ static void *run(void *context) {
   assert(pthread_create(&one, NULL, initialize, &a) == 0);
   assert(pthread_create(&two, NULL, initialize, &b) == 0);
   assert(pthread_join(one, NULL) == 0 && pthread_join(two, NULL) == 0);
+  if (a.rc != CAI_OK || b.rc != CAI_OK || input.calls != 1)
+    fprintf(stderr, "initializers: %d / %d; producer calls: %d\n", a.rc, b.rc,
+            input.calls);
   assert(a.rc == CAI_OK && b.rc == CAI_OK && input.calls == 1);
   assert(strcmp(a.bytes, input.text) == 0 && strcmp(a.bytes, b.bytes) == 0);
   check_auth(&f->left, &error);
   /* Credential refresh preserves the definition and its configuration bytes. */
-  assert(cai_cli_pouch_default_agent(&f->left, produce, &input, &source,
-                                     &error) == CAI_OK);
+  assert(default_agent(&f->left, produce, &input, &source, &error) == CAI_OK);
   {
     char bytes[128];
     size_t n = cai_source_read(source, bytes, sizeof(bytes) - 1U, &error);
@@ -250,14 +264,12 @@ static void *run(void *context) {
                                     &error) == CAI_OK);
   input.calls = 0;
   input.fail = 1;
-  assert(cai_cli_pouch_default_agent(&f->left, produce, &input, &source,
-                                     &error) != CAI_OK);
+  assert(default_agent(&f->left, produce, &input, &source, &error) != CAI_OK);
   assert(source == NULL);
   cai_error_cleanup(&error);
   cai_error_init(&error);
   input.fail = 0;
-  assert(cai_cli_pouch_default_agent(&f->left, produce, &input, &source,
-                                     &error) == CAI_OK);
+  assert(default_agent(&f->left, produce, &input, &source, &error) == CAI_OK);
   cai_source_close(source);
   source = NULL;
   assert(input.calls == 2);
@@ -268,8 +280,7 @@ static void *run(void *context) {
   assert(cai_cli_pouch_open_options(&f->left, &bootstrap_options, NULL,
                                     &error) == CAI_OK);
   input.text = "[storage]\nsessions_store = \"elsewhere\"\n";
-  assert(cai_cli_pouch_default_agent(&f->left, produce, &input, &source,
-                                     &error) == CAI_OK);
+  assert(default_agent(&f->left, produce, &input, &source, &error) == CAI_OK);
   cai_source_close(source);
   source = NULL;
   assert(cai_cli_configure_at(6, args, &bootstrap_options, &bootstrap, NULL,
@@ -289,8 +300,7 @@ static void *run(void *context) {
   assert(cai_cli_pouch_open_options(&f->left, &bootstrap_options, NULL,
                                     &error) == CAI_OK);
   input.text = "[env]\nCAI_STORAGE_SESSIONS_STORE = \"elsewhere\"\n";
-  assert(cai_cli_pouch_default_agent(&f->left, produce, &input, &source,
-                                     &error) == CAI_OK);
+  assert(default_agent(&f->left, produce, &input, &source, &error) == CAI_OK);
   cai_source_close(source);
   source = NULL;
   args[6] = strdup("--namespace-prefix");

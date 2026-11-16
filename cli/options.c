@@ -65,8 +65,8 @@ void cai_cli_options_init(cai_cli_options *options) {
   options->ip_multicast_ttl = 1L;
   options->review_theme_offset = 1LL;
   options->status_fields = CAI_CLI_STATUS_DEFAULT_FIELDS;
-  options->agents_store = options->sessions_store = options->auth_store =
-      options->messaging_store = "default";
+  options->agents_store = options->sessions_store = options->messaging_store =
+      "default";
   options->image_generation = 1;
   options->terminal = 1;
   options->yield_time_ms = CAI_TERMINAL_DEFAULT_YIELD_TIME_MS;
@@ -584,22 +584,31 @@ static int cli_read_options(int argc, char *const *argv,
       continue;
     }
     if (strcmp(flag, "--build") == 0 || strcmp(flag, "--make") == 0 ||
-        strcmp(flag, "--dump-agents") == 0) {
+        strcmp(flag, "--dump-agents") == 0 ||
+        strcmp(flag, "--dump-system-prompts") == 0) {
       const char *directory = ".";
       if (strcmp(flag, "--dump-agents") == 0)
         directory = "agents";
+      if (strcmp(flag, "--dump-system-prompts") == 0)
+        directory = "prompts";
       if (i + 1 < argc && argv[i + 1][0] != '-')
         directory = argv[++i];
       if (strcmp(flag, "--build") == 0)
         options->agent_build = directory;
       else if (strcmp(flag, "--make") == 0)
         options->agent_make = directory;
+      else if (strcmp(flag, "--dump-system-prompts") == 0)
+        options->dump_system_prompts = directory;
       else
         options->agent_dump_all = directory;
       continue;
     }
     if (strcmp(flag, "--include-credentials") == 0) {
       options->include_credentials = 1;
+      continue;
+    }
+    if (strcmp(flag, "--builder") == 0) {
+      options->agent_builder = 1;
       continue;
     }
     if (strcmp(flag, "-N") == 0 || strcmp(flag, "--new") == 0) {
@@ -791,8 +800,6 @@ static int cli_read_options(int argc, char *const *argv,
       field = &options->namespace_prefix;
     else if (strcmp(flag, "--sessions-namespace") == 0)
       field = &options->sessions_namespace;
-    else if (strcmp(flag, "--auth-namespace") == 0)
-      field = &options->auth_namespace;
     else if (strcmp(flag, "--scopes-namespace") == 0)
       field = &options->scopes_namespace;
     else if (strcmp(flag, "--todo-namespace") == 0)
@@ -811,12 +818,12 @@ static int cli_read_options(int argc, char *const *argv,
       field = &options->agent_use;
     else if (strcmp(flag, "--dump-agent") == 0)
       field = &options->agent_dump;
+    else if (strcmp(flag, "--edit-agent") == 0)
+      field = &options->agent_edit;
     else if (strcmp(flag, "--from-auth-json") == 0)
       field = &options->agent_auth_import;
     else if (strcmp(flag, "--sessions-store") == 0)
       field = &options->sessions_store;
-    else if (strcmp(flag, "--auth-store") == 0)
-      field = &options->auth_store;
     else if (strcmp(flag, "--messaging-store") == 0)
       field = &options->messaging_store;
     else if (strcmp(flag, "--context-store") == 0)
@@ -992,7 +999,8 @@ int cai_cli_options_utility(const cai_cli_options *o) {
          o->context_export != NULL || o->message != NULL ||
          o->dump_developer_instructions != NULL || o->agent_build != NULL ||
          o->agent_make != NULL || o->agent_dump != NULL ||
-         o->agent_dump_all != NULL;
+         o->agent_dump_all != NULL || o->agent_edit != NULL ||
+         o->dump_system_prompts != NULL;
 }
 
 int cai_cli_store_name_valid(const char *name) {
@@ -1004,9 +1012,17 @@ int cai_cli_store_name_valid(const char *name) {
 int cai_cli_validate_options(cai_cli_options *options) {
   static const char *const providers[] = {"chatgpt", "openai", "openrouter",
                                           "berget",  "custom", NULL};
+  if (options->agent_builder && (options->review || options->review_and_fix ||
+                                 cai_cli_options_utility(options))) {
+    cai_cli_option_error(options, "--builder requires an ordinary agent run, "
+                                  "without review or utility modes");
+    return -1;
+  }
   if ((options->agent_build != NULL) + (options->agent_make != NULL) +
               (options->agent_dump != NULL) +
-              (options->agent_dump_all != NULL) >
+              (options->agent_dump_all != NULL) +
+              (options->agent_edit != NULL) +
+              (options->dump_system_prompts != NULL) >
           1 ||
       (options->agent_auth_import != NULL && options->agent_make == NULL) ||
       (options->include_credentials && options->agent_build == NULL &&
@@ -1018,15 +1034,16 @@ int cai_cli_validate_options(cai_cli_options *options) {
     return -1;
   }
   if ((options->agent_build != NULL || options->agent_make != NULL ||
-       options->agent_dump != NULL || options->agent_dump_all != NULL) &&
+       options->agent_dump != NULL || options->agent_dump_all != NULL ||
+       options->agent_edit != NULL || options->dump_system_prompts != NULL) &&
       (options->headless || options->terminate_headless ||
        options->server != NULL || options->temporary || options->review ||
-       options->review_and_fix || options->instruction_count != 0U ||
-       options->goal != NULL || options->list || options->list_all ||
-       options->resume_list || options->resume_id != NULL ||
-       options->new_session || options->delete_id != NULL ||
-       options->delete_list || options->export_id != NULL ||
-       options->import_file != NULL ||
+       options->review_and_fix || options->agent_builder ||
+       options->instruction_count != 0U || options->goal != NULL ||
+       options->list || options->list_all || options->resume_list ||
+       options->resume_id != NULL || options->new_session ||
+       options->delete_id != NULL || options->delete_list ||
+       options->export_id != NULL || options->import_file != NULL ||
        options->dump_developer_instructions != NULL ||
        options->context_export != NULL || options->install_skill != NULL ||
        options->login || options->message != NULL || options->chrome_setup ||
@@ -1037,7 +1054,6 @@ int cai_cli_validate_options(cai_cli_options *options) {
   }
   if (!cai_cli_store_name_valid(options->agents_store) ||
       !cai_cli_store_name_valid(options->sessions_store) ||
-      !cai_cli_store_name_valid(options->auth_store) ||
       !cai_cli_store_name_valid(options->messaging_store) ||
       (options->context_store != NULL &&
        !cai_cli_store_name_valid(options->context_store))) {
@@ -1282,8 +1298,8 @@ int cai_cli_validate_options(cai_cli_options *options) {
   if (options->output_type == NULL)
     options->output_type = "markdown";
   if (options->non_interactive && !options->review &&
-      !options->review_and_fix && options->instruction_count == 0U &&
-      options->goal == NULL) {
+      !options->review_and_fix && !options->agent_builder &&
+      options->instruction_count == 0U && options->goal == NULL) {
     cai_cli_option_error(
         options, "%s",
         "--non-interactive requires -i, --goal, or a review mode\n");
@@ -1291,12 +1307,6 @@ int cai_cli_validate_options(cai_cli_options *options) {
   }
   if (!cai_cli_one_of(options->provider, providers)) {
     cai_cli_option_error(options, "invalid provider: %s\n", options->provider);
-    return -1;
-  }
-  if (strcmp(options->provider, "chatgpt") != 0 &&
-      (options->auth_json != NULL || options->login)) {
-    cai_cli_option_error(
-        options, "%s", "--auth-json and --login require --provider chatgpt\n");
     return -1;
   }
   if (options->login &&

@@ -1515,7 +1515,7 @@ static int service(frontend *f) {
                              "select verified completion directory");
       f->startup.stage = ready == CAI_CLI_FRONTEND_STARTED
                              ? CAI_CLI_STARTUP_REVIEW_AND_FIX
-                             : CAI_CLI_STARTUP_MODEL;
+                             : CAI_CLI_STARTUP_AGENT;
       if (ready == CAI_CLI_FRONTEND_STARTED)
         f->startup_select = 0;
       if (connect_target(f) != CAI_OK)
@@ -1558,9 +1558,10 @@ static int service(frontend *f) {
     if (f->state.transport.phase == CAI_WORKSPACE_CONNECTED && !f->bound &&
         !f->awaiting_bind) {
       if (f->startup_select)
-        rc = cai_app_client_select(
+        rc = cai_app_client_select_agent(
             f->client, ++f->bind_request,
-            f->options->new_session ? NULL : f->options->resume_id, &f->error);
+            f->options->new_session ? NULL : f->options->resume_id,
+            f->options->agent_use, &f->error);
       else
         rc = cai_app_client_bind(
             f->client, ++f->bind_request, 0U, f->current->producer,
@@ -2154,7 +2155,7 @@ static frontend *frontend_open(frontend_group *group,
   f->boot = boot;
   /* Select the session before binding/replay. Only subsequent explicit
    * invocation inputs use admissions after that selected replay completes. */
-  f->startup.stage = CAI_CLI_STARTUP_MODEL;
+  f->startup.stage = CAI_CLI_STARTUP_AGENT;
   f->startup_select = options->resume_id != NULL || options->new_session;
   f->theme_offsets[0] = options->theme_offset;
   f->theme_offsets[1] = options->subagent_theme_offset;

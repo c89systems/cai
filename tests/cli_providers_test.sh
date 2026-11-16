@@ -18,13 +18,15 @@ cat > "$fixture/home/.codex/auth.json" <<'JSON'
 {"auth_mode":"chatgpt","tokens":{"id_token":"eyJhbGciOiAibm9uZSJ9.eyJleHAiOiA0MTAyNDQ0ODAwfQ.sig","access_token":"eyJhbGciOiAibm9uZSJ9.eyJleHAiOiA0MTAyNDQ0ODAwfQ.sig","refresh_token":"fixture","account_id":"fixture"},"last_refresh":"2026-09-25T00:00:00Z"}
 JSON
 export HTTPS_PROXY=http://127.0.0.1:1 HTTP_PROXY=http://127.0.0.1:1 NO_PROXY=
+"$cli" -C "$fixture/work" --build "$fixture/default"
+"$cli" -C "$fixture/work" --yes --make "$fixture/default" --from-auth-json "$fixture/home/.codex/auth.json"
 status=$(printf '/status\n/quit\n' | "$cli" -C "$fixture/work")
 [[ "$status" == *"Provider"* && "$status" == *"chatgpt"* ]]
 [[ "$status" == *"Model"* && "$status" == *"gpt-6-luna"* ]]
 
 printf 'invalid\n' > "$fixture/home/.codex/auth.json"
-if printf '/quit\n' | "$cli" -C "$fixture/work" >"$fixture/out" 2>"$fixture/err"; then
-  echo 'Codex auth was not preferred' >&2
+if printf '/quit\n' | "$cli" -C "$fixture/work" --auth-json "$fixture/home/.codex/auth.json" >"$fixture/out" 2>"$fixture/err"; then
+  echo 'Invalid explicitly selected auth was accepted' >&2
   exit 1
 fi
 grep -q 'failed to parse auth JSON' "$fixture/err"
@@ -59,14 +61,14 @@ if printf '/quit\n' | BERGET_API_KEY=fixture "$cli" -N -p berget -C "$fixture/wo
   exit 1
 fi
 cat "$fixture/out" "$fixture/err" | grep -q 'invalid model metadata JSON'
-override=$(printf '/status\n/quit\n' | BERGET_API_KEY=fixture "$cli" -p berget \
+override=$(printf '/status\n/quit\n' | BERGET_API_KEY=fixture "$cli" -N -p berget \
   -C "$fixture/work" --model-metadata "$XDG_CONFIG_HOME/cai/models.json")
 [[ "$override" == *"zai-org/GLM-5.3-Flash"* ]]
-custom=$(printf '/status\n/quit\n' | LOCAL_KEY=fixture "$cli" -p custom \
+custom=$(printf '/status\n/quit\n' | LOCAL_KEY=fixture "$cli" -N -p custom \
   --endpoint https://example.test/v1 --api-key-env LOCAL_KEY -m local-model -C "$fixture/work")
 [[ "$custom" == *"Provider"* && "$custom" == *"custom"* ]]
 [[ "$custom" == *"Model"* && "$custom" == *"local-model"* ]]
-default_key=$(printf '/status\n/quit\n' | CAI_API_KEY=fixture "$cli" -p custom \
+default_key=$(printf '/status\n/quit\n' | CAI_API_KEY=fixture "$cli" -N -p custom \
   --endpoint https://example.test/v1 -m local-model -C "$fixture/work")
 [[ "$default_key" == *"custom"* ]]
 if printf '/quit\n' | env -u OPENAI_API_KEY "$cli" -N -p openai -C "$fixture/work" \
@@ -87,7 +89,7 @@ if printf '/quit\n' | "$cli" -C "$fixture/work" >"$fixture/out" 2>"$fixture/err"
   echo 'missing auth was accepted' >&2
   exit 1
 fi
-grep -q 'auth JSON is not stored' "$fixture/err"
+grep -q 'credentials' "$fixture/err"
 help=$("$cli" --help)
 [[ "$help" == $'cai and libcai Copyright (C) 2026 C89 Systems AB https://c89.systems\n\nUsage: cai '* ]]
 [[ "$("$cli" -h)" == "$help" ]]

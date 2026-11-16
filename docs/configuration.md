@@ -10,7 +10,7 @@ Leaving them commented retains automatic lookup on subsequent starts; an empty v
 Existing files are never rewritten.
 `-c FILE`/`--config FILE` selects another file; `--no-config` skips disk bootstrap/seed loading while retaining stored-agent resolution.
 `--config-dir DIR` also selects `DIR/config.ini`.
-Agent startup loads `<namespace-prefix>.agents/agent.NAME` through liblockdc. New sessions use `default`; resuming restores the last selected agent, and `-u NAME` / `--use NAME` selects explicitly. Metadata identifies the agent; its `config.ini` attachment holds agent behavior. If the agent is absent, CAI initializes it once from the valid seed configuration without triggering provider login. Concurrent initializers publish one complete definition. Later disk edits do not replace stored agent behavior.
+Agent startup loads `<namespace-prefix>.agents/agent.NAME` through liblockdc. New sessions use `default`; resuming restores the last selected agent, and `-u NAME` / `--use NAME` selects explicitly. Metadata identifies the agent; its `config.ini` attachment holds agent behavior. If `default` is absent, CAI initializes it once from the valid seed configuration without triggering provider login. Missing named agents are errors. Concurrent initializers publish one complete definition. Later disk edits do not replace stored agent behavior.
 
 Bootstrap fields stay local: named store definitions and selections, storage namespaces/compression, application paths needed before opening storage, workspace-server settings, temporary-run selection, and runtime session identity/ownership settings. A stored attachment containing these fields is rejected. Agent and session stores default to `default` and share one client when they identify the same backend. Selecting a different agent store leaves session history in its configured session store.
 
@@ -18,7 +18,7 @@ An explicit `-s` attachment uses the running backend's agent and opens no local 
 
 Explicit CLI and embedding settings override stored agent behavior without being persisted into the initial definition. Only declared INI values seed the attachment; automatic optional paths are rediscovered at startup. Explicit seed paths are resolved against their original file before publication. Application-prefixed environment settings select bootstrap fields only; they no longer override stored model, reasoning, themes, tools or other agent behavior. Explicit API-key environment lookup and the stored `[env]` block remain available. `LOG_*` stays independent; local `[env] LOG_*` entries configure logging without becoming agent behavior.
 
-The bootstrap file must remain valid INI. Its non-bootstrap values seed `default` once. Named-agent publication, selection and resource packaging are described below; the broader builder/live-activation design remains in [stored agents](stored-agents.md).
+The bootstrap file must remain valid INI. Its non-bootstrap values seed `default` once. Publication, editing, builder mode and live activation are described below and in [stored agents](stored-agents.md).
 Global instruction files are loaded again when a session runtime opens, including on replay; saved session state does not replace those files.
 Resuming restores the saved model and reasoning settings unless explicitly overridden by startup flags.
 Paths accept `~/` and are relative to the configuration file.
@@ -68,9 +68,13 @@ cai --use engineer -R SESSION_ID
 
 API keys can be set directly in `[client] api_key` and are retained in encrypted lockd configuration. `--dump-agent NAME` writes `NAME/` below the selected directory; `--dump-agents [DIR]` writes one directory per agent (default root `agents/`). These exports and `--build` omit declared secret configuration fields and native credentials by default. `--include-credentials` explicitly includes them; native authentication is written as `AUTH.json`. Prompts, scripts and arbitrary environment assignments are ordinary bundled content, so inspect them before sharing an export.
 
-`--make DIR --from-auth-json FILE` explicitly imports ChatGPT credentials without login. Imported credentials are consumed and refreshed in the selected agent object, even when another provider performs inference and ChatGPT supplies MCP apps. Replacing the definition without a new import preserves its current credentials. An explicit `--auth-json` overrides this selection; agents without imported credentials retain existing authentication-store/external-file discovery.
+`--make DIR --from-auth-json FILE` explicitly imports ChatGPT credentials without login. `--login --use NAME` logs into that agent directly. Credentials are consumed and refreshed in the selected agent object, even when another provider performs inference and ChatGPT supplies MCP apps. Replacing the definition without a new import preserves its current credentials. `--auth-json FILE` explicitly selects core file-backed authentication instead; external files are never discovered automatically.
 
-Runtime configuration and native credentials stay out of the disk cache. Bundled resources use private revision-specific directories under `cache_dir/agents/NAME/REVISION`. Session IDs, journals and recall stay in the configured session store when changing agents at startup. `/status` identifies the selected definition. An explicit selection that differs from an already-running owner's agent is rejected; acknowledged live activation through `/use` is a subsequent milestone.
+Runtime `config.ini` streams from lockd into the parser and never touches the disk cache. Native credentials also stay out of the cache. Bundled resources use private revision-specific directories under `cache_dir/agents/NAME/REVISION`. Session IDs, journals and recall stay in the session store. `/status` identifies the selected definition. `/use NAME`, or explicit `--use NAME` when attaching, activates through the existing owner at a whole-turn boundary. Failed activation preserves the old agent. Unsupported provider/account context conversion is rejected.
+
+`--edit-agent NAME` opens configuration and instruction files using `VISUAL`, then `EDITOR`, then `vi`, in a private temporary directory. Save validates and atomically updates the same name; cancel, failure or a conflicting definition revision preserves storage. The temporary tree, including editor backups, is removed on ordinary exit. Bundled resources use the source workflow instead. `--builder` and `/builder` select dedicated builder instructions, using the same `--make` publisher. `--dump-system-prompts [DIR]` writes the built-in model, reviewer and builder prompt catalog; its default directory is `prompts/`.
+
+Historical exports use recorded activation instructions, including after definitions are edited or removed. The unreleased configuration-only registry format is unsupported; republish or recreate those definitions rather than relying on migration. Session history remains independent.
 
 ## One application root
 
@@ -97,7 +101,7 @@ An embedding app named `smith` uses `SMITH_HOME` and the same directory layout, 
 
 ## Named stores
 
-Named stores separate agent definitions, session history, authentication, and messaging backends:
+Named stores separate agent definitions and native credentials, session history, and messaging backends:
 
 ```ini
 [store.default]
@@ -111,12 +115,11 @@ key_file = "/srv/agents/pouch.key"
 [storage]
 sessions_store = default
 agents_store = default
-auth_store = default
 messaging_store = team
 ```
 
 All role selections default to `default`.
-The matching flags are `--agents-store`, `--sessions-store`, `--auth-store`, and `--messaging-store`; environment aliases are `CAI_AGENTS_STORE`, `CAI_SESSIONS_STORE`, `CAI_AUTH_STORE`, and `CAI_MESSAGING_STORE`.
+The matching flags are `--agents-store`, `--sessions-store` and `--messaging-store`; environment aliases are `CAI_AGENTS_STORE`, `CAI_SESSIONS_STORE` and `CAI_MESSAGING_STORE`. Native authentication belongs to the selected agent, with no separate auth-store selector.
 `--lockd` / `CAI_LOCKD` and `--pouch-key-file` / `CAI_POUCH_KEY_FILE` override the default store.
 Each named pouch store requires its own explicit `key_file`; new roots generate it, while existing roots require their existing key.
 HTTP(S) stores accept `client_pem` and do not use a local pouch key.
@@ -127,11 +130,11 @@ Store handles remain open for the app run, including turns, `/new`, `/resume`, m
 Pouch roots are identified by their filesystem identity: aliases share one process client, references keep it alive, and the final owning context closes it.
 Conflicting keys or endpoint options for the same open root are rejected.
 Reconnection remains liblockdc's responsibility.
-`--temp` substitutes only the session store; configured auth and messaging stores remain available, including communication with normal runs.
+`--temp` substitutes only the session store; configured agent and messaging stores remain available, including native credentials and communication with normal runs.
 Its kanban data stays with the private session store.
 
 Session history requires a Pouch store.
-Remote stores can still serve supported authentication and messaging roles.
+Remote stores can still serve supported agent and messaging roles.
 See [session journals](journal.md#pouch-storage-and-ownership) for encryption, compression, ownership and compatibility.
 
 ## Workspace approval

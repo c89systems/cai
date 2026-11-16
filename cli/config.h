@@ -26,6 +26,12 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
 int cai_cli_configure_agent_at(int argc, char *const *, cai_cli_options *,
                                cai_config **, const cai_app_config *,
                                const cai_config_context *, cai_error *);
+/** Apply invocation flags to an already resolved definition, without rereading
+ * disk configuration. The output owns stored on every return. */
+int cai_cli_configure_stored_at(int, char *const *, cai_config *,
+                                cai_cli_options *, cai_config **,
+                                const cai_app_config *,
+                                const cai_config_context *, cai_error *);
 /** Host/attachment configuration only: no repository or session store opens,
  * no automatic INI creation, and seed values do not constrain a live owner. */
 int cai_cli_configure_bootstrap_at(int argc, char *const *, cai_cli_options *,

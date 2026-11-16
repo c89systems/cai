@@ -14,7 +14,7 @@ add_library(cai_app_server_objects OBJECT cli/server.c cli/identity.c cli/app_co
   cli/export_job.c
   cli/quota_refresh.c cli/session_commands.c cli/workspace_claims.c cli/log.c
   cli/log_environment.c cli/documents.c cli/messages.c cli/message_names.c
-  cli/todo.c cli/stores.c cli/agents.c cli/agent_package.c cli/temp.c cli/replay.c)
+  cli/todo.c cli/stores.c cli/agents.c cli/agent_package.c cli/editor.c cli/temp.c cli/replay.c)
 add_dependencies(cai_app_server_objects cai_smith_prompt_asset)
 target_include_directories(cai_app_server_objects PRIVATE "${CAI_SMITH_PRIVATE_INCLUDE_DIR}")
 foreach(target cai_app_owner_objects cai_app_server_objects)

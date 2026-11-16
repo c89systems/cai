@@ -204,6 +204,7 @@ typedef struct cai_cli_login_scratch {
   char request_buffer[16384];
 } cai_cli_login_scratch;
 static int cai_cli_login_with_scratch(const cai_blob_store *storage,
+                                      const char *auth_json,
                                       pslog_logger *logger, int stop_fd,
                                       cai_cli_login_stop_fn stop, void *context,
                                       cai_environment *environment,
@@ -246,6 +247,7 @@ static int cai_cli_login_with_scratch(const cai_blob_store *storage,
   cai_error_init(&error);
   cai_chatgpt_login_config_init(&login_config);
   login_config.storage = storage;
+  login_config.auth_json_path = auth_json;
   login_config.logger = logger;
   login_config.redirect_uri = redirect_uri;
   rc = cai_chatgpt_login_start(&login_config, &login, &authorize_url, &error);
@@ -365,9 +367,10 @@ done:
   return exit_code;
 }
 
-int cai_cli_login(const cai_blob_store *storage, pslog_logger *logger,
-                  int stop_fd, cai_cli_login_stop_fn stop, void *context,
-                  cai_environment *environment, const char *directory) {
+int cai_cli_login(const cai_blob_store *storage, const char *auth_json,
+                  pslog_logger *logger, int stop_fd, cai_cli_login_stop_fn stop,
+                  void *context, cai_environment *environment,
+                  const char *directory) {
   cai_cli_login_scratch *scratch =
       (cai_cli_login_scratch *)calloc(1U, sizeof(*scratch));
   int rc;
@@ -380,8 +383,8 @@ int cai_cli_login(const cai_blob_store *storage, pslog_logger *logger,
     cai_error_cleanup(&failure);
     return 1;
   }
-  rc = cai_cli_login_with_scratch(storage, logger, stop_fd, stop, context,
-                                  environment, directory, scratch);
+  rc = cai_cli_login_with_scratch(storage, auth_json, logger, stop_fd, stop,
+                                  context, environment, directory, scratch);
   free(scratch);
   return rc;
 }

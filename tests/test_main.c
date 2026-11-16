@@ -27092,6 +27092,7 @@ static int test_runtime_input_boundary(void *context,
 /* Compound goal fixtures reuse the queue identity/recovery helpers above. */
 #include "runtime_goal_input_test.inc"
 
+#include "runtime_activation_test.inc"
 #include "runtime_queue_test.inc"
 #include "runtime_responsiveness_test.inc"
 
@@ -52212,7 +52213,11 @@ static void test_session_state_validation(test_state *state) {
       "{\"version\":1,\"reasoning_effort\":\"\"}",
       "{\"version\":1,\"reasoning_effort\":\"high effort\"}",
       "{\"version\":1,\"reasoning_summary\":\"\"}",
-      "{\"version\":1,\"reasoning_summary\":\"invalid mode\"}"};
+      "{\"version\":1,\"reasoning_summary\":\"invalid mode\"}",
+      "{\"version\":1,\"agent_binding\":{\"name\":\"../unsafe\"}}",
+      "{\"version\":1,\"agent_binding\":{\"name\":\"safe\",\"backend\":"
+      "\"short\"}}",
+      "{\"version\":1,\"agent_binding\":{\"sequence\":1}}"};
   cai_client_config client_config;
   cai_agent_config agent_config;
   cai_client *client;
@@ -52226,7 +52231,7 @@ static void test_session_state_validation(test_state *state) {
   cai_source *source;
   cai_error error;
   cai_token_usage usage;
-  char state_json[512];
+  char state_json[1024];
   char history_json[512];
   size_t i;
 
@@ -55018,6 +55023,7 @@ static const test_entry test_entries[] = {
     {"agent_runtime_resume", test_agent_runtime_resume},
     {"agent_runtime_input_ack", test_agent_runtime_input_ack},
     {"agent_runtime_pending_input", test_agent_runtime_pending_input},
+    {"agent_runtime_activation", test_agent_runtime_activation},
     {"agent_runtime_input_identity", test_agent_runtime_input_identity},
     {"agent_runtime_responsiveness", test_agent_runtime_responsiveness},
     {"agent_runtime_markdown_export", test_agent_runtime_markdown_export},

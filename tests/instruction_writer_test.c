@@ -82,6 +82,59 @@ static int capture(void *context, const void *bytes, size_t length,
   return CAI_OK;
 }
 
+static int catalog_capture(void *context, const void *bytes, size_t length,
+                           cai_error *error) {
+  captured *out = context;
+  size_t copied = length;
+  assert(length <= 4096U);
+  if (++out->calls == out->fail_at)
+    return cai_set_error(error, CAI_ERR_CANCELLED, "catalog sink cancelled");
+  if (out->length < sizeof(out->small) - 1U) {
+    if (copied > sizeof(out->small) - 1U - out->length)
+      copied = sizeof(out->small) - 1U - out->length;
+    memcpy(out->small + out->length, bytes, copied);
+    out->small[out->length + copied] = '\0';
+  }
+  out->length += length;
+  return CAI_OK;
+}
+
+static void catalog(void) {
+  captured out;
+  cai_sink_callbacks callbacks = {0};
+  cai_sink *sink = NULL;
+  cai_error error;
+  size_t i, j, count = cai_agent_builtin_instructions_count();
+  cai_error_init(&error);
+  callbacks.context = &out;
+  callbacks.write = catalog_capture;
+  assert(cai_sink_from_callbacks(&callbacks, &sink, &error) == CAI_OK);
+  assert(count >= 6U && cai_agent_builtin_instructions_name(count) == NULL);
+  for (i = 0U; i < count; ++i) {
+    const char *name = cai_agent_builtin_instructions_name(i);
+    assert(name != NULL && *name != '\0');
+    for (j = 0U; j < i; ++j)
+      assert(strcmp(name, cai_agent_builtin_instructions_name(j)) != 0);
+    memset(&out, 0, sizeof(out));
+    assert(cai_agent_builtin_instructions_write(name, "Catalog Identity", sink,
+                                                &error) == CAI_OK);
+    assert(out.length > 100U &&
+           strstr(out.small, "You are Catalog Identity") != NULL);
+  }
+  assert(cai_agent_builtin_instructions_write("absent", "Catalog", sink,
+                                              &error) == CAI_ERR_INVALID);
+  cai_error_cleanup(&error);
+  cai_error_init(&error);
+  memset(&out, 0, sizeof(out));
+  out.fail_at = 2U;
+  assert(cai_agent_builtin_instructions_write(
+             cai_agent_builtin_instructions_name(0U), "Catalog", sink,
+             &error) == CAI_ERR_CANCELLED);
+  assert(out.calls == 2U);
+  cai_sink_close(sink);
+  cai_error_cleanup(&error);
+}
+
 static int empty_policy(void *context, const char *key, cai_source **out,
                         cai_error *error) {
   (void)context;
@@ -433,6 +486,7 @@ static void *run(void *context) {
 
 int main(void) {
   pthread_t worker;
+  catalog();
   assert(pthread_create(&worker, NULL, run, NULL) == 0);
   assert(pthread_join(worker, NULL) == 0);
   return 0;

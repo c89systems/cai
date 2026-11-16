@@ -2,7 +2,7 @@
 source "$(dirname "$0")/cli_test_common.sh"
 export CAI_TEST_APP_NAME=smith SMITH_API_KEY=fixture SMITH_MODEL=smith-model
 peer_start
-base=("$cli" -p custom --endpoint "$endpoint" --no-terminal --no-image-generation -C "$work")
+base=("$cli" -p custom --endpoint "$endpoint" -m smith-model --no-terminal --no-image-generation -C "$work")
 run --help; ok
 contains "$root/stdout" 'smith and libcai Copyright'
 contains "$root/stdout" 'Usage: vectis -a smith --'
@@ -22,7 +22,7 @@ contains "$root/peer/requests.jsonl" SMITH_GLOBAL_INSTRUCTIONS_MARKER
 contains "$root/peer/requests.jsonl" 'Named application skill marker'
 run --list-all; ok
 id=$(awk 'NR == 1 {print $1}' "$root/stdout")
-[[ -n "$id" && -f "$root/config/smith/config.ini" && -f "$root/state/smith/pouch.key" ]]
+[[ -n "$id" && ! -e "$root/config/smith/config.ini" && -f "$root/state/smith/pouch.key" ]]
 run --export "$id"; ok
 [[ -s "$root/data/smith/exports/$id/$id.md" && -s "$root/data/smith/exports/$id/$id.jsonl" ]]
 terminal_start --resume "$id"
@@ -40,14 +40,15 @@ export CAI_TEST_APP_CACHE_DIRECTORY="$root/cache/vectis/cai"
 export CAI_TEST_APP_DATA_DIRECTORY="$root/data/vectis/cai"
 export CAI_TEST_APP_NAMESPACE_PREFIX=vectis.smith CAI_TEST_APP_QUEUE_PREFIX=vectis
 mkdir -p "$root/config/vectis/instructions"
+printf '# Explicit embedding bootstrap\n' >"$root/config/vectis/cai.ini"
 printf 'VECTIS_GLOBAL_INSTRUCTIONS_MARKER\n' >"$root/config/vectis/instructions/AGENTS.md"
 plan '{"plan":["OVERRIDDEN APP REPLY"]}'
 run -Nni 'overridden layout'; ok
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
 contains "$root/request" VECTIS_GLOBAL_INSTRUCTIONS_MARKER
 absent "$root/request" SMITH_GLOBAL_INSTRUCTIONS_MARKER
-[[ -f "$root/config/vectis/cai.ini" && -f "$root/state/vectis/cai/pouch.key" ]]
-contains "$root/config/vectis/cai.ini" "$root/config/vectis/instructions/AGENTS.md"
+[[ -f "$root/state/vectis/cai/pouch.key" ]]
+[[ $(cat "$root/config/vectis/cai.ini") == '# Explicit embedding bootstrap' ]]
 run --list-all; ok
 id=$(awk 'NR == 1 {print $1}' "$root/stdout")
 run --export "$id"; ok
@@ -55,7 +56,7 @@ run --export "$id"; ok
 # An explicit env prefix does not fall back to SMITH_ or CAI_.
 export CAI_TEST_APP_ENVIRONMENT_PREFIX=BOT_ BOT_API_KEY=fixture BOT_MODEL=bot-model
 plan '{"plan":["PREFIX OVERRIDE"]}'
-run -Nni 'different environment prefix'; ok
+run -m bot-model -Nni 'different environment prefix'; ok
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
 json "$root/request" '.model == "bot-model"'
 run --help; ok
@@ -66,8 +67,8 @@ base+=(--state-dir "$root/flags/state" --cache-dir "$root/flags/cache"
        --data-dir "$root/flags/data"
        --clipboard-dir "$root/flags/clipboard" --log-dir "$root/flags/logs"
        --pouch-key-file "$root/flags/key" --namespace-prefix flags
-       --sessions-namespace flags.sessions-explicit --scopes-namespace flags.scopes-explicit
-       --auth-namespace flags.auth-explicit --todo-namespace flags.todo-explicit
+       --sessions-namespace flags.sessions-explicit
+       --scopes-namespace flags.scopes-explicit --todo-namespace flags.todo-explicit
        --messages-namespace flags.messages-explicit --queue-prefix dispatch)
 plan '{"plan":["FLAG OVERRIDES"]}'
 run -Nni 'forwarded roots'; ok
@@ -82,7 +83,6 @@ terminal_close
 [[ ! -e "$root/flags/history" ]]
 find "$root/flags/logs" -name '*.log' | grep -q .
 export BOT_TODO=invalid
-run --list
-[[ $rc == 2 ]]
-contains "$root/stderr" BOT_TODO
+run --list; ok
+absent "$root/stderr" BOT_TODO
 unset BOT_TODO

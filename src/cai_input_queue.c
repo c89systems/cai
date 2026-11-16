@@ -54,6 +54,16 @@ static int queue_valid(const cai_input_queue *queue, cai_error *error) {
                          "input queue requires its controller owner thread");
   return CAI_OK;
 }
+int cai_input_queue_rebind(cai_input_queue *queue, void *previous, void *next,
+                           cai_error *error) {
+  int rc = queue_valid(queue, error);
+  if (rc == CAI_OK && queue->config.persist_context != previous)
+    rc = cai_set_error(error, CAI_ERR_INVALID,
+                       "input persistence receiver changed");
+  if (rc == CAI_OK)
+    queue->config.persist_context = next;
+  return rc;
+}
 static void node_free(input_node *node) {
   cai_free_mem(NULL, node->text);
   cai_free_mem(NULL, node->input_events);

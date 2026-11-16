@@ -671,6 +671,15 @@ add_custom_command(OUTPUT "${_cai_goal_prompt_inc}"
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/prompts/goal/continuation.md"
     "${CAI_SMITH_PROMPT_GENERATOR}" VERBATIM)
 list(APPEND CAI_SMITH_PROMPT_INC_PATHS "${_cai_goal_prompt_inc}")
+set(_cai_builder_prompt_inc "${CAI_SMITH_PRIVATE_INCLUDE_DIR}/cai_agent_builder.inc")
+add_custom_command(OUTPUT "${_cai_builder_prompt_inc}"
+  COMMAND "${CMAKE_COMMAND}"
+    "-DCAI_ASSET_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/prompts/agents/builder.md"
+    "-DCAI_ASSET_OUTPUT=${_cai_builder_prompt_inc}" -DCAI_ASSET_MODE=c-string
+    -P "${CAI_SMITH_PROMPT_GENERATOR}"
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/prompts/agents/builder.md"
+    "${CAI_SMITH_PROMPT_GENERATOR}" VERBATIM)
+list(APPEND CAI_SMITH_PROMPT_INC_PATHS "${_cai_builder_prompt_inc}")
 add_custom_target(cai_smith_prompt_asset
   DEPENDS ${CAI_SMITH_PROMPT_INC_PATHS})
 foreach(_kanban_asset html js css)

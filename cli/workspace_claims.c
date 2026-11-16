@@ -6,6 +6,7 @@
 #define _XOPEN_SOURCE 700
 #include "workspace_claims.h"
 #include "agent_package.h"
+#include "agents.h"
 #include "error.h"
 #include <limits.h>
 #include <locale.h>
@@ -115,6 +116,7 @@ int cai_cli_workspace_claims_merge(cai_cli_workspace_claims *out,
 static int supplemental(const char *section, const char *key) {
   char name[CAI_WORKSPACE_CLAIM_NAME + 1U];
   static const char *const local[] = {"paths.directory",
+                                      "agent.name",
                                       "paths.runtime_dir",
                                       "todo.default_board",
                                       "storage.conversation_retention_days",
@@ -205,6 +207,8 @@ static int explicit_entry(void *context, const char *section, const char *key,
                           const char *const *values, size_t count,
                           cai_error *error) {
   projection *p = context;
+  if (!cai_cli_agent_configuration_requirement(p->config, section, key))
+    return CAI_OK;
   if (strcmp(section, "env") == 0) {
     const char *effective = cai_config_getenv(p->config, key);
     return fingerprint(p, section, key, NULL, &effective, 1U, error);
@@ -314,15 +318,6 @@ int cai_cli_workspace_claims_build(const cai_cli_options *options,
       memcpy(&flag, p, sizeof(flag));
       value = flag ? "true" : "false";
     }
-    if (i == CAI_CLI_OWNER_agent_use) {
-      const char *name = value != NULL ? value : options->source_agent_name;
-      if (cai_cli_agent_name(name != NULL ? name : "default", canonical,
-                             error) != CAI_OK) {
-        ok = 0;
-        break;
-      }
-      value = canonical;
-    }
     /* Non-custom providers accept these through the core INI schema, while
      * CLI endpoint/key-variable flags remain custom-provider-only. */
     if (value == NULL && i == CAI_CLI_OWNER_endpoint)
@@ -336,11 +331,7 @@ int cai_cli_workspace_claims_build(const cai_cli_options *options,
       if (options->no_config)
         value = NULL;
       else {
-        value = cai_config_origin(cfg);
-        if (value == NULL) {
-          ok = 0;
-          break;
-        }
+        value = cai_cli_agent_configuration_bootstrap_origin(cfg);
       }
       if (value != NULL && value[0] == '/' &&
           realpath(value, canonical) != NULL)
@@ -359,7 +350,7 @@ int cai_cli_workspace_claims_build(const cai_cli_options *options,
     /* A selector alone is insufficient: identically named stores can refer to
      * different endpoints or keys in independently selected configurations. */
     if (ok && value != NULL &&
-        (i == CAI_CLI_OWNER_sessions_store || i == CAI_CLI_OWNER_auth_store ||
+        (i == CAI_CLI_OWNER_sessions_store || i == CAI_CLI_OWNER_agents_store ||
          i == CAI_CLI_OWNER_messaging_store)) {
       char section[80];
       if (snprintf(section, sizeof(section), "store.%s", value) >=

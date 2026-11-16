@@ -142,8 +142,6 @@ static const cli_field fields[] = {
      "days; 0 disables expiry. Liblockdc maintenance performs deletion, not a "
      "CAI timer. "
      "Individual journal entries never expire separately."},
-    S("storage", "auth_namespace", auth_namespace, 0U,
-      "Empty uses namespace_prefix.auth."),
     S("storage", "scopes_namespace", scopes_namespace, 0U,
       "Empty uses namespace_prefix.scopes."),
     S("storage", "todo_namespace", todo_namespace, 0U,
@@ -194,8 +192,9 @@ static const cli_field fields[] = {
       "Empty uses the current working directory on each invocation; explicit "
       "-C wins."),
     S("paths", "auth_json", auth_json, CAI_CONFIG_PATH,
-      "Empty uses native agent credentials, then ~/.codex/auth.json and "
-      "application auth. An explicit existing file overrides that selection."),
+      "Explicit external ChatGPT auth file. Empty uses the selected agent's "
+      "encrypted native credentials; external files are never "
+      "auto-discovered."),
     S("paths", "agents_md", agents_md, CAI_CONFIG_PATH,
       "Global AGENTS.md; empty uses config_dir/AGENTS.md, loaded if it "
       "exists."),
@@ -229,8 +228,6 @@ static const cli_field fields[] = {
       "Changing an existing root's mode converts it synchronously with "
       "exclusive writer ownership; contention warns and keeps the stored "
       "mode."),
-    S("storage", "auth_store", auth_store, 0U,
-      "Named authentication store; retained in --temp runs."),
     S("storage", "messaging_store", messaging_store, 0U,
       "Named messaging store; retained in --temp runs."),
     S("storage", "context_store", context_store, 0U,
@@ -414,12 +411,12 @@ static int application_defaults_with_scratch(
   static const char *const suffixes[] = {
       "/clipboard", "",        "/pouch.key",  "/exports",
       "/AGENTS.md", "/skills", "/models.json"};
-  const char **namespaces[6];
+  const char **namespaces[5];
   static const char *const ns_keys[] = {
-      "sessions_namespace", "auth_namespace",     "scopes_namespace",
-      "todo_namespace",     "messages_namespace", "context_namespace"};
-  static const char *const ns_suffixes[] = {"sessions", "auth",     "scopes",
-                                            "todo",     "messages", "context"};
+      "sessions_namespace", "scopes_namespace", "todo_namespace",
+      "messages_namespace", "context_namespace"};
+  static const char *const ns_suffixes[] = {"sessions", "scopes", "todo",
+                                            "messages", "context"};
 
   size_t i;
   int rc, n;
@@ -584,12 +581,11 @@ static int application_defaults_with_scratch(
   if (rc != CAI_OK)
     return rc;
   namespaces[0] = &o->sessions_namespace;
-  namespaces[1] = &o->auth_namespace;
-  namespaces[2] = &o->scopes_namespace;
-  namespaces[3] = &o->todo_namespace;
-  namespaces[4] = &o->messages_namespace;
-  namespaces[5] = &o->context_namespace;
-  for (i = 0U; i < 6U; i++) {
+  namespaces[1] = &o->scopes_namespace;
+  namespaces[2] = &o->todo_namespace;
+  namespaces[3] = &o->messages_namespace;
+  namespaces[4] = &o->context_namespace;
+  for (i = 0U; i < 5U; i++) {
     const char *v = *namespaces[i];
     if (v == NULL) {
       n = snprintf(scratch->path, sizeof(scratch->path), "%s.%s",
@@ -903,7 +899,6 @@ static int tool_environment(cai_config *cfg, const char *prefix,
         {"LOCKD", "store.default", "endpoint"},
         {"SESSIONS_STORE", "storage", "sessions_store"},
         {"AGENTS_STORE", "storage", "agents_store"},
-        {"AUTH_STORE", "storage", "auth_store"},
         {"MESSAGING_STORE", "storage", "messaging_store"},
         {"CONTEXT_STORE", "storage", "context_store"},
         {"CONTEXT_NAMESPACE", "storage", "context_namespace"},
@@ -1296,9 +1291,7 @@ static int cai_cli_configure_at_with_scratch(
   for (i = 0U; i < cfg->section_count(cfg); ++i)
     if (strncmp(cfg->section_at(cfg, i), "store.", 6U) == 0)
       scratch->defaults.owner_explicit[CAI_CLI_OWNER_sessions_store] =
-          scratch->defaults.owner_explicit[CAI_CLI_OWNER_auth_store] =
-              scratch->defaults.owner_explicit[CAI_CLI_OWNER_messaging_store] =
-                  1U;
+          scratch->defaults.owner_explicit[CAI_CLI_OWNER_messaging_store] = 1U;
   {
     long long replay = cai_config_get_integer(cfg, "ui", "replay_turns", 10LL);
     if (replay < -1LL || replay > LONG_MAX)
@@ -1564,6 +1557,26 @@ int cai_cli_configure_at(int argc, char *const *argv, cai_cli_options *options,
   return rc;
 }
 
+int cai_cli_configure_stored_at(int argc, char *const *argv, cai_config *stored,
+                                cai_cli_options *options,
+                                cai_config **configuration,
+                                const cai_app_config *application,
+                                const cai_config_context *startup,
+                                cai_error *error) {
+  cai_cli_configure_at_scratch *scratch = calloc(1U, sizeof(*scratch));
+  int rc;
+  *configuration = stored;
+  if (scratch == NULL)
+    return nomem(error, "allocate selected agent configuration");
+  rc = cai_cli_configure_at_with_scratch(argc, argv, options, configuration,
+                                         application, startup, error, scratch,
+                                         stored, 1, NULL);
+  if (*configuration == NULL)
+    *configuration = stored;
+  free(scratch);
+  return rc;
+}
+
 int cai_cli_configure_agent_at(int argc, char *const *argv,
                                cai_cli_options *options,
                                cai_config **configuration,
@@ -1579,10 +1592,9 @@ int cai_cli_configure_agent_at(int argc, char *const *argv,
   rc = cai_cli_configure_at_with_scratch(argc, argv, options, &bootstrap,
                                          application, startup, error, scratch,
                                          NULL, 1, &seed);
-  if (rc <= 0 ||
-      (cai_cli_options_utility(options) && options->export_id == NULL &&
-       options->dump_developer_instructions == NULL &&
-       options->agent_build == NULL)) {
+  if (rc <= 0 || (cai_cli_options_utility(options) &&
+                  options->dump_developer_instructions == NULL &&
+                  options->agent_build == NULL && !options->login)) {
     *configuration = bootstrap;
     cai_config_close(seed);
     free(scratch);

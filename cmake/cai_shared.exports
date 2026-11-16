@@ -1,6 +1,9 @@
 cai_agent_add_hosted_mcp_tool
 cai_agent_add_hosted_tool_json
 cai_agent_add_simple_hosted_tool
+cai_agent_builtin_instructions_count
+cai_agent_builtin_instructions_name
+cai_agent_builtin_instructions_write
 cai_agent_config_init
 cai_agent_destroy
 cai_agent_execution_close
@@ -702,3 +705,7 @@ cai_workspace_server_pump
 cai_workspace_server_ready
 cai_workspace_server_stop
 cai_workspace_server_write
+cai_agent_runtime_bind_agent
+cai_agent_runtime_activate
+cai_agent_runtime_get_agent
+cai_agent_runtime_open_agent

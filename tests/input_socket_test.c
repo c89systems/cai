@@ -44,6 +44,7 @@ typedef struct fixture {
   unsigned long long clock;
   size_t cancellations;
   size_t selections;
+  char selected_agent[129];
 } fixture;
 static int observed(void *context, const cai_app_client_event *event,
                     cai_error *error) {
@@ -661,11 +662,13 @@ static void settlement_cases(fixture *f) {
   free(a);
   free(b);
 }
-static int select_conversation(void *context, const char *selector,
-                               cai_error *error) {
+static int select_session(void *context, const char *selector,
+                          const char *agent, cai_error *error) {
   fixture *f = context;
   (void)error;
   ++f->selections;
+  snprintf(f->selected_agent, sizeof(f->selected_agent), "%s",
+           agent != NULL ? agent : "");
   return selector == NULL || strcmp(selector, "1") == 0 ? CAI_OK
                                                         : CAI_ERR_INVALID;
 }
@@ -677,7 +680,7 @@ static void selection_cases(fixture *f) {
   assert(a != NULL && b != NULL);
   a->descriptors[0] = a->descriptors[1] = -1;
   b->descriptors[0] = b->descriptors[1] = -1;
-  cai_cli_workspace_host_selection(f->host, select_conversation, f);
+  cai_cli_workspace_host_selection(f->host, select_session, f);
   connect(f, a);
   assert(drive(f, a, NULL) == CAI_OK);
   assert(cai_app_client_select(a->client, 1U, "", NULL) == CAI_ERR_INVALID);
@@ -685,17 +688,23 @@ static void selection_cases(fixture *f) {
   assert(drive(f, a, NULL) == CAI_OK);
   assert(f->selections == 1U && a->binding_rejections == 1U &&
          a->binding_code == CAI_ERR_INVALID && !a->state.bound);
-  assert(cai_app_client_select(a->client, 2U, "1", NULL) == CAI_OK);
+  assert(cai_app_client_select_agent(a->client, 2U, "1", "", NULL) ==
+         CAI_ERR_INVALID);
+  assert(cai_app_client_select_agent(a->client, 2U, "1", "engineer", NULL) ==
+         CAI_OK);
   assert(drive(f, a, NULL) == CAI_OK && a->state.ready);
   assert(f->selections == 2U && strcmp(a->state.session, "session") == 0 &&
          a->state.last_request == 0U && count(f) == 0U);
+  assert(strcmp(f->selected_agent, "engineer") == 0);
   assert(cai_app_client_select(a->client, 3U, NULL, NULL) == CAI_ERR_INVALID);
   connect(f, b);
   assert(drive(f, a, b) == CAI_OK);
-  assert(cai_app_client_select(b->client, 1U, NULL, NULL) == CAI_OK);
+  assert(cai_app_client_select_agent(b->client, 1U, NULL, "observer", NULL) ==
+         CAI_OK);
   assert(drive(f, a, b) == CAI_OK);
   assert(b->binding_rejections == 1U && !b->state.bound &&
          f->selections == 2U && count(f) == 0U);
+  assert(strcmp(f->selected_agent, "engineer") == 0);
   close_frontend(a);
   close_frontend(b);
   server(f);
@@ -706,6 +715,7 @@ static void selection_cases(fixture *f) {
   assert(cai_app_client_select(a->client, 1U, NULL, NULL) == CAI_OK);
   assert(drive(f, a, NULL) == CAI_OK && a->state.ready && f->selections == 3U &&
          count(f) == 0U);
+  assert(f->selected_agent[0] == '\0');
   close_frontend(a);
   cai_cli_workspace_host_selection(f->host, NULL, NULL);
   free(b);

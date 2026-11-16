@@ -1,9 +1,7 @@
 # Providers and authentication
 
-The default `chatgpt` provider imports `~/.codex/auth.json` first when present, otherwise it loads credentials from cai's lockd store.
-`--auth-json` selects another import source.
-Unchanged source files preserve tokens refreshed in cai's store; refresh never writes back to the source file.
-If neither source nor stored credentials exist, `cai --login` opens a browser login, stores auth in the `cai.auth` namespace, and exits.
+The default `chatgpt` provider uses native credentials in the selected stored agent. `cai --login` opens browser login, updates that agent object in encrypted lockd storage, and exits. Add `--use NAME` to log into a named agent.
+`--make DIR --from-auth-json FILE` explicitly imports existing credentials. Runtime refresh updates the agent object without changing the import source. `--auth-json FILE` explicitly selects the core file-backed authentication path instead. External files, including `~/.codex/auth.json`, are never discovered automatically.
 `-l` means `--list`, not login.
 The `openai` provider uses `OPENAI_API_KEY`, `openrouter` uses `OPENROUTER_API_KEY`, `berget` uses `BERGET_API_KEY`, and `custom` requires `--endpoint` and `--model` with `CAI_API_KEY` by default or a variable selected by `--api-key-env`.
 `--provider`/`-p` selects a provider.

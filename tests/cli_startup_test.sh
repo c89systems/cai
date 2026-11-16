@@ -5,7 +5,7 @@ printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"fixture","access_tok
 mkfifo "$root/began" "$root/release"
 exec 8<>"$root/began" 9<>"$root/release"
 export CAI_TEST_QUOTA_STARTED=8 CAI_TEST_QUOTA_RELEASE=9
-base=("$cli" -C "$work")
+base=("$cli" --auth-json "$root/.codex/auth.json" -C "$work")
 terminal_start -N
 read -r -n1 -t5 began <&8; [[ "$began" == Q ]]
 # The API is blocked, but prompt and help are usable.
@@ -23,7 +23,7 @@ export CAI_TEST_QUOTA_HTTP2_DISABLED=1
 for insecure in false true; do
   if [[ "$insecure" == true ]]; then export CAI_TEST_QUOTA_INSECURE=1; else export CAI_TEST_QUOTA_INSECURE=0; fi
   printf '[client]\ntimeout_ms=23456\nca_bundle_path=trust.pem\nca_path=certs\ninsecure_skip_verify=%s\nhttp_2_disabled=true\n' "$insecure" >"$root/timeout.ini"
-  terminal_start -N --config "$root/timeout.ini"
+  terminal_start -N --config "$root/timeout.ini" --namespace-prefix "startup-tls-$insecure"
   read -r -n1 -t5 began <&8; [[ "$began" == Q ]]
   printf 1 >&9; expect 'w 88%'
   terminal_close

@@ -16,13 +16,13 @@ struct cai_cli_input_wire_decoder {
   size_t index, offset, length;
   char *string;
   int phase;
-  char text[CAI_CLI_INPUT_TEXT_MAX + 1U], session[129], origin[128],
+  char text[CAI_CLI_INPUT_TEXT_MAX + 1U], session[129], agent[129], origin[128],
       reason[192];
 };
 static const char *format(cai_protocol_kind kind) {
   switch (kind) {
   case CAI_PROTOCOL_SYNCHRONIZE:
-    return "usbb";
+    return "usbbt";
   case CAI_PROTOCOL_INPUT_SETTLED:
     return "u";
   case CAI_PROTOCOL_USER_SHELL:
@@ -110,10 +110,13 @@ static int pack(const cai_cli_input_wire_message *m, field *f,
     f[0].text = r->text;
     break;
   case CAI_PROTOCOL_SYNCHRONIZE:
+    if (!m->select_session && m->agent != NULL)
+      return invalid(error);
     f[0].number = m->producer;
     f[1].text = m->session;
     f[2].number = m->managed_delivery;
     f[3].number = m->select_session;
+    f[4].text = m->agent;
     break;
   case CAI_PROTOCOL_INPUT_SETTLED:
     f[0].number = m->delivery_after;
@@ -214,6 +217,9 @@ static int unpack(cai_cli_input_wire_decoder *d, cai_error *error) {
     m->session = f[1].text;
     m->managed_delivery = (int)f[2].number;
     m->select_session = (int)f[3].number;
+    m->agent = f[4].text;
+    if (!m->select_session && m->agent != NULL)
+      return invalid(error);
     if (m->select_session &&
         (m->producer != 0U || m->header.conversation != 0U))
       return invalid(error);
@@ -320,6 +326,8 @@ static int unpack(cai_cli_input_wire_decoder *d, cai_error *error) {
 static char *string_target(cai_cli_input_wire_decoder *d, size_t *capacity) {
   cai_protocol_kind kind = d->message.header.kind;
   *capacity = string_capacity(kind, d->index);
+  if (kind == CAI_PROTOCOL_SYNCHRONIZE && d->index == 4U)
+    return d->agent;
   if (kind == CAI_PROTOCOL_SYNCHRONIZE || kind == CAI_PROTOCOL_QUEUE_BEGIN) {
     return d->session;
   }

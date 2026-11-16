@@ -340,6 +340,11 @@ int main(int argc, char **argv) {
   assert(h.app->get_status(h.app, &retained, &error) == CAI_OK);
   if (strcmp(h.mode, "stores") == 0) {
     assert(code == 0 && h.starts == 0 && h.acks == 0);
+    if (cai_test_storage_open_count() !=
+        (unsigned int)atoi(getenv("CAI_TEST_APP_STORE_OPENS")))
+      fprintf(stderr, "store opens: %u, expected %s\n",
+              cai_test_storage_open_count(),
+              getenv("CAI_TEST_APP_STORE_OPENS"));
     assert(cai_test_storage_open_count() ==
            (unsigned int)atoi(getenv("CAI_TEST_APP_STORE_OPENS")));
   } else if (strcmp(h.mode, "queue") == 0) {

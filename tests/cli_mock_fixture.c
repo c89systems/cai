@@ -92,6 +92,7 @@ int __wrap_cai_cli_pouch_prompt_save(cai_cli_pouch *pouch, const char *id,
 
 static int fixture_runtime_open(cai_client *client,
                                 const cai_agent_runtime_config *config,
+                                const char *name, const char *revision,
                                 cai_agent_runtime **out, cai_error *error) {
   cai_agent_runtime_config selected = *config;
   cai_agent_preset worker;
@@ -126,7 +127,8 @@ static int fixture_runtime_open(cai_client *client,
     selected.subagents = &profile;
     selected.subagent_count = 1U;
   }
-  return cai_agent_runtime_open(client, &selected, out, error);
+  return cai_agent_runtime_open_agent(client, &selected, name, revision, out,
+                                      error);
 }
 /* Fail after the services have started to exercise partial-open cleanup. */
 static int fixture_messages_start(cai_cli_messages *messages, const char *id,
@@ -142,13 +144,13 @@ static int fixture_messages_start(cai_cli_messages *messages, const char *id,
   }
   return rc;
 }
-#define cai_agent_runtime_open fixture_runtime_open
+#define cai_agent_runtime_open_agent fixture_runtime_open
 #define cai_cli_messages_start fixture_messages_start
 #define cai_cli_export_job_start fixture_export_start
 #include "../cli/app_run.c"
 #undef cai_cli_export_job_start
 #undef cai_cli_messages_start
-#undef cai_agent_runtime_open
+#undef cai_agent_runtime_open_agent
 
 /* A trusted host may change the goal while the owner has an export pending.
  * Keep that explicit host action separate from automatic goal continuation. */

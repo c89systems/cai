@@ -38,6 +38,7 @@ typedef struct utility_run {
   cai_config_context startup;
   cai_cli_log *log;
   cai_cli_pouch pouch, messaging;
+  cai_cli_agent_auth agent_auth;
   cai_cli_session *sessions;
   size_t session_count;
   cai_error error;
@@ -308,7 +309,7 @@ static int dispatch(utility_run *u) {
         u->log->logger, &u->error);
   }
   store =
-      u->options.login             ? u->options.auth_store
+      u->options.login             ? u->options.agents_store
       : u->options.message != NULL ? u->options.messaging_store
       : u->options.context_export != NULL && u->options.context_store != NULL
           ? u->options.context_store
@@ -323,9 +324,17 @@ static int dispatch(utility_run *u) {
     return rc;
   if (u->options.login) {
     u->operation = "login";
-    return cai_cli_login(&u->pouch.credentials, u->log->logger, u->bridge->fd,
-                         cai_app_bridge_cleanup_stop, u->bridge, u->environment,
-                         u->workspace);
+    rc = cai_cli_agent_auth_init(&u->agent_auth, &u->pouch,
+                                 u->options.source_agent_name != NULL
+                                     ? u->options.source_agent_name
+                                     : "default",
+                                 &u->error);
+    if (rc != CAI_OK)
+      return rc;
+    return cai_cli_login(
+        u->options.auth_json != NULL ? NULL : &u->agent_auth.storage,
+        u->options.auth_json, u->log->logger, u->bridge->fd,
+        cai_app_bridge_cleanup_stop, u->bridge, u->environment, u->workspace);
   }
   if (u->options.context_export != NULL) {
     cai_context_config config;
@@ -473,6 +482,12 @@ int cai_cli_utility_run(int argc, char **argv,
     result = rc == CAI_OK ? 0 : 1;
     goto done;
   }
+  if (u->options.dump_system_prompts != NULL) {
+    u->operation = "dump built-in instructions";
+    rc = cai_cli_dump_system_prompts(&u->options, &u->error);
+    result = rc == CAI_OK ? 0 : 1;
+    goto done;
+  }
   if (cai_cli_theme_validate(&u->options, &u->error) != CAI_OK) {
     result = 2;
     goto done;
@@ -518,16 +533,23 @@ int cai_cli_utility_run(int argc, char **argv,
       *paths[i] = u->paths[i];
     }
     if (u->options.agent_build != NULL || u->options.agent_make != NULL ||
-        u->options.agent_dump != NULL || u->options.agent_dump_all != NULL) {
+        u->options.agent_dump != NULL || u->options.agent_dump_all != NULL ||
+        u->options.agent_edit != NULL) {
       u->operation = "agent package";
-      rc = cai_cli_agent_package_run(&u->options, u->configuration, application,
-                                     &u->startup, &u->error);
+      rc = cai_cli_agent_package_run(
+          &u->options, u->configuration, application, &u->startup,
+          u->bridge->fd, cai_app_bridge_cleanup_stop, u->bridge, &u->error);
     } else
       rc = dispatch(u);
   }
   result = rc == CAI_OK ? 0 : 1;
 done:
   (void)cai_app_bridge_cleanup_stop(bridge);
+  if (cai_app_bridge_stopping(bridge) && u->error.code == CAI_ERR_CANCELLED) {
+    cai_error_cleanup(&u->error);
+    cai_error_init(&u->error);
+    result = 0;
+  }
   if (u->error.code != CAI_OK) {
     if (u->log == NULL && u->startup.environment != NULL)
       (void)utility_log(u, application, raw);

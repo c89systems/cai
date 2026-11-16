@@ -38,7 +38,7 @@ typedef struct host_peer {
   int selecting;
   uint64_t selection_request, selection_generation;
   int selection_managed;
-  char selection[129];
+  char selection[129], selection_agent[129];
   cai_agent_runtime *shell_runtime;
   uint64_t shell_id, shell_sequence, shell_high, shell_generation,
       shell_conversation, shell_started;
@@ -64,7 +64,7 @@ struct cai_cli_workspace_host {
   cai_app_view status;
   int (*cancel)(void *, cai_error *);
   void *cancel_context;
-  int (*select)(void *, const char *, cai_error *);
+  int (*select)(void *, const char *, const char *, cai_error *);
   void *select_context;
   host_peer peers[CAI_ATTACHMENT_LIMIT];
 };
@@ -652,6 +652,9 @@ static int select_peer(host_peer *peer, cai_error *error) {
     rc = host->select != NULL
              ? host->select(host->select_context,
                             peer->selection[0] != '\0' ? peer->selection : NULL,
+                            peer->selection_agent[0] != '\0'
+                                ? peer->selection_agent
+                                : NULL,
                             &local)
              : cai_cli_error(&local, CAI_ERR_INVALID,
                              "session selection unavailable");
@@ -836,6 +839,8 @@ static int message(void *context, const cai_workspace_server_event *event,
       peer->selection_managed = m->managed_delivery;
       snprintf(peer->selection, sizeof(peer->selection), "%s",
                m->session != NULL ? m->session : "");
+      snprintf(peer->selection_agent, sizeof(peer->selection_agent), "%s",
+               m->agent != NULL ? m->agent : "");
       return CAI_OK;
     }
     cai_error_init(&binding);
@@ -1117,7 +1122,7 @@ int cai_cli_workspace_host_open(
 }
 void cai_cli_workspace_host_selection(cai_cli_workspace_host *host,
                                       int (*select)(void *, const char *,
-                                                    cai_error *),
+                                                    const char *, cai_error *),
                                       void *context) {
   if (host != NULL) {
     host->select = select;

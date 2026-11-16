@@ -530,11 +530,6 @@ static int parse_source_optional(cai_source *source, const lonejson_map *map,
   return rc;
 }
 
-static int parse_source(cai_source *source, const lonejson_map *map, void *doc,
-                        cai_error *error) {
-  return parse_source_optional(source, map, doc, NULL, NULL, error);
-}
-
 /* Collection receivers borrow the existing shared client. Opening a receiver
  * never creates another Pouch root, client, or background worker. */
 static int history_supported(cai_cli_pouch *pouch, cai_error *error) {
@@ -2338,47 +2333,6 @@ int cai_cli_pouch_transcript_open(cai_cli_pouch *pouch, const char *scope,
 #include "pouch_agents.inc"
 #include "pouch_delete.inc"
 
-static int auth_load(void *context, const char *key, cai_source **out,
-                     cai_error *error) {
-  cai_cli_pouch *pouch;
-  lc_describe_req request;
-  lc_describe_res response;
-  lc_error local;
-  int rc;
-  pouch = (cai_cli_pouch *)context;
-  *out = NULL;
-  lc_describe_req_init(&request);
-  memset(&response, 0, sizeof(response));
-  lc_error_init(&local);
-  request.key = key;
-  request.ns = pouch->auth_namespace;
-  rc = lc_describe(pouch->sessions, &request, &response, &local);
-  if (rc != LC_OK && local.http_status != 404)
-    rc = cai_cli_lc_error(error, &local);
-  else {
-    rc = response.state_etag != NULL && response.state_etag[0] != '\0'
-             ? download_source_ns(pouch->sessions, pouch->auth_namespace, key,
-                                  NULL, out, error)
-             : CAI_OK;
-  }
-  lc_describe_res_cleanup(&response);
-  lc_error_cleanup(&local);
-  return rc;
-}
-
-static int auth_replace(void *context, const char *key, cai_source *source,
-                        cai_error *error) {
-  cai_cli_pouch *pouch;
-  lc_lease *lease;
-  int rc;
-  pouch = (cai_cli_pouch *)context;
-  lease = NULL;
-  rc = acquire_ns(pouch, pouch->auth_namespace, key, &lease, error);
-  if (rc == CAI_OK)
-    rc = update(lease, source, error);
-  return release(lease, rc, error);
-}
-
 typedef struct todo_transaction {
   cai_cli_pouch *pouch;
   lc_lease *lease;
@@ -2761,7 +2715,6 @@ static int cai_cli_pouch_open_options_with_scratch(
              "MNOPQRSTUVWXYZ0123456789._-") != (size_t)rc)                     \
   return cai_cli_error(error, CAI_ERR_INVALID, "invalid " #kind " namespace")
   NAMESPACE(sessions);
-  NAMESPACE(auth);
   NAMESPACE(scopes);
   if (snprintf(pouch->agents_namespace, sizeof(pouch->agents_namespace),
                "%s.agents", prefix) >= (int)sizeof(pouch->agents_namespace))
@@ -2895,9 +2848,6 @@ static int cai_cli_pouch_open_options_with_scratch(
   pouch->store.load_id = load_owned_id;
   pouch->store.append_event = append_event;
   pouch->store.load_events_after = load_events;
-  pouch->credentials.context = pouch;
-  pouch->credentials.load = auth_load;
-  pouch->credentials.replace = auth_replace;
   return CAI_OK;
 }
 
@@ -2960,125 +2910,6 @@ void cai_cli_pouch_close(cai_cli_pouch *pouch) {
   pthread_mutex_unlock(&clients_lock);
   pouch->connection = NULL;
   pouch->sessions = NULL;
-}
-
-typedef struct auth_origin {
-  char path[PATH_MAX];
-  char digest[65];
-} auth_origin;
-static const lonejson_field auth_origin_fields[] = {
-    LONEJSON_FIELD_STRING_FIXED_REQ(auth_origin, path, "path",
-                                    LONEJSON_OVERFLOW_FAIL),
-    LONEJSON_FIELD_STRING_FIXED_REQ(auth_origin, digest, "digest",
-                                    LONEJSON_OVERFLOW_FAIL)};
-LONEJSON_MAP_DEFINE(auth_origin_map, auth_origin, auth_origin_fields);
-
-/** Per-invocation scratch belongs to the heap, including callback reentry. */
-typedef struct cai_cli_pouch_seed_auth_scratch {
-  auth_origin current;
-  auth_origin previous;
-} cai_cli_pouch_seed_auth_scratch;
-static int
-cai_cli_pouch_seed_auth_with_scratch(cai_cli_pouch *pouch, const char *path,
-                                     cai_error *error,
-                                     cai_cli_pouch_seed_auth_scratch *scratch) {
-
-  unsigned char buffer[4096];
-  unsigned char digest[EVP_MAX_MD_SIZE];
-  unsigned int digest_length;
-  EVP_MD_CTX *hash;
-  cai_source *source;
-  cai_source *stored;
-  FILE *file;
-  cai_chatgpt_auth_config auth_config;
-  cai_chatgpt_auth *auth;
-  size_t count;
-  size_t i;
-  int rc;
-  memset(&scratch->current, 0, sizeof(scratch->current));
-  memset(&scratch->previous, 0, sizeof(scratch->previous));
-  if (realpath(path, scratch->current.path) == NULL)
-    return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                         "cannot open authentication source file");
-  /* Reject invalid credentials before changing the durable credential store.
-   * Opening auth only validates the document; token access performs refresh. */
-  auth = NULL;
-  cai_chatgpt_auth_config_init(&auth_config);
-  auth_config.logger = pouch->logger;
-  auth_config.auth_json_path = scratch->current.path;
-  rc = cai_chatgpt_auth_open(&auth_config, &auth, error);
-  cai_chatgpt_auth_close(auth);
-  if (rc != CAI_OK)
-    return rc;
-  file = fopen(scratch->current.path, "rb");
-  if (file == NULL)
-    return cai_cli_error(error, CAI_ERR_TRANSPORT,
-                         "cannot read authentication source file");
-  source = NULL;
-  stored = NULL;
-  rc = cai_source_file(file, 1, &source, error);
-  if (rc != CAI_OK) {
-    fclose(file);
-    return rc;
-  }
-  hash = EVP_MD_CTX_new();
-  if (hash == NULL || EVP_DigestInit_ex(hash, EVP_sha256(), NULL) != 1)
-    rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
-                       "initialize auth source fingerprint");
-  while (rc == CAI_OK) {
-    count = cai_source_read(source, buffer, sizeof(buffer), error);
-    if (count == 0U) {
-      rc = error->code;
-      break;
-    }
-    if (EVP_DigestUpdate(hash, buffer, count) != 1)
-      rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "fingerprint auth source");
-  }
-  if (rc == CAI_OK && EVP_DigestFinal_ex(hash, digest, &digest_length) != 1)
-    rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
-                       "finish auth source fingerprint");
-  EVP_MD_CTX_free(hash);
-  OPENSSL_cleanse(buffer, sizeof(buffer));
-  if (rc == CAI_OK) {
-    for (i = 0U; i < digest_length; i++)
-      snprintf(scratch->current.digest + i * 2U,
-               sizeof(scratch->current.digest) - i * 2U, "%02x",
-               (unsigned int)digest[i]);
-    rc = auth_load(pouch, "source.json", &stored, error);
-  }
-  if (rc == CAI_OK && stored != NULL)
-    rc = parse_source(stored, &auth_origin_map, &scratch->previous, error);
-  cai_source_close(stored);
-  stored = NULL;
-  /* An unchanged Codex file must not replace refreshed tokens in the pouch. */
-  if (rc == CAI_OK &&
-      (strcmp(scratch->current.path, scratch->previous.path) != 0 ||
-       strcmp(scratch->current.digest, scratch->previous.digest) != 0)) {
-    rc = cai_source_reset(source, error);
-    if (rc == CAI_OK)
-      rc = auth_replace(pouch, "auth.json", source, error);
-    if (rc == CAI_OK)
-      rc = cai_cli_mapped_source(&auth_origin_map, &scratch->current, &stored,
-                                 error);
-    if (rc == CAI_OK)
-      rc = auth_replace(pouch, "source.json", stored, error);
-  }
-  cai_source_close(stored);
-  cai_source_close(source);
-  return rc;
-}
-
-int cai_cli_pouch_seed_auth(cai_cli_pouch *pouch, const char *path,
-                            cai_error *error) {
-  cai_cli_pouch_seed_auth_scratch *scratch =
-      (cai_cli_pouch_seed_auth_scratch *)calloc(1U, sizeof(*scratch));
-  int rc;
-  if (scratch == NULL)
-    return cai_cli_error(error, CAI_ERR_NOMEM,
-                         "allocate cai_cli_pouch_seed_auth scratch");
-  rc = cai_cli_pouch_seed_auth_with_scratch(pouch, path, error, scratch);
-  free(scratch);
-  return rc;
 }
 
 /** Per-invocation scratch belongs to the heap, including callback reentry. */

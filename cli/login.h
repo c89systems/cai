@@ -14,8 +14,9 @@ int cai_cli_login_write_response(int fd,
  * stop_fd/stop interrupt callback socket waits. STOP returns zero; the caller
  * acknowledges the host control after the sockets and login are closed.
  */
-int cai_cli_login(const cai_blob_store *storage, pslog_logger *logger,
-                  int stop_fd, cai_cli_login_stop_fn stop, void *context,
-                  cai_environment *environment, const char *directory);
+int cai_cli_login(const cai_blob_store *storage, const char *auth_json,
+                  pslog_logger *logger, int stop_fd, cai_cli_login_stop_fn stop,
+                  void *context, cai_environment *environment,
+                  const char *directory);
 
 #endif

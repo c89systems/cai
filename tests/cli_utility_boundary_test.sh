@@ -57,14 +57,14 @@ run --config "$root/browser.ini" --chrome-remove; ok
 rc=0
 LOG_OUTPUT=stdout "$guard" --chrome-native-host >"$root/native.out" 2>"$root/native.err" || rc=$?
 [[ "$rc" == 1 && ! -s "$root/native.out" && -s "$root/native.err" ]]
-for selector in messaging_store sessions_store auth_store; do
+for selector in messaging_store sessions_store agents_store; do
   printf '[storage]\n%s = ""\n' "$selector" >"$root/invalid.ini"
   case "$selector" in
     messaging_store) run --config "$root/invalid.ini" --delete "$session" ;;
     sessions_store) run --config "$root/invalid.ini" --list ;;
-    auth_store) run --config "$root/invalid.ini" --login ;;
+    agents_store) run --config "$root/invalid.ini" --login ;;
   esac
-  [[ "$rc" == 1 ]]
+  [[ "$rc" == 2 ]]
 done
 run --list; ok; contains "$root/stdout" "$session"
 [[ $(requests) == "$before" ]]

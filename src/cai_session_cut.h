@@ -22,6 +22,7 @@ LONEJSON_MAP_DEFINE(cai_cut_edit_map, cai_cut_edit_header, cai_cut_edit_fields);
 /** Bounded envelope fields retained from each record during cut planning. */
 typedef struct cai_cut_header {
   char record_type[24];
+  char type[40];
   lonejson_uint64 sequence;
   cai_cut_edit_header state;
   lonejson_json_value data;
@@ -30,6 +31,8 @@ static const lonejson_field cai_cut_fields[] = {
     LONEJSON_FIELD_STRING_FIXED_REQ(cai_cut_header, record_type, "record_type",
                                     LONEJSON_OVERFLOW_FAIL),
     LONEJSON_FIELD_U64(cai_cut_header, sequence, "sequence"),
+    LONEJSON_FIELD_STRING_FIXED(cai_cut_header, type, "type",
+                                LONEJSON_OVERFLOW_TRUNCATE_SILENT),
     LONEJSON_FIELD_OBJECT(cai_cut_header, state, "state", &cai_cut_edit_map),
     LONEJSON_FIELD_JSON_VALUE(cai_cut_header, data, "data")};
 LONEJSON_MAP_DEFINE(cai_cut_map, cai_cut_header, cai_cut_fields);
@@ -44,8 +47,9 @@ typedef struct cai_cut_plan {
   unsigned long long anchor, revision, bytes, last_position, last_sequence;
   unsigned long long last_revision, last_bytes, suffix;
   cai_cut_range events[CAI_CUT_MAX_RANGES], commits[CAI_CUT_MAX_RANGES];
+  cai_cut_range provenance[CAI_CUT_MAX_RANGES];
   cai_cut_range ranges[CAI_CUT_MAX_RANGES * 2U + 1U];
-  size_t event_count, commit_count, count;
+  size_t event_count, commit_count, count, provenance_count;
   lonejson *json;
   lonejson_curl_parse parser;
   cai_cut_header record;
@@ -158,6 +162,8 @@ static int cai_cut_end(cai_cut_plan *p, unsigned long long position,
       rc = CAI_CUT_FAIL(error, "history changed during atomic cut preparation");
     else {
       p->last_sequence = p->record.sequence;
+      if (strcmp(p->record.type, "agent_activation") == 0)
+        rc = cai_cut_add(p->provenance, &p->provenance_count, position, error);
       if (p->last_sequence >= p->request->first_sequence && p->suffix == 0U)
         p->suffix = position;
       if (p->suffix == 0U) {
@@ -182,7 +188,7 @@ static int cai_cut_compare(const void *a, const void *b) {
 /** Merge selected event/commit ranges and the discarded suffix into one plan.
  */
 static int cai_cut_finish(cai_cut_plan *p, cai_error *error) {
-  size_t i, count = 0U;
+  size_t i, j, kept = 0U, count = 0U;
   if (p->last_revision == 0U || p->bytes > (size_t)-1)
     return CAI_CUT_FAIL(error, "history cut has no valid commit");
   memcpy(p->ranges, p->events, p->event_count * sizeof(*p->ranges));
@@ -201,10 +207,31 @@ static int cai_cut_finish(cai_cut_plan *p, cai_error *error) {
     } else
       p->ranges[count++] = p->ranges[i];
   }
-  p->count = count;
-  return count <= CAI_CUT_MAX_RANGES
-             ? CAI_OK
-             : CAI_CUT_FAIL(error, "history cut exceeds atomic range limit");
+  /* Definition provenance is operator metadata, independent of turn context.
+   * Preserve its immutable chain even when the surrounding turns are cut. */
+  for (i = 0U; i < count; ++i) {
+    unsigned long long after = p->ranges[i].after;
+    unsigned long long through = p->ranges[i].through;
+    for (j = 0U; j <= p->provenance_count && after < through; ++j) {
+      unsigned long long end = through;
+      if (j < p->provenance_count) {
+        if (p->provenance[j].through <= after)
+          continue;
+        if (p->provenance[j].after < end)
+          end = p->provenance[j].after;
+      }
+      if (end > after) {
+        if (kept >= CAI_CUT_MAX_RANGES)
+          return CAI_CUT_FAIL(error, "history cut exceeds atomic range limit");
+        p->events[kept].after = after;
+        p->events[kept++].through = end;
+      }
+      after = j < p->provenance_count ? p->provenance[j].through : through;
+    }
+  }
+  p->count = kept;
+  memcpy(p->ranges, p->events, kept * sizeof(*p->ranges));
+  return CAI_OK;
 }
 /** Test whether a store position is included in the prepared deletion plan. */
 static int cai_cut_removed(const cai_cut_plan *p, unsigned long long position) {

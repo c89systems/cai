@@ -666,7 +666,9 @@ int cai_execution_record_write_markdown(const cai_execution_record *r,
   if (compact && !failed && r->field != NULL &&
       strcmp(r->kind, "hosted.tool") != 0)
     return CAI_OK;
-  label = strcmp(r->kind, "reasoning.receipt") == 0      ? "Reasoning"
+  label = strcmp(r->kind, "agent.activation") == 0
+              ? "Agent definition and instructions"
+          : strcmp(r->kind, "reasoning.receipt") == 0    ? "Reasoning"
           : strcmp(r->kind, "tool.started") == 0         ? "Tool called"
           : strcmp(r->kind, "tool.arguments") == 0       ? "Tool arguments"
           : strcmp(r->kind, "tool.output") == 0          ? "Tool result"

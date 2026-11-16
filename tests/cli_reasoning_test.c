@@ -414,7 +414,7 @@ static int test_auth_token(cai_chatgpt_auth *auth, char **out,
 }
 
 static void *test_token_thread(void *context) {
-  cli_state *state = context;
+  cli_agent_services *state = context;
   cai_error error;
   char *token;
   cai_error_init(&error);
@@ -424,7 +424,7 @@ static void *test_token_thread(void *context) {
 }
 
 static void *test_refresh_thread(void *context) {
-  cli_state *state = context;
+  cli_agent_services *state = context;
   auth_fixture *fixture = state->auth->impl;
   cai_error error;
   pthread_mutex_lock(&fixture->lock);
@@ -438,7 +438,7 @@ static void *test_refresh_thread(void *context) {
 }
 
 static int test_shared_auth(void) {
-  cli_state state;
+  cli_agent_services state;
   cai_chatgpt_auth auth;
   auth_fixture fixture;
   pthread_t token;

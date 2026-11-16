@@ -47,6 +47,7 @@ cai_cli_documents_finish
 cai_cli_documents_operation
 cai_cli_documents_write
 cai_cli_dump_instructions
+cai_cli_dump_system_prompts
 cai_cli_environment_prefix
 cai_cli_error
 cai_cli_goal_input_argument
@@ -112,7 +113,6 @@ cai_cli_pouch_ownership_fd
 cai_cli_pouch_prompt_close
 cai_cli_pouch_prompt_configure
 cai_cli_pouch_retention
-cai_cli_pouch_seed_auth
 cai_cli_pouch_session
 cai_cli_pouch_set_retention
 cai_cli_pouch_todo_callbacks
@@ -182,3 +182,6 @@ cai_cli_workspace_host_shell
 cai_cli_workspace_host_status
 cai_cli_workspace_host_stop
 cai_cli_workspace_path
+cai_cli_agent_package_initialize
+cai_cli_agent_auth_init
+cai_cli_pouch_agent_initialize

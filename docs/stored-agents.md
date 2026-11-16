@@ -1,129 +1,94 @@
 # Stored agents and agent builder
 
-Status: source-package and named-startup milestone implemented. The implemented commands are `--build`, `--make`, `--dump-agent`, `--dump-agents`, `--use` and explicit credential transfer. Startup restores a saved session's last selected agent unless overridden; new sessions use `default`. Interactive building/editing, live `/use` activation, complete historical instruction provenance and provider-context conversion remain planned below. This consolidates `stash/TODO.md` and `stash/agent_builder.md`; [configuration](configuration.md#stored-agent-workflow) describes the available workflow.
+A stored agent is a named operating environment: configuration, developer instructions, native authentication, tools, skills, MCP connections and bundled files. It can operate any compatible session in the configured session store. The C `cai_agent_preset` descriptor supplies execution defaults; it is only one part of a stored agent.
 
-## Purpose and terminology
+A workspace is the canonical directory served by one backend. A session is the saved interaction. An attachment is a live frontend connection. Changing the agent changes none of these identities. See [terminology](README.md#terminology) and the [configuration guide](configuration.md#stored-agent-workflow).
 
-A stored agent is a complete, named agent: its configuration, developer instructions, authentication, tools, skills, MCP connections and bundled files. Selecting one selects that agent's operating environment. An instruction template or a collection of configuration overrides alone is insufficient.
+## Selection and session continuity
 
-Use the existing [workspace, session and attachment terminology](README.md#terminology). A workspace is the canonical directory served by one backend. A session is the saved interaction. An attachment is a live frontend connection. The agent operating a session can change without changing any of these identities.
+New sessions use `default`. Resume restores the last successfully selected agent. `-u NAME` / `--use NAME` explicitly selects an agent before replay, including when attaching to an existing workspace owner. `/use NAME` changes the active agent; `/use` reports its name and definition revision. An observer cannot activate an agent.
 
-The existing C `cai_agent_preset` descriptor supplies only part of the execution policy. It does not represent the complete stored agent described here and must not constrain the repository or builder design.
+Live activation waits for a whole-turn boundary. A steering submission of `/use` is visibly reclassified into the turn queue. The backend prepares the selected definition and capabilities, verifies continuation compatibility and publishes the binding durably before acknowledging it or admitting work under it. Failure leaves the previous agent usable.
 
-## Session continuity
+Activation transfers the existing context and pending input queue by ownership. It does not restore the journal again, copy the session or replay already displayed output. Session ID, journal ownership, retained and compacted context, prompt recall, queued input, goal, accounting and retention survive. Historical tool calls remain history; they are neither executed again nor granted as capabilities to the new agent.
 
-Agent selection must be independent of session storage identity. Selecting another agent must not change the session namespace, allocate a replacement session, copy the journal, or hide sessions created by other agents.
+The selected definition supplies future instructions, provider/client settings, tools, skills and MCP connections. Explicit invocation flags override its settings. Parent-only `-z` instructions apply to the initial parent and are cleared when selecting another agent. Resuming the same definition restores saved model/reasoning controls; selecting a different definition uses that definition's defaults, subject to explicit controls from the attaching invocation. `/new` selects `default`; `/resume` restores the destination session's selection. Operational controls remain in effect when changing sessions without changing agents.
 
-The following survive an agent change:
+Provider-specific continuation IDs, opaque compaction and hosted-tool state are not portable by implication. Backend/account changes and models requiring incompatible context conversion are rejected before live activation. Select a compatible model first or use another session. Automatic cross-provider context conversion is not implemented. API-key rotation alone is not treated as proof of a different account; explicit organization/project IDs and native OAuth account identity participate in compatibility checks.
 
-- Session ID, workspace binding, journal order and existing storage ownership.
-- Retained model context, compacted context, prompts, replies and tool history.
-- Prompt recall, pending backend input, goal status, accounting and retention.
-- Files and assets already available to the session, and attached frontends.
+## Storage and credentials
 
-The selected agent supplies the instructions, provider settings, capability policy, tool registrations, skills and MCP configuration used for subsequent work. Historical tool calls remain historical data; they neither grant the new agent those tools nor run again. Historical instructions must not override the newly selected agent's instructions.
+The registry uses the configured `agents_store`, normally the same client/store as sessions. Each definition is an ordinary state object in `<namespace-prefix>.agents`, normally `cai.agents`, keyed by canonical name: `agent.engineer`. Its JSON body contains kind, name, definition revision, bundled-file inventory and optional native authentication. There is no metadata file named `agent.json`.
 
-Switching agents does not merge unrelated sessions. It allows different agents to operate the same saved session successively. Normal review/subagent isolation remains intact.
+Attachments contain `config.ini`, `SYSTEM_PROMPT.md`, optional global `AGENTS.md`, and selected tools, skills and other resources. Directory structure is preserved in attachment names. Publication validates the package and commits metadata and attachments under one object lease. Replacing or editing a definition preserves its latest native credentials unless an explicit credential import replaces them. Concurrent edits use the definition revision to detect conflicts.
 
-Startup journal commits now record the selected agent name and definition revision; the session header and latest index are derived selection metadata. The live-activation design must additionally identify successful activations and preserve instruction provenance. Exports and replay retain the original attribution of earlier activity. Export must remain possible after the stored agent is edited or removed; historical instruction provenance cannot depend solely on resolving its current name.
+Runtime `config.ini` streams directly from lockd into the configuration parser. It is never written to the runtime cache. Native authentication remains bounded parsed JSON, at most 1 MiB, and is never cached as a file. Bundled resources are streamed to private revision-specific cache directories before registration, so editing a definition cannot overwrite an active runtime's files. Existing tool execution policies still apply.
 
-Provider-specific continuation IDs, opaque compaction items and hosted-tool state need explicit handling. They must not be sent blindly to another provider. Preserve the authoritative journal and construct compatible continuation context, or reject the change before activation with an actionable reason. Silently dropping history, starting a new session or claiming unsupported provider portability does not satisfy this requirement.
+`cai --login --use engineer` stores native ChatGPT credentials in that agent object. `--make DIR --from-auth-json FILE` explicitly imports credentials. Login and token refresh update the native field without replacing the definition revision or its attachments. ChatGPT apps may use these credentials while another provider performs inference. Missing required credentials produce an actionable login error; optional apps do not force login. External files are never discovered implicitly. `--auth-json FILE` explicitly selects the core file-backed authentication path instead of native agent storage.
 
-## Storage ownership
+API keys may be placed directly in `[client] api_key` in the editable configuration and are retained in encrypted registry storage. Package exports omit declared secret fields and native authentication unless `--include-credentials` is explicit. Arbitrary prompt text, scripts and environment assignments are ordinary bundled content: inspect them before sharing. Session exports do not include authentication objects or secret configuration fields.
 
-Store agents through liblockdc, using the same configured client/store as the application unless explicitly configured otherwise. The proposed registry namespace is `<application-prefix>.agents`, normally `cai.agents`, with one state object per canonical agent name.
+Session journals and recall remain independent of the agent registry. Context and todo tools retain their configured namespaces; this cutover introduces no agent-specific namespace policy.
 
-The object contains agent metadata, the bundled-file inventory and native authentication data. It is an ordinary lockd state object, for example namespace `cai.agents`, key `agent.engineer`; there is no file or attachment named `agent.json`. Attachments contain `config.ini`, `SYSTEM_PROMPT.md`, optional global `AGENTS.md`, and selected tools, skills and other bundled files. Directory structure is preserved in attachment names. MCP definitions and provider endpoints belong to the agent's configuration.
+## Bootstrap and initialization
 
-The readable identity is separate from the canonical storage name. Normalize names consistently for lookup, creation and dumps, and reject collisions rather than silently addressing another agent. Keep the existing identity validation rules for display text.
+The local `config.ini` locates storage and the workspace server. Its non-host settings seed `default` once. Initialization validates and captures explicitly configured instructions, tools, skills and reviewer resources through the same validators and uploader used by source publication. Concurrent initializers publish one complete definition; a failed attempt leaves initialization retryable. Initialization never triggers provider login.
 
-Use liblockdc's state-object lease and revision facilities to publish a validated definition and its attachments consistently. Concurrent edits or credential refresh must not overwrite one another's changes. An active runtime retains the definition it resolved until an explicit activation; editing a stored agent must not mutate a running agent halfway through a response.
+After initialization, stored agent configuration controls agent behavior. Editing the bootstrap file does not replace a stored definition. CAI does not generate or rewrite that file automatically; `--dump-config` remains an explicit reference-template utility. Application-prefixed environment variables select bootstrap settings only. Captured command environments, explicit API-key environment lookup and `LOG_*` retain their normal behavior.
 
-Configuration and native credentials are read from encrypted storage and are never copied into the runtime cache. Native authentication is intentionally retained as bounded parsed JSON (at most 1 MiB), independently of attachment sizes. Bundled files are materialized beneath the application's agent cache before their tools or skills are registered. Use stable revision-specific paths so an edit cannot overwrite files still used by an active agent. Include the resolved paths in the normal discovery instructions. Materializing files must not execute them; existing execution policy continues to apply.
+Workspace identity, store endpoints/selectors, host paths and server lifetime belong to the host. Agent configuration cannot relocate an existing backend or session store. Explicit host requirements still participate in attachment compatibility checks; another agent's bundled resource paths and configuration origin do not identify the workspace server. Workspace approval and execution policy remain enforced.
 
-Transfer attachments through bounded streaming reads and writes. Do not materialize an entire agent archive behind a streaming-looking interface.
+This is a clean cutover of the unreleased agent format. Earlier configuration-only definitions are unsupported: republish them from source or recreate the registry definition. There is no automatic migration or parallel authentication namespace. Session storage remains independent.
 
-Session journals and recall collections remain in their session store independently of the agent registry. Context and todo tools use their configured namespaces; choosing their defaults must not change session ownership. If definitions and tool documents share a namespace, use explicit document kinds and query constraints so context search cannot return configuration or authentication objects. Exact defaults for agent-associated context/todo data remain to be settled.
+## Source and builder commands
 
-## Initialization and configuration
+Apply `-C` / `--directory` before operation-relative paths. It selects an existing directory and does not create it.
 
-The default agent is named `default`. If it does not exist, initialize it from application defaults and the explicitly selected or default seed configuration. Import selected global instructions and embedded resources through the same validation path used for other agents. Concurrent initialization must create one valid default agent without overwriting an existing definition.
-
-Do not log into ChatGPT merely because the default agent is initialized. Native CAI credentials belong in liblockdc. Loading an external Codex `auth.json` remains an explicit configuration choice. Credential import uses `--make DIR --from-auth-json FILE`. Imported native authentication is read and refreshed in the agent object. Agents without imported authentication still use the configured authentication store or existing external-auth discovery; explicit `--auth-json FILE` selects the external path. Moving default login storage into agent objects remains later work.
-
-After seeding, the agent's stored `config.ini` is authoritative for agent behavior. Do not keep automatically generating or loading a second disk configuration for the same behavior. Retain `--dump-config` as the configuration-template utility; use the agent dump operations for actual stored definitions.
-
-Explicit invocation flags override the selected agent's configuration. The original proposal removes environment-variable overrides of stored agent behavior. This does not remove `LOG_*`, the captured environment used by commands, or environment lookup explicitly requested by a provider's API-key configuration. Store bootstrap settings require a separate decision below because they are needed before an agent can be read.
-
-Settings that identify the workspace server or locate its store cannot silently relocate an already running backend when an agent is selected. Resolve those host responsibilities separately from the agent's operating settings. Preserve workspace approval and existing execution-policy enforcement.
-
-## Commands and builder workflow
-
-The source-package and startup-selection interfaces are available; `--builder`, `--edit-agent`, `--dump-system-prompts` and `/use` remain proposed. Apply `-C` / `--directory` before resolving operation-relative paths. It changes directory and fails if the directory does not exist; it does not create it.
-
-| Interface | Intended behavior |
+| Interface | Behavior |
 |---|---|
-| `-u NAME`, `--use NAME` | Select the stored agent to operate the requested or automatically resumed session. |
-| `--build [DIR]` | Create an editable agent source directory, using the selected agent as the starting point; default DIR is cwd. Create missing output parents. |
-| `--make [DIR]` | Validate the source directory and publish the named agent; default DIR is cwd. Reject an existing name unless `--yes` / `--force` explicitly permits replacement. |
-| `--builder` | Run the specialized agent builder, which asks what agent to build and produces the same editable source format. |
-| `--edit-agent NAME` | Edit the stored configuration, developer instructions and optional global instructions using the user's editor, then validate and publish together. |
-| `--dump-agent NAME` | Export one agent into `NAME/` beneath the selected directory. |
-| `--dump-agents [DIR]` | Export all agents into one subdirectory each; default root is `agents/`. |
-| `--dump-system-prompts [DIR]` | Export the built-in instruction catalog for inspection and use in an agent's instruction file. |
-| `/use NAME` | Proposed live equivalent of agent selection, submitted through the ordinary backend command queue. |
+| `--build [DIR]` | Export editable source based on the selected agent; default DIR is cwd. Create missing parents; require an empty destination. |
+| `--make [DIR]` | Validate and publish source; default DIR is cwd. Existing names require `--yes` / `--force`. |
+| `--builder` | Start with dedicated builder instructions and ask what to build unless an initial prompt was supplied. |
+| `/builder` | Activate builder instructions in the current session at a whole-turn boundary. |
+| `--edit-agent NAME` | Edit configuration, base instructions and optional global instructions locally, then validate and publish together. |
+| `--dump-agent NAME` | Export into `NAME/` below the selected directory. |
+| `--dump-agents [DIR]` | Export each agent into a subdirectory; default root is `agents/`. |
+| `--dump-system-prompts [DIR]` | Export each built-in model-profile prompt, reviewer instructions and builder instructions; default root is `prompts/`. No runtime or authentication is opened. |
 
-For example, `cai --build new_agent --use old_agent` uses `old_agent` to populate `new_agent/`. `cai -u engineer -R ID` selects `engineer` while resuming session ID. It does not import or duplicate ID's history.
+For example:
 
-The source directory contains `config.ini`, `SYSTEM_PROMPT.md`, generated `EXAMPLE_SYSTEM_PROMPT.md`, optional `AGENTS.md`, and bundled resources. The dumped `config.ini` contains an editable `[agent] name`. An explicit nonempty name wins when publishing; an empty or omitted name falls back to the source directory's basename. `--build DIR` initially writes the name inferred from DIR, while `--dump-agent NAME` retains the selected agent's name. The lockd object's JSON metadata owns the canonical published name and file inventory; no separate metadata file is written to disk.
+```sh
+cai --build agents/engineer
+# Edit agents/engineer/config.ini and SYSTEM_PROMPT.md.
+cai --make agents/engineer
+cai --use engineer -R SESSION_ID
+cai --edit-agent engineer
+cai --builder
+cai --dump-system-prompts prompts
+```
 
-Package exports omit saved provider tokens and declared secret configuration values by default. `--include-credentials` explicitly includes them. `--from-auth-json FILE` explicitly imports ChatGPT credentials; initializing or copying an agent does not trigger provider login. Ordinary session exports never include credentials.
+Source contains `config.ini`, `SYSTEM_PROMPT.md`, generated `EXAMPLE_SYSTEM_PROMPT.md`, optional `AGENTS.md`, and bundled resources. `[agent] name` is editable; a nonempty value wins on publication, while an omitted or empty name uses the source directory basename. Build initially infers the destination basename. Canonical names use lowercase ASCII letters, digits, `_` and `-`; spaces become `_`, other characters are removed, and 1–64 usable characters are required. Display identity is separate.
 
-The agent builder uses dedicated instructions and the existing tool/runtime architecture. It can produce configuration, MCP definitions, custom tools, skills and files, rather than only writing a prompt. Validate and publish its output through the same operation as `--make`; do not give the builder an independent storage writer. Being in an empty directory or repository is a convenience, not permission to erase an existing workspace.
+Resources under `tools/`, `skills/` and `files/` use bounded streaming transfer. Symlinks and special files are rejected. Instruction files must be NUL-free text of at most 1 MiB; whitespace-only `AGENTS.md` is omitted. Tool manifest validation prepares registrations without invoking tools. The builder produces the same source format and uses the ordinary `--make` publisher, rather than an independent storage writer.
 
-`--edit-agent` uses a frontend or local utility editor handoff. A persistent headless backend must not launch an interactive editor. Cancellation, editor failure or validation failure leaves the stored agent unchanged. Omit `AGENTS.md` when its edited content contains only whitespace. Edit bundled resources through the source-directory workflow.
+## Editing lifecycle
 
-## Instruction composition
+`--edit-agent` is a local utility, never an editor launched by a persistent headless owner. It selects `VISUAL`, then `EDITOR`, then `vi`. Only the three editable text files are exported into a private temporary directory; bundled tools and native authentication are not exported for editing. Configuration may contain keys, so the directory is mode 0700 and files are mode 0600.
 
-The default `SYSTEM_PROMPT.md` contains `{{runtime_default}}`. If that token occurs anywhere in the file, select the existing provider/model-dependent base instructions instead of concatenating the surrounding text. Otherwise use the file as the literal base for every provider/model selected for that agent.
+After the editor exits, CAI validates the whole edit and publishes only if the stored definition revision is unchanged. Rename the agent through the source workflow; editing keeps the canonical name fixed. Editor cancellation, signal failure, validation failure and revision conflicts preserve the stored definition. Host STOP cancels and reaps the editor. The temporary tree, including editor backups, is removed on save, cancel and ordinary failure. An uncatchable process/host crash cannot run cleanup.
 
-`EXAMPLE_SYSTEM_PROMPT.md` is an editable CAI-specific example based on the existing coding-agent template, with provider-specific self-identification removed. It does not become active unless chosen as the actual instruction file.
+## Instructions and historical export
 
-Keep one instruction-composition path for runtime use, builder output, instruction dumps and exports. Apply explicit parent-only `-z` overrides as currently specified, and append `-I` additions before the automatic tools/MCP/skills guidance. Keep the optional chart guide and existing reviewer instruction selection in this same path. Agent selection must not accidentally propagate a parent-only override to children.
+If `SYSTEM_PROMPT.md` contains `{{runtime_default}}` anywhere, it selects the provider/model-dependent built-in base. Otherwise the entire file is the literal base. The example prompt is inactive unless chosen as the actual base. Reviewer policy, parent-only `-z`, `-I` additions, optional chart guidance and automatic tools/MCP/skills instructions use the existing composition path. Builder instructions remain parent-only.
 
-## Live activation and client/server separation
+Successful activation records name, revision and effective instructions as bounded `agent_activation` journal chunks. Ordinary commits retain a compact binding reference and instruction digest rather than copying the instructions repeatedly. The references link only successful activations; failed publication chunks cannot become exported provenance. Model changes record a new instruction stream only when the effective instructions change.
 
-The backend owns selection, validation, activation and persistence. Softline submits and observes the command through its existing queue adapter; another frontend must be able to perform the same operation without Softline. Keep entries editable until applied.
+Markdown and portable JSONL exports preserve this provenance independently of the current registry. Editing or removing a definition cannot rewrite historical instructions. History trimming removes model turns while preserving successful agent attribution; JSONL export/import retains the linked records. Offline export does not resolve a mutable agent definition to reconstruct its recorded prompt.
 
-Live selection is a whole-turn operation. A steering submission that cannot be applied at a steering boundary must be reclassified visibly into the turn queue according to the existing command policy. It must not block later steering by remaining falsely classified as steerable.
+## Embedding and verification
 
-Resolve the target definition, validate configuration and capabilities, prepare resources and construct a compatible continuation before committing a switch. Keep the existing session collection ownership throughout. Publish the successful activation durably before acknowledging completion or starting work with the new agent. Failure leaves the prior active agent, session and pending input intact.
+Core libcai owns session continuation, compatibility checks, runtime activation and instruction provenance. `cai_agent_runtime_open_agent` gates recovered work until the selected binding is durable. `cai_agent_runtime_activate` returns a prepared replacement owning the same session/context/queue; the host closes the retired runtime before retiring its clients and capability receivers. Preparation/publication errors leave the old runtime usable. These APIs add no liblockdc, frontend or Lua dependency to core libcai.
 
-Keep one backend per workspace and the existing controller/observer rules. An observer cannot change the active agent. An explicit agent selection made while attaching to an existing backend must be an acknowledged owner operation, rather than a second backend or an unnoticed client-local setting. Switching must neither replay already displayed history nor lose the frontend's transcript cursor.
+libcai_app supplies registry/configuration adapters and services. `cai_app_client_select_agent` selects a destination and optional agent before replay/producer binding. Softline is one frontend adapter and submits `/use` through the ordinary backend input policy.
 
-Core libcai owns runtime/session continuation behavior and host-neutral hooks. The application server supplies the liblockdc repository adapter and full application configuration; the terminal adapter supplies editor and presentation behavior. Do not force liblockdc, Softline, libmdf or Lua dependencies into core libcai to implement this feature.
-
-## Required implementation changes and verification
-
-Current runtime resume rejects a saved preset name or prompt revision that differs from the selected runtime. Offline Markdown export also assumes the built-in Smith descriptor. Replace these assumptions for ordinary agent activation, while retaining malformed-state validation and private review/subagent isolation. Existing metadata is provenance, not ownership of a session by one agent.
-
-Required tests include:
-
-- Create, load, edit, replace, dump and rebuild agents through liblockdc; test collisions, invalid input, concurrent publication and interrupted writes.
-- Initialize `default` once, without automatic login, and verify subsequent agent configuration comes from storage.
-- Resume one session with two agents having different literal instructions and tools. Verify identical session identity and history, changed future requests, and no re-executed tools.
-- Switch after compaction, with an active goal, with queued input, and across backend restart. Verify no duplicate replay or lost recall/accounting.
-- Verify a queued live switch, steering reclassification, observer rejection, existing-owner attachment and rollback after preparation/publication failures.
-- Test changed providers/models and provider-specific continuation state explicitly, including unsupported conversions that leave the old agent usable.
-- Export a multi-agent session after its original stored agent is changed or removed. Preserve attribution without including credentials.
-- Verify bundled resources and instruction composition, including reviewer policy, runtime-default selection, parent-only overrides and optional guidance.
-- Exercise native Debug's constrained worker stacks and the default musl worker stack; keep attachment transfer streaming and allocation bounded.
-
-## Open decisions
-
-1. **Selection when `-u` is omitted: accepted.** Restore the agent selected by the session's last successful activation; use `default` for a new session. Explicit `-u` overrides that selection without replacing the session or its history.
-2. **Store bootstrap configuration: accepted.** Keep the existing local `config.ini` for bootstrap storage/host settings. Its agent settings seed `default` once; later startups use the liblockdc configuration attachment. `agents_store` selects the repository independently of `sessions_store`, both defaulting to `default`. Do not automatically generate or rewrite the disk file. The bootstrap definition starts with configuration only. Source-package publication adds bundled resources and optional native authentication; changing default login ownership remains later work.
-3. **Package identity and credential transfer: accepted.** The editable source name is in `config.ini`, with the directory basename as fallback. The canonical name and file inventory live in the lockd object's JSON body, never an `agent.json` file. Export omits saved tokens and declared secret configuration values unless `--include-credentials` is explicit; ChatGPT credential import uses `--from-auth-json FILE`. Credentials must never appear in ordinary session export or model context.
-4. **Agent-associated context and todo defaults.** The original notes suggest storing these beside the agent, but do not settle shared versus agent-specific namespaces and selection rules. These must remain independent of session history.
-
-This document records the design discussion and required behavior. It does not claim these interfaces exist or that all implementation decisions are closed.
+Executable coverage includes [package publication and startup selection](../tests/cli_agent_packages_test.sh), [editing and cleanup](../tests/cli_agent_edit_test.sh), [headless activation and historical exports](../tests/cli_agent_activation_test.sh), [builder mode](../tests/cli_agent_builder_test.sh), [prompt catalog](../tests/cli_prompt_catalog_test.sh), and [core activation/rollback](../tests/runtime_activation_test.inc). These complement the standard Debug units and default-worker-stack application checks. Unsupported provider conversion is an explicit rejection, not a portability claim.

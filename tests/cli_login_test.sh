@@ -15,6 +15,6 @@ for level in warn debug; do
   rc=0; wait "$login_pid" || rc=$?; [[ "$rc" == 1 ]]
   jq -se 'any(.[]; .lvl == "error")' "$root/stderr" >/dev/null
   if [[ "$level" == warn ]]; then jq -se 'all(.[]; .lvl == "warn" or .lvl == "error" or .lvl == "fatal" or .lvl == "panic")' "$root/stderr" >/dev/null
-  else jq -se 'any(.[]; .lvl == "debug")' "$root/stderr" >/dev/null; fi
+  else jq -se 'any(.[]; .lvl == "info" and .msg == "Waiting for OAuth callback")' "$root/stderr" >/dev/null; fi
   [[ ! -e "$XDG_STATE_HOME/cai/auth.json" ]]
 done

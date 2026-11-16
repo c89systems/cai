@@ -2,6 +2,7 @@
 #include "journal_projection.h"
 #include "pouch_stream.h"
 #include "transcript.h"
+#include <cai/execution.h>
 #include <cai/history.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -36,13 +37,21 @@ static const lonejson_field owned_fields[] = {
     LONEJSON_FIELD_I64_REQ(owned, entry, "entry"),
     LONEJSON_FIELD_I64_REQ(owned, sequence, "sequence")};
 LONEJSON_MAP_DEFINE(owned_map, owned, owned_fields);
+typedef struct binding_reference {
+  lonejson_uint64 sequence;
+} binding_reference;
+static const lonejson_field binding_fields[] = {
+    LONEJSON_FIELD_U64(binding_reference, sequence, "sequence")};
+LONEJSON_MAP_DEFINE(binding_map, binding_reference, binding_fields);
 typedef struct metadata {
+  binding_reference binding;
   lonejson_int64 version;
   lonejson_object_array blocks, hidden, owned;
   lonejson_json_value history;
   lonejson_json_value strings[15];
 } metadata;
 static const lonejson_field metadata_fields[] = {
+    LONEJSON_FIELD_OBJECT(metadata, binding, "agent_binding", &binding_map),
     LONEJSON_FIELD_I64_REQ(metadata, version, "version"),
     LONEJSON_FIELD_OBJECT_ARRAY(metadata, blocks, "history_blocks", block,
                                 &block_map, LONEJSON_OVERFLOW_FAIL),
@@ -124,6 +133,10 @@ LONEJSON_MAP_DEFINE(copy_map, copy_record, copy_fields);
 typedef struct span {
   uint64_t position, revision, length;
 } span;
+typedef struct activation_link {
+  uint64_t first, last, previous, bytes;
+  int final, committed;
+} activation_link;
 typedef enum pass { INDEX, EVENTS, METADATA, CHECKPOINT, HISTORY } pass;
 typedef struct cai_cli_journal_view {
   lc_collection *collection;
@@ -143,6 +156,13 @@ typedef struct cai_cli_journal_view {
   metadata metadata;
   accounting accounting;
   span *spans;
+  activation_link *activations;
+  size_t activation_count, activation_capacity;
+  uint64_t selected_agent, activation_event;
+  cai_execution_decoder *activation_decoder;
+  cai_execution_record activation_record;
+  cai_sink *activation_sink;
+  int activation_selected, activation_indexed;
   size_t count, capacity, next_span;
   uint64_t revision, bytes, position, last_commit, checkpoint;
   uint64_t created, applied, decoded, remaining;
@@ -312,6 +332,7 @@ static int index_commit(projection *p, uint64_t position) {
   p->last_commit = position;
   p->created = p->record.created;
   p->applied = p->record.applied;
+  p->selected_agent = e->metadata.binding.sequence;
   p->accounting = e->accounting;
   if (p->checkpoint_seen)
     p->checkpoint = position;
@@ -766,6 +787,31 @@ static lonejson_status output(void *context, const void *bytes, size_t count,
     p->rc = cai_sink_write(p->sink, bytes, count, p->error);
   return p->rc == CAI_OK ? LONEJSON_STATUS_OK : LONEJSON_STATUS_IO_ERROR;
 }
+static activation_link *activation_find(projection *p, uint64_t sequence) {
+  size_t left = 0U, right = p->activation_count;
+  while (left < right) {
+    size_t middle = left + (right - left) / 2U;
+    if (p->activations[middle].first < sequence)
+      left = middle + 1U;
+    else
+      right = middle;
+  }
+  return left < p->activation_count && p->activations[left].first == sequence
+             ? &p->activations[left]
+             : NULL;
+}
+static int activation_visible(projection *p, uint64_t sequence) {
+  size_t left = 0U, right = p->activation_count;
+  while (left < right) {
+    size_t middle = left + (right - left) / 2U;
+    if (p->activations[middle].first <= sequence)
+      left = middle + 1U;
+    else
+      right = middle;
+  }
+  return left != 0U && p->activations[left - 1U].committed &&
+         sequence <= p->activations[left - 1U].last;
+}
 static int event(void *context, const cai_cli_transcript_event *e,
                  cai_error *error) {
   projection *p = context;
@@ -782,6 +828,8 @@ static int event(void *context, const cai_cli_transcript_event *e,
       if (ranges[i].first >= 0 && e->sequence >= (uint64_t)ranges[i].first &&
           e->sequence <= (uint64_t)ranges[i].last)
         p->visible = 0;
+    if (strcmp(e->type, "agent_activation") == 0)
+      p->visible = !p->activation_indexed || activation_visible(p, e->sequence);
     if (!p->visible)
       return CAI_OK;
     if (p->event_callback != NULL) {
@@ -990,6 +1038,113 @@ static int seed(projection *p) {
 }
 #undef W
 #undef KEY
+/** Decode one bounded instruction chunk. The linked predecessor names the
+ * previous successful binding; orphaned failed attempts are never selected. */
+static int activation_event(void *context,
+                            const cai_cli_transcript_event *event,
+                            cai_error *error) {
+  projection *p = context;
+  cai_execution_record *chunk = &p->activation_record;
+  activation_link *link;
+  unsigned long long first, previous;
+  char extra;
+  int rc;
+  if (event->kind == CAI_CLI_TRANSCRIPT_BEGIN) {
+    p->activation_selected = strcmp(event->type, "agent_activation") == 0;
+    p->activation_event = event->sequence;
+    if (p->activation_selected)
+      return cai_execution_decoder_reset(p->activation_decoder, error);
+  } else if (p->activation_selected && event->kind == CAI_CLI_TRANSCRIPT_DATA)
+    return cai_execution_decoder_feed(p->activation_decoder, event->data,
+                                      event->length, error);
+  else if (p->activation_selected && event->kind == CAI_CLI_TRANSCRIPT_END) {
+    rc = cai_execution_decoder_finish(p->activation_decoder, chunk, error);
+    if (rc != CAI_OK)
+      return rc;
+    if (chunk->call_id == NULL ||
+        strcmp(chunk->kind, "agent.activation") != 0 ||
+        sscanf(chunk->call_id, "agent:%llu:%llu%c", &first, &previous,
+               &extra) != 2 ||
+        first == 0U || previous >= first || first > event->sequence) {
+      cai_execution_record_cleanup(chunk);
+      return fail(p, CAI_ERR_PROTOCOL, "invalid agent provenance link");
+    }
+    if (p->activation_indexed) {
+      rc = first == p->selected_agent && p->activation_sink != NULL
+               ? cai_sink_write(p->activation_sink, chunk->data,
+                                strlen(chunk->data), error)
+               : CAI_OK;
+      cai_execution_record_cleanup(chunk);
+      return rc;
+    }
+    link = activation_find(p, first);
+    if (link == NULL && chunk->offset == 0U && first == p->activation_event) {
+      if (p->activation_count == p->activation_capacity) {
+        size_t capacity =
+            p->activation_capacity != 0U ? p->activation_capacity * 2U : 16U;
+        activation_link *grown;
+        if (capacity < p->activation_capacity ||
+            capacity > SIZE_MAX / sizeof(*grown))
+          return fail(p, CAI_ERR_NOMEM,
+                      "agent provenance index exceeds address space");
+        grown = realloc(p->activations, capacity * sizeof(*grown));
+        if (grown == NULL)
+          return fail(p, CAI_ERR_NOMEM, "allocate agent provenance index");
+        p->activations = grown;
+        p->activation_capacity = capacity;
+      }
+      link = &p->activations[p->activation_count++];
+      memset(link, 0, sizeof(*link));
+      link->first = first;
+      link->previous = previous;
+    }
+    if (link == NULL || link->final || link->previous != previous ||
+        link->bytes != chunk->offset) {
+      cai_execution_record_cleanup(chunk);
+      return fail(p, CAI_ERR_PROTOCOL, "incomplete agent provenance stream");
+    }
+    link->last = p->activation_event;
+    link->bytes += strlen(chunk->data);
+    link->final = chunk->final;
+    cai_execution_record_cleanup(chunk);
+  }
+  return CAI_OK;
+}
+
+static int activation_index(projection *p) {
+  uint64_t sequence = p->selected_agent;
+  int rc = CAI_OK;
+  if (sequence != 0U) {
+    rc = cai_execution_decoder_open(&p->activation_decoder, p->error);
+    if (rc == CAI_OK)
+      rc = cai_cli_journal_view_events(p, activation_event, p, p->error);
+    while (rc == CAI_OK && sequence != 0U) {
+      activation_link *link = activation_find(p, sequence);
+      if (link == NULL || !link->final)
+        return fail(p, CAI_ERR_PROTOCOL,
+                    "committed agent provenance is missing");
+      link->committed = 1;
+      sequence = link->previous;
+    }
+  }
+  p->activation_indexed = 1;
+  return rc;
+}
+unsigned long long cai_cli_journal_view_agent(const cai_cli_journal_view *p) {
+  return p != NULL ? p->selected_agent : 0U;
+}
+int cai_cli_journal_view_agent_instructions(cai_cli_journal_view *p,
+                                            cai_sink *sink, cai_error *error) {
+  int rc;
+  if (p == NULL || sink == NULL || p->selected_agent == 0U)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "recorded agent instructions required");
+  p->activation_sink = sink;
+  rc = cai_cli_journal_view_events(p, activation_event, p, error);
+  p->activation_sink = NULL;
+  return rc;
+}
+
 int cai_cli_journal_view_open(lc_collection *collection,
                               const cai_cli_journal_options *options,
                               cai_cli_journal_view **out, cai_error *error) {
@@ -1080,6 +1235,8 @@ int cai_cli_journal_view_open(lc_collection *collection,
           owners[i].sequence <= 0)
         fail(p, CAI_ERR_PROTOCOL, "invalid retained event ownership");
   }
+  if (p->rc == CAI_OK)
+    p->rc = activation_index(p);
   if (p->rc != CAI_OK) {
     int rc = p->rc;
     cai_cli_journal_view_close(p);
@@ -1103,6 +1260,9 @@ void cai_cli_journal_view_close(cai_cli_journal_view *p) {
   free(p->metadata.owned.items);
   lonejson_free(p->json);
   free(p->spans);
+  free(p->activations);
+  cai_execution_record_cleanup(&p->activation_record);
+  cai_execution_decoder_close(p->activation_decoder);
   free(p);
 }
 

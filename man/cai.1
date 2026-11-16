@@ -9,9 +9,7 @@ cai \- terminal coding agent
 starts the Smith coding agent in the current directory or the directory selected
 with
 .BR \-C .
-It uses ChatGPT authentication from
-.I ~/.codex/auth.json
-first, then credentials in cai's lockd store if the Codex file is absent, and starts with the
+It uses native ChatGPT credentials in the selected stored agent, and starts with the
 .B gpt-6-luna
 model at medium reasoning effort.
 The prompt is
@@ -171,15 +169,15 @@ non-interactive runs preserve the workspace unless --yes or --force is given.
 Also [ui] temporary or CAI_TEMP; --no-temp disables configured temporary mode.
 Supplied loggers and explicit LOG_OUTPUT retain their configured sinks.
 .TP
-.BR \-\-yes , " " \-\-force
-Equivalent explicit approval flags. Delete a temporary workspace without
-asking, including on failure; with --install-skill replace an existing package.
-Requires --temp or --install-skill. Replaces the former --replace spelling.
+.BR \-y , " " \-\-yes , " " \-\-force
+Approve the workspace directory and its descendants. With --temp, delete the
+temporary workspace without asking, including on failure. With --install-skill
+replace an existing package; with --make replace an existing agent definition.
 .TP
-.BR \-\-agents-store " NAME, " \-\-sessions-store " NAME, " \-\-auth-store " NAME, " \-\-messaging-store " NAME"
+.BR \-\-agents-store " NAME, " \-\-sessions-store " NAME, " \-\-messaging-store " NAME"
 Select named stores independently (default default). INI keys are
-[storage] agents_store, sessions_store, auth_store and messaging_store;
-environment aliases are CAI_AGENTS_STORE, CAI_SESSIONS_STORE, CAI_AUTH_STORE
+[storage] agents_store, sessions_store and messaging_store;
+environment aliases are CAI_AGENTS_STORE, CAI_SESSIONS_STORE
 and CAI_MESSAGING_STORE. Selecting agents_store never redirects session history.
 [store.NAME] defines endpoint, key_file for Pouch, and optional HTTP client_pem.
 --lockd and --pouch-key-file override store.default. Different roots select
@@ -242,7 +240,7 @@ settings as well. Individual journal entries never expire separately.
 .TP
 .BI \-\-namespace-prefix " NAME"
 Default storage namespace prefix (cai). Individual --sessions-namespace,
---scopes-namespace, --auth-namespace, --todo-namespace and --messages-namespace
+--scopes-namespace, --todo-namespace and --messages-namespace
 flags override complete namespaces; matching keys are in [storage].
 .TP
 .BI \-\-queue-prefix " NAME"
@@ -480,17 +478,15 @@ for final review findings. Requires
 .BR \-\-review .
 .TP
 .BR \-a , " " \-\-auth-json " " PATH
-Import ChatGPT authentication from
+Explicitly select core file-backed ChatGPT authentication at
 .IR PATH .
-The default source is
-.IR ~/.codex/auth.json .
-Otherwise use credentials in the lockd store. Unchanged source files preserve
-refreshed stored tokens. Token refresh never changes the source file.
+Without this option, use the selected agent's encrypted native credentials.
+External files are never auto-discovered. Use --make DIR --from-auth-json FILE
+for an explicit import into the agent object instead.
 .TP
 .B \-\-login
-Open the browser login flow, save ChatGPT auth in the cai.auth namespace of
-cai's lockd store, and exit. Cannot be combined with
-.BR \-\-auth-json .
+Open browser login, save native ChatGPT authentication in the selected agent
+object, and exit. Add --use NAME to select another stored agent.
 .TP
 .BR \-l , " " \-\-list
 List all sessions across directories and exit. Rows show the ID,
@@ -1315,16 +1311,40 @@ Overrides survive resume and take precedence over application defaults.
 Unavailable journals are omitted from lists and auto-resume; explicit resume
 reports their absence. Prompt-history aging/pruning is deferred, and this
 policy does not expire exports or logs.
+.SH STORED AGENTS
+New sessions use default; resume restores the last selected agent.
+-u NAME or --use NAME selects explicitly before replay. /use NAME activates
+through the existing owner at a whole-turn boundary; /use reports the current
+name and definition revision. Session identity, context, goal and queued input
+remain intact. Unsupported provider/account context conversion is rejected.
+.PP
+--build [DIR] creates editable source, default cwd, in an empty destination.
+--make [DIR] validates and publishes it; replacing a name requires --yes.
+The source name is [agent] name, with the directory basename as fallback.
+--dump-agent NAME exports NAME/; --dump-agents [DIR] exports all definitions,
+default agents/. Exports omit declared secret fields and native authentication
+unless --include-credentials is explicit.
+.PP
+--edit-agent NAME edits config.ini, SYSTEM_PROMPT.md and optional AGENTS.md
+using VISUAL, EDITOR or vi. The private temporary tree is removed on save,
+cancel and ordinary failure. Revision conflicts preserve the stored definition.
+--builder and /builder use dedicated builder instructions and the same source
+publisher. --dump-system-prompts [DIR] exports the built-in model-profile,
+reviewer and builder instruction catalog, default prompts/.
+.PP
+Registry metadata is an ordinary lockd agent.NAME object in cai.agents;
+there is no agent.json file. Runtime config.ini streams from lockd and never
+touches the resource cache. Native credentials stay in encrypted agent storage.
+Historical session exports retain recorded instructions independently of
+subsequent definition edits. Earlier unreleased configuration-only definitions
+must be republished or recreated; no automatic migration is performed.
 .SH FILES
 The following paths describe the XDG defaults. With --home DIR, unset roots
 instead use DIR/config, DIR/state, DIR/cache, DIR/data and DIR/run. Explicit
 individual paths and --config FILE retain their selections.
 .TP
-.I ~/.codex/auth.json
-Preferred ChatGPT authentication file when present.
-.TP
 .I $XDG_STATE_HOME/cai/pouch
-Encrypted default Pouch root containing cai.sessions and cai.auth namespaces,
+Encrypted default Pouch root containing cai.sessions and cai.agents namespaces,
 plus a derived cai.scopes index for newest-session lookup. Missing or interrupted
 directory indexes are rebuilt from session identities and journal headers.
 Incremental state commits and observation events share one ordered collection

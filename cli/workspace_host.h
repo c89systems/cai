@@ -34,7 +34,7 @@ void cai_cli_workspace_host_cancel(cai_cli_workspace_host *,
  * NULL selector means a new session. Borrow callback/context to close. */
 void cai_cli_workspace_host_selection(cai_cli_workspace_host *,
                                       int (*)(void *, const char *,
-                                              cai_error *),
+                                              const char *, cai_error *),
                                       void *);
 void cai_cli_workspace_host_prompt_limit(cai_cli_workspace_host *,
                                          unsigned int);

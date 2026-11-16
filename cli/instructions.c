@@ -11,6 +11,47 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+static const unsigned char builder_instructions[] = {
+#include "cai_agent_builder.inc"
+};
+
+const char *cai_cli_builder_instructions(void) {
+  return (const char *)builder_instructions;
+}
+
+/** Runtime construction owns a rendered base string. Keep this small built-in
+ * template parent-only, using the same literal-override seam as explicit -z. */
+static int builder_text(const char *identity, char **out, cai_error *error) {
+  static const char token[] = "{{agent_identity}}";
+  const char *text = cai_cli_builder_instructions(), *cursor = text, *next;
+  char *write;
+  size_t count = 0U, length, prefix, identity_length;
+  if (!cai_agent_identity_valid(identity))
+    return cai_cli_error(error, CAI_ERR_INVALID, "invalid builder identity");
+  identity_length = strlen(identity);
+  while ((next = strstr(cursor, token)) != NULL) {
+    ++count;
+    cursor = next + sizeof(token) - 1U;
+  }
+  length =
+      strlen(text) - count * (sizeof(token) - 1U) + count * identity_length;
+  *out = malloc(length + 1U);
+  if (*out == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate builder instructions");
+  cursor = text;
+  write = *out;
+  while ((next = strstr(cursor, token)) != NULL) {
+    prefix = (size_t)(next - cursor);
+    memcpy(write, cursor, prefix);
+    write += prefix;
+    memcpy(write, identity, identity_length);
+    write += identity_length;
+    cursor = next + sizeof(token) - 1U;
+  }
+  strcpy(write, cursor);
+  return CAI_OK;
+}
+
 /* Renderer guidance belongs to libcai_app. The runtime's existing instruction
  * extension carries it to children and model changes without a libmdf
  * dependency in libcai. Keep each C89 string below its required 509 bytes. */
@@ -138,6 +179,87 @@ static int make_directories(char *path, cai_error *error) {
   }
 }
 
+int cai_cli_dump_system_prompts(const cai_cli_options *options,
+                                cai_error *error) {
+  size_t i, builtins = cai_agent_builtin_instructions_count();
+  size_t count = builtins + 1U, created = 0U;
+  char *directory = malloc(PATH_MAX), **paths = calloc(count, sizeof(*paths));
+  cai_sink *sink = NULL;
+  FILE *file = NULL;
+  int fd, rc = CAI_OK;
+  if (directory == NULL || paths == NULL) {
+    rc = cai_cli_error(error, CAI_ERR_NOMEM,
+                       "allocate built-in instruction export");
+    goto done;
+  }
+  rc = cai_cli_workspace_path(directory, PATH_MAX, options->directory,
+                              options->dump_system_prompts, error);
+  if (rc == CAI_OK)
+    rc = make_directories(directory, error);
+  for (i = 0U; rc == CAI_OK && i < count; ++i) {
+    const char *name =
+        i < builtins ? cai_agent_builtin_instructions_name(i) : "agent-builder";
+    size_t length = strlen(directory) + strlen(name) + 5U;
+    paths[i] = malloc(length);
+    if (paths[i] == NULL) {
+      rc = cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate built-in instruction filename");
+      break;
+    }
+    snprintf(paths[i], length, "%s/%s.md", directory, name);
+    fd = open(paths[i], O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd < 0) {
+      rc = instruction_error(
+          error, paths[i],
+          "instruction output already exists or cannot be created");
+      break;
+    }
+    ++created;
+    file = fdopen(fd, "wb");
+    if (file == NULL) {
+      close(fd);
+      rc = instruction_error(error, paths[i],
+                             "open built-in instruction output");
+      break;
+    }
+    rc = cai_sink_file(file, 0, &sink, error);
+    if (rc == CAI_OK && i < builtins)
+      rc = cai_agent_builtin_instructions_write(name, options->identity, sink,
+                                                error);
+    else if (rc == CAI_OK) {
+      cai_agent_preset preset;
+      cai_agent_preset_config config;
+      cai_agent_preset_from_smith(&preset);
+      cai_agent_preset_config_init(&config);
+      preset.developer_instructions = cai_cli_builder_instructions();
+      config.agent_identity = options->identity;
+      rc = cai_agent_preset_write_base_instructions(&preset, &config, 0, sink,
+                                                    error);
+    }
+    cai_sink_close(sink);
+    sink = NULL;
+    if (fclose(file) != 0 && rc == CAI_OK)
+      rc = instruction_error(error, paths[i],
+                             "close built-in instruction output");
+    file = NULL;
+  }
+  if (rc == CAI_OK &&
+      printf("Built-in instructions written to %s.\n", directory) < 0)
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
+                       "write instruction export result");
+done:
+  if (paths != NULL) {
+    for (i = 0U; i < count; ++i) {
+      if (rc != CAI_OK && i < created)
+        (void)unlink(paths[i]);
+      free(paths[i]);
+    }
+  }
+  free(paths);
+  free(directory);
+  return rc;
+}
+
 int cai_cli_instruction_files_open(const cai_cli_options *o,
                                    cai_cli_instruction_files *files,
                                    cai_error *error) {
@@ -148,6 +270,8 @@ int cai_cli_instruction_files_open(const cai_cli_options *o,
     rc = load(o->reviewer_instructions_file, &files->reviewer, error);
   if (rc == CAI_OK)
     rc = load(o->developer_instructions_override_file, &files->initial, error);
+  if (rc == CAI_OK && o->agent_builder && files->initial == NULL)
+    rc = builder_text(o->identity, &files->initial, error);
   if (rc == CAI_OK)
     rc = extension(o, &files->extension, error);
   return rc;

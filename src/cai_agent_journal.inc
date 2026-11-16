@@ -558,19 +558,33 @@ int cai_session_restore_journal_source(cai_session *session, cai_source *source,
   lonejson *json;
   lonejson_error local;
   cai_source_reader_context reader;
-  cai_journal_record record;
+  cai_journal_record *record;
+  cai_session_state_doc *metadata;
   cai_journal_restore restore;
   lonejson_value_visitor visitor = lonejson_default_value_visitor();
   int rc = CAI_OK, commits = 0;
   if (session == NULL || source == NULL)
     return cai_set_error(error, CAI_ERR_INVALID,
                          "session and journal source are required");
+  /* Record metadata and its folded view are multi-KiB aggregates. Reuse heap
+   * scratch across records, including on default musl worker stacks. */
+  record = cai_alloc(NULL, sizeof(*record));
+  metadata = cai_alloc(NULL, sizeof(*metadata));
+  if (record == NULL || metadata == NULL) {
+    cai_free_mem(NULL, record);
+    cai_free_mem(NULL, metadata);
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate journal restore metadata");
+  }
   config.clear_destination_by_default = 0;
   config.json_value_max_total_bytes = 0U;
   config.json_value_max_string_bytes = 0U;
   json = lonejson_new(&config, &local);
-  if (json == NULL)
+  if (json == NULL) {
+    cai_free_mem(NULL, record);
+    cai_free_mem(NULL, metadata);
     return cai_set_error(error, CAI_ERR_NOMEM, "create journal parser");
+  }
   memset(&reader, 0, sizeof(reader));
   reader.source = source;
   reader.error = error;
@@ -590,29 +604,28 @@ int cai_session_restore_journal_source(cai_session *session, cai_source *source,
   while (rc == CAI_OK) {
     lonejson_stream_result result;
     cai_session_impl *impl = CAI_SESSION_IMPL(session);
-    cai_session_state_doc merged;
-    memset(&record, 0, sizeof(record));
+    memset(record, 0, sizeof(*record));
     memset(&restore, 0, sizeof(restore));
     restore.session = session;
-    restore.record = &record;
+    restore.record = record;
     restore.error = error;
-    lonejson_json_value_init(json, &record.state.metadata.history);
-    lonejson_json_value_set_parse_sink(&record.state.metadata.history,
+    lonejson_json_value_init(json, &record->state.metadata.history);
+    lonejson_json_value_set_parse_sink(&record->state.metadata.history,
                                        cai_journal_reject_snapshot, &restore,
                                        &local);
-    lonejson_json_value_init(json, &record.data);
-    lonejson_json_value_set_parse_sink(&record.data, cai_journal_discard, NULL,
+    lonejson_json_value_init(json, &record->data);
+    lonejson_json_value_set_parse_sink(&record->data, cai_journal_discard, NULL,
                                        &local);
-    lonejson_json_value_init(json, &record.state.history);
-    lonejson_json_value_init(json, &record.state.input_checkpoint);
-    lonejson_json_value_set_parse_sink(&record.state.input_checkpoint,
+    lonejson_json_value_init(json, &record->state.history);
+    lonejson_json_value_init(json, &record->state.input_checkpoint);
+    lonejson_json_value_set_parse_sink(&record->state.input_checkpoint,
                                        cai_journal_checkpoint_chunk, &restore,
                                        &local);
-    record.state.history.methods->set_parse_visitor(&record.state.history,
-                                                    &visitor, &restore, &local);
-    result = lonejson_stream_next(stream, &record, &local);
+    record->state.history.methods->set_parse_visitor(
+        &record->state.history, &visitor, &restore, &local);
+    result = lonejson_stream_next(stream, record, &local);
     if (result == LONEJSON_STREAM_EOF) {
-      lonejson_cleanup(&cai_journal_record_map, &record, NULL);
+      lonejson_cleanup(&cai_journal_record_map, record, NULL);
       break;
     }
     if (result != LONEJSON_STREAM_OBJECT)
@@ -620,47 +633,47 @@ int cai_session_restore_journal_source(cai_session *session, cai_source *source,
                ? error->code
                : cai_set_error_detail(error, CAI_ERR_INVALID,
                                       "parse session journal", local.message);
-    else if (strcmp(record.record_type, "commit") == 0) {
-      if (record.state.blocks_keep > (size_t)-1 ||
-          record.state.hidden_keep > (size_t)-1 ||
-          record.state.owned_keep > (size_t)-1)
+    else if (strcmp(record->record_type, "commit") == 0) {
+      if (record->state.blocks_keep > (size_t)-1 ||
+          record->state.hidden_keep > (size_t)-1 ||
+          record->state.owned_keep > (size_t)-1)
         rc = cai_set_error(error, CAI_ERR_LIMIT,
                            "journal metadata cursor exceeds addressable size");
       if (!restore.seen || !restore.complete ||
-          impl->history.size_fn(&impl->history) != record.state.end_bytes)
+          impl->history.size_fn(&impl->history) != record->state.end_bytes)
         rc = cai_set_error(error, CAI_ERR_INVALID,
                            "incomplete session journal edit");
-      merged = record.state.metadata;
+      *metadata = record->state.metadata;
       if (rc == CAI_OK)
         rc = cai_journal_join(
-            &impl->history_blocks, (size_t)record.state.blocks_keep,
-            &merged.history_blocks, sizeof(cai_history_block), error);
+            &impl->history_blocks, (size_t)record->state.blocks_keep,
+            &metadata->history_blocks, sizeof(cai_history_block), error);
       if (rc == CAI_OK)
         rc = cai_journal_join(&impl->history_hidden_events,
-                              (size_t)record.state.hidden_keep,
-                              &merged.history_hidden_events,
+                              (size_t)record->state.hidden_keep,
+                              &metadata->history_hidden_events,
                               sizeof(cai_history_hidden_range), error);
       if (rc == CAI_OK)
         rc = cai_journal_join(&impl->history_owned_events,
-                              (size_t)record.state.owned_keep,
-                              &merged.history_owned_events,
+                              (size_t)record->state.owned_keep,
+                              &metadata->history_owned_events,
                               sizeof(cai_history_owned_event), error);
       if (rc == CAI_OK)
-        rc = cai_session_import_state(session, NULL, &merged, error);
+        rc = cai_session_import_state(session, NULL, metadata, error);
       if (rc == CAI_OK &&
-          record.applied_event_sequence < impl->journal_applied_sequence)
+          record->applied_event_sequence < impl->journal_applied_sequence)
         rc = cai_set_error(error, CAI_ERR_INVALID,
                            "session journal watermark moved backwards");
       if (rc == CAI_OK &&
-          (record.state.accounting.usage.input_tokens < 0LL ||
-           record.state.accounting.usage.input_cached_tokens < 0LL ||
-           record.state.accounting.usage.output_tokens < 0LL ||
-           record.state.accounting.usage.output_reasoning_tokens < 0LL ||
-           record.state.accounting.usage.total_tokens < 0LL ||
-           !(record.state.accounting.estimated_spend_usd >= 0.0 &&
-             record.state.accounting.estimated_spend_usd <= DBL_MAX) ||
-           !(record.state.accounting.estimated_spend_eur >= 0.0 &&
-             record.state.accounting.estimated_spend_eur <= DBL_MAX)))
+          (record->state.accounting.usage.input_tokens < 0LL ||
+           record->state.accounting.usage.input_cached_tokens < 0LL ||
+           record->state.accounting.usage.output_tokens < 0LL ||
+           record->state.accounting.usage.output_reasoning_tokens < 0LL ||
+           record->state.accounting.usage.total_tokens < 0LL ||
+           !(record->state.accounting.estimated_spend_usd >= 0.0 &&
+             record->state.accounting.estimated_spend_usd <= DBL_MAX) ||
+           !(record->state.accounting.estimated_spend_eur >= 0.0 &&
+             record->state.accounting.estimated_spend_eur <= DBL_MAX)))
         rc = cai_set_error(error, CAI_ERR_INVALID,
                            "invalid journal usage accounting");
       if (rc == CAI_OK) {
@@ -676,17 +689,17 @@ int cai_session_restore_journal_source(cai_session *session, cai_source *source,
         }
       }
       if (rc == CAI_OK) {
-        impl->usage = record.state.accounting;
+        impl->usage = record->state.accounting;
         impl->usage.limit_exceeded =
             cai_usage_accounting_exceeds(&impl->usage, &impl->usage_limits);
         commits++;
-        impl->journal_revision = record.state.revision;
-        impl->journal_applied_sequence = record.applied_event_sequence;
+        impl->journal_revision = record->state.revision;
+        impl->journal_applied_sequence = record->applied_event_sequence;
       }
-    } else if (strcmp(record.record_type, "event") != 0)
+    } else if (strcmp(record->record_type, "event") != 0)
       rc = cai_set_error(error, CAI_ERR_INVALID,
                          "unknown session journal record");
-    lonejson_cleanup(&cai_journal_record_map, &record, NULL);
+    lonejson_cleanup(&cai_journal_record_map, record, NULL);
     cai_input_checkpoint_close(restore.input_checkpoint);
   }
   if (stream != NULL)
@@ -698,15 +711,14 @@ int cai_session_restore_journal_source(cai_session *session, cai_source *source,
   if (rc == CAI_OK)
     rc = cai_journal_validate_context(session, error);
   if (rc == CAI_OK) {
-    cai_session_state_doc metadata;
-    memset(&metadata, 0, sizeof(metadata));
-    metadata.history_blocks = CAI_SESSION_IMPL(session)->history_blocks;
-    metadata.history_hidden_events =
+    memset(metadata, 0, sizeof(*metadata));
+    metadata->history_blocks = CAI_SESSION_IMPL(session)->history_blocks;
+    metadata->history_hidden_events =
         CAI_SESSION_IMPL(session)->history_hidden_events;
-    metadata.history_owned_events =
+    metadata->history_owned_events =
         CAI_SESSION_IMPL(session)->history_owned_events;
     rc = cai_history_validate_metadata(
-        session, &CAI_SESSION_IMPL(session)->history, &metadata, error);
+        session, &CAI_SESSION_IMPL(session)->history, metadata, error);
   }
   if (rc == CAI_OK) {
     unsigned long long revision = CAI_SESSION_IMPL(session)->journal_revision;
@@ -716,5 +728,7 @@ int cai_session_restore_journal_source(cai_session *session, cai_source *source,
     CAI_SESSION_IMPL(session)->journal_revision = revision;
     CAI_SESSION_IMPL(session)->history_items_known = 0;
   }
+  cai_free_mem(NULL, record);
+  cai_free_mem(NULL, metadata);
   return rc;
 }

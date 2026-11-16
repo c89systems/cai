@@ -46,6 +46,8 @@ int __wrap_poll(struct pollfd *, nfds_t, int);
 int __wrap_poll(struct pollfd *fds, nfds_t count, int timeout) {
   int accepting = 0;
   socklen_t length = sizeof(accepting);
+  if (strcmp(mode, "edit") == 0 && count == 2U && requests == 0)
+    request_stop();
   if (strncmp(mode, "login_", 6U) == 0 && count == 2U && requests == 0 &&
       getsockopt(fds[0].fd, SOL_SOCKET, SO_ACCEPTCONN, &accepting, &length) ==
           0) {
@@ -107,7 +109,7 @@ int main(int argc, char **argv) {
   assert(!status.running && !status.runtime_ready && status.session_id == NULL);
   if (strncmp(mode, "message", 7U) == 0)
     assert(enqueues == (strcmp(mode, "message") == 0 ? 1 : 0));
-  else {
+  else if (strcmp(mode, "edit") != 0) {
     assert(listener >= 0 && enqueues == 0);
     if (connection >= 0)
       close(connection);

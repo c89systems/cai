@@ -10,6 +10,8 @@ mkdir -p "$HOME/.codex"
 token='e30.eyJleHAiOjQxMDI0NDQ4MDB9.fixture'
 jq -n --arg token "$token" '{auth_mode:"chatgpt",tokens:{id_token:$token,access_token:$token,refresh_token:"fixture",account_id:"apps-account"}}' >"$HOME/.codex/auth.json"
 cat >"$root/apps.ini" <<INI
+[paths]
+auth_json = "$HOME/.codex/auth.json"
 [client]
 api_protocol = $protocol
 [mcp.chatgpt]

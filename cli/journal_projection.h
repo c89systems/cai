@@ -23,6 +23,11 @@ typedef struct cai_cli_journal_options {
 int cai_cli_journal_view_open(lc_collection *, const cai_cli_journal_options *,
                               cai_cli_journal_view **, cai_error *);
 void cai_cli_journal_view_close(cai_cli_journal_view *);
+/** The successful attribution chain is independent of mutable agent objects.
+ * Instruction bytes are streamed from authenticated bounded journal records. */
+unsigned long long cai_cli_journal_view_agent(const cai_cli_journal_view *);
+int cai_cli_journal_view_agent_instructions(cai_cli_journal_view *, cai_sink *,
+                                            cai_error *);
 /** Emit portable JSONL with retained metadata, checkpoint and observations. */
 int cai_cli_journal_view_jsonl(cai_cli_journal_view *, cai_sink *, cai_error *);
 /** Emit the final metadata object, including folded boundary/visibility arrays.

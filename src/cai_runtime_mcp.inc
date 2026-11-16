@@ -255,6 +255,7 @@ static int cai_runtime_apply_pending_mcp_pass(cai_agent_runtime *runtime,
     return CAI_OK;
   }
   runtime->mcp_refresh_pending = 0;
+  runtime->mcp_refresh_applying = 1;
   pthread_mutex_unlock(&runtime->lock);
   cai_error_init(&local);
   memset(&policy, 0, sizeof(policy));
@@ -322,6 +323,7 @@ static int cai_runtime_apply_pending_mcp_pass(cai_agent_runtime *runtime,
   cai_free_mem(NULL, ends);
   cai_error_cleanup(&local);
   pthread_mutex_lock(&runtime->lock);
+  runtime->mcp_refresh_applying = 0;
   rc = cai_runtime_enqueue_locked(runtime, CAI_AGENT_EVENT_MCP_UPDATED, receipt,
                                   strlen(receipt), NULL, NULL, runtime->state,
                                   error);

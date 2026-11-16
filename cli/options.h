@@ -37,11 +37,14 @@ typedef struct cai_cli_options {
   char environment_prefix[65];
   char default_api_key_env[80];
   const char *namespace_prefix, *queue_prefix;
-  const char *sessions_namespace, *auth_namespace, *scopes_namespace;
+  const char *sessions_namespace, *scopes_namespace;
   const char *todo_namespace, *messages_namespace;
-  const char *agents_store, *sessions_store, *auth_store, *messaging_store;
+  const char *agents_store, *sessions_store, *messaging_store;
   const char *agent_use, *source_agent_name;
   const char *agent_build, *agent_make, *agent_dump, *agent_dump_all;
+  const char *agent_edit;
+  const char *dump_system_prompts;
+  int agent_builder;
   const char *agent_auth_import;
   int include_credentials;
   const char *context_store, *context_namespace, *context_export;

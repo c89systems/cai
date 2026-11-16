@@ -5,6 +5,7 @@
 #define _GNU_SOURCE
 #include "agent_package.h"
 #include "config.h"
+#include "editor.h"
 #include "identity.h"
 #include "instructions.h"
 #include "stores.h"
@@ -75,6 +76,8 @@ typedef struct agent_package {
   const cai_cli_options *options;
   const char *export_root;
   int global_text;
+  int editing;
+  char expected_revision[21], expected_name[65];
 } agent_package;
 
 static int invalid(cai_error *error, const char *message) {
@@ -217,6 +220,8 @@ static int read_record(cai_cli_pouch *pouch, const char *name,
     rc = cai_cli_lj_error(error, &local);
   if (rc == CAI_OK)
     rc = cai_cli_pouch_agent_read(pouch, name, NULL, &source, error);
+  if (rc == CAI_OK)
+    rc = cai_cli_stream_ready(source, error);
   if (rc == CAI_OK &&
       lonejson_parse_reader(json, &record_map, record, cai_cli_json_read,
                             source, &local) != LONEJSON_STATUS_OK)
@@ -387,6 +392,18 @@ static int append_file(agent_record *record, const char *path, const char *hash,
   lonejson *json = record->runtime;
   lonejson_error local;
   agent_file *file;
+  size_t i;
+  for (i = 0U; i < record->files.count; ++i) {
+    file = (agent_file *)record->files.items + i;
+    if (strcmp(file->path, path) == 0) {
+      if (json->record_assign_string(json, &file_map, file, &file_fields[1],
+                                     hash, strlen(hash),
+                                     &local) != LONEJSON_STATUS_OK)
+        return cai_cli_lj_error(error, &local);
+      file->mode = mode;
+      return CAI_OK;
+    }
+  }
   if (record->files.count >= 8192U)
     return invalid(error, "agent package exceeds 8192 resources");
   file = json->record_object_array_append_slot(
@@ -403,11 +420,10 @@ static int append_file(agent_record *record, const char *path, const char *hash,
   return CAI_OK;
 }
 
-static int attach_file(agent_package *package, lc_lease *lease,
-                       const char *path, cai_error *error) {
-  struct stat status;
-  FILE *file = NULL;
-  cai_source *source = NULL;
+/** Own source on every return; hash during the actual upload. */
+static int attach_source(agent_package *package, lc_lease *lease,
+                         const char *path, cai_source *source, long long mode,
+                         cai_error *error) {
   lc_source *input = NULL;
   lc_attach_req request;
   lc_attach_res result = {0};
@@ -415,20 +431,7 @@ static int attach_file(agent_package *package, lc_lease *lease,
   cai_source *hashed = NULL;
   cai_source_callbacks callbacks = {0};
   lc_error local;
-  int fd = open_path(package->root, path, O_RDONLY, 0, 0, error), rc;
-  if (fd < 0)
-    return error->code;
-  rc = fstat(fd, &status) == 0 && S_ISREG(status.st_mode)
-           ? CAI_OK
-           : invalid(error, "agent resource must be a regular file");
-  if (rc == CAI_OK && (file = fdopen(fd, "rb")) == NULL)
-    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "open agent resource stream");
-  if (file == NULL)
-    close(fd);
-  if (rc == CAI_OK)
-    rc = cai_source_file(file, 1, &source, error);
-  if (source == NULL && file != NULL)
-    fclose(file);
+  int rc = CAI_OK;
   lc_error_init(&local);
   lc_attach_req_init(&request);
   request.name = path;
@@ -462,8 +465,7 @@ static int attach_file(agent_package *package, lc_lease *lease,
       strcmp(digest->actual, result.attachment.plaintext_sha256) != 0)
     rc = invalid(error, "attachment upload digest mismatch");
   if (rc == CAI_OK)
-    rc = append_file(&package->record, path, digest->actual,
-                     (status.st_mode & 0111) != 0 ? 0700 : 0600, error);
+    rc = append_file(&package->record, path, digest->actual, mode, error);
   lc_source_close(input);
   if (hashed != NULL)
     cai_source_close(hashed);
@@ -473,6 +475,37 @@ static int attach_file(agent_package *package, lc_lease *lease,
   lc_attach_res_cleanup(&result);
   lc_error_cleanup(&local);
   return rc;
+}
+
+static int attach_file_as(agent_package *package, lc_lease *lease,
+                          const char *path, const char *name,
+                          cai_error *error) {
+  struct stat status;
+  FILE *file = NULL;
+  cai_source *source = NULL;
+  int fd = open_path(package->root, path, O_RDONLY, 0, 0, error), rc;
+  if (fd < 0)
+    return error->code;
+  rc = fstat(fd, &status) == 0 && S_ISREG(status.st_mode)
+           ? CAI_OK
+           : invalid(error, "agent resource must be a regular file");
+  if (rc == CAI_OK && (file = fdopen(fd, "rb")) == NULL)
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "open agent resource stream");
+  if (file == NULL)
+    close(fd);
+  if (rc == CAI_OK)
+    rc = cai_source_file(file, 1, &source, error);
+  if (source == NULL && file != NULL)
+    fclose(file);
+  if (rc == CAI_OK)
+    return attach_source(package, lease, name, source,
+                         (status.st_mode & 0111) != 0 ? 0700 : 0600, error);
+  cai_source_close(source);
+  return rc;
+}
+static int attach_file(agent_package *package, lc_lease *lease,
+                       const char *path, cai_error *error) {
+  return attach_file_as(package, lease, path, path, error);
 }
 
 typedef struct scan_frame {
@@ -574,6 +607,159 @@ static int attach_tree(agent_package *package, lc_lease *lease,
   context.package = package;
   context.lease = lease;
   return walk_tree(package->root, root, attach_visit, &context, error);
+}
+
+typedef struct seed_package {
+  agent_package package;
+  cai_cli_producer produce;
+  void *context;
+  cai_config *resources;
+  lc_lease *lease;
+  const char *prefix;
+  size_t skip;
+} seed_package;
+
+static int seed_visit(void *context, const char *path, cai_error *error) {
+  seed_package *seed = context;
+  char *name = NULL;
+  int rc;
+  if (asprintf(&name, "%s/%s", seed->prefix, path + seed->skip) < 0)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate seeded resource name");
+  rc = attach_file_as(&seed->package, seed->lease, path, name, error);
+  free(name);
+  return rc;
+}
+
+static int default_instructions(void *context, cai_sink *sink,
+                                cai_error *error) {
+  static const char text[] = "{{runtime_default}}\n";
+  (void)context;
+  return cai_sink_write(sink, text, sizeof(text) - 1U, error);
+}
+
+/** Capture selected global resources through the normal inventory/uploader.
+ * The cloned configuration is rewritten before its producer starts. */
+static int text_file(int, const char *, int, int *, cai_error *);
+static int validate_tool_directory(const char *, cai_error *);
+
+static int seed_publish(void *context, lc_lease *lease, cai_error *error) {
+  static const char *const sections[] = {"agent", "paths", "plugins", "paths",
+                                         "review"};
+  static const char *const keys[] = {"developer_instructions_file", "agents_md",
+                                     "directory", "skills_dir",
+                                     "developer_instructions_file"};
+  static const char *const names[] = {"SYSTEM_PROMPT.md", "AGENTS.md", "tools",
+                                      "skills", "files/reviewer.md"};
+  seed_package *seed = context;
+  agent_package *package = &seed->package;
+  cai_config *config = NULL;
+  cai_source *source = NULL;
+  lc_error local;
+  const char *path;
+  size_t i;
+  int rc, instructions = 0;
+  lc_error_init(&local);
+  seed->lease = lease;
+  strcpy(package->record.name, "default");
+  strcpy(package->record.kind, "agent");
+  rc = lc_xid_new(package->record.revision, &local) == LC_OK
+           ? CAI_OK
+           : cai_cli_lc_error(error, &local);
+  if (rc == CAI_OK)
+    rc = write_metadata(lease, &package->record, error);
+  if (rc == CAI_OK && seed->resources != NULL)
+    rc = cai_config_clone(seed->resources, &config, error);
+  if (rc == CAI_OK && config != NULL) {
+    package->root = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (package->root < 0)
+      rc = invalid(error, "open seeded resource root");
+  }
+  for (i = 0U;
+       rc == CAI_OK && config != NULL && i < sizeof(keys) / sizeof(keys[0]);
+       ++i) {
+    char *absolute;
+    path = cai_config_get(config, sections[i], keys[i]);
+    if (path == NULL || *path == '\0')
+      continue;
+    rc = cai_config_resolve_path(config, sections[i], keys[i], &path, error);
+    if (rc != CAI_OK)
+      break;
+    absolute = realpath(path, NULL);
+    if (absolute == NULL) {
+      rc = invalid(error, "configured agent resource is unavailable");
+      break;
+    }
+    if (i == 2U || i == 3U) {
+      seed->skip = strcmp(absolute, "/") == 0 ? 0U : strlen(absolute);
+      seed->prefix = names[i];
+      if (i == 2U)
+        rc = validate_tool_directory(absolute, error);
+      if (rc == CAI_OK)
+        rc = walk_tree(package->root, absolute + 1U, seed_visit, seed, error);
+    } else {
+      int has_text;
+      rc = text_file(package->root, absolute + 1U, 1, &has_text, error);
+      if (rc == CAI_OK && (i != 1U || has_text))
+        rc = attach_file_as(package, lease, absolute + 1U, names[i], error);
+      if (rc == CAI_OK && i == 1U && !has_text) {
+        free(absolute);
+        rc = cai_config_set(config, sections[i], keys[i], "", error);
+        continue;
+      }
+      if (rc == CAI_OK && i == 0U)
+        instructions = 1;
+    }
+    free(absolute);
+    if (rc == CAI_OK)
+      rc = cai_config_set(config, sections[i], keys[i], i == 0U ? "" : names[i],
+                          error);
+  }
+  if (package->root >= 0) {
+    close(package->root);
+    package->root = -1;
+  }
+  if (rc == CAI_OK && !instructions)
+    rc =
+        cai_cli_stream_source(default_instructions, NULL, NULL, &source, error);
+  if (rc == CAI_OK && !instructions) {
+    rc = attach_source(package, lease, "SYSTEM_PROMPT.md", source, 0600, error);
+    source = NULL;
+  }
+  if (rc == CAI_OK)
+    rc = cai_cli_stream_source(
+        config != NULL ? cai_cli_agent_configuration_write : seed->produce,
+        config != NULL ? config : seed->context, NULL, &source, error);
+  if (rc == CAI_OK) {
+    rc = attach_source(package, lease, "config.ini", source, 0600, error);
+    source = NULL;
+  }
+  if (rc == CAI_OK)
+    rc = write_metadata(lease, &package->record, error);
+  cai_source_close(source);
+  cai_config_close(config);
+  lc_error_cleanup(&local);
+  return rc;
+}
+
+int cai_cli_agent_package_initialize(cai_cli_pouch *pouch,
+                                     cai_cli_producer produce, void *context,
+                                     cai_config *resources, cai_error *error) {
+  seed_package *seed = calloc(1U, sizeof(*seed));
+  int rc;
+  if (seed == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate default agent publication");
+  seed->package.root = -1;
+  seed->produce = produce;
+  seed->context = context;
+  seed->resources = resources;
+  rc = record_open(&seed->package.record, error);
+  if (rc == CAI_OK)
+    rc = cai_cli_pouch_agent_initialize(pouch, "default", seed_publish, seed,
+                                        error);
+  record_close(&seed->package.record);
+  free(seed);
+  return rc;
 }
 
 static int publish(void *context, lc_lease *lease, cai_error *error) {
@@ -725,6 +911,26 @@ static int materialize(cai_cli_pouch *pouch, const agent_record *record,
   return rc;
 }
 
+/** Editing exposes only configuration and instruction documents. Other
+ * attachments remain in lockd and retain their existing inventory entries. */
+static int materialize_editor(cai_cli_pouch *pouch, const agent_record *record,
+                              int root, cai_error *error) {
+  const agent_file *files = record->files.items;
+  size_t i;
+  int rc = CAI_OK, instructions = 0;
+  for (i = 0U; rc == CAI_OK && i < record->files.count; ++i) {
+    if (strcmp(files[i].path, "SYSTEM_PROMPT.md") == 0 ||
+        strcmp(files[i].path, "AGENTS.md") == 0) {
+      rc = download_file(pouch, record->name, &files[i], root, error);
+      if (strcmp(files[i].path, "SYSTEM_PROMPT.md") == 0)
+        instructions = 1;
+    }
+  }
+  return rc == CAI_OK && !instructions
+             ? invalid(error, "stored agent lacks SYSTEM_PROMPT.md")
+             : rc;
+}
+
 static int config_source(cai_cli_pouch *pouch, agent_record *record,
                          cai_source **out, cai_error *error) {
   const agent_file *files = record->files.items;
@@ -779,13 +985,6 @@ int cai_cli_agent_package_load(cai_cli_pouch *pouch, const char *name,
   rc = record_open(record, error);
   if (rc == CAI_OK)
     rc = read_record(pouch, name, record, error);
-  /* The built-in default initially owns only its declared configuration.
-   * Publishing a package replaces that definition through the same key. */
-  if (rc == CAI_OK && strcmp(name, "default") == 0 &&
-      record->files.count == 0U && record->revision[0] == '\0') {
-    rc = cai_cli_pouch_agent_read(pouch, name, "config.ini", config, error);
-    goto done;
-  }
   if (rc == CAI_OK && (!lc_xid_is_valid(record->revision) ||
                        asprintf(&parent, "%s/agents/%s", cache, name) < 0))
     rc = invalid(error, "invalid stored agent revision");
@@ -842,7 +1041,6 @@ int cai_cli_agent_package_load(cai_cli_pouch *pouch, const char *name,
     *directory = target;
     target = NULL;
   }
-done:
   if (root >= 0)
     close(root);
   if (stage != NULL && parent_fd >= 0)
@@ -1005,126 +1203,6 @@ static int write_configuration(int root, cai_config *config, const char *name,
   return rc;
 }
 
-typedef struct copy_context {
-  int source, destination;
-  const char *prefix;
-} copy_context;
-static int copy_file(int source, const char *path, int destination,
-                     const char *target, cai_error *error) {
-  unsigned char bytes[2048];
-  struct stat status;
-  ssize_t n;
-  int input = -1, output = -1, rc = CAI_OK;
-  input = open_path(source, path, O_RDONLY, 0, 0, error);
-  if (input < 0)
-    rc = error->code;
-  if (rc == CAI_OK && (fstat(input, &status) != 0 || !S_ISREG(status.st_mode)))
-    rc = invalid(error, "bundled source must be a regular file");
-  if (rc == CAI_OK) {
-    output = open_path(destination, target, O_CREAT | O_EXCL | O_WRONLY, 0600,
-                       1, error);
-    if (output < 0)
-      rc = error->code;
-  }
-  while (rc == CAI_OK) {
-    n = read(input, bytes, sizeof(bytes));
-    if (n < 0 && errno == EINTR)
-      continue;
-    if (n < 0)
-      rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "read bundled source");
-    if (n <= 0)
-      break;
-    rc = write_all(output, bytes, (size_t)n, error);
-  }
-  if (rc == CAI_OK &&
-      fchmod(output, (status.st_mode & 0111) ? 0700 : 0600) != 0)
-    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "set bundled permissions");
-  if (input >= 0)
-    close(input);
-  if (output >= 0 && close(output) != 0 && rc == CAI_OK)
-    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "close bundled copy");
-  return rc;
-}
-
-static int copy_visit(void *context, const char *path, cai_error *error) {
-  copy_context *copy = context;
-  char *target = NULL;
-  int rc;
-  if (asprintf(&target, "%s%s%s", copy->prefix,
-               *copy->prefix != '\0' ? "/" : "", path) < 0)
-    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate bundled copy path");
-  rc = copy_file(copy->source, path, copy->destination, target, error);
-  free(target);
-  return rc;
-}
-
-/** Bootstrap definitions initially contain config only. Capture explicitly
- * configured resources when turning such a definition into editable sources. */
-static int export_seed_resources(cai_config *config, int root,
-                                 cai_error *error) {
-  static const char *const sections[] = {"agent", "paths", "plugins", "paths",
-                                         "review"};
-  static const char *const keys[] = {"developer_instructions_file", "agents_md",
-                                     "directory", "skills_dir",
-                                     "developer_instructions_file"};
-  static const char *const names[] = {"SYSTEM_PROMPT.md", "AGENTS.md", "tools",
-                                      "skills", "files/reviewer.md"};
-  size_t i;
-  char *directory = NULL;
-  const char *path;
-  copy_context copy;
-  int fd, rc = CAI_OK;
-  for (i = 0U; rc == CAI_OK && i < sizeof(keys) / sizeof(keys[0]); ++i) {
-    path = cai_config_get(config, sections[i], keys[i]);
-    if (path == NULL || *path == '\0') {
-      if (i == 0U)
-        rc = write_literal_file(root, names[i], "{{runtime_default}}\n", error);
-      continue;
-    }
-    rc = cai_config_resolve_path(config, sections[i], keys[i], &path, error);
-    if (rc != CAI_OK)
-      break;
-    copy.destination = root;
-    if (i == 2U || i == 3U) {
-      fd = open(path, O_RDONLY | O_NOFOLLOW | O_DIRECTORY | O_CLOEXEC);
-      if (fd < 0)
-        rc = invalid(error,
-                     "configured agent resource directory is unavailable");
-      else {
-        copy.source = fd;
-        copy.prefix = names[i];
-        rc = walk_tree(fd, "", copy_visit, &copy, error);
-        close(fd);
-      }
-    } else {
-      directory = strdup(path);
-      if (directory == NULL)
-        rc = cai_cli_error(error, CAI_ERR_NOMEM, "allocate instruction copy");
-      else {
-        char *slash = strrchr(directory, '/');
-        const char *filename = slash != NULL ? slash + 1U : directory;
-        if (slash != NULL)
-          *slash = '\0';
-        fd = open(slash != NULL ? (*directory ? directory : "/") : ".",
-                  O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-        if (fd < 0)
-          rc =
-              invalid(error, "configured instruction directory is unavailable");
-        else {
-          rc = copy_file(fd, filename, root, names[i], error);
-          close(fd);
-        }
-      }
-      free(directory);
-      directory = NULL;
-    }
-    if (rc == CAI_OK)
-      rc = cai_config_set(config, sections[i], keys[i], i == 0U ? "" : names[i],
-                          error);
-  }
-  return rc;
-}
-
 static int write_example(int root, const cai_cli_options *options,
                          cai_error *error) {
   cai_agent_preset preset;
@@ -1194,14 +1272,14 @@ static int export_package(agent_package *package, const char *selected,
   rc = read_record(&package->repository, selected, &package->record, error);
   if (rc == CAI_OK)
     rc = create_empty_directory(target, &root, error);
-  if (rc == CAI_OK && package->record.files.count != 0U) {
-    rc = materialize(&package->repository, &package->record, root, error);
+  if (rc == CAI_OK) {
+    rc = package->editing
+             ? materialize_editor(&package->repository, &package->record, root,
+                                  error)
+             : materialize(&package->repository, &package->record, root, error);
     if (rc == CAI_OK)
       rc =
           config_source(&package->repository, &package->record, &config, error);
-  } else if (rc == CAI_OK) {
-    rc = cai_cli_pouch_agent_read(&package->repository, selected, "config.ini",
-                                  &config, error);
   }
   if (rc == CAI_OK && asprintf(&origin, "%s/config.ini", target) < 0)
     rc = CAI_ERR_NOMEM;
@@ -1210,12 +1288,12 @@ static int export_package(agent_package *package, const char *selected,
         NULL, target, package->options->environment, &parsed, error);
   if (rc == CAI_OK)
     rc = cai_config_load(parsed, config, origin, error);
-  if (rc == CAI_OK && package->record.files.count == 0U)
-    rc = export_seed_resources(parsed, root, error);
   if (rc == CAI_OK)
-    rc = write_configuration(root, parsed, output_name,
-                             package->options->include_credentials, error);
-  if (rc == CAI_OK && package->options->include_credentials &&
+    rc = write_configuration(
+        root, parsed, output_name,
+        package->editing || package->options->include_credentials, error);
+  if (rc == CAI_OK && !package->editing &&
+      package->options->include_credentials &&
       package->record.authentication.kind != LONEJSON_JSON_VALUE_NULL) {
     cai_sink *sink = NULL;
     FILE *file = NULL;
@@ -1252,6 +1330,171 @@ static int export_package(agent_package *package, const char *selected,
   free(origin);
   cai_source_close(config);
   cai_config_close(parsed);
+  return rc;
+}
+
+static int edit_publish(void *context, lc_lease *lease, cai_error *error) {
+  agent_package *package = context;
+  agent_record *record = &package->record;
+  cai_source *source = NULL;
+  lonejson_error json_error;
+  lc_error local;
+  int rc, deleted;
+  size_t i;
+  lc_error_init(&local);
+  record_close(record);
+  rc = record_open(record, error);
+  if (rc == CAI_OK)
+    rc = cai_cli_pouch_agent_private(lease, &source, error);
+  if (rc == CAI_OK && lonejson_parse_reader(record->runtime, &record_map,
+                                            record, cai_cli_json_read, source,
+                                            &json_error) != LONEJSON_STATUS_OK)
+    rc = cai_cli_lj_error(error, &json_error);
+  cai_source_close(source);
+  if (rc == CAI_OK &&
+      (strcmp(record->name, package->expected_name) != 0 ||
+       strcmp(record->revision, package->expected_revision) != 0))
+    rc = invalid(
+        error,
+        "agent changed while editing; reopen --edit-agent to resolve it");
+  if (rc == CAI_OK && !package->global_text) {
+    agent_file *files = record->files.items;
+    lc_attachment_selector selector = {0};
+    selector.name = "AGENTS.md";
+    if (lc_lease_delete_attachment(lease, &selector, &deleted, &local) != LC_OK)
+      rc = cai_cli_lc_error(error, &local);
+    for (i = 0U; rc == CAI_OK && i < record->files.count; ++i) {
+      if (strcmp(files[i].path, "AGENTS.md") == 0) {
+        /* The mapped array owns its flat elements. Move the final element
+         * rather than duplicating ownership of its allocated strings. */
+        record->runtime->cleanup(record->runtime, &file_map, &files[i], NULL);
+        --record->files.count;
+        if (i != record->files.count)
+          files[i] = files[record->files.count];
+        memset(&files[record->files.count], 0, sizeof(*files));
+        break;
+      }
+    }
+  }
+  if (rc == CAI_OK)
+    rc = attach_file(package, lease, "config.ini", error);
+  if (rc == CAI_OK)
+    rc = attach_file(package, lease, "SYSTEM_PROMPT.md", error);
+  if (rc == CAI_OK && package->global_text)
+    rc = attach_file(package, lease, "AGENTS.md", error);
+  if (rc == CAI_OK && lc_xid_new(record->revision, &local) != LC_OK)
+    rc = cai_cli_lc_error(error, &local);
+  if (rc == CAI_OK)
+    rc = write_metadata(lease, record, error);
+  lc_error_cleanup(&local);
+  return rc;
+}
+
+/** A local edit is an explicitly requested plaintext handoff. The private
+ * tree, including editor backups, is removed on every ordinary return. */
+static int edit_package(agent_package *package, const char *name, int stop_fd,
+                        int (*stop)(void *), void *context, cai_error *error) {
+  static const char *const names[] = {"config.ini", "SYSTEM_PROMPT.md",
+                                      "AGENTS.md"};
+  const char *temporary =
+      cai_environment_get(package->options->environment, "TMPDIR");
+  const char *edited_name;
+  char *tree = NULL, *parent = NULL, *paths[3] = {NULL, NULL, NULL};
+  char canonical[65];
+  struct stat status;
+  size_t i;
+  int parent_fd = -1, rc = CAI_OK, has_text = 0;
+  if (temporary == NULL || *temporary == '\0')
+    temporary = "/tmp";
+  if (temporary[0] != '/')
+    return invalid(error, "TMPDIR must be absolute for agent editing");
+  if (asprintf(&tree, "%s/%s-agent-edit.XXXXXX", temporary,
+               package->options->program_name) < 0)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate private agent edit path");
+  if (mkdtemp(tree) == NULL) {
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
+                       "create private agent edit directory");
+    goto done;
+  }
+  parent = strdup(tree);
+  if (parent == NULL) {
+    (void)rmdir(tree);
+    rc = cai_cli_error(error, CAI_ERR_NOMEM, "retain agent edit parent");
+    goto done;
+  }
+  *strrchr(parent, '/') = '\0';
+  parent_fd = open(*parent ? parent : "/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (parent_fd < 0) {
+    (void)rmdir(tree);
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "open agent edit parent");
+    goto done;
+  }
+  package->editing = 1;
+  rc = export_package(package, name, tree, name, error);
+  if (rc == CAI_OK) {
+    strcpy(package->expected_name, name);
+    strcpy(package->expected_revision, package->record.revision);
+    package->root = open(tree, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (package->root < 0)
+      rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "open private edit directory");
+  }
+  if (rc == CAI_OK &&
+      fstatat(package->root, "AGENTS.md", &status, AT_SYMLINK_NOFOLLOW) != 0) {
+    if (errno == ENOENT)
+      rc = write_literal_file(package->root, "AGENTS.md", "", error);
+    else
+      rc = cai_cli_error(error, CAI_ERR_TRANSPORT,
+                         "inspect editable global instructions");
+  }
+  for (i = 0U; rc == CAI_OK && i < 3U; ++i)
+    if (asprintf(&paths[i], "%s/%s", tree, names[i]) < 0)
+      rc = cai_cli_error(error, CAI_ERR_NOMEM, "allocate editable filename");
+  if (rc == CAI_OK)
+    rc = cai_cli_editor_run(package->options->environment,
+                            (const char *const *)paths, 3U, stop_fd, stop,
+                            context, error);
+  if (rc == CAI_OK)
+    rc = cai_cli_agent_source_configuration(paths[0], tree,
+                                            package->options->environment,
+                                            &package->configuration, error);
+  if (rc == CAI_OK)
+    rc =
+        cai_config_visit(package->configuration, validate_setting, NULL, error);
+  if (rc == CAI_OK) {
+    edited_name = cai_config_get(package->configuration, "agent", "name");
+    rc = cai_cli_agent_name(edited_name != NULL && *edited_name ? edited_name
+                                                                : name,
+                            canonical, error);
+    if (rc == CAI_OK && strcmp(canonical, name) != 0)
+      rc = invalid(error, "--edit-agent keeps its name; use --build and --make "
+                          "to create a named copy");
+  }
+  if (rc == CAI_OK)
+    rc = text_file(package->root, "SYSTEM_PROMPT.md", 1, &has_text, error);
+  if (rc == CAI_OK)
+    rc = text_file(package->root, "AGENTS.md", 0, &has_text, error);
+  package->global_text = has_text;
+  if (rc == CAI_OK && stop != NULL && stop(context))
+    rc = cai_cli_error(error, CAI_ERR_CANCELLED, "agent edit cancelled");
+  if (rc == CAI_OK)
+    rc = cai_cli_pouch_agent_publish(&package->repository, name, 1,
+                                     edit_publish, package, error);
+  if (rc == CAI_OK && printf("Updated agent %s.\n", name) < 0)
+    rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "write agent edit result");
+done:
+  if (parent_fd >= 0) {
+    if (cai_cli_remove_at(parent_fd, strrchr(tree, '/') + 1U) != 0)
+      rc = cai_cli_error(
+          error, CAI_ERR_TRANSPORT,
+          "agent edit cleanup failed; remove its private temporary directory");
+    close(parent_fd);
+  }
+  for (i = 0U; i < 3U; ++i)
+    free(paths[i]);
+  free(parent);
+  free(tree);
   return rc;
 }
 
@@ -1306,24 +1549,16 @@ int cai_cli_agent_package_configure(cai_config *config, const char *directory,
   return rc;
 }
 
-static int validate_tools(agent_package *package, cai_error *error) {
+static int validate_tool_directory(const char *path, cai_error *error) {
   cai_plugins_config config;
   cai_plugins *plugins = NULL;
 #ifdef CAI_APP_LUA_TOOLS
   cai_lua_tools *lua = NULL;
   cai_lua_tools_config adapter;
 #endif
-  char *path = NULL;
-  struct stat status;
   int rc = CAI_OK;
-  if (fstatat(package->root, "tools", &status, AT_SYMLINK_NOFOLLOW) != 0)
-    return errno == ENOENT ? CAI_OK : invalid(error, "inspect bundled tools");
-  if (!S_ISDIR(status.st_mode))
-    return invalid(error, "bundled tools root must be a real directory");
-  if (asprintf(&path, "%s/tools", package->directory) < 0)
-    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate tool validation root");
   cai_plugins_config_init(&config);
-  config.directories = (const char *const *)&path;
+  config.directories = &path;
   config.directory_count = 1U;
   rc = cai_plugins_open(&config, &plugins, error);
 #ifdef CAI_APP_LUA_TOOLS
@@ -1339,6 +1574,20 @@ static int validate_tools(agent_package *package, cai_error *error) {
 #ifdef CAI_APP_LUA_TOOLS
   cai_lua_tools_close(lua);
 #endif
+  return rc;
+}
+
+static int validate_tools(agent_package *package, cai_error *error) {
+  char *path = NULL;
+  struct stat status;
+  int rc;
+  if (fstatat(package->root, "tools", &status, AT_SYMLINK_NOFOLLOW) != 0)
+    return errno == ENOENT ? CAI_OK : invalid(error, "inspect bundled tools");
+  if (!S_ISDIR(status.st_mode))
+    return invalid(error, "bundled tools root must be a real directory");
+  if (asprintf(&path, "%s/tools", package->directory) < 0)
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate tool validation root");
+  rc = validate_tool_directory(path, error);
   free(path);
   return rc;
 }
@@ -1366,7 +1615,8 @@ static int export_one(void *context, const char *name, cai_error *error) {
 int cai_cli_agent_package_run(const cai_cli_options *options,
                               cai_config *config,
                               const cai_app_config *application,
-                              const cai_config_context *startup,
+                              const cai_config_context *startup, int stop_fd,
+                              int (*stop)(void *), void *context,
                               cai_error *error) {
   agent_package *package = calloc(1U, sizeof(*package));
   const char *operation = options->agent_make != NULL    ? options->agent_make
@@ -1393,6 +1643,12 @@ int cai_cli_agent_package_run(const cai_cli_options *options,
     rc = cai_cli_agent_name(options->agent_use != NULL ? options->agent_use
                                                        : "default",
                             selected, error);
+  if (rc == CAI_OK && options->agent_edit != NULL) {
+    rc = cai_cli_agent_name(options->agent_edit, selected, error);
+    if (rc == CAI_OK)
+      rc = edit_package(package, selected, stop_fd, stop, context, error);
+    goto done;
+  }
   if (rc == CAI_OK && options->agent_dump_all != NULL) {
     rc = package_path(options, options->agent_dump_all, &path, error);
     if (rc == CAI_OK) {

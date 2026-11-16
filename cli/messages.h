@@ -24,6 +24,10 @@ const char *cai_cli_messages_name(const cai_cli_messages *messages);
 /* Owner-thread-only, between runtime turns; keeps delivered inbox entries. */
 int cai_cli_messages_set_queue(cai_cli_messages *messages, const char *name,
                                cai_error *error);
+/** Suspend/resume receiving without losing accepted queue entries, edit state
+ * or delivery receipts. Requires an idle owner boundary. */
+int cai_cli_messages_set_receiving(cai_cli_messages *, int enabled,
+                                   cai_error *);
 int cai_cli_messages_fd(const cai_cli_messages *messages);
 int cai_cli_messages_sync(cai_cli_messages *messages, cai_input_queue *queue,
                           cai_error *error);

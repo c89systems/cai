@@ -80,7 +80,7 @@ struct cai_cli_messages {
   lc_consumer_service *service, *receipts_service;
   pthread_mutex_t lock;
   pthread_cond_t condition;
-  int fd, stopping, dirty, receipt, claimed, lost;
+  int fd, stopping, dirty, receipt, claimed, lost, receiving;
   unsigned long long cancel_sequence;
   long timeout_ms;
   long delay_seconds;
@@ -744,10 +744,46 @@ int cai_cli_messages_start(cai_cli_messages *m, const char *id,
   if (rc != LC_OK)
     rc = fail_lc(error, &local);
   lc_error_cleanup(&local);
+  if (rc == CAI_OK)
+    m->receiving = 1;
   return rc;
 }
 const char *cai_cli_messages_name(const cai_cli_messages *m) {
   return m != NULL ? m->queue : NULL;
+}
+int cai_cli_messages_set_receiving(cai_cli_messages *m, int enabled,
+                                   cai_error *error) {
+  lc_error local;
+  int rc = CAI_OK;
+  if (m == NULL || m->receiving == enabled)
+    return CAI_OK;
+  lc_error_init(&local);
+  if (!enabled) {
+    (void)lc_consumer_service_stop(m->service);
+    if (lc_consumer_service_wait(m->service, &local) != LC_OK)
+      rc = fail_lc(error, &local);
+    lc_consumer_service_close(m->service);
+    m->service = NULL;
+    mailbox_release(m, m->queue);
+    m->claimed = 0;
+    m->receiving = 0;
+  } else {
+    rc = mailbox_claim(m, m->queue, 0, error);
+    if (rc == CAI_OK && new_consumer(m, m->queue, &m->service, &local) != LC_OK)
+      rc = fail_lc(error, &local);
+    if (rc == CAI_OK && lc_consumer_service_start(m->service, &local) != LC_OK)
+      rc = fail_lc(error, &local);
+    if (rc == CAI_OK)
+      m->receiving = 1;
+    else {
+      lc_consumer_service_close(m->service);
+      m->service = NULL;
+      mailbox_release(m, m->queue);
+      m->claimed = 0;
+    }
+  }
+  lc_error_cleanup(&local);
+  return rc;
 }
 /* Owner thread, between runtime turns: no send_tool call may be in flight.
  * Keep the inbox links, eventfd and private receipt listener in place. */
@@ -1307,6 +1343,8 @@ cai_cli_messages_sync_with_scratch(cai_cli_messages *m, cai_input_queue *queue,
   rc = cai_cli_messages_flush_decisions(m, queue, error);
   if (rc != CAI_OK)
     return rc;
+  if (!m->receiving)
+    return CAI_OK;
   if (m->capacity_blocked) {
     rc = cai_input_queue_get_state(queue, &scratch->pending, error);
     if (rc != CAI_OK)

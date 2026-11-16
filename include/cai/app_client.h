@@ -151,6 +151,12 @@ int cai_app_client_bind(cai_app_client *, uint64_t request,
  * BIND_REJECTED. No synthetic prompt, command or history entry is generated. */
 int cai_app_client_select(cai_app_client *, uint64_t request,
                           const char *selector, cai_error *);
+/** Select a saved/new session with an explicit stored-agent override before
+ * replay or producer binding. NULL agent restores the saved selection (or
+ * default for a new session). Authority and settlement match select(). */
+int cai_app_client_select_agent(cai_app_client *, uint64_t request,
+                                const char *selector, const char *agent,
+                                cai_error *);
 /** Opt this unbound producer into acknowledged delivery before bind. It stays
  * gated until settled; producers without dependent asynchronous requests keep
  * ordinary delivery. No frontend draft or editing state is transmitted. */

@@ -1182,7 +1182,7 @@ same session. `/queue NAME` overrides the full name; `/queue` shows it.
 `/status` includes the queue and approval mode. These live settings survive
 `/new` and `/resume`, without changing config.ini.
 `storage.messaging_store` selects a named `store.NAME` backend independently
-of `storage.sessions_store` and `storage.auth_store` (all default to `default`).
+of `storage.sessions_store` and `storage.agents_store` (all default to `default`). Native authentication belongs to the selected agent object.
 Each store defines `endpoint`, pouch `key_file`, and optional HTTP `client_pem`.
 In C these are ordinary `cai_app_setting` section/key/value entries. In Lua use,
 for example, `settings = {["store.team"] = {endpoint = "pouch:///srv/agents/pouch",

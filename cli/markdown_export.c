@@ -271,6 +271,8 @@ static int objective(void *context, cai_sink *sink, cai_error *error) {
 }
 static int instructions(void *context, cai_sink *sink, cai_error *error) {
   markdown *m = context;
+  if (cai_cli_journal_view_agent(m->view) != 0U)
+    return cai_cli_journal_view_agent_instructions(m->view, sink, error);
   return cai_agent_instructions_write(m->instructions, m->handover.active_model,
                                       sink, error);
 }
@@ -283,6 +285,7 @@ static int execution(void *context, const cai_cli_transcript_event *event,
   if (event->kind == CAI_CLI_TRANSCRIPT_BEGIN) {
     m->selected =
         strcmp(event->type, "execution") == 0 ||
+        strcmp(event->type, "agent_activation") == 0 ||
         (m->include_subagents && strcmp(event->type, "subagent") == 0);
     m->execution_error = 0;
     if (m->selected)
@@ -335,7 +338,7 @@ int cai_cli_markdown_export(cai_cli_journal_view *view, cai_cli_pouch *pouch,
   lonejson_error local;
   struct stat info;
   long long now = (long long)time(NULL), delta;
-  int rc;
+  int rc, recorded;
   if (view == NULL || pouch == NULL || session == NULL || workspace == NULL ||
       sink == NULL || sink->callbacks.write == NULL)
     return cai_cli_error(
@@ -347,6 +350,7 @@ int cai_cli_markdown_export(cai_cli_journal_view *view, cai_cli_pouch *pouch,
   m->view = view;
   m->sink = sink;
   m->error = error;
+  recorded = cai_cli_journal_view_agent(view) != 0U;
   cai_execution_record_init(&m->record);
   if (active != NULL) {
     m->handover = *active;
@@ -370,7 +374,7 @@ int cai_cli_markdown_export(cai_cli_journal_view *view, cai_cli_pouch *pouch,
   if (m->rc == CAI_OK)
     metadata(m, NULL);
   cai_agent_preset_from_smith(&preset);
-  if (m->rc == CAI_OK &&
+  if (!recorded && m->rc == CAI_OK &&
       ((m->text[PRESET - MODEL].present || m->text[VERSION - MODEL].present) &&
        (strcmp(m->text[PRESET - MODEL].bytes, preset.name) != 0 ||
         strcmp(m->text[VERSION - MODEL].bytes, preset.prompt_version) != 0)))
@@ -394,58 +398,66 @@ int cai_cli_markdown_export(cai_cli_journal_view *view, cai_cli_pouch *pouch,
   }
   cai_agent_preset_config_init(&config);
   config.workspace_directory =
-      stat(session->workspace, &info) == 0 && S_ISDIR(info.st_mode)
+      recorded ? session->workspace
+      : stat(session->workspace, &info) == 0 && S_ISDIR(info.st_mode)
           ? session->workspace
           : workspace;
-  config.agent_config_directory = pouch->config_directory;
-  config.agent_identity = pouch->program_name;
-  if (options != NULL) {
-    config.environment = options->environment;
-    config.agent_config_directory = options->config_dir;
-    config.global_agents_md_path = options->agents_md;
-    config.agent_identity =
-        options->identity != NULL ? options->identity : pouch->program_name;
-    config.codex_compat_agents_md = options->codex_agents_md;
-    config.disable_terminal = !options->terminal;
-    cai_skill_config_init(&skills);
-    skills.skills_directory = options->skills_dir;
-    config.skills = &skills;
+  if (!recorded) {
+    config.agent_config_directory = pouch->config_directory;
+    config.agent_identity = pouch->program_name;
+    if (options != NULL) {
+      config.environment = options->environment;
+      config.agent_config_directory = options->config_dir;
+      config.global_agents_md_path = options->agents_md;
+      config.agent_identity =
+          options->identity != NULL ? options->identity : pouch->program_name;
+      config.codex_compat_agents_md = options->codex_agents_md;
+      config.disable_terminal = !options->terminal;
+      cai_skill_config_init(&skills);
+      skills.skills_directory = options->skills_dir;
+      config.skills = &skills;
 #define ENABLED(member, bit)                                                   \
   if (!options->member)                                                        \
   preset.tool_capabilities &= ~(bit)
-    ENABLED(read_file, CAI_AGENT_PRESET_TOOL_READ_FILE);
-    ENABLED(list_files, CAI_AGENT_PRESET_TOOL_LIST_FILES);
-    ENABLED(apply_patch, CAI_AGENT_PRESET_TOOL_APPLY_PATCH);
-    ENABLED(view_image, CAI_AGENT_PRESET_TOOL_VIEW_IMAGE);
-    ENABLED(goals, CAI_AGENT_PRESET_TOOL_GOAL);
-    ENABLED(skills, CAI_AGENT_PRESET_TOOL_SKILLS);
-    ENABLED(mcp, CAI_AGENT_PRESET_TOOL_MCP);
-    ENABLED(chrome, CAI_AGENT_PRESET_TOOL_CHROME);
-    ENABLED(web_search, CAI_AGENT_PRESET_TOOL_WEB_SEARCH);
-    ENABLED(image_generation, CAI_AGENT_PRESET_TOOL_IMAGE_GENERATION);
+      ENABLED(read_file, CAI_AGENT_PRESET_TOOL_READ_FILE);
+      ENABLED(list_files, CAI_AGENT_PRESET_TOOL_LIST_FILES);
+      ENABLED(apply_patch, CAI_AGENT_PRESET_TOOL_APPLY_PATCH);
+      ENABLED(view_image, CAI_AGENT_PRESET_TOOL_VIEW_IMAGE);
+      ENABLED(goals, CAI_AGENT_PRESET_TOOL_GOAL);
+      ENABLED(skills, CAI_AGENT_PRESET_TOOL_SKILLS);
+      ENABLED(mcp, CAI_AGENT_PRESET_TOOL_MCP);
+      ENABLED(chrome, CAI_AGENT_PRESET_TOOL_CHROME);
+      ENABLED(web_search, CAI_AGENT_PRESET_TOOL_WEB_SEARCH);
+      ENABLED(image_generation, CAI_AGENT_PRESET_TOOL_IMAGE_GENERATION);
 #undef ENABLED
-    if (m->rc == CAI_OK)
-      m->rc = cai_cli_instruction_files_open(options, &m->files, error);
-    preset.developer_instructions = m->files.agent;
-    preset.developer_instructions_literal = m->files.agent != NULL;
-    config.developer_instructions_override = m->files.initial;
-    config.developer_instructions_extension = m->files.extension;
-    if (options->insecure)
-      config.workspace_instructions_root = config.workspace_directory;
-    else if (m->rc == CAI_OK) {
-      m->rc = cai_cli_pouch_workspace_approval(
-          pouch, config.workspace_directory, m->approval_root,
-          sizeof(m->approval_root), error);
-      if (m->approval_root[0] != '\0')
-        config.workspace_instructions_root = m->approval_root;
+      if (m->rc == CAI_OK)
+        m->rc = cai_cli_instruction_files_open(options, &m->files, error);
+      preset.developer_instructions = m->files.agent;
+      preset.developer_instructions_literal = m->files.agent != NULL;
+      config.developer_instructions_override = m->files.initial;
+      config.developer_instructions_extension = m->files.extension;
+      if (options->insecure)
+        config.workspace_instructions_root = config.workspace_directory;
+      else if (m->rc == CAI_OK) {
+        m->rc = cai_cli_pouch_workspace_approval(
+            pouch, config.workspace_directory, m->approval_root,
+            sizeof(m->approval_root), error);
+        if (m->approval_root[0] != '\0')
+          config.workspace_instructions_root = m->approval_root;
+      }
     }
+    if (m->rc == CAI_OK)
+      m->rc = cai_agent_preset_prepare_instructions(
+          &preset, &config, pouch->logger, &m->instructions, NULL, error);
   }
-  if (m->rc == CAI_OK)
-    m->rc = cai_agent_preset_prepare_instructions(
-        &preset, &config, pouch->logger, &m->instructions, NULL, error);
   cai_handover_config_init(&m->handover);
-  m->handover.preset_name = preset.name;
-  m->handover.preset_prompt_version = preset.prompt_version;
+  m->handover.preset_name = recorded && m->text[PRESET - MODEL].present
+                                ? m->text[PRESET - MODEL].bytes
+                                : preset.name;
+  m->handover.preset_prompt_version =
+      recorded && m->text[VERSION - MODEL].present
+          ? m->text[VERSION - MODEL].bytes
+          : preset.prompt_version;
   m->handover.active_model =
       m->text[REQUEST - MODEL].present ? m->text[REQUEST - MODEL].bytes
       : m->text[MODEL - MODEL].present ? m->text[MODEL - MODEL].bytes

@@ -22,6 +22,7 @@ The workspace protocol's `conversation` field carries the **session epoch**, whi
 |---|---|
 | [Terminal](terminal.md) | Input, steering, goals, model changes, reviews, shells and workspace switching. |
 | [Configuration](configuration.md) | Precedence, paths, named stores, approval, execution policy, temporary runs and logs. |
+| [Stored agents](stored-agents.md) | Build, publish, edit, switch, credentials and historical instructions. |
 | [Sessions](sessions.md) | Resume, recall, retention, deletion, trim, compaction and export. |
 | [Appearance](appearance.md) | Theme pairs, reviewer offsets, status fields and timestamps. |
 | [Providers](providers.md) | ChatGPT imports/login, API keys, protocols and retries. |
@@ -68,7 +69,6 @@ Source examples live under `examples/` in the repository; [the examples guide](h
 - [Initial transport baseline](benchmark-baseline.md) and [presentation attribution / CBOR optimization](performance-cbor-presentation.md).
 - [Historical startup/CPU measurements](startup-responsiveness.md), taken before the workspace-server cutover.
 - [Network prompt and event transport specification](network-prompt-events.md).
-- [Stored agents and agent builder](stored-agents.md): design, implemented bootstrap milestone, shared-session continuity and remaining decisions.
 
 Design proposals and dependency incident reports that have been superseded are not current API documentation.
 Their history remains available in Git.

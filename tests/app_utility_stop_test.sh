@@ -18,3 +18,15 @@ for mode in login_accept login_partial message_before message; do
     contains "$root/stdout" 'Waiting for OAuth callback'
   fi
 done
+
+# Host STOP cancels the editor handoff, reaps its group and removes the
+# private edit tree before reporting the normal stopped utility outcome.
+export CAI_TEST_UTILITY_STOP=edit TMPDIR="$root/edit-tmp"
+mkdir "$TMPDIR"
+printf '#!/bin/sh\nexec sleep 60\n' >"$root/bin/editor"
+chmod 700 "$root/bin/editor"
+export EDITOR="$root/bin/editor"
+unset VISUAL
+"$cli" -C "$work" --edit-agent default >"$root/stdout" 2>"$root/stderr"
+[[ -z $(find "$TMPDIR" -mindepth 1 -print -quit) ]]
+[[ ! -s "$root/stderr" ]]

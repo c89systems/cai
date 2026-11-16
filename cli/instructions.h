@@ -19,4 +19,9 @@ void cai_cli_instruction_files_close(cai_cli_instruction_files *);
  * Existing files are never truncated. No runtime or storage client is opened.
  */
 int cai_cli_dump_instructions(const cai_cli_options *, cai_error *);
+/** Export each distinct built-in profile and reviewer rubric. Does not load a
+ * stored agent or apply instruction-file overrides. Existing files survive. */
+int cai_cli_dump_system_prompts(const cai_cli_options *, cai_error *);
+/** Built-in parent-only builder template; tools/discovery compose normally. */
+const char *cai_cli_builder_instructions(void);
 #endif

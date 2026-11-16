@@ -80,7 +80,7 @@ contains "$config" '# enabled = false'
 contains "$config" '# enable_auto_enqueue = false'
 contains "$config" '# ack_timeout_ms = 300000'
 contains "$config" '# queue_name = ""'
-contains "$config" '## Empty uses native agent credentials, then ~/.codex/auth.json and application auth.'
+contains "$config" "encrypted native credentials; external files are never auto-discovered."
 contains "$config" '## Empty optionally loads config_dir/models.json;'
 contains "$config" '## Remote lockd mTLS client PEM; empty supplies no client certificate.'
 ! grep -E '^# [^=]*$' "$config"
@@ -113,10 +113,9 @@ base=("$cli" -C "$work")
 # Empty store selectors must fail before model requests, never at strcmp().
 (
   ulimit -c 0
-  for selector in agents_store sessions_store auth_store messaging_store; do
+  for selector in agents_store sessions_store messaging_store; do
     printf '[storage]\n%s = ""\n' "$selector" >"$root/empty-store.ini"
     extra=(-p custom --endpoint "$endpoint" -m fixture)
-    if [[ "$selector" == auth_store ]]; then extra=(-p chatgpt); fi
     run --config "$root/empty-store.ini" "${extra[@]}" --messaging -Nni never
     [[ $rc == 2 ]]
     contains "$root/stderr" 'invalid store name'

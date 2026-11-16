@@ -6,7 +6,9 @@
 /** Ordered invocation inputs after session selection and binding. No
  * transport, editor, runtime or configuration ownership belongs here. */
 typedef enum cai_cli_startup_stage {
-  CAI_CLI_STARTUP_MODEL = 0,
+  CAI_CLI_STARTUP_AGENT = 0,
+  CAI_CLI_STARTUP_BUILDER_MODE,
+  CAI_CLI_STARTUP_MODEL,
   CAI_CLI_STARTUP_EFFORT,
   CAI_CLI_STARTUP_SUMMARY,
   CAI_CLI_STARTUP_TIER,
@@ -24,6 +26,7 @@ typedef enum cai_cli_startup_stage {
   CAI_CLI_STARTUP_REVIEW_AND_FIX,
   CAI_CLI_STARTUP_GOAL,
   CAI_CLI_STARTUP_REVIEW,
+  CAI_CLI_STARTUP_BUILDER,
   CAI_CLI_STARTUP_INSTRUCTIONS,
   CAI_CLI_STARTUP_DONE
 } cai_cli_startup_stage;

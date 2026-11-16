@@ -10,9 +10,12 @@
 typedef struct agent_configuration {
   cai_config receiver;
   cai_config *base;
-  cai_cli_pouch *repository;
+  cai_config *bootstrap, *seed;
+  cai_cli_pouch *repository, *selection_repository;
   cai_cli_log *log;
   char *resources, *origin;
+  char **requirements;
+  size_t requirement_count;
   char name[65], revision[21];
 } agent_configuration;
 
@@ -44,13 +47,23 @@ int cai_cli_agent_bootstrap_field(const char *section, const char *key) {
 
 static void configuration_close(cai_config *self) {
   agent_configuration *owned = (agent_configuration *)self;
+  size_t i;
   if (owned->repository != NULL) {
     cai_cli_pouch_close(owned->repository);
     free(owned->repository);
   }
+  if (owned->selection_repository != NULL) {
+    cai_cli_pouch_close(owned->selection_repository);
+    free(owned->selection_repository);
+  }
   cai_config_close(owned->base);
+  cai_config_close(owned->bootstrap);
+  cai_config_close(owned->seed);
   free(owned->resources);
   free(owned->origin);
+  for (i = 0U; i < owned->requirement_count; ++i)
+    free(owned->requirements[i]);
+  free(owned->requirements);
   (void)cai_cli_log_release(owned->log);
   free(owned);
 }
@@ -66,12 +79,54 @@ int cai_cli_agent_configuration_identity(cai_config *configuration,
   }
   return 0;
 }
+const char *
+cai_cli_agent_configuration_bootstrap_origin(const cai_config *configuration) {
+  if (configuration != NULL && configuration->close == configuration_close)
+    return cai_config_origin(
+        ((const agent_configuration *)configuration)->bootstrap);
+  return cai_config_origin(configuration);
+}
+
+int cai_cli_agent_configuration_requirement(const cai_config *configuration,
+                                            const char *section,
+                                            const char *key) {
+  const agent_configuration *owned;
+  size_t i, n = strlen(section);
+  if (configuration == NULL || configuration->close != configuration_close ||
+      cai_cli_agent_bootstrap_field(section, key))
+    return 1;
+  owned = (const agent_configuration *)configuration;
+  for (i = 0U; i < owned->requirement_count; ++i)
+    if (strncmp(owned->requirements[i], section, n) == 0 &&
+        owned->requirements[i][n] == '.' &&
+        strcmp(owned->requirements[i] + n + 1U, key) == 0)
+      return 1;
+  return 0;
+}
+
+int cai_cli_agent_configuration_select(cai_config *configuration,
+                                       const char *name,
+                                       const cai_cli_options *options,
+                                       const cai_app_config *application,
+                                       const cai_config_context *startup,
+                                       cai_config **out, cai_error *error) {
+  agent_configuration *owned;
+  cai_cli_options selected = *options;
+  *out = NULL;
+  if (configuration == NULL || configuration->close != configuration_close)
+    return cai_cli_error(error, CAI_ERR_INVALID,
+                         "stored agent bootstrap is unavailable");
+  owned = (agent_configuration *)configuration;
+  selected.agent_use = name;
+  return cai_cli_agent_configuration(owned->bootstrap, owned->seed, &selected,
+                                     application, startup, out, error);
+}
 
 /** Resolve only the small session header. Context restoration remains the
  * runtime's single read, and registry/session stores may be independent. */
 static int selected_name(cai_config *bootstrap, const cai_cli_options *options,
                          pslog_logger *logger, char name[65],
-                         cai_error *error) {
+                         cai_cli_pouch **retained, cai_error *error) {
   cai_cli_pouch *sessions = NULL;
   cai_cli_session *session = NULL;
   cai_cli_options *store = NULL;
@@ -80,6 +135,7 @@ static int selected_name(cai_config *bootstrap, const cai_cli_options *options,
   const char *selector =
       options->export_id != NULL ? options->export_id : options->resume_id;
   int rc, present = 0;
+  *retained = NULL;
   if (options->agent_use != NULL)
     return cai_cli_agent_name(options->agent_use, name, error);
   strcpy(name, "default");
@@ -120,6 +176,12 @@ static int selected_name(cai_config *bootstrap, const cai_cli_options *options,
   if (rc == CAI_OK && session->agent_name[0] != '\0')
     rc = cai_cli_agent_name(session->agent_name, name, error);
 done:
+  /* Keep a metadata lookup's shared client alive until the owner opens its
+   * session store. Separate registry/history roots must not reopen history. */
+  if (rc == CAI_OK && sessions != NULL && sessions->sessions != NULL) {
+    *retained = sessions;
+    sessions = NULL;
+  }
   if (sessions != NULL)
     cai_cli_pouch_close(sessions);
   free(sessions);
@@ -150,6 +212,11 @@ void cai_cli_agent_configuration_detach(cai_config *configuration) {
       cai_cli_pouch_close(owned->repository);
       free(owned->repository);
       owned->repository = NULL;
+    }
+    if (owned->selection_repository != NULL) {
+      cai_cli_pouch_close(owned->selection_repository);
+      free(owned->selection_repository);
+      owned->selection_repository = NULL;
     }
     (void)cai_cli_log_release(owned->log);
     owned->log = NULL;
@@ -373,6 +440,27 @@ int cai_cli_agent_configuration(cai_config *bootstrap, cai_config *seed,
   }
   for (i = 0U; i < count; ++i)
     fields[i] = *cai_config_field_at(bootstrap, i);
+  rc = cai_config_clone(bootstrap, &owned->bootstrap, error);
+  if (rc == CAI_OK)
+    rc = cai_config_clone(seed, &owned->seed, error);
+  if (rc == CAI_OK && application != NULL && application->setting_count != 0U) {
+    owned->requirements =
+        calloc(application->setting_count, sizeof(*owned->requirements));
+    if (owned->requirements == NULL)
+      rc = cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate explicit agent requirements");
+    for (i = 0U; rc == CAI_OK && i < application->setting_count; ++i) {
+      const cai_app_setting *setting = &application->settings[i];
+      if (asprintf(&owned->requirements[i], "%s.%s", setting->section,
+                   setting->key) < 0)
+        rc = cai_cli_error(error, CAI_ERR_NOMEM,
+                           "retain explicit agent requirement");
+      else
+        ++owned->requirement_count;
+    }
+  }
+  if (rc != CAI_OK)
+    goto done;
   context.directory = cai_config_directory(bootstrap);
   if (startup != NULL && startup->environment != NULL) {
     context.environment = startup->environment;
@@ -397,7 +485,7 @@ int cai_cli_agent_configuration(cai_config *bootstrap, cai_config *seed,
                                     owned->log->logger, error);
   if (rc == CAI_OK)
     rc = selected_name(bootstrap, options, owned->log->logger, owned->name,
-                       error);
+                       &owned->selection_repository, error);
   /* Persist declared paths against their source, not incidental startup
    * defaults such as an optional models.json discovered on this invocation. */
   for (i = 0U; rc == CAI_OK && i < cai_config_field_count(seed); ++i) {
@@ -411,8 +499,9 @@ int cai_cli_agent_configuration(cai_config *bootstrap, cai_config *seed,
                                    error);
   }
   if (rc == CAI_OK && strcmp(owned->name, "default") == 0)
-    rc = cai_cli_pouch_ensure_default_agent(
-        owned->repository, cai_cli_agent_configuration_write, seed, error);
+    rc = cai_cli_agent_package_initialize(owned->repository,
+                                          cai_cli_agent_configuration_write,
+                                          seed, seed, error);
   if (rc == CAI_OK)
     rc = cai_cli_agent_package_load(owned->repository, owned->name,
                                     options->cache_dir, &source,
@@ -440,15 +529,7 @@ done:
   cai_environment_close(context.environment);
   free(fields);
   if (rc != CAI_OK) {
-    if (owned->repository != NULL) {
-      cai_cli_pouch_close(owned->repository);
-      free(owned->repository);
-    }
-    cai_config_close(owned->base);
-    free(owned->resources);
-    free(owned->origin);
-    (void)cai_cli_log_release(owned->log);
-    free(owned);
+    configuration_close(&owned->receiver);
     return rc;
   }
   owned->receiver = *owned->base;

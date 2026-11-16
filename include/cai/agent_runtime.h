@@ -887,6 +887,37 @@ void cai_agent_runtime_config_init(cai_agent_runtime_config *config);
 int cai_agent_runtime_open(cai_client *client,
                            const cai_agent_runtime_config *config,
                            cai_agent_runtime **out, cai_error *error);
+/** Open with an explicit stored-definition identity. Restores request settings
+ * for the same definition; a changed definition supplies its own defaults.
+ * The worker stays gated until binding is durable, including recovered input.
+ * Uses the same single context restore as open(). */
+int cai_agent_runtime_open_agent(cai_client *, const cai_agent_runtime_config *,
+                                 const char *name, const char *revision,
+                                 cai_agent_runtime **, cai_error *);
+/** Durably attribute subsequent work to a stored definition. Requires an idle
+ * ordinary runtime. Instruction provenance is recorded once per change, in
+ * bounded journal chunks. No credential bytes enter the transcript. */
+int cai_agent_runtime_bind_agent(cai_agent_runtime *, const char *name,
+                                 const char *revision, cai_error *);
+/** Value projection of a settled runtime's stored-definition attribution. */
+typedef struct cai_agent_runtime_binding {
+  char name[65], revision[129];
+  unsigned long long sequence;
+} cai_agent_runtime_binding;
+int cai_agent_runtime_get_agent(cai_agent_runtime *,
+                                cai_agent_runtime_binding *, cai_error *);
+/** Prepare and durably activate a replacement at an idle owner boundary.
+ * Success returns a new runtime owning the same session/context/input queue;
+ * close the retired runtime before closing its client or capability receivers.
+ * Failure leaves the original runtime usable. No journal restore or history
+ * copy occurs. The supplied configuration describes future execution only:
+ * session identity, storage and accepted input remain owned by current.
+ * Incompatible provider/account contexts or allocators are rejected before
+ * mutation. Child/review runtimes cannot be replaced. */
+int cai_agent_runtime_activate(cai_agent_runtime *current, cai_client *,
+                               const cai_agent_runtime_config *,
+                               const char *name, const char *revision,
+                               cai_agent_runtime **out, cai_error *);
 /**
  * Select the model for subsequent turns at a stable runtime boundary.
  *

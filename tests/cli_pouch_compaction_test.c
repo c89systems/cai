@@ -132,6 +132,7 @@ int main(int argc, char **argv) {
   cai_cli_options options;
   cai_error error;
   cai_source *source;
+  lc_lease *lease = NULL;
   char endpoint[PATH_MAX + 160];
   size_t offset;
   int i;
@@ -149,8 +150,10 @@ int main(int argc, char **argv) {
   options.disable_compression = 1;
   assert(cai_cli_pouch_open_options(&pouch, &options, NULL, &error) == CAI_OK);
   source = document_source(&offset, &error);
-  assert(pouch.credentials.replace(&pouch, "fixture.json", source, &error) ==
-         CAI_OK);
+  assert(acquire_ns(&pouch, pouch.scopes_namespace, "fixture.json", &lease,
+                    &error) == CAI_OK);
+  assert(update(lease, source, &error) == CAI_OK);
+  assert(release(lease, CAI_OK, &error) == CAI_OK);
   cai_source_close(source);
   /* Keep a large live span in the candidate segments so the snapshot copies
    * multiple chunks, alongside the real session's small live records. */
@@ -172,8 +175,8 @@ int main(int argc, char **argv) {
          CAI_OK);
   verify_document(source, &error);
   source = NULL;
-  assert(pouch.credentials.load(&pouch, "fixture.json", &source, &error) ==
-         CAI_OK);
+  assert(download_source_ns(pouch.sessions, pouch.scopes_namespace,
+                            "fixture.json", NULL, &source, &error) == CAI_OK);
   verify_document(source, &error);
   cai_cli_pouch_close(&pouch);
   cai_error_cleanup(&error);

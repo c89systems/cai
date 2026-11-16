@@ -11,13 +11,14 @@ temp_cleanup() {
 }
 trap temp_cleanup EXIT
 export CAI_RUNTIME_DIR="$runtime_root"
-for args in '--temp --list' '--temp --resume old' '--force' '--replace'; do
+for args in '--temp --list' '--temp --resume old' '--replace'; do
   read -r -a flags <<<"$args"
   run "${flags[@]}"; bad
 done
 [[ ! -e "$root/cache/cai/temp" ]]
 peer_start
 config="$root/config/custom-agent.ini"
+mkdir -p "$(dirname "$config")"
 cat >"$config" <<INI
 ## Preserve this exact configuration, including comments.
 [client]
@@ -158,30 +159,29 @@ printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"eyJhbGciOiAibm9uZSJ9
 export CAI_TEST_API_BASE_URL="$endpoint"
 cp "$root/message.key" "$root/message-key-before"
 cp "$HOME/.codex/auth.json" "$work/input/auth.json"
-for source in relative codex stored; do
+for source in relative explicit; do
   auth_flags=()
-  if [[ "$source" == relative ]]; then auth_flags=(--auth-json input/auth.json); fi
+  if [[ "$source" == relative ]]; then auth_flags=(--auth-json input/auth.json); else auth_flags=(--auth-json "$HOME/.codex/auth.json"); fi
   plan '{"plan":["AUTH TEMP DONE"]}'
-  run --temp --yes -p chatgpt --auth-store messages "${auth_flags[@]}" -ni 'shared auth'; ok
+  run --temp --yes -p chatgpt --agents-store messages "${auth_flags[@]}" -ni 'shared auth'; ok
   [[ $(stdout_text) == 'AUTH TEMP DONE' ]]
   cmp "$root/message.key" "$root/message-key-before"
-  if [[ "$source" == codex ]]; then rm "$HOME/.codex/auth.json"; fi
 done
 unset CAI_TEST_API_BASE_URL
 fi
 
 # Runtime reopen, /new, and enabling/disabling messaging retain store handles.
 # Count SDK opens, rather than infer reuse from the eventual output. MCP uses
-# the auth store too: cover both a shared root and a deliberately separate one.
+# the agent store too: cover both a shared root and a deliberately separate one.
 export CAI_TEST_APP_CONTROL=stores
-for auth_store in sessions default; do
+for agents_store in sessions default; do
   base=("$controls" --config "$config" --no-terminal -C "$work"
-        --sessions-store sessions --messaging-store sessions --auth-store "$auth_store"
+        --sessions-store sessions --messaging-store sessions --agents-store "$agents_store"
         --message-queue cai.store-reuse)
   for temporary in false true; do
     flags=()
     CAI_TEST_APP_STORE_OPENS=1
-    if [[ "$auth_store" == default ]]; then CAI_TEST_APP_STORE_OPENS=2; fi
+    if [[ "$agents_store" == default ]]; then CAI_TEST_APP_STORE_OPENS=2; fi
     if [[ "$temporary" == true ]]; then
       flags=(--temp --force)
       CAI_TEST_APP_STORE_OPENS=$((CAI_TEST_APP_STORE_OPENS + 1))
@@ -212,6 +212,7 @@ contains "$term/text" 'Kept temporary workspace:'
 
 # The default global config is used too; neither path is rewritten by --temp.
 unset CAI_TEST_APP_CONTROL CAI_TEST_APP_TEMP_SIGNAL
+mkdir -p "$root/config/cai"
 cp "$config" "$root/config/cai/config.ini"
 base=("$cli" --no-terminal -C "$work")
 plan '{"plan":["GLOBAL CONFIG DONE"]}'

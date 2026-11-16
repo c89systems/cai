@@ -1,4 +1,5 @@
 #include <cai/agent_runtime.h>
+#include <cai/auth.h>
 #include <cai/dtg.h>
 #include <cai/environment.h>
 #include <cai/handover.h>
@@ -12,6 +13,7 @@
 #include "cai_decimal.h"
 #include "cai_execution.h"
 #include "cai_input_queue_codec.h"
+#include "cai_input_queue_internal.h"
 #include "cai_internal.h"
 #include "cai_mcp_search.h"
 #include "cai_process_child.h"
@@ -525,6 +527,8 @@ struct cai_agent_runtime {
   unsigned int goal_utf8_value;
   int goal_utf8_remaining;
   int model_switching;
+  int binding_initializing;
+  int binding_commit_pending;
   int settings_applying;
   int pending_settings_failed;
   char *reasoning_current_call;
@@ -777,6 +781,7 @@ struct cai_agent_runtime {
   size_t mcp_search_tool;
   size_t mcp_tool_begin;
   int mcp_refresh_pending;
+  int mcp_refresh_applying;
   size_t *mcp_tool_ends;
   cai_mcp_tool_registration_config mcp_tool_config;
   cai_mcp_registration_snapshot mcp_policy_snapshot;
@@ -2794,13 +2799,17 @@ static int cai_runtime_validate_resumed_preset(cai_agent_runtime *runtime,
     return cai_runtime_set_session_preset_metadata(runtime, error);
   }
   if (session->state_preset_name == NULL ||
-      session->state_preset_prompt_version == NULL ||
-      strcmp(session->state_preset_name, runtime->preset_name) != 0 ||
+      session->state_preset_prompt_version == NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "session commit has incomplete preset metadata");
+  if (strcmp(session->state_preset_name, runtime->preset_name) != 0 ||
       strcmp(session->state_preset_prompt_version,
              runtime->preset_prompt_version) != 0) {
-    return cai_set_error(error, CAI_ERR_INVALID,
-                         "session commit preset does not match runtime "
-                         "preset");
+    if (runtime->review_mode)
+      return cai_set_error(
+          error, CAI_ERR_INVALID,
+          "session commit preset does not match isolated review preset");
+    return cai_runtime_set_session_preset_metadata(runtime, error);
   }
   return CAI_OK;
 }
@@ -2877,7 +2886,11 @@ static int cai_runtime_append_journal_event_locked(
   return rc;
 }
 
+/* These implementation fragments have a producer-before-consumer order. */
+/* clang-format off */
 #include "cai_runtime_execution.inc"
+#include "cai_runtime_binding.inc"
+/* clang-format on */
 
 /** Host-side execution-history field writer borrowing a runtime until close.
  * Owns copied metadata and one pending payload chunk; failures are sticky so
@@ -3314,7 +3327,7 @@ static int cai_runtime_make_trim_source(void *context,
 }
 
 static int
-cai_runtime_commit_reserved_mode(cai_agent_runtime *runtime, int emit_event,
+cai_runtime_commit_reserved_impl(cai_agent_runtime *runtime, int emit_event,
                                  cai_runtime_event_node *commit_event,
                                  const cai_agent_session_trim_request *cut,
                                  cai_error *error) {
@@ -3331,6 +3344,9 @@ cai_runtime_commit_reserved_mode(cai_agent_runtime *runtime, int emit_event,
   if (runtime->session_store == NULL) {
     return CAI_OK;
   }
+  rc = cai_runtime_record_binding(runtime, error);
+  if (rc != CAI_OK)
+    return rc;
   rc = cai_runtime_queue_own_history(runtime, error);
   if (rc != CAI_OK)
     return rc;
@@ -3427,6 +3443,17 @@ cai_runtime_commit_reserved_mode(cai_agent_runtime *runtime, int emit_event,
   return rc;
 }
 
+static int cai_runtime_commit_reserved_mode(
+    cai_agent_runtime *runtime, int emit_event, cai_runtime_event_node *event,
+    const cai_agent_session_trim_request *cut, cai_error *error) {
+  cai_session_binding previous = CAI_SESSION_IMPL(runtime->session)->binding;
+  int rc =
+      cai_runtime_commit_reserved_impl(runtime, emit_event, event, cut, error);
+  if (rc != CAI_OK)
+    CAI_SESSION_IMPL(runtime->session)->binding = previous;
+  return rc;
+}
+
 static int cai_runtime_commit_reserved(cai_agent_runtime *runtime,
                                        int emit_event,
                                        cai_runtime_event_node *commit_event,
@@ -3437,6 +3464,12 @@ static int cai_runtime_commit_reserved(cai_agent_runtime *runtime,
 
 static int cai_runtime_commit(cai_agent_runtime *runtime, int emit_event,
                               cai_error *error) {
+  /* Named startup publishes recovery, request settings and definition as one
+   * initial commit, after all capability registration has succeeded. */
+  if (runtime->binding_initializing) {
+    runtime->binding_commit_pending = 1;
+    return CAI_OK;
+  }
   return cai_runtime_commit_reserved(runtime, emit_event, NULL, error);
 }
 
@@ -6017,7 +6050,7 @@ static void *cai_runtime_worker(void *context) {
     while (
         !runtime->stopping &&
         (runtime->shell_context_failed || runtime->pending_settings_failed ||
-         runtime->settings_applying ||
+         runtime->settings_applying || runtime->model_switching ||
          (runtime->shell_context_head == NULL &&
           runtime->user_shell_command != NULL) ||
          (runtime->shell_context_head == NULL &&
@@ -6821,7 +6854,8 @@ cai_runtime_model_switch_ready_locked(const cai_agent_runtime *runtime,
   if (rc != CAI_OK) {
     return rc;
   }
-  if (runtime->model_switching || runtime->goal_control_count != 0U ||
+  if (runtime->model_switching || runtime->mcp_refresh_pending ||
+      runtime->mcp_refresh_applying || runtime->goal_control_count != 0U ||
       runtime->goal_control_inflight != 0U || runtime->subagent_active ||
       runtime->active_review != NULL || runtime->review_launching ||
       runtime->review_pause_pending || runtime->settings_applying ||
@@ -7415,11 +7449,11 @@ typedef struct cai_agent_runtime_open_scratch {
   cai_terminal_tool_config terminal_config;
   char workspace[4096];
 } cai_agent_runtime_open_scratch;
-static int
-cai_agent_runtime_open_with_scratch(cai_client *client,
-                                    const cai_agent_runtime_config *config,
-                                    cai_agent_runtime **out, cai_error *error,
-                                    cai_agent_runtime_open_scratch *scratch) {
+static int cai_agent_runtime_open_with_scratch(
+    cai_client *client, const cai_agent_runtime_config *config,
+    cai_agent_runtime **out, cai_error *error,
+    cai_agent_runtime_open_scratch *scratch, const char *binding_name,
+    const char *binding_revision) {
   cai_agent_runtime *runtime;
 
   const cai_agent_preset *preset;
@@ -7480,6 +7514,9 @@ cai_agent_runtime_open_with_scratch(cai_client *client,
                          "synchronized input requires an event callback");
   review_mode = config->preset != NULL &&
                 strcmp(config->preset, CAI_SMITH_REVIEW_PRESET) == 0;
+  if (review_mode && binding_name != NULL)
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "named activation requires an ordinary runtime");
   resumed_commit = 0;
   if (config->preset != NULL && strcmp(config->preset, CAI_SMITH_PRESET) != 0 &&
       !review_mode) {
@@ -7522,6 +7559,7 @@ cai_agent_runtime_open_with_scratch(cai_client *client,
                          "failed to allocate agent runtime");
   }
   memset(runtime, 0, sizeof(*runtime));
+  runtime->binding_initializing = binding_name != NULL;
   runtime->wakeup_read_fd = -1;
   runtime->wakeup_write_fd = -1;
   subagent_instructions = NULL;
@@ -7873,6 +7911,17 @@ cai_agent_runtime_open_with_scratch(cai_client *client,
               CAI_SESSION_IMPL(runtime->session)->journal_applied_sequence;
           runtime->commit_event_sequence = runtime->applied_event_sequence;
         }
+        if (rc == CAI_OK &&
+            CAI_SESSION_IMPL(runtime->session)->binding.backend[0] != '\0') {
+          char backend[65];
+          rc = cai_runtime_binding_hash(runtime, backend, error);
+          if (rc == CAI_OK &&
+              strcmp(backend,
+                     CAI_SESSION_IMPL(runtime->session)->binding.backend) != 0)
+            rc = cai_set_error(error, CAI_ERR_INVALID,
+                               "agent backend/account differs from the saved "
+                               "context; provider conversion is not supported");
+        }
         if (rc == CAI_OK) {
           rc = cai_runtime_validate_resumed_preset(runtime, error);
         }
@@ -7885,18 +7934,24 @@ cai_agent_runtime_open_with_scratch(cai_client *client,
           char *model_instructions;
           cai_shared_text *model_text = NULL;
           size_t model_prefix_length;
-          if (config->model == NULL && (saved->state_request_model != NULL ||
-                                        saved->state_model != NULL))
+          int changed_agent =
+              binding_name != NULL && saved->binding.name[0] != '\0' &&
+              (strcmp(binding_name, saved->binding.name) != 0 ||
+               strcmp(binding_revision, saved->binding.revision) != 0);
+          if (!changed_agent && config->model == NULL &&
+              (saved->state_request_model != NULL ||
+               saved->state_model != NULL))
             selected.model = saved->state_request_model != NULL
                                  ? saved->state_request_model
                                  : saved->state_model;
-          if (config->reasoning_effort == NULL &&
+          if (!changed_agent && config->reasoning_effort == NULL &&
               saved->state_reasoning_effort != NULL)
             selected.reasoning_effort = saved->state_reasoning_effort;
-          if (config->reasoning_summary == NULL &&
+          if (!changed_agent && config->reasoning_summary == NULL &&
               saved->state_reasoning_summary != NULL)
             selected.reasoning_summary = saved->state_reasoning_summary;
-          if (config->service_tier == NULL && saved->state_service_tier != NULL)
+          if (!changed_agent && config->service_tier == NULL &&
+              saved->state_service_tier != NULL)
             selected.service_tier = saved->state_service_tier;
           memset(&active_copy, 0, sizeof(active_copy));
           memset(&smith_copy, 0, sizeof(smith_copy));
@@ -8091,6 +8146,8 @@ cai_agent_runtime_open_with_scratch(cai_client *client,
                      : cai_agent_use_plugins(runtime->agent, config->plugins,
                                              &call, error);
   }
+  if (rc == CAI_OK && binding_name != NULL)
+    runtime->model_switching = 1;
   if (rc == CAI_OK && pthread_create(&runtime->worker_thread, NULL,
                                      cai_runtime_worker, runtime) != 0) {
     rc = cai_set_error(error, CAI_ERR_TRANSPORT,
@@ -8157,9 +8214,50 @@ int cai_agent_runtime_open(cai_client *client,
   if (scratch == NULL)
     return cai_set_error(error, CAI_ERR_NOMEM,
                          "allocate runtime configuration scratch");
-  rc = cai_agent_runtime_open_with_scratch(client, config, out, error, scratch);
+  rc = cai_agent_runtime_open_with_scratch(client, config, out, error, scratch,
+                                           NULL, NULL);
   cai_free_mem(NULL, scratch);
   return rc;
+}
+int cai_agent_runtime_open_agent(cai_client *client,
+                                 const cai_agent_runtime_config *config,
+                                 const char *name, const char *revision,
+                                 cai_agent_runtime **out, cai_error *error) {
+  cai_agent_runtime_open_scratch *scratch;
+  cai_agent_runtime *runtime = NULL;
+  int rc;
+  if (out != NULL)
+    *out = NULL;
+  if (out == NULL || name == NULL || *name == '\0' || strlen(name) > 64U ||
+      strspn(name, "abcdefghijklmnopqrstuvwxyz0123456789_-") != strlen(name) ||
+      revision == NULL || strlen(revision) > 128U ||
+      strspn(revision, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012"
+                       "3456789._-") != strlen(revision))
+    return cai_set_error(error, CAI_ERR_INVALID,
+                         "invalid stored-definition identity");
+  scratch = cai_alloc(NULL, sizeof(*scratch));
+  if (scratch == NULL)
+    return cai_set_error(error, CAI_ERR_NOMEM,
+                         "allocate named runtime configuration");
+  rc = cai_agent_runtime_open_with_scratch(client, config, &runtime, error,
+                                           scratch, name, revision);
+  cai_free_mem(NULL, scratch);
+  if (rc == CAI_OK) {
+    runtime->binding_initializing = 0;
+    rc = cai_runtime_bind_value(runtime, name, revision,
+                                runtime->binding_commit_pending, error);
+    runtime->binding_commit_pending = 0;
+  }
+  if (rc != CAI_OK) {
+    cai_agent_runtime_close(runtime);
+    return rc;
+  }
+  pthread_mutex_lock(&runtime->lock);
+  runtime->model_switching = 0;
+  pthread_cond_broadcast(&runtime->condition);
+  pthread_mutex_unlock(&runtime->lock);
+  *out = runtime;
+  return CAI_OK;
 }
 
 /** A previous outcome is not an in-flight turn. All input paths share this
@@ -13642,3 +13740,5 @@ void cai_agent_runtime_close(cai_agent_runtime *runtime) {
   pthread_mutex_unlock(&runtime->lock);
   cai_agent_runtime_destroy(runtime);
 }
+
+#include "cai_runtime_activation.inc"

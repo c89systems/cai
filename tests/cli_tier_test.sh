@@ -82,17 +82,18 @@ prompt 'custom routing' 'CUSTOM TIER'
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
 json "$root/request" '.service_tier == "experimental"'
 terminal_close
-# Config, environment, and explicit flags use the same routing surface.
+# New registry definitions seed config once. Environment aliases do not
+# override stored behavior; explicit invocation flags still do.
 printf '[agent]\nservice_tier = flex\n' >"$root/tier.ini"
 plan '{"chat":true,"plan":["CONFIG","ENVIRONMENT","FLAG"]}'
 for source in config env flag; do
-  extra=(--config "$root/tier.ini")
+  extra=(--config "$root/tier.ini" --namespace-prefix routing-config)
   [[ "$source" != config ]] || unset CAI_SERVICE_TIER
   [[ "$source" == config ]] || export CAI_SERVICE_TIER=priority
   [[ "$source" != flag ]] || extra+=(--service-tier default)
   run -Nn "${extra[@]}" -i 'routing setting'; ok
   tail -1 "$root/peer/requests.jsonl" >"$root/request"
-  case "$source" in config) value=flex ;; env) value=priority ;; flag) value=default ;; esac
+  case "$source" in config|env) value=flex ;; flag) value=default ;; esac
   json "$root/request" ".service_tier == \"$value\""
 done
 unset CAI_SERVICE_TIER
@@ -100,7 +101,7 @@ mkdir -p "$root/.codex"
 printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"fixture","access_token":"e30.eyJleHAiOiA0MTAyNDQ0ODAwfQ.fixture","refresh_token":"fixture","account_id":"fixture"}}' >"$root/.codex/auth.json"
 unset CAI_TEST_CHAT_COMPLETIONS
 plan '{"catalog":{"models":[]},"plan":["NORMAL CHATGPT"]}'
-base=("$cli" -p chatgpt -m gpt-5.6-luna --no-terminal --no-image-generation -C "$work")
+base=("$cli" -p chatgpt --auth-json "$root/.codex/auth.json" -m gpt-5.6-luna --no-terminal --no-image-generation -C "$work")
 run -Nn --service-tier default -i 'normal ChatGPT routing'; ok
 tail -1 "$root/peer/requests.jsonl" >"$root/request"
 json "$root/request" 'has("service_tier") | not'

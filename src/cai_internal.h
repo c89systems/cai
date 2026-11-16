@@ -199,7 +199,15 @@ typedef struct cai_history_owned_event {
  * Owns model context, pending inputs, usage/goals and incremental journal
  * bookkeeping. Runtime workers operate on it; owner-thread observers use
  * published runtime snapshots rather than reading mutable session pointers. */
+typedef struct cai_session_binding {
+  char name[65], revision[129], backend[65], instructions[65];
+  unsigned long long sequence;
+} cai_session_binding;
+
 typedef struct cai_session_impl {
+  /** Successful definition selection; instruction bytes live in ordered
+   * activation records, rather than being copied into every commit. */
+  cai_session_binding binding;
   cai_agent *agent;
   char *previous_response_id;
   char *conversation_id;

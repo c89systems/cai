@@ -660,6 +660,7 @@ if(CAI_BUILD_TESTS)
     agent_local_session_store_rejects_unsafe_scope
     agent_runtime_resume
     agent_runtime_input_ack
+    agent_runtime_activation
     agent_runtime_pending_input
     agent_runtime_input_identity
     agent_runtime_responsiveness

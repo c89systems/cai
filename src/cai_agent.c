@@ -151,6 +151,7 @@ LONEJSON_MAP_DEFINE(cai_history_owned_map, cai_history_owned_event,
                     cai_history_owned_fields);
 
 typedef struct cai_session_state_doc {
+  cai_session_binding binding;
   long long version;
   unsigned long long input_ack_start_sequence;
   char *model;
@@ -203,7 +204,21 @@ typedef struct cai_session_state_doc {
   lonejson_object_array history_owned_events;
 } cai_session_state_doc;
 
+static const lonejson_field cai_binding_fields[] = {
+    LONEJSON_FIELD_STRING_FIXED(cai_session_binding, name, "name",
+                                LONEJSON_OVERFLOW_FAIL),
+    LONEJSON_FIELD_STRING_FIXED(cai_session_binding, revision, "revision",
+                                LONEJSON_OVERFLOW_FAIL),
+    LONEJSON_FIELD_STRING_FIXED(cai_session_binding, backend, "backend",
+                                LONEJSON_OVERFLOW_FAIL),
+    LONEJSON_FIELD_STRING_FIXED(cai_session_binding, instructions,
+                                "instructions", LONEJSON_OVERFLOW_FAIL),
+    LONEJSON_FIELD_U64(cai_session_binding, sequence, "sequence")};
+LONEJSON_MAP_DEFINE(cai_binding_map, cai_session_binding, cai_binding_fields);
+
 static const lonejson_field cai_session_state_fields[] = {
+    LONEJSON_FIELD_OBJECT(cai_session_state_doc, binding, "agent_binding",
+                          &cai_binding_map),
     LONEJSON_FIELD_OBJECT_ARRAY_OMIT_EMPTY(
         cai_session_state_doc, history_blocks, "history_blocks",
         cai_history_block, &cai_history_block_map, LONEJSON_OVERFLOW_FAIL),
@@ -7887,6 +7902,7 @@ cai_session_state_fill(cai_session *session, cai_session_state_doc *doc,
                        cai_error *error) {
   int rc;
   doc->version = 1LL;
+  doc->binding = CAI_SESSION_IMPL(session)->binding;
   doc->input_ack_start_sequence =
       CAI_SESSION_IMPL(session)->input_ack_start_sequence;
   doc->history_blocks = CAI_SESSION_IMPL(session)->history_blocks;
@@ -8251,6 +8267,27 @@ static int cai_session_import_state(cai_session *session, cai_source *source,
                        "session state has incomplete goal data");
     goto done;
   }
+  {
+    const cai_session_binding *b = &doc.binding;
+    int named = b->name[0] != '\0';
+    if ((!named && (b->revision[0] != '\0' || b->backend[0] != '\0' ||
+                    b->instructions[0] != '\0' || b->sequence != 0U)) ||
+        (named &&
+         (strspn(b->name, "abcdefghijklmnopqrstuvwxyz0123456789_-") !=
+              strlen(b->name) ||
+          strspn(b->revision, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV"
+                              "WXYZ0123456789._-") != strlen(b->revision) ||
+          strlen(b->backend) != 64U ||
+          strspn(b->backend, "0123456789abcdef") != 64U ||
+          (b->sequence == 0U
+               ? b->instructions[0] != '\0'
+               : strlen(b->instructions) != 64U ||
+                     strspn(b->instructions, "0123456789abcdef") != 64U)))) {
+      rc = cai_set_error(error, CAI_ERR_INVALID,
+                         "session state has invalid agent binding");
+      goto done;
+    }
+  }
   if (doc.goal_input_applied != NULL) {
     const char *p = doc.goal_input_applied;
     if (strlen(p) != 64U || strspn(p, "0123456789abcdef") != 64U) {
@@ -8449,6 +8486,7 @@ static int cai_session_import_state(cai_session *session, cai_source *source,
     CAI_SESSION_IMPL(session)->state_preset_name = next_state_preset_name;
     CAI_SESSION_IMPL(session)->state_preset_prompt_version =
         next_state_preset_prompt_version;
+    CAI_SESSION_IMPL(session)->binding = doc.binding;
     next_state_preset_name = NULL;
     next_state_preset_prompt_version = NULL;
   }

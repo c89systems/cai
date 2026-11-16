@@ -14,7 +14,7 @@ See [session export](sessions.md#export-and-import).
 ## Authentication and workspace approval
 
 Use `cai --login` when ChatGPT credentials are unavailable.
-The CLI can import Codex auth, but refreshes its own stored copy; explicit `--auth-json` selects another import source.
+Native login and refresh update the selected agent object. Use `--make DIR --from-auth-json FILE` to import existing credentials, or explicitly select file-backed authentication with `--auth-json FILE`. No external credential file is discovered automatically.
 API-key providers require their configured key variable.
 See [providers](providers.md).
 A new workspace requires explicit approval with `-y`/`--yes`/`--force`, or invocation-only `-k`/`--insecure`.

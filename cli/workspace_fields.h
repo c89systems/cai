@@ -19,13 +19,11 @@
   X("store.default", "client_pem", lockd_client_pem, 's') \
   X("storage", "namespace_prefix", namespace_prefix, 's') \
   X("storage", "sessions_namespace", sessions_namespace, 's') \
-  X("storage", "auth_namespace", auth_namespace, 's') \
   X("storage", "scopes_namespace", scopes_namespace, 's') \
   X("storage", "todo_namespace", todo_namespace, 's') \
   X("storage", "messages_namespace", messages_namespace, 's') \
   X("storage", "sessions_store", sessions_store, 's') \
   X("storage", "agents_store", agents_store, 's') \
-  X("storage", "auth_store", auth_store, 's') \
   X("storage", "messaging_store", messaging_store, 's') \
   X("storage", "context_store", context_store, 's') \
   X("storage", "context_namespace", context_namespace, 's') \
@@ -35,7 +33,6 @@
   X("messaging", "delay_seconds", message_delay_seconds, 'l') \
   X("agent", "shell_context_max_lines", shell_context_max_lines, 'z') \
   X("agent", "shell_context_max_bytes", shell_context_max_bytes, 'z') \
-  X("agent", "name", agent_use, 's') \
   X("client", "provider", provider, 's') \
   X("client", "base_url", endpoint, 's') \
   X("client", "api_key_env", api_key_env, 's') \

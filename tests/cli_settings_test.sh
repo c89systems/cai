@@ -85,7 +85,7 @@ printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"eyJhbGciOiAibm9uZSJ9
 unset CAI_TEST_CHAT_COMPLETIONS
 jq -n '{plan:[],catalog:{models:([range(70)|{slug:("catalog-model-"+tostring),context_window:272000,supported_in_api:true}]+[{slug:"gpt-6.1-sol"},{slug:"future-account-only-model",supported_in_api:false,visibility:"hide",minimum_client_version:"999.0.0"}])}}' >"$root/catalog"
 plan "$(cat "$root/catalog")"
-base=("$cli" -p chatgpt --no-terminal --no-image-generation -C "$work")
+base=("$cli" -p chatgpt --auth-json "$root/.codex/auth.json" --no-terminal --no-image-generation -C "$work")
 terminal_start -N; send '/model\r'; expect future-account-only-model; expect catalog-model-69; expect gpt-6.1-sol
 absent "$term/text" 'Showing 50'; terminal_close
 contains "$root/peer/gets" 'client_version=0.160.0'

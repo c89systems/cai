@@ -3,8 +3,9 @@
 #include "app_internal.h"
 
 /** Synchronous maintenance dispatcher. Runs no agent loop, workspace server,
- * renderer or editor. Standalone export retains the shared helper's read-only
- * context restoration. Callbacks remain on this calling thread; STOP
+ * renderer. Explicit agent editing hands local files to the user's editor.
+ * Standalone export reads the journal without restoring model context.
+ * Callbacks remain on this calling thread; STOP
  * uses the ordinary application control channel. Returns the CLI exit code.
  *
  * Configuration and helpers consume immutable environment/cwd views. No

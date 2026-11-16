@@ -2,7 +2,7 @@
 
 `cai_app.run` routes maintenance through one utility dispatcher. The ordinary
 argv parser classifies list/resume-list/delete-list, delete, import/export,
-login, one-shot messaging, skill installation and Chrome registration. Help,
+login, agent source publication/dumps/editing, one-shot messaging, skill installation and Chrome registration. Help,
 version, dumps and invalid argv use the same dispatcher's configuration path.
 Chrome's native-host entry is recognized only in the first argument, retaining
 its strict arity and stdout framing contract. An option value resembling a
@@ -19,6 +19,8 @@ Import/export retain their existing source/sink behavior and paths. Utilities
 do not acquire an inference attachment or start an automatic server. Lifecycle
 status has no active runtime/session, and host STOP uses the ordinary control
 channel, including OAuth callback waits and standalone enqueue completion.
+
+`--edit-agent NAME` explicitly hands private temporary text files to the user's external editor, without starting an agent or terminal adapter. It validates and publishes under the ordinary agent repository lease, detects revision conflicts and removes the temporary tree on save/cancel/failure. Host STOP cancels and reaps the editor before cleanup. The [stored-agent guide](stored-agents.md#editing-lifecycle) describes credentials and file ownership.
 
 Utility path aggregates have one heap owner. Work and callbacks remain on the
 thread calling `run`; the default musl worker stack needs no enlargement.

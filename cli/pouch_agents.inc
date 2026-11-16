@@ -1,16 +1,5 @@
 /* Stored definitions use ordinary state objects. Publish initial metadata and
  * its INI attachment in one lease; readers never own a session collection. */
-typedef struct stored_agent_metadata {
-  char kind[16], name[16];
-} stored_agent_metadata;
-static const lonejson_field stored_agent_fields[] = {
-    LONEJSON_FIELD_STRING_FIXED_REQ(stored_agent_metadata, kind, "kind",
-                                    LONEJSON_OVERFLOW_FAIL),
-    LONEJSON_FIELD_STRING_FIXED_REQ(stored_agent_metadata, name, "name",
-                                    LONEJSON_OVERFLOW_FAIL)};
-LONEJSON_MAP_DEFINE(stored_agent_map, stored_agent_metadata,
-                    stored_agent_fields);
-
 static int agent_key(const char *name, char key[72], cai_error *error) {
   size_t n = name != NULL ? strlen(name) : 0U;
   if (n == 0U || n > 64U ||
@@ -104,88 +93,39 @@ int cai_cli_pouch_agents_visit(cai_cli_pouch *pouch,
   return rc;
 }
 
-int cai_cli_pouch_ensure_default_agent(cai_cli_pouch *pouch,
-                                       cai_cli_producer produce, void *seed,
-                                       cai_error *error) {
+int cai_cli_pouch_agent_initialize(cai_cli_pouch *pouch, const char *name,
+                                   cai_cli_agent_publish_fn publish,
+                                   void *context, cai_error *error) {
   lc_describe_req describe;
   lc_describe_res observed = {0};
   lc_error local;
   lc_lease *lease = NULL;
-  cai_source *source = NULL;
-  lc_source *input = NULL;
-  lc_attach_req attachment;
-  lc_attach_res attached = {0};
-  stored_agent_metadata metadata = {"agent", "default"};
-  int rc, exists;
+  char key[72];
+  int rc = agent_key(name, key, error), exists = 0;
   lc_error_init(&local);
   lc_describe_req_init(&describe);
   describe.ns = pouch->agents_namespace;
-  describe.key = "agent.default";
-  rc = lc_describe(pouch->sessions, &describe, &observed, &local);
-  exists = rc == LC_OK && observed.state_etag != NULL &&
-           observed.state_etag[0] != '\0';
-  if (rc != LC_OK && local.http_status != 404) {
-    rc = cai_cli_lc_error(error, &local);
-    goto done;
+  describe.key = key;
+  if (rc == CAI_OK) {
+    rc = lc_describe(pouch->sessions, &describe, &observed, &local);
+    /* With no active lease the described state is committed. A publisher
+     * can expose a private staged etag while holding its lease: serialize
+     * that case before deciding whether initialization is necessary. */
+    exists = rc == LC_OK && observed.state_etag != NULL &&
+             observed.state_etag[0] != '\0' &&
+             (observed.lease_id == NULL || observed.lease_id[0] == '\0');
+    rc = rc == LC_OK || local.http_status == 404
+             ? CAI_OK
+             : cai_cli_lc_error(error, &local);
   }
-  /* Missing is expected on first use; do not pass that stale SDK error into
-   * attachment streaming callbacks belonging to the initialization lease. */
-  lc_error_cleanup(&local);
-  lc_error_init(&local);
-  rc = CAI_OK;
-  if (!exists) {
-    rc = acquire_wait(pouch, pouch->agents_namespace, "agent.default", 30L,
-                      &lease, error);
-    if (rc == CAI_OK &&
-        (lease->state_etag == NULL || lease->state_etag[0] == '\0')) {
-      /* Attachments require an initialized parent in the private lease. Both
-       * changes remain unpublished until the same successful release. */
-      rc = cai_cli_mapped_source(&stored_agent_map, &metadata, &source, error);
-      if (rc == CAI_OK)
-        rc = update(lease, source, error);
-      cai_source_close(source);
-      source = NULL;
-      if (rc == CAI_OK)
-        rc = cai_cli_stream_source(produce, seed, NULL, &source, error);
-      if (rc == CAI_OK)
-        rc = cai_cli_lc_source(source, &input, error);
-      lc_attach_req_init(&attachment);
-      attachment.name = "config.ini";
-      attachment.content_type = "text/plain";
-      if (rc == CAI_OK && lc_lease_attach(lease, &attachment, input, &attached,
-                                          &local) != LC_OK)
-        rc = cai_cli_lc_error(error, &local);
-      lc_source_close(input);
-      input = NULL;
-      cai_source_close(source);
-      source = NULL;
-    }
-    rc = release_mode(lease, rc != CAI_OK, rc, error);
-  }
-done:
-  lc_attach_res_cleanup(&attached);
   lc_describe_res_cleanup(&observed);
   lc_error_cleanup(&local);
+  if (rc == CAI_OK && !exists) {
+    rc = acquire_wait(pouch, pouch->agents_namespace, key, 30L, &lease, error);
+    if (rc == CAI_OK &&
+        (lease->state_etag == NULL || lease->state_etag[0] == '\0'))
+      rc = publish(context, lease, error);
+    rc = release_mode(lease, rc != CAI_OK, rc, error);
+  }
   return rc;
-}
-
-int cai_cli_pouch_default_agent(cai_cli_pouch *pouch, cai_cli_producer produce,
-                                void *seed, cai_source **out,
-                                cai_error *error) {
-  stored_agent_metadata metadata = {0};
-  cai_source *source = NULL;
-  int rc = cai_cli_pouch_ensure_default_agent(pouch, produce, seed, error);
-  *out = NULL;
-  if (rc == CAI_OK)
-    rc = cai_cli_pouch_agent_read(pouch, "default", NULL, &source, error);
-  if (rc == CAI_OK)
-    rc = parse_source(source, &stored_agent_map, &metadata, error);
-  cai_source_close(source);
-  if (rc == CAI_OK &&
-      (strcmp(metadata.kind, "agent") || strcmp(metadata.name, "default")))
-    rc = cai_cli_error(error, CAI_ERR_INVALID,
-                       "invalid stored default agent metadata");
-  return rc == CAI_OK ? cai_cli_pouch_agent_read(pouch, "default", "config.ini",
-                                                 out, error)
-                      : rc;
 }

@@ -14,6 +14,25 @@ int cai_cli_startup_next(cai_cli_startup *cursor, const cai_cli_options *o,
   *control = 0;
   while (value == NULL && cursor->stage < CAI_CLI_STARTUP_DONE) {
     switch (cursor->stage++) {
+    case CAI_CLI_STARTUP_AGENT:
+      if (o->agent_use != NULL) {
+        prefix = "/use ";
+        value = o->agent_use;
+      }
+      break;
+    case CAI_CLI_STARTUP_BUILDER_MODE:
+      if (o->agent_builder) {
+        prefix = "/builder";
+        value = "";
+      }
+      break;
+    case CAI_CLI_STARTUP_BUILDER:
+      if (o->agent_builder && o->instruction_count == 0U) {
+        value =
+            "Help me build an agent. Ask what it should accomplish and which "
+            "material choices you need before creating its source files.";
+      }
+      break;
     case CAI_CLI_STARTUP_MODEL:
       if (o->model_explicit) {
         prefix = "/model ";

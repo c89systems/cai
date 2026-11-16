@@ -48,7 +48,11 @@ for selection in argv config; do
     [[ ! -e "${workspace%/workspace}" ]]
   fi
   cmp "$config" "$root/config-before"
-  [[ ! -e "$root/state/cai/pouch" && ! -e "$root/state/cai/pouch.key" ]]
+  # Agent definitions persist outside the private session store. Their root
+  # must contain no temporary session after cleanup.
+  [[ -e "$root/state/cai/pouch" && -e "$root/state/cai/pouch.key" ]]
+  run --no-temp --list; ok
+  [[ $(stdout_text) == 'No sessions.' ]]
   exec 7>&-
   exec {terminal_event_fd}>&-
   terminal_events=
@@ -85,6 +89,6 @@ wait_for test -s "$term/status"
 peer_rc=0; wait "$terminal_pid" || peer_rc=$?; terminal_pid=
 [[ $peer_rc == 1 && $(cat "$term/status") == 1 && $(requests) == 2 ]]
 absent "$term/text" '[y/N]'
-contains "$term/stderr" 'Workspace socket path exceeds Unix limit'
+contains "$term/text" 'Workspace socket path exceeds Unix limit'
 [[ -z $(find "$root/cache/cai/temp" -name private -print -quit) ]]
 [[ -z $(find "$long_runtime" -mindepth 1 -print -quit) ]]

@@ -207,6 +207,22 @@ static void roundtrips(void) {
              strcmp(got->observation.result.reason, "detailed rejection") == 0);
     close_fixture(f);
   }
+  memset(&message, 0, sizeof(message));
+  message.header.kind = CAI_PROTOCOL_SYNCHRONIZE;
+  message.header.request = 1U;
+  message.session = "selected-session";
+  message.agent = "engineer";
+  message.select_session = 1;
+  open_fixture(f);
+  assert(send(f, &message) == CAI_OK && f->complete != NULL);
+  assert(strcmp(f->complete->session, "selected-session") == 0);
+  assert(strcmp(f->complete->agent, "engineer") == 0);
+  assert(f->complete->select_session);
+  close_fixture(f);
+  message.select_session = 0;
+  open_fixture(f);
+  assert(send(f, &message) == CAI_ERR_PROTOCOL && f->complete == NULL);
+  close_fixture(f);
   for (i = 0U; i < 4U; ++i) {
     memset(&message, 0, sizeof(message));
     message.header.kind = CAI_PROTOCOL_SYNCHRONIZE;

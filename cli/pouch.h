@@ -69,13 +69,12 @@ typedef struct cai_cli_pouch {
   int ownership_pipe[2];
   char ownership_error[512];
   char program_name[33], queue_prefix[33];
-  char sessions_namespace[129], auth_namespace[129], scopes_namespace[129];
+  char sessions_namespace[129], scopes_namespace[129];
   char agents_namespace[129];
   char todo_namespace[129], messages_namespace[129];
   /** Selected definition for subsequent parent commits; never child scope. */
   char active_agent_name[65], active_agent_revision[21];
   cai_agent_session_store store;
-  cai_blob_store credentials;
   pslog_logger *logger;
   /* Borrowed, synchronous replay observer; installed only during CLI open. */
   int (*replay_begin)(void *, const char *, cai_error *);
@@ -198,8 +197,6 @@ int cai_cli_pouch_transcript_read(cai_cli_pouch_transcript *,
                                   lc_collection_read_res *out,
                                   cai_cli_transcript_fn, void *, cai_error *);
 void cai_cli_pouch_transcript_close(cai_cli_pouch_transcript *);
-int cai_cli_pouch_seed_auth(cai_cli_pouch *pouch, const char *path,
-                            cai_error *error);
 int cai_cli_pouch_list(cai_cli_pouch *pouch, const char *scope,
                        cai_cli_session **out, size_t *count, cai_error *error);
 /** Inspect a local root/key without creating either or opening an SDK client.
@@ -247,16 +244,13 @@ const cai_todo_store_callbacks *cai_cli_pouch_todo_callbacks(void);
  * Trimmed content is excluded; no inference or tool execution. */
 int cai_cli_pouch_export(cai_cli_pouch *pouch, const char *id, cai_sink *sink,
                          cai_error *error);
-/** Atomically initialize default once, then stream its configuration
- * attachment. Normal reads acquire no state lease. Existing malformed agents
- * fail closed. */
-int cai_cli_pouch_default_agent(cai_cli_pouch *, cai_cli_producer, void *,
-                                cai_source **, cai_error *);
-int cai_cli_pouch_ensure_default_agent(cai_cli_pouch *, cai_cli_producer,
-                                       void *, cai_error *);
-/** One agent-object transaction. A callback may stream metadata and files;
- * failure rolls back both. Existing names require explicit replacement. */
+/** One agent-object transaction. A callback streams metadata and files;
+ * failure rolls back both. Initialize observes existing definitions without
+ * leasing and rechecks missing ones under its publication lease. */
 typedef int (*cai_cli_agent_publish_fn)(void *, lc_lease *, cai_error *);
+int cai_cli_pouch_agent_initialize(cai_cli_pouch *, const char *name,
+                                   cai_cli_agent_publish_fn, void *,
+                                   cai_error *);
 int cai_cli_pouch_agent_publish(cai_cli_pouch *, const char *name, int replace,
                                 cai_cli_agent_publish_fn, void *, cai_error *);
 /** Public committed metadata (attachment NULL) or attachment bytes. */
