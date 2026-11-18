@@ -173,7 +173,7 @@ static int deletion_one_with_scratch(cai_cli_pouch *pouch,
     rc = cai_cli_lc_error(error, &local);
   rc = release(lease, rc, error);
   if (rc == CAI_OK && directory != NULL)
-    rc = latest_rebuild(pouch, &scratch->index, error);
+    rc = latest_rebuild(pouch, &scratch->index, 1, error);
   if (rc == CAI_OK && directory != NULL)
     rc = latest_write(pouch, directory, &scratch->index, error);
   lc_error_cleanup(&local);

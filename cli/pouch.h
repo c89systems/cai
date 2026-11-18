@@ -209,6 +209,10 @@ int cai_cli_pouch_latest_session(cai_cli_pouch *, const char *workspace,
 int cai_cli_pouch_agent_private(lc_lease *, cai_source **, cai_error *);
 int cai_cli_pouch_session(cai_cli_pouch *pouch, const char *id,
                           cai_cli_session *out, cai_error *error);
+/** Resolve startup selection after dirty-index recovery, using committed
+ * headers without restoring session context or replaying observations. */
+int cai_cli_pouch_selected_session(cai_cli_pouch *, const char *id,
+                                   cai_cli_session *, cai_error *);
 int cai_cli_pouch_publish(cai_cli_pouch *pouch, const char *id, int published,
                           cai_error *error);
 /* Capture the root runtime's identity and acquire SDK ownership before writable

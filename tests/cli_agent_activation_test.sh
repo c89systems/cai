@@ -151,3 +151,29 @@ contains "$root/roundtrip.md" first_AGENT_ORIGINAL
 contains "$root/roundtrip.md" second_AGENT_ORIGINAL
 contains "$root/roundtrip.md" SECOND_AGENT_REVISED
 absent "$root/roundtrip.md" agent-activation-private-key
+
+# Import must publish selection metadata before the first resume.
+plan '{"plan":["IMPORTED_NAMED_AGENT_REPLY"]}'
+run --resume "$imported" -ni 'continue the imported session'; ok
+last_request
+json "$root/request" '.model == "first-model"'
+contains "$root/request" FIRST_AGENT_REPLACEMENT
+[[ $(current_session_id) == "$imported" ]]
+wait_for owner_stopped
+# Directory recovery must also retain the normalized seed's binding.
+run --import "$root/offline.jsonl"; ok
+imported=$(current_session_id)
+run --delete "$new_id"; ok
+plan '{"plan":["IMPORTED_RECOVERED_AGENT_REPLY"]}'
+run --resume "$imported" -ni 'continue after rebuilding the directory index'; ok
+last_request
+json "$root/request" '.model == "first-model"'
+contains "$root/request" FIRST_AGENT_REPLACEMENT
+[[ $(current_session_id) == "$imported" ]]
+wait_for owner_stopped
+plan '{"plan":["IMPORTED_LATEST_AGENT_REPLY"]}'
+run -ni 'continue the latest imported session'; ok
+last_request
+json "$root/request" '.model == "first-model"'
+contains "$root/request" FIRST_AGENT_REPLACEMENT
+[[ $(current_session_id) == "$imported" ]]

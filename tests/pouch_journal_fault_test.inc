@@ -1,6 +1,7 @@
 /* Faults at the public SDK boundary; actual encrypted collections underneath.
  */
 static int journal_append_mode, journal_append_calls, identity_updates;
+static int identity_fail_at = 2;
 static int (*journal_real_append)(lc_collection *,
                                   const lc_collection_append_req *, lc_source *,
                                   lc_collection_append_res *, lc_error *);
@@ -38,7 +39,7 @@ static int journal_status(lc_collection *collection, const char *id,
 static int journal_identity_update(lc_lease *lease, lc_source *source,
                                    const lc_update_opts *options,
                                    lc_error *error) {
-  if (++identity_updates == 2) {
+  if (++identity_updates == identity_fail_at) {
     error->code = LC_ERR_TRANSPORT;
     error->message = strdup("injected post-append metadata failure");
     return LC_ERR_TRANSPORT;
@@ -48,7 +49,8 @@ static int journal_identity_update(lc_lease *lease, lc_source *source,
 static int journal_acquire(lc_client *client, const lc_acquire_req *request,
                            lc_lease **out, lc_error *error) {
   int rc = journal_real_acquire(client, request, out, error);
-  if (rc == LC_OK && strcmp(request->key, "fault-identity") == 0) {
+  if (rc == LC_OK && (strcmp(request->key, "fault-identity") == 0 ||
+                      strcmp(request->key, "fault-selection") == 0)) {
     journal_real_update = (*out)->update;
     (*out)->update = journal_identity_update;
   }
@@ -68,6 +70,57 @@ static size_t journal_identity_read(void *context, void *bytes, size_t count,
   memcpy(bytes, edit + *offset, count);
   *offset += count;
   return count;
+}
+static void journal_agent_selection(cai_cli_pouch *pouch, cai_error *error) {
+  cai_cli_session *selected = calloc(1U, sizeof(*selected));
+  unsigned long long before;
+  assert(selected != NULL);
+  strcpy(pouch->active_agent_name, "default");
+  strcpy(pouch->active_agent_revision, "default-revision");
+  save(pouch, "/work/agent-selection", "fault-selection", error);
+  assert(cai_cli_pouch_session(pouch, "fault-selection", selected, error) ==
+         CAI_OK);
+  before = selected->commit_position;
+  strcpy(pouch->active_agent_name, "engineer");
+  strcpy(pouch->active_agent_revision, "engineer-revision");
+  identity_fail_at = 1;
+  identity_updates = 0;
+  pouch->sessions->acquire = journal_acquire;
+  save(pouch, "/work/agent-selection", "fault-selection", error);
+  assert(identity_updates == 1);
+  assert(cai_cli_pouch_session(pouch, "fault-selection", selected, error) ==
+         CAI_OK);
+  assert(strcmp(selected->agent_name, "default") == 0 &&
+         selected->commit_position == before);
+
+  /* Even another metadata-write failure must select the committed binding,
+   * leave recovery pending and avoid publishing a falsely clean index. */
+  identity_updates = 0;
+  assert(cai_cli_pouch_selected_session(pouch, "fault-selection", selected,
+                                        error) == CAI_OK);
+  assert(strcmp(selected->agent_name, "engineer") == 0);
+  assert(strcmp(selected->agent_revision, "engineer-revision") == 0);
+  assert(selected->commit_position > before);
+  assert(cai_cli_pouch_session(pouch, "fault-selection", selected, error) ==
+         CAI_OK);
+  assert(strcmp(selected->agent_name, "default") == 0);
+  pouch->sessions->acquire = journal_real_acquire;
+  identity_fail_at = 2;
+
+  /* A different session can trigger recovery and become latest. Its clean
+   * index must not conceal stale exact-ID metadata for the older session. */
+  strcpy(pouch->active_agent_name, "default");
+  strcpy(pouch->active_agent_revision, "default-revision");
+  save(pouch, "/work/agent-selection", "selection-newer", error);
+  assert(cai_cli_pouch_session(pouch, "fault-selection", selected, error) ==
+         CAI_OK);
+  assert(strcmp(selected->agent_name, "engineer") == 0);
+  assert(strcmp(selected->agent_revision, "engineer-revision") == 0);
+  assert(cai_cli_pouch_selected_session(pouch, "fault-selection", selected,
+                                        error) == CAI_OK);
+  assert(strcmp(selected->agent_name, "engineer") == 0);
+  pouch->active_agent_name[0] = pouch->active_agent_revision[0] = '\0';
+  free(selected);
 }
 static void journal_faults(cai_cli_pouch *pouch, cai_error *error) {
   lc_collection *collection = NULL;
@@ -101,6 +154,7 @@ static void journal_faults(cai_cli_pouch *pouch, cai_error *error) {
   newest(pouch, "/work/fault-identity", "fault-identity", error);
   assert(validate_commit(pouch, "fault-identity", "/work/fault-identity",
                          error) == CAI_OK);
+  journal_agent_selection(pouch, error);
   assert(collection_owner_open(pouch, "append-faults", "events", 1, 0,
                                &collection, error) == CAI_OK);
   journal_real_append = collection->append;
@@ -156,6 +210,10 @@ static void journal_faults(cai_cli_pouch *pouch, cai_error *error) {
   lc_error_cleanup(&local);
   cai_cli_pouch_close(pouch);
   assert(cai_cli_pouch_open(pouch, NULL, NULL, NULL, error) == CAI_OK);
+  assert(cai_cli_pouch_selected_session(pouch, "fault-selection", &session,
+                                        error) == CAI_OK);
+  assert(strcmp(session.agent_name, "engineer") == 0);
+  assert(strcmp(session.agent_revision, "engineer-revision") == 0);
   newest(pouch, "/work/fault-identity", "fault-identity", error);
   assert(validate_commit(pouch, "fault-identity", "/work/fault-identity",
                          error) == CAI_OK);

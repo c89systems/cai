@@ -209,7 +209,7 @@ static int latest_open(cai_cli_pouch *, const char *, lc_lease **,
 static int latest_write(cai_cli_pouch *, lc_lease *, latest_index *,
                         cai_error *);
 static int session_exists(cai_cli_pouch *, const char *, int *, cai_error *);
-static int latest_rebuild(cai_cli_pouch *, latest_index *, cai_error *);
+static int latest_rebuild(cai_cli_pouch *, latest_index *, int, cai_error *);
 static int session_compare(const void *, const void *);
 static int session_refresh(cai_cli_pouch *, cai_cli_session *, cai_error *);
 static int latest_key(const char *, char[65], cai_error *);
@@ -232,6 +232,10 @@ static const lonejson_field scope_fields[] = {
     LONEJSON_FIELD_OBJECT(scope_query, eq, "eq", &scope_predicate_map)};
 LONEJSON_MAP_DEFINE(scope_map, scope_query, scope_fields);
 
+/** Bounded selection extracted while context/history stream past unchanged. */
+typedef struct journal_binding {
+  char name[65], revision[21];
+} journal_binding;
 typedef struct cli_record {
   char record_type[24];
   char agent_name[65], agent_revision[21];
@@ -244,7 +248,68 @@ typedef struct cli_record {
   const char *data;
   lonejson_json_value state;
   lonejson_json_value data_value;
+  journal_binding selection;
+  lonejson_path_value_visitor selection_visitor;
 } cli_record;
+
+/** Match only the binding's two scalar fields. Large instructions, summaries
+ * and history use the JSON visitor's chunk delivery, never mapped strings. */
+static char *selection_destination(journal_binding *binding,
+                                   const lonejson_value_path *path,
+                                   size_t *capacity) {
+  const lonejson_path_segment *segments = path->segments;
+  if (path->segment_count != 3U || segments[0].len != 8U ||
+      memcmp(segments[0].data, "metadata", 8U) != 0 || segments[1].len != 13U ||
+      memcmp(segments[1].data, "agent_binding", 13U) != 0)
+    return NULL;
+  if (segments[2].len == 4U && memcmp(segments[2].data, "name", 4U) == 0) {
+    *capacity = sizeof(binding->name);
+    return binding->name;
+  }
+  if (segments[2].len == 8U && memcmp(segments[2].data, "revision", 8U) == 0) {
+    *capacity = sizeof(binding->revision);
+    return binding->revision;
+  }
+  return NULL;
+}
+static lonejson_status selection_string_begin(void *context,
+                                              const lonejson_value_path *path,
+                                              lonejson_error *error) {
+  size_t capacity;
+  char *destination = selection_destination(context, path, &capacity);
+  (void)error;
+  if (destination != NULL)
+    destination[0] = '\0';
+  return LONEJSON_STATUS_OK;
+}
+static lonejson_status selection_string_chunk(void *context,
+                                              const lonejson_value_path *path,
+                                              const char *bytes, size_t count,
+                                              lonejson_error *error) {
+  size_t capacity, length;
+  char *destination = selection_destination(context, path, &capacity);
+  if (destination == NULL)
+    return LONEJSON_STATUS_OK;
+  length = strlen(destination);
+  if (count >= capacity - length) {
+    error->code = LONEJSON_STATUS_OVERFLOW;
+    strcpy(error->message, "journal agent selection exceeds field capacity");
+    return LONEJSON_STATUS_OVERFLOW;
+  }
+  memcpy(destination + length, bytes, count);
+  destination[length + count] = '\0';
+  return LONEJSON_STATUS_OK;
+}
+/** The record owns its visitor until parser cleanup. No context is retained. */
+static lonejson_status selection_init(lonejson *json, cli_record *record,
+                                      lonejson_error *error) {
+  record->selection_visitor = lonejson_default_path_value_visitor();
+  record->selection_visitor.string_begin = selection_string_begin;
+  record->selection_visitor.string_chunk = selection_string_chunk;
+  lonejson_json_value_init(json, &record->state);
+  return lonejson_json_value_set_parse_path_visitor(
+      &record->state, &record->selection_visitor, &record->selection, error);
+}
 static const lonejson_field journal_event_fields[] = {
     LONEJSON_FIELD_STRING_FIXED_REQ(cli_record, record_type, "record_type",
                                     LONEJSON_OVERFLOW_FAIL),
@@ -272,6 +337,16 @@ static const lonejson_field commit_fields[] = {
     LONEJSON_FIELD_JSON_VALUE_REQ(cli_record, state, "state")};
 LONEJSON_MAP_DEFINE(commit_map, cli_record, commit_fields);
 
+/** Native headers and exported seed metadata describe the same binding. */
+static void session_commit_agent(cai_cli_session *session,
+                                 const cli_record *record) {
+  const journal_binding *binding = &record->selection;
+  strcpy(session->agent_name,
+         binding->name[0] != '\0' ? binding->name : record->agent_name);
+  strcpy(session->agent_revision,
+         binding->name[0] != '\0' ? binding->revision : record->agent_revision);
+}
+
 static const lonejson_field import_fields[] = {
     LONEJSON_FIELD_STRING_FIXED_REQ(cli_record, record_type, "record_type",
                                     LONEJSON_OVERFLOW_FAIL),
@@ -280,6 +355,10 @@ static const lonejson_field import_fields[] = {
                        "commit_created_at_ns"),
     LONEJSON_FIELD_U64(cli_record, applied_event_sequence,
                        "applied_event_sequence"),
+    LONEJSON_FIELD_STRING_FIXED(cli_record, agent_name, "agent_name",
+                                LONEJSON_OVERFLOW_FAIL),
+    LONEJSON_FIELD_STRING_FIXED(cli_record, agent_revision, "agent_revision",
+                                LONEJSON_OVERFLOW_FAIL),
     LONEJSON_FIELD_STRING_ALLOC(cli_record, type, "type"),
     LONEJSON_FIELD_JSON_VALUE(cli_record, data_value, "data"),
     LONEJSON_FIELD_JSON_VALUE(cli_record, state, "state")};
@@ -1225,7 +1304,7 @@ commit_mode_with_scratch(void *context, const char *scope, const char *id,
     if (scratch->session.published &&
         strcmp(scratch->session.id, scratch->index.latest.id) == 0 &&
         scratch->session.commit_ns < scratch->index.latest.commit_ns)
-      rc = latest_rebuild(pouch, &scratch->index, error);
+      rc = latest_rebuild(pouch, &scratch->index, 1, error);
     else if (scratch->session.published &&
              (scratch->index.latest.id[0] == '\0' ||
               strcmp(scratch->session.id, scratch->index.latest.id) == 0 ||
@@ -1544,16 +1623,53 @@ static int latest_write(cai_cli_pouch *pouch, lc_lease *guard,
   return release(lease, rc, error);
 }
 
-static int latest_rebuild(cai_cli_pouch *pouch, latest_index *index,
+/** Republish only derived commit fields, preserving current retention and
+ * visibility settings. The caller holds the directory writer guard. */
+static int session_repair(cai_cli_pouch *pouch,
+                          const cai_cli_session *recovered, cai_error *error) {
+  cai_cli_session *current = calloc(1U, sizeof(*current));
+  lc_lease *lease = NULL;
+  int rc;
+  if (current == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate session header repair");
+  rc = acquire(pouch, recovered->id, &lease, error);
+  if (rc == CAI_OK)
+    rc =
+        get_session(lease, recovered->workspace, recovered->id, current, error);
+  if (rc == CAI_OK &&
+      (current->commit_position != recovered->commit_position ||
+       current->applied_sequence != recovered->applied_sequence ||
+       current->commit_ns < recovered->commit_ns ||
+       strcmp(current->agent_name, recovered->agent_name) != 0 ||
+       strcmp(current->agent_revision, recovered->agent_revision) != 0)) {
+    current->commit_position = recovered->commit_position;
+    current->applied_sequence = recovered->applied_sequence;
+    if (current->commit_ns < recovered->commit_ns)
+      current->commit_ns = recovered->commit_ns;
+    strcpy(current->agent_name, recovered->agent_name);
+    strcpy(current->agent_revision, recovered->agent_revision);
+    rc = update_session(lease, current, error);
+  }
+  rc = release(lease, rc, error);
+  free(current);
+  return rc;
+}
+static int latest_rebuild(cai_cli_pouch *pouch, latest_index *index, int repair,
                           cai_error *error) {
   cai_cli_session *sessions = NULL;
-  size_t count = 0U;
+  size_t count = 0U, i;
   int rc = session_list(pouch, index->workspace, 2, &sessions, &count, error);
+  /* Clearing dirty must not strand stale exact-ID headers behind a clean
+   * directory index. Read-only recovery behind another writer never publishes.
+   */
+  for (i = 0U; repair && rc == CAI_OK && i < count; ++i)
+    rc = session_repair(pouch, &sessions[i], error);
   if (rc == CAI_OK) {
     memset(&index->latest, 0, sizeof(index->latest));
     if (count != 0U)
       index->latest = sessions[0];
-    index->dirty = 0;
+    index->dirty = repair ? 0 : 1;
   }
   free(sessions);
   return rc;
@@ -1623,7 +1739,7 @@ static int latest_open_wait(cai_cli_pouch *pouch, const char *scope,
     if (pouch->logger != NULL)
       pouch->logger->info(pouch->logger, "Rebuilding directory session index",
                           &field, 1U);
-    rc = latest_rebuild(pouch, index, error);
+    rc = latest_rebuild(pouch, index, 1, error);
     if (rc == CAI_OK)
       rc = latest_write(pouch, *out, index, error);
   }
@@ -1699,7 +1815,7 @@ static int latest_metadata(cai_cli_pouch *pouch, const char *scope,
                              2U);
       memset(index, 0, sizeof(*index));
       strcpy(index->workspace, scope);
-      rc = latest_rebuild(pouch, index, error);
+      rc = latest_rebuild(pouch, index, 0, error);
     }
     cai_error_cleanup(&optional);
   }
@@ -1716,6 +1832,27 @@ int cai_cli_pouch_latest_session(cai_cli_pouch *pouch, const char *scope,
   rc = latest_metadata(pouch, scope, index, error);
   if (rc == CAI_OK)
     *out = index->latest;
+  free(index);
+  return rc;
+}
+
+int cai_cli_pouch_selected_session(cai_cli_pouch *pouch, const char *id,
+                                   cai_cli_session *out, cai_error *error) {
+  latest_index *index = calloc(1U, sizeof(*index));
+  int rc;
+  if (index == NULL)
+    return cai_cli_error(error, CAI_ERR_NOMEM,
+                         "allocate selected session metadata");
+  rc = session_read(pouch, id, out, NULL, error);
+  if (rc == CAI_OK && scope_indexed(out->workspace)) {
+    rc = latest_metadata(pouch, out->workspace, index, error);
+    if (rc == CAI_OK && strcmp(index->latest.id, id) == 0)
+      *out = index->latest;
+    else if (rc == CAI_OK && index->dirty)
+      rc = session_refresh(pouch, out, error);
+    else if (rc == CAI_OK)
+      rc = session_read(pouch, id, out, NULL, error);
+  }
   free(index);
   return rc;
 }
@@ -1998,7 +2135,12 @@ static int collection_event_write(lc_sink *sink, const void *bytes,
   (void)error;
   if (!read->initialized) {
     read->initialized = 1;
-    if (read->discard_data) {
+    if (read->map == &commit_map) {
+      lonejson_error local;
+      if (selection_init(read->json, &read->record, &local) !=
+          LONEJSON_STATUS_OK)
+        read->rc = cai_cli_lj_error(read->error, &local);
+    } else if (read->discard_data) {
       lonejson_error local;
       lonejson_json_value_init(read->json, &read->record.state);
       if (lonejson_json_value_set_parse_sink(&read->record.state, discard_json,
@@ -2135,8 +2277,7 @@ static int commit_refresh_boundary(void *context,
   if (read->rc == CAI_OK) {
     refresh->session->commit_position = metadata->position;
     refresh->session->applied_sequence = read->record.applied_event_sequence;
-    strcpy(refresh->session->agent_name, read->record.agent_name);
-    strcpy(refresh->session->agent_revision, read->record.agent_revision);
+    session_commit_agent(refresh->session, &read->record);
     if (read->record.commit_created_at_ns > refresh->session->commit_ns)
       refresh->session->commit_ns = read->record.commit_created_at_ns;
   }
@@ -2947,7 +3088,7 @@ cai_cli_pouch_publish_with_scratch(cai_cli_pouch *pouch, const char *id,
   rc = release(lease, rc, error);
   if (rc == CAI_OK && directory != NULL) {
     if (!published && strcmp(scratch->index.latest.id, id) == 0)
-      rc = latest_rebuild(pouch, &scratch->index, error);
+      rc = latest_rebuild(pouch, &scratch->index, 1, error);
     else if (published && scratch->session.commit_position != 0U &&
              (scratch->index.latest.id[0] == '\0' ||
               session_compare(&scratch->session, &scratch->index.latest) < 0))

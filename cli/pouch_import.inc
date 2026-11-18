@@ -73,7 +73,7 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
                          const char *workspace, char *id, size_t capacity,
                          cai_error *error) {
   FILE *file;
-  cai_cli_session session;
+  cai_cli_session *session;
   lc_lease *lease = NULL;
   lc_collection *collection = NULL;
   lonejson *json;
@@ -85,7 +85,7 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
   struct timespec now;
   size_t i;
   int ch, created = 0, rc = CAI_OK;
-  if (capacity < 33U || strlen(workspace) >= sizeof(session.workspace))
+  if (capacity < 33U || strlen(workspace) >= sizeof(session->workspace))
     return cai_cli_error(error, CAI_ERR_INVALID,
                          "import output or workspace too long");
   file = fopen(path, "rb");
@@ -100,18 +100,24 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
     lonejson_free(json);
     return cai_cli_error(error, CAI_ERR_TRANSPORT, "initialize journal import");
   }
+  /* Session metadata contains path-sized fields; keep it off worker stacks. */
+  session = calloc(1U, sizeof(*session));
+  if (session == NULL) {
+    fclose(file);
+    lonejson_free(json);
+    return cai_cli_error(error, CAI_ERR_NOMEM, "allocate imported session");
+  }
   for (i = 0U; i < sizeof(random); i++)
     snprintf(id + i * 2U, capacity - i * 2U, "%02x", (unsigned int)random[i]);
-  memset(&session, 0, sizeof(session));
-  strcpy(session.id, id);
-  strcpy(session.workspace, workspace);
-  strcpy(session.history_backend, "collections");
+  strcpy(session->id, id);
+  strcpy(session->workspace, workspace);
+  strcpy(session->history_backend, "collections");
   rc = acquire(pouch, id, &lease, error);
   if (rc == CAI_OK && lease->state_etag != NULL && lease->state_etag[0] != '\0')
     rc = cai_cli_error(error, CAI_ERR_INVALID,
                        "generated session ID already exists");
   if (rc == CAI_OK) {
-    rc = update_session(lease, &session, error);
+    rc = update_session(lease, session, error);
     created = rc == CAI_OK;
   }
   rc = release(lease, rc, error);
@@ -134,6 +140,8 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
     memset(&line, 0, sizeof(line));
     memset(&record, 0, sizeof(record));
     line.file = file;
+    if (selection_init(json, &record, &local) != LONEJSON_STATUS_OK)
+      rc = cai_cli_lj_error(error, &local);
     visitor.string_chunk = journal_import_text;
     visitor.object_begin = journal_import_bad_data;
     visitor.array_begin = journal_import_bad_data;
@@ -142,11 +150,9 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
     lonejson_json_value_init(json, &record.data_value);
     lonejson_json_value_set_parse_visitor(&record.data_value, &visitor, &line,
                                           &local);
-    lonejson_json_value_init(json, &record.state);
-    lonejson_json_value_set_parse_sink(&record.state, discard_json, NULL,
-                                       &local);
-    if (lonejson_curl_parse_init(&line.parser, json, &import_map, &record) !=
-        LONEJSON_STATUS_OK)
+    if (rc == CAI_OK &&
+        lonejson_curl_parse_init(&line.parser, json, &import_map, &record) !=
+            LONEJSON_STATUS_OK)
       rc = cai_cli_lj_error(error, &line.parser.error);
     memset(&callbacks, 0, sizeof(callbacks));
     callbacks.read = journal_import_read;
@@ -175,16 +181,17 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
                (unsigned long long)record.commit_created_at_ns,
                (unsigned long long)record.applied_event_sequence);
     if (rc == CAI_OK)
-      rc = journal_append_source(pouch, &session, collection, append_id, source,
+      rc = journal_append_source(pouch, session, collection, append_id, source,
                                  &position, error);
     cai_source_close(source);
     if (rc == CAI_OK &&
         lonejson_curl_parse_finish(&line.parser) != LONEJSON_STATUS_OK)
       rc = cai_cli_lj_error(error, &line.parser.error);
     if (rc == CAI_OK && strcmp(record.record_type, "commit") == 0) {
-      session.applied_sequence = record.applied_event_sequence;
-      session.commit_position = position;
-      session.commit_ns = record.commit_created_at_ns;
+      session->applied_sequence = record.applied_event_sequence;
+      session->commit_position = position;
+      session->commit_ns = record.commit_created_at_ns;
+      session_commit_agent(session, &record);
     } else if (rc == CAI_OK && strcmp(record.record_type, "event") == 0) {
       if (record.sequence <= previous || record.type == NULL ||
           record.type[0] == '\0')
@@ -195,8 +202,8 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
       if (record.type != NULL &&
           (strcmp(record.type, "turn_submitted") == 0 ||
            strcmp(record.type, "turn_queued") == 0) &&
-          session.first_prompt[0] == '\0')
-        preview(session.first_prompt, sizeof(session.first_prompt),
+          session->first_prompt[0] == '\0')
+        preview(session->first_prompt, sizeof(session->first_prompt),
                 line.preview);
     } else if (rc == CAI_OK)
       rc = cai_cli_error(error, CAI_ERR_INVALID,
@@ -208,7 +215,7 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
     rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "read imported journal");
   fclose(file);
   lonejson_free(json);
-  if (rc == CAI_OK && session.commit_position == 0U)
+  if (rc == CAI_OK && session->commit_position == 0U)
     rc = cai_cli_error(error, CAI_ERR_INVALID,
                        "imported journal has no committed state");
   /* An import is a new session now, even if its original journal is old.
@@ -216,12 +223,12 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
   if (rc == CAI_OK && clock_gettime(CLOCK_REALTIME, &now) != 0)
     rc = cai_cli_error(error, CAI_ERR_TRANSPORT, "read import timestamp");
   if (rc == CAI_OK)
-    session.commit_ns = (lonejson_uint64)now.tv_sec * 1000000000ULL +
-                        (lonejson_uint64)now.tv_nsec;
+    session->commit_ns = (lonejson_uint64)now.tv_sec * 1000000000ULL +
+                         (lonejson_uint64)now.tv_nsec;
   if (rc == CAI_OK)
     rc = acquire(pouch, id, &lease, error);
   if (rc == CAI_OK)
-    rc = update_session(lease, &session, error);
+    rc = update_session(lease, session, error);
   rc = release(lease, rc, error);
   lease = NULL;
   if (rc == CAI_OK)
@@ -242,5 +249,6 @@ int cai_cli_pouch_import(cai_cli_pouch *pouch, const char *path,
     cai_error_cleanup(&ignored);
   }
   collection_owner_remove(pouch, collection);
+  free(session);
   return rc;
 }

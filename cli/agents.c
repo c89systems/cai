@@ -170,9 +170,10 @@ static int selected_name(cai_config *bootstrap, const cai_cli_options *options,
   if (rc == CAI_OK && selector != NULL)
     rc = cai_cli_session_select(sessions, workspace, selector, id, error);
   if (rc == CAI_OK)
-    rc = selector != NULL ? cai_cli_pouch_session(sessions, id, session, error)
-                          : cai_cli_pouch_latest_session(sessions, workspace,
-                                                         session, error);
+    rc =
+        selector != NULL
+            ? cai_cli_pouch_selected_session(sessions, id, session, error)
+            : cai_cli_pouch_latest_session(sessions, workspace, session, error);
   if (rc == CAI_OK && session->agent_name[0] != '\0')
     rc = cai_cli_agent_name(session->agent_name, name, error);
 done:
