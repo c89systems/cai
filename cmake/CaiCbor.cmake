@@ -1,18 +1,18 @@
 # The released c89.systems codec owns CBOR grammar and UTF-8 validation.
 # CAI uses its public types and operations directly.
-set(CAI_CBOR_VERSION "0.1.0")
+set(CAI_CBOR_VERSION "0.2.0")
 if(CAI_RESOLVED_DEPENDENCY_MODE STREQUAL "cpkt")
   set(_cai_cbor_targets
     x86_64-linux-gnu x86_64-linux-musl aarch64-linux-gnu aarch64-linux-musl
     armhf-linux-gnu armhf-linux-musl arm64-apple-darwin)
   set(_cai_cbor_checksums
-    14726a029c310a5a755006c488cd63e6648c1125b61e03a875d08da79e27f666
-    91e4499a7a4bffe2e9d738e872bc517cdb17c3835cd5d02b9001fd50f2c3770c
-    7ed7a6b3bca9dbe2798950980ac819094e74d841edb9bf058596e78a686d25dd
-    54ac5539044902047ace7e3b1b4e54304c15d585d2a3f37998212e225fa9aa00
-    bcfcdf1eb2dff737a4ab023a35905a282bc07714ab493d4c8cf3bed66b305058
-    3b9eb5a11b52338a76ed4ae72c74798ba20e157bc869eab63956b9de7fd844f4
-    8d58ff45f12cf2501763bbb809f7394d426d0dfc1bca169a67b4b971a878943b)
+    136ba69b0765654cc0fbf7e42db2128f45b1dfe9b6fa5ca6b6307a0092281b74
+    d671237d7fa13fea23e2dd9e55fca20d0cfc43890bc37e0113e5ccd5f0c90780
+    840e216b2ecd07edaed31e8af05205cbd0b7d2016095354dbb075a82a2a3534c
+    eaf93027ef05df7efafd03837b6c1db787eada66ac7672485c7a0469ea885128
+    4276041efdc4d94e7d0de58ccb53497282ce7be4ca3e15e900b24e236c573618
+    a5403cf3ee5072e017c8f8198f11320ea5e2cbd92856da7fd67c88a851209544
+    8c77f1274e5d9c5aa7b29d6c823aa0531166d09cd0d6837c322cfbfc4b2bf2a1)
   list(FIND _cai_cbor_targets "${CAI_TARGET_ID}" _cai_cbor_index)
   if(_cai_cbor_index LESS 0)
     message(FATAL_ERROR "No pinned libcbor SDK for ${CAI_TARGET_ID}")

@@ -28,7 +28,7 @@ The metadata records the dependency mode used to build cai.
 In the default `cpkt` mode it points at the matching official `cpkt` release URL and checksum for the native curl/OpenSSL stack and the matching official lonejson release URL/checksum.
 The CMake package models lonejson as an external dependency: `find_package(cai)` requires `liblonejson` and its `curl`, `oidc`, and `openssl` component package surfaces to be discoverable and adds lonejson headers when they are available, but cai release archives do not vendor lonejson or curl runtime libraries.
 The discovered host `liblonejson` must also expose cai's expected ABI generation.
-CAI uses c89.systems libcbor 0.1.0 directly, discovered as the `C89Cbor` CMake package or `c89cbor` pkg-config module. Install its SDK alongside lonejson and cpkt; its metadata supplies the complete static/shared dependency closure. This is distinct from PJK/libcbor. Installed consumers need the dependency SDK metadata, including lonejson development headers.
+CAI uses c89.systems libcbor 0.2.0 directly, discovered as the `C89Cbor` CMake package or `c89cbor` pkg-config module. Install its SDK alongside lonejson and cpkt; its metadata supplies the complete static/shared dependency closure. This is distinct from PJK/libcbor. Installed consumers need the dependency SDK metadata, including lonejson development headers.
 The pkg-config file exposes lonejson as a public requirement and libcurl 7.86.0 or newer as a private link requirement.
 `pslog.h`/`libpslog` is only needed by source builds, logging integrations that construct pslog loggers directly, and the logging-enabled MCP and Smith terminal examples. cai release archives do not compile in single-header dependency variants.
 

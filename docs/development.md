@@ -67,7 +67,7 @@ The same source also supplies the GNU SDKs and Darwin cross-build lane; Darwin r
   dependency inputs.
 - `CAI_DEPENDENCY_MODE=host` uses already-installed host dependencies instead:
   libcurl 7.86.0 or newer, OpenSSL crypto, `lonejson.h` plus `liblonejson`,
-  `pslog.h`, c89.systems libcbor 0.1.0 (`C89Cbor`), and cpktmisc's `CpktYaml` package with a compatible cpkt core SDK.
+  `pslog.h`, c89.systems libcbor 0.2.0 (`C89Cbor`), and cpktmisc's `CpktYaml` package with a compatible cpkt core SDK.
   The libcurl minimum is required for Responses WebSocket
   support. The discovered `liblonejson` must match cai's required ABI
   generation (`liblonejson.so.29` on Linux, `liblonejson.29.dylib` on Darwin).
