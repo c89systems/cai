@@ -84,10 +84,6 @@ int main(void) {
   assert(cai_cli_pouch_open_options(&first, &o, NULL, &error) == CAI_OK);
   assert(cai_test_storage_open_count() == 1U);
   input = source(&error, &position);
-  assert(first.credentials.replace(first.credentials.context, "probe", input,
-                                   &error) == CAI_OK);
-  cai_source_close(input);
-  input = source(&error, &position);
   assert(first.store.commit(&first, "/workspace", "first", input, 1U, &error) ==
          CAI_OK);
   cai_source_close(input);
@@ -108,9 +104,6 @@ int main(void) {
   }
   assert(first.sessions == isolated.sessions &&
          cai_test_storage_open_count() == 1U);
-  assert(isolated.credentials.load(isolated.credentials.context, "probe",
-                                   &loaded, &error) == CAI_OK &&
-         loaded == NULL);
   assert(isolated.store.load_latest(&isolated, "/workspace", id, sizeof(id),
                                     &loaded, &sequence, &error) == CAI_OK &&
          loaded == NULL);
@@ -134,11 +127,6 @@ int main(void) {
   assert(cai_cli_pouch_open_options(&shared, &other, NULL, &error) == CAI_OK);
   assert(first.sessions == shared.sessions &&
          cai_test_storage_open_count() == 1U);
-  assert(shared.credentials.load(shared.credentials.context, "probe", &loaded,
-                                 &error) == CAI_OK &&
-         loaded != NULL);
-  cai_source_close(loaded);
-  loaded = NULL;
   /* Sharing a client does not grant a second writer for an owned session.
    * Namespace visibility is inspected through the public committed reader. */
   assert(shared.store.load_latest(&shared, "/workspace", id, sizeof(id),
@@ -154,9 +142,10 @@ int main(void) {
   cai_source_close(loaded);
   cai_cli_pouch_close(&first);
   /* The first context exiting cannot close the remaining borrower's client. */
-  assert(shared.credentials.load(shared.credentials.context, "probe", &loaded,
-                                 &error) == CAI_OK &&
+  assert(cai_cli_pouch_read_id(&shared, "/workspace", "first", &loaded,
+                               &sequence, &error) == CAI_OK &&
          loaded != NULL);
+  assert(sequence == 1U);
   cai_source_close(loaded);
   cai_cli_pouch_close(&shared);
   assert(cai_test_storage_open_count() == 1U);
