@@ -60,14 +60,14 @@ The same source also supplies the GNU SDKs and Darwin cross-build lane; Darwin r
   `github.com/c89systems/cpkt` release tarball for the selected target to
   provide the native dependency stack. cai currently consumes curl, OpenSSL,
   nghttp2, libssh2, and zlib from that archive. It also uses official
-  `lonejson` and `libpslog` release artifacts for the JSON library and logger
+  `lonejson`, `libcbor` and `libpslog` release artifacts for JSON, CBOR and logger
   header. Those dependency archives ship consumer CMake and pkg-config
   metadata, and cai consumes that metadata when available. Tarball URLs and
   SHA-256 values are pinned in CMake; sibling checkout artifacts are not
   dependency inputs.
 - `CAI_DEPENDENCY_MODE=host` uses already-installed host dependencies instead:
   libcurl 7.86.0 or newer, OpenSSL crypto, `lonejson.h` plus `liblonejson`,
-  `pslog.h`, and cpktmisc's `CpktYaml` package with a compatible cpkt core SDK.
+  `pslog.h`, c89.systems libcbor 0.1.0 (`C89Cbor`), and cpktmisc's `CpktYaml` package with a compatible cpkt core SDK.
   The libcurl minimum is required for Responses WebSocket
   support. The discovered `liblonejson` must match cai's required ABI
   generation (`liblonejson.so.29` on Linux, `liblonejson.29.dylib` on Darwin).

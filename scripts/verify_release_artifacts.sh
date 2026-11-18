@@ -442,6 +442,7 @@ verify_dependency_manifest() {
      ! grep -F '"providedBy": "cpktmisc"' <<<"$manifest_text" >/dev/null ||
      ! grep -F '"name": "lonejson"' <<<"$manifest_text" >/dev/null ||
      ! grep -F '"name": "libpslog"' <<<"$manifest_text" >/dev/null ||
+     ! grep -F '"name": "libcbor"' <<<"$manifest_text" >/dev/null ||
      ! grep -F "\"targetId\": \"$target_id\"" <<<"$manifest_text" >/dev/null ||
      ! grep -F '"installRole": "external-static-consumer-sdk"' \
        <<<"$manifest_text" >/dev/null ||
@@ -919,6 +920,7 @@ verify_extracted_sdk_smoke() {
   local cpktmisc_version
   local lonejson_version
   local pslog_version
+  local cbor_version cbor_prefix
   local cpkt_prefix
   local cpktmisc_prefix
   local lonejson_prefix
@@ -940,6 +942,8 @@ verify_extracted_sdk_smoke() {
   cpkt_version=$(pc_value "$pc" cpkt_version)
   cpktmisc_version=$(pc_value "$pc" cpktmisc_version)
   lonejson_version=$(pc_value "$pc" lonejson_version)
+  cbor_version=$(pc_value "$pc" cbor_version)
+  [[ -n "$cbor_version" ]] || fail "cai.pc is missing libcbor version"
   [[ -n "$cpkt_version" ]] || fail "cai.pc is missing cpkt version"
   [[ -n "$cpktmisc_version" ]] || fail "cai.pc is missing cpktmisc version"
   [[ -n "$lonejson_version" ]] || fail "cai.pc is missing lonejson version"
@@ -947,6 +951,7 @@ verify_extracted_sdk_smoke() {
   cpkt_prefix="$repo_root/.cache/deps/cpkt-$cpkt_version-$target_id"
   cpktmisc_prefix="$repo_root/.cache/deps/cpktmisc-$cpktmisc_version-$target_id"
   lonejson_prefix="$repo_root/.cache/deps/liblonejson-$lonejson_version-$target_id"
+  cbor_prefix="$repo_root/.cache/deps/libcbor-$cbor_version-$target_id"
   pslog_version=$(sed -n \
     's/^CAI_PSLOG_VERSION[[:space:]]*[?:]*=[[:space:]]*//p' \
     "$repo_root/Makefile" | tail -n 1)
@@ -955,13 +960,15 @@ verify_extracted_sdk_smoke() {
   require_dependency_prefix "$cpkt_prefix" "cpkt" "$root_dir"
   require_dependency_prefix "$cpktmisc_prefix" "cpktmisc" "$root_dir"
   require_dependency_prefix "$lonejson_prefix" "liblonejson" "$root_dir"
+  require_dependency_prefix "$cbor_prefix" "libcbor" "$root_dir"
 
-  cmake_prefixes=("$root_dir" "$cpkt_prefix" "$cpktmisc_prefix" "$lonejson_prefix")
+  cmake_prefixes=("$root_dir" "$cpkt_prefix" "$cpktmisc_prefix" "$lonejson_prefix" "$cbor_prefix")
   pkg_config_dirs=(
     "$root_dir/lib/pkgconfig"
     "$cpkt_prefix/lib/pkgconfig"
     "$cpktmisc_prefix/lib/pkgconfig"
     "$lonejson_prefix/lib/pkgconfig"
+    "$cbor_prefix/lib/pkgconfig"
   )
   include_dirs=("-I$root_dir/include" "-I$lonejson_prefix/include")
   if [[ -n "$pslog_version" && -d "$pslog_prefix" ]]; then
@@ -1301,7 +1308,7 @@ verify_cli_archive() {
     require_file "$root_dir/$doc"
   done
   local dependency
-  for dependency in liblockdc liblql softline libmdf libpslog liblonejson curl openssl zlib nghttp2 libssh2; do
+  for dependency in liblockdc liblql softline libmdf libpslog liblonejson libcbor curl openssl zlib nghttp2 libssh2; do
     require_file "$root_dir/share/doc/libcai/third_party/$dependency/LICENSE"
   done
   require_file "$root_dir/share/doc/libcai/third_party/libyaml/LICENSE"

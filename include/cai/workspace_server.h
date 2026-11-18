@@ -120,7 +120,7 @@ int cai_workspace_server_begin(cai_workspace_server *server,
                                const cai_protocol_header *header,
                                uint32_t payload_length, cai_error *error);
 int cai_workspace_server_write(cai_workspace_server *server,
-                               uint64_t attachment, const cai_cbor_token *token,
+                               uint64_t attachment, const c89cbor_token *token,
                                cai_error *error);
 int cai_workspace_server_end(cai_workspace_server *server, uint64_t attachment,
                              cai_error *error);

@@ -64,8 +64,7 @@ static int observed(void *context, const cai_protocol_event *event,
     assert(event->type == CAI_PROTOCOL_COMPLETE);
   if (event->type == CAI_PROTOCOL_HEADER)
     ++out->headers;
-  if (event->type == CAI_PROTOCOL_PAYLOAD &&
-      event->token->type == CAI_CBOR_DATA)
+  if (event->type == CAI_PROTOCOL_PAYLOAD && event->token->type == C89CBOR_DATA)
     out->bytes += event->token->length;
   if (event->type == CAI_PROTOCOL_COMPLETE) {
     if (event->header->kind == CAI_PROTOCOL_WELCOME)
@@ -124,7 +123,7 @@ static void exchange(cai_workspace_server *server, cai_workspace_client *first,
 static void request(cai_workspace_client *client, uint64_t generation,
                     int mutation, int expected) {
   cai_protocol_header header;
-  cai_cbor_token value;
+  c89cbor_token value;
   int rc;
   memset(&header, 0, sizeof(header));
   header.kind = CAI_PROTOCOL_REQUEST;
@@ -136,7 +135,7 @@ static void request(cai_workspace_client *client, uint64_t generation,
   if (rc != CAI_OK)
     return;
   memset(&value, 0, sizeof(value));
-  value.type = CAI_CBOR_NULL;
+  value.type = C89CBOR_NULL;
   assert(cai_workspace_client_write(client, &value, NULL) == CAI_OK);
   assert(cai_workspace_client_end(client, NULL) == CAI_OK);
 }
@@ -293,7 +292,7 @@ static void integration(const char *runtime, const char *workspace,
   assert(sb.phase == CAI_WORKSPACE_CONNECTED && sb.controller == sa.attachment);
   {
     cai_protocol_header header;
-    cai_cbor_token value;
+    c89cbor_token value;
     unsigned char bytes[256];
     size_t part;
     memset(bytes, 'o', sizeof(bytes));
@@ -303,11 +302,11 @@ static void integration(const char *runtime, const char *workspace,
     assert(cai_workspace_server_begin(server, sa.attachment, &header, 8195U,
                                       NULL) == CAI_OK);
     memset(&value, 0, sizeof(value));
-    value.type = CAI_CBOR_BYTES;
+    value.type = C89CBOR_BYTES;
     value.argument = 8192U;
     assert(cai_workspace_server_write(server, sa.attachment, &value, NULL) ==
            CAI_OK);
-    value.type = CAI_CBOR_DATA;
+    value.type = C89CBOR_DATA;
     value.argument = 0U;
     value.data = bytes;
     value.length = sizeof(bytes);
@@ -326,8 +325,8 @@ static void integration(const char *runtime, const char *workspace,
     for (part = 1U; part < 32U; ++part)
       assert(cai_workspace_server_write(server, sa.attachment, &value, NULL) ==
              CAI_OK);
-    value.type = CAI_CBOR_END;
-    value.argument = CAI_CBOR_BYTES;
+    value.type = C89CBOR_END;
+    value.argument = C89CBOR_BYTES;
     value.data = NULL;
     value.length = 0U;
     assert(cai_workspace_server_write(server, sa.attachment, &value, NULL) ==
@@ -365,7 +364,7 @@ static void integration(const char *runtime, const char *workspace,
   assert(admission.completed == 2U && admission.applied == 1U);
   {
     cai_protocol_header header;
-    cai_cbor_token value;
+    c89cbor_token value;
     unsigned char bytes[256];
     size_t part;
     uint64_t original = snapshot(a).generation;
@@ -375,10 +374,10 @@ static void integration(const char *runtime, const char *workspace,
     header.generation = original;
     assert(cai_workspace_client_begin(a, &header, 8195U, 1, NULL) == CAI_OK);
     memset(&value, 0, sizeof(value));
-    value.type = CAI_CBOR_BYTES;
+    value.type = C89CBOR_BYTES;
     value.argument = 8192U;
     assert(cai_workspace_client_write(a, &value, NULL) == CAI_OK);
-    value.type = CAI_CBOR_DATA;
+    value.type = C89CBOR_DATA;
     value.argument = 0U;
     value.data = bytes;
     value.length = sizeof(bytes);
@@ -390,8 +389,8 @@ static void integration(const char *runtime, const char *workspace,
     exchange(server, a, b, 100004U);
     for (part = 1U; part < 32U; ++part)
       assert(cai_workspace_client_write(a, &value, NULL) == CAI_OK);
-    value.type = CAI_CBOR_END;
-    value.argument = CAI_CBOR_BYTES;
+    value.type = C89CBOR_END;
+    value.argument = C89CBOR_BYTES;
     value.data = NULL;
     value.length = 0U;
     assert(cai_workspace_client_write(a, &value, NULL) == CAI_OK);
@@ -553,7 +552,7 @@ static void control_backpressure(const char *runtime, const char *workspace) {
   cai_workspace_server *server;
   cai_workspace_client *a, *b;
   cai_protocol_header header;
-  cai_cbor_token value;
+  c89cbor_token value;
   cai_attachment_state state;
   observer oa, ob;
   size_t i;
@@ -573,7 +572,7 @@ static void control_backpressure(const char *runtime, const char *workspace) {
   assert(cai_workspace_server_begin(server, snapshot(a).attachment, &header,
                                     8195U, NULL) == CAI_OK);
   memset(&value, 0, sizeof(value));
-  value.type = CAI_CBOR_BYTES;
+  value.type = C89CBOR_BYTES;
   value.argument = 8192U;
   assert(cai_workspace_server_write(server, snapshot(a).attachment, &value,
                                     NULL) == CAI_OK);
@@ -600,16 +599,15 @@ static void control_backpressure(const char *runtime, const char *workspace) {
   cai_workspace_client_close(b);
   cai_workspace_server_close(server);
 }
-static int ignore(void *context, const cai_wire_event *event,
-                  cai_error *error) {
+static int ignore(void *context, const c89cbor_event *event, cai_error *error) {
   (void)context;
   (void)event;
   (void)error;
   return CAI_OK;
 }
-static void wt(cai_wire_peer *peer, cai_cbor_type type, uint64_t argument,
+static void wt(cai_wire_peer *peer, c89cbor_type type, uint64_t argument,
                const void *bytes, size_t length) {
-  cai_cbor_token token;
+  c89cbor_token token;
   memset(&token, 0, sizeof(token));
   token.type = type;
   token.argument = argument;
@@ -618,9 +616,9 @@ static void wt(cai_wire_peer *peer, cai_cbor_type type, uint64_t argument,
   assert(cai_wire_peer_write(peer, &token, NULL) == CAI_OK);
 }
 static void ws(cai_wire_peer *peer, const char *value, size_t length) {
-  wt(peer, CAI_CBOR_BYTES, length, NULL, 0U);
-  wt(peer, CAI_CBOR_DATA, 0U, value, length);
-  wt(peer, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U);
+  wt(peer, C89CBOR_BYTES, length, NULL, 0U);
+  wt(peer, C89CBOR_DATA, 0U, value, length);
+  wt(peer, C89CBOR_END, C89CBOR_BYTES, NULL, 0U);
 }
 static void send_identity(cai_wire_peer *peer, const char *workspace,
                           int defect, cai_attachment_phase phase) {
@@ -637,23 +635,23 @@ static void send_identity(cai_wire_peer *peer, const char *workspace,
   assert(cai_protocol_peer_begin(peer, &h,
                                  (uint32_t)(n + s + m + (n < 24U ? 6U : 7U)),
                                  NULL) == CAI_OK);
-  wt(peer, CAI_CBOR_ARRAY, defect == 14 ? 4U : 5U, NULL, 0U);
+  wt(peer, C89CBOR_ARRAY, defect == 14 ? 4U : 5U, NULL, 0U);
   if (defect == 1) {
-    wt(peer, CAI_CBOR_BYTES, n, NULL, 0U);
-    wt(peer, CAI_CBOR_DATA, 0U, "!", 1U);
-    wt(peer, CAI_CBOR_DATA, 0U, workspace + 1, n - 1U);
-    wt(peer, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U);
+    wt(peer, C89CBOR_BYTES, n, NULL, 0U);
+    wt(peer, C89CBOR_DATA, 0U, "!", 1U);
+    wt(peer, C89CBOR_DATA, 0U, workspace + 1, n - 1U);
+    wt(peer, C89CBOR_END, C89CBOR_BYTES, NULL, 0U);
   } else
     ws(peer, workspace, n);
-  wt(peer, CAI_CBOR_TEXT, s, NULL, 0U);
-  wt(peer, CAI_CBOR_DATA, 0U, schema, s);
-  wt(peer, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U);
+  wt(peer, C89CBOR_TEXT, s, NULL, 0U);
+  wt(peer, C89CBOR_DATA, 0U, schema, s);
+  wt(peer, C89CBOR_END, C89CBOR_TEXT, NULL, 0U);
   ws(peer, instance, m);
-  wt(peer, defect == 9 ? CAI_CBOR_UINT : CAI_CBOR_BOOL, 1U, NULL, 0U);
+  wt(peer, defect == 9 ? C89CBOR_UINT : C89CBOR_BOOL, 1U, NULL, 0U);
   if (defect == 14)
     return; /* Invalid arity is rejected at the first token. */
-  wt(peer, CAI_CBOR_UINT, defect == 4 ? 3U : (uint64_t)phase, NULL, 0U);
-  wt(peer, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U);
+  wt(peer, C89CBOR_UINT, defect == 4 ? 3U : (uint64_t)phase, NULL, 0U);
+  wt(peer, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U);
   assert(cai_protocol_peer_end(peer, NULL) == CAI_OK);
 }
 static void discovery_replies(const char *root) {
@@ -737,11 +735,11 @@ static void send_welcome(cai_wire_peer *peer, const char *workspace,
   assert(cai_protocol_peer_begin(peer, &h,
                                  (uint32_t)(n + m + (n < 24U ? 4U : 5U)),
                                  NULL) == CAI_OK);
-  wt(peer, CAI_CBOR_ARRAY, 3U, NULL, 0U);
+  wt(peer, C89CBOR_ARRAY, 3U, NULL, 0U);
   ws(peer, workspace, n);
   ws(peer, instance, m);
-  wt(peer, CAI_CBOR_BOOL, 1U, NULL, 0U);
-  wt(peer, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U);
+  wt(peer, C89CBOR_BOOL, 1U, NULL, 0U);
+  wt(peer, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U);
   assert(cai_protocol_peer_end(peer, NULL) == CAI_OK);
 }
 static void send_role(cai_wire_peer *peer, uint64_t attachment,
@@ -752,7 +750,9 @@ static void send_role(cai_wire_peer *peer, uint64_t attachment,
   h.attachment = attachment;
   h.generation = generation;
   assert(cai_protocol_peer_begin(peer, &h, 1U, NULL) == CAI_OK);
-  wt(peer, malformed ? CAI_CBOR_NULL : CAI_CBOR_UINT, controller, NULL, 0U);
+  /* Malformed at the role schema level, but still a valid CBOR NULL token. */
+  wt(peer, malformed ? C89CBOR_NULL : C89CBOR_UINT, malformed ? 0U : controller,
+     NULL, 0U);
   assert(cai_protocol_peer_end(peer, NULL) == CAI_OK);
 }
 static void streamed(cai_wire_peer *peer, cai_workspace_client *client,
@@ -776,10 +776,10 @@ static void streamed(cai_wire_peer *peer, cai_workspace_client *client,
     header.stream = 42U;
     header.sequence = chunk + 1U;
     assert(cai_protocol_peer_begin(peer, &header, 32771U, NULL) == CAI_OK);
-    wt(peer, CAI_CBOR_BYTES, 32768U, NULL, 0U);
+    wt(peer, C89CBOR_BYTES, 32768U, NULL, 0U);
     for (part = 0U; part < 128U; ++part)
-      wt(peer, CAI_CBOR_DATA, 0U, bytes, sizeof(bytes));
-    wt(peer, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U);
+      wt(peer, C89CBOR_DATA, 0U, bytes, sizeof(bytes));
+    wt(peer, C89CBOR_END, C89CBOR_BYTES, NULL, 0U);
     assert(cai_protocol_peer_end(peer, NULL) == CAI_OK);
     assert(cai_wire_peer_flush(peer, 512U, NULL) == CAI_OK);
     assert(cai_workspace_client_pump(client, 1U, NULL) == CAI_OK);
@@ -886,7 +886,7 @@ static void adversarial(const char *runtime, const char *workspace) {
         assert(interest.fd == -1 && deadline == 0U);
       } else if (variant == 15) {
         cai_protocol_header header;
-        cai_cbor_token value;
+        c89cbor_token value;
         send_role(peer, 7U, 1U, 7U, 0);
         assert(cai_wire_peer_flush(peer, 0U, NULL) == CAI_OK);
         assert(cai_workspace_client_pump(client, 1U, NULL) == CAI_OK);
@@ -896,7 +896,7 @@ static void adversarial(const char *runtime, const char *workspace) {
         assert(cai_workspace_client_begin(client, &header, 4U, 1, NULL) ==
                CAI_OK);
         memset(&value, 0, sizeof(value));
-        value.type = CAI_CBOR_BYTES;
+        value.type = C89CBOR_BYTES;
         value.argument = 3U;
         assert(cai_workspace_client_write(client, &value, NULL) == CAI_OK);
         assert(cai_workspace_client_pump(client, 1U, NULL) == CAI_OK);

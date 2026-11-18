@@ -64,6 +64,10 @@ typedef enum cai_protocol_kind {
  * used for inapplicable metadata. Required keys, order and shape are exact;
  * unknown kinds/keys fail, without compatibility negotiation.
  *
+ * The workspace profile permits integers, byte/text strings, arrays, maps,
+ * booleans, null and finite binary64. Tags, other simple values, narrower
+ * floats and nonfinite numbers are rejected here, above the generic codec.
+ *
  * Identity/role validation and the kind-specific payload schema belong to the
  * host. An untrusted header's attachment field does not authenticate its
  * sender. Use the identity bound by the completed connection handshake at
@@ -84,7 +88,7 @@ typedef struct cai_protocol_event {
    * payload token and COMPLETE. Copy only what the consumer actually needs. */
   const cai_protocol_header *header;
   /** Borrowed PAYLOAD token, including BEGIN/DATA/END for nested values. */
-  const cai_cbor_token *token;
+  const c89cbor_token *token;
 } cai_protocol_event;
 typedef int (*cai_protocol_event_fn)(void *context,
                                      const cai_protocol_event *event,
@@ -101,11 +105,11 @@ typedef struct cai_protocol_decoder cai_protocol_decoder;
  */
 int cai_protocol_decoder_open(cai_protocol_event_fn callback, void *context,
                               cai_protocol_decoder **out, cai_error *error);
-/** Pass directly as cai_wire_peer_open/cai_wire_decoder_open's callback, with
- * the decoder as context. Records arrive incrementally from the wire decoder;
+/** Pass directly as cai_wire_peer_open's callback, with
+ * the decoder as context. Records arrive incrementally from libcbor's reader;
  * its successful END is required before COMPLETE. Protocol/consumer failures
  * are terminal. */
-int cai_protocol_decoder_event(void *decoder, const cai_wire_event *event,
+int cai_protocol_decoder_event(void *decoder, const c89cbor_event *event,
                                cai_error *error);
 void cai_protocol_decoder_close(cai_protocol_decoder *decoder);
 

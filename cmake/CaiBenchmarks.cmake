@@ -8,7 +8,7 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/bench/benchmark_build.h.in"
   "${CMAKE_CURRENT_BINARY_DIR}/benchmark_build.h" @ONLY)
 add_executable(cai_benchmark bench/wire_benchmark.c)
 target_include_directories(cai_benchmark PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
-target_link_libraries(cai_benchmark PRIVATE cai_static)
+target_link_libraries(cai_benchmark PRIVATE cai_static C89Cbor::static)
 target_link_options(cai_benchmark PRIVATE -Wl,--wrap=send -Wl,--wrap=recv -Wl,--wrap=write)
 cai_configure_cli_target(cai_benchmark)
 if(CAI_BUILD_APP AND TARGET cai_app_client_static)

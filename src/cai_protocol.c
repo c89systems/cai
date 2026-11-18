@@ -15,7 +15,7 @@ struct cai_protocol_decoder {
   int failed, busy;
 };
 static int notify(cai_protocol_decoder *decoder, cai_protocol_event_type type,
-                  const cai_cbor_token *token, cai_error *error) {
+                  const c89cbor_token *token, cai_error *error) {
   cai_protocol_event event;
   event.type = type;
   event.header = &decoder->header;
@@ -28,19 +28,40 @@ static int bad(cai_error *error) {
 }
 /** Validate envelope field order and forward payload tokens without a DOM. */
 static int decode_token(cai_protocol_decoder *decoder,
-                        const cai_cbor_token *token, cai_error *error) {
+                        const c89cbor_token *token, cai_error *error) {
   int rc;
   if (token == NULL)
     return bad(error);
+  /* The workspace protocol's finite-number profile is application policy;
+   * the native codec remains a general RFC 8949 implementation. */
+  switch (token->type) {
+  case C89CBOR_UINT:
+  case C89CBOR_NEGATIVE:
+  case C89CBOR_BYTES:
+  case C89CBOR_TEXT:
+  case C89CBOR_ARRAY:
+  case C89CBOR_MAP:
+  case C89CBOR_BOOL:
+  case C89CBOR_NULL:
+  case C89CBOR_DATA:
+  case C89CBOR_END:
+    break;
+  case C89CBOR_FLOAT64:
+    if (((token->argument >> 52U) & UINT64_C(0x7ff)) == UINT64_C(0x7ff))
+      return bad(error);
+    break;
+  default:
+    return bad(error);
+  }
   switch (decoder->stage) {
   case ROOT:
-    if (token->type != CAI_CBOR_MAP || token->indefinite ||
+    if (token->type != C89CBOR_MAP || token->indefinite ||
         token->argument != 8U)
       return bad(error);
     decoder->stage = KEY;
     return CAI_OK;
   case KEY:
-    if (token->type != CAI_CBOR_UINT || token->argument != decoder->field)
+    if (token->type != C89CBOR_UINT || token->argument != decoder->field)
       return bad(error);
     if (decoder->field == 7U) {
       decoder->stage = PAYLOAD;
@@ -49,7 +70,7 @@ static int decode_token(cai_protocol_decoder *decoder,
     decoder->stage = VALUE;
     return CAI_OK;
   case VALUE:
-    if (token->type != CAI_CBOR_UINT)
+    if (token->type != C89CBOR_UINT)
       return bad(error);
     switch (decoder->field) {
     case 0:
@@ -82,23 +103,23 @@ static int decode_token(cai_protocol_decoder *decoder,
     decoder->stage = KEY;
     return CAI_OK;
   case PAYLOAD:
-    if (token->type == CAI_CBOR_BYTES || token->type == CAI_CBOR_TEXT ||
-        token->type == CAI_CBOR_ARRAY || token->type == CAI_CBOR_MAP) {
-      if (decoder->depth == CAI_CBOR_MAX_DEPTH)
+    if (token->type == C89CBOR_BYTES || token->type == C89CBOR_TEXT ||
+        token->type == C89CBOR_ARRAY || token->type == C89CBOR_MAP) {
+      if (decoder->depth == C89CBOR_DEPTH)
         return bad(error);
       ++decoder->depth;
-    } else if (token->type == CAI_CBOR_END) {
+    } else if (token->type == C89CBOR_END) {
       if (decoder->depth == 0U)
         return bad(error);
       --decoder->depth;
-    } else if (token->type == CAI_CBOR_DATA && decoder->depth == 0U)
+    } else if (token->type == C89CBOR_DATA && decoder->depth == 0U)
       return bad(error);
     rc = notify(decoder, CAI_PROTOCOL_PAYLOAD, token, error);
     if (decoder->depth == 0U)
       decoder->stage = ROOT_END;
     return rc;
   case ROOT_END:
-    if (token->type != CAI_CBOR_END || token->argument != CAI_CBOR_MAP)
+    if (token->type != C89CBOR_END || token->argument != C89CBOR_MAP)
       return bad(error);
     decoder->stage = RECORD_END;
     return CAI_OK;
@@ -123,7 +144,7 @@ int cai_protocol_decoder_open(cai_protocol_event_fn callback, void *context,
   *out = decoder;
   return CAI_OK;
 }
-int cai_protocol_decoder_event(void *context, const cai_wire_event *event,
+int cai_protocol_decoder_event(void *context, const c89cbor_event *event,
                                cai_error *error) {
   cai_protocol_decoder *decoder = context;
   int rc;
@@ -138,7 +159,7 @@ int cai_protocol_decoder_event(void *context, const cai_wire_event *event,
   }
   decoder->busy = 1;
   switch (event->type) {
-  case CAI_WIRE_BEGIN:
+  case C89CBOR_RECORD_BEGIN:
     rc = decoder->stage != IDLE ? bad(error) : CAI_OK;
     if (rc == CAI_OK) {
       memset(&decoder->header, 0, sizeof(decoder->header));
@@ -146,10 +167,10 @@ int cai_protocol_decoder_event(void *context, const cai_wire_event *event,
       decoder->stage = ROOT;
     }
     break;
-  case CAI_WIRE_TOKEN:
-    rc = decode_token(decoder, event->token, error);
+  case C89CBOR_RECORD_TOKEN:
+    rc = decode_token(decoder, &event->token, error);
     break;
-  case CAI_WIRE_END:
+  case C89CBOR_RECORD_END:
     rc = decoder->stage != RECORD_END
              ? bad(error)
              : notify(decoder, CAI_PROTOCOL_COMPLETE, NULL, error);
@@ -180,9 +201,9 @@ static uint32_t uint_length(uint64_t value) {
          : value <= 0xffffffffU ? 5U
                                 : 9U;
 }
-static int write_token(cai_wire_peer *peer, cai_cbor_type type, uint64_t value,
+static int write_token(cai_wire_peer *peer, c89cbor_type type, uint64_t value,
                        cai_error *error) {
-  cai_cbor_token token;
+  c89cbor_token token;
   memset(&token, 0, sizeof(token));
   token.type = type;
   token.argument = value;
@@ -213,17 +234,17 @@ int cai_protocol_peer_begin(cai_wire_peer *peer,
                          "protocol payload exceeds one wire record");
   rc = cai_wire_peer_begin(peer, length + payload_length, error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_MAP, 8U, error);
+    rc = write_token(peer, C89CBOR_MAP, 8U, error);
   for (i = 0U; rc == CAI_OK && i < 7U; ++i) {
-    rc = write_token(peer, CAI_CBOR_UINT, i, error);
+    rc = write_token(peer, C89CBOR_UINT, i, error);
     if (rc == CAI_OK)
-      rc = write_token(peer, CAI_CBOR_UINT, values[i], error);
+      rc = write_token(peer, C89CBOR_UINT, values[i], error);
   }
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_UINT, 7U, error);
+    rc = write_token(peer, C89CBOR_UINT, 7U, error);
   return rc;
 }
 int cai_protocol_peer_end(cai_wire_peer *peer, cai_error *error) {
-  int rc = write_token(peer, CAI_CBOR_END, CAI_CBOR_MAP, error);
+  int rc = write_token(peer, C89CBOR_END, C89CBOR_MAP, error);
   return rc == CAI_OK ? cai_wire_peer_end(peer, error) : rc;
 }

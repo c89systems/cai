@@ -36,7 +36,7 @@ void cai_cli_input_wire_decoder_close(cai_cli_input_wire_decoder *);
 typedef struct cai_cli_input_wire_output {
   void *context;
   int (*begin)(void *, const cai_protocol_header *, uint32_t, cai_error *);
-  int (*write)(void *, const cai_cbor_token *, cai_error *);
+  int (*write)(void *, const c89cbor_token *, cai_error *);
   int (*end)(void *, cai_error *);
 } cai_cli_input_wire_output;
 /* Synchronously emit fields, without gathering/serializing a value to size it.

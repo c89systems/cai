@@ -123,7 +123,7 @@ static int real_child(const void *context, int fd, int argc,
   cai_error_cleanup(&error);
   return rc == CAI_OK ? code : 1;
 }
-static int ignore_record(void *context, const cai_wire_event *e,
+static int ignore_record(void *context, const c89cbor_event *e,
                          cai_error *error) {
   (void)context;
   (void)e;

@@ -353,7 +353,7 @@ int cai_cli_input_wire_decode(cai_cli_input_wire_decoder *d,
                               const cai_protocol_event *event,
                               const cai_cli_input_wire_message **out,
                               cai_error *error) {
-  const cai_cbor_token *t;
+  const c89cbor_token *t;
   size_t count;
   char expected;
   if (out != NULL)
@@ -399,13 +399,13 @@ int cai_cli_input_wire_decode(cai_cli_input_wire_decoder *d,
   if (event->type != CAI_PROTOCOL_PAYLOAD || t == NULL || t->indefinite)
     return invalid(error);
   if (d->phase == 0) {
-    if (t->type != CAI_CBOR_ARRAY || t->argument != count)
+    if (t->type != C89CBOR_ARRAY || t->argument != count)
       return invalid(error);
     d->phase = 1;
     return CAI_OK;
   }
   if (d->phase == 2) {
-    if (t->type == CAI_CBOR_DATA) {
+    if (t->type == C89CBOR_DATA) {
       if (t->length > d->length - d->offset ||
           (t->length != 0U &&
            (t->data == NULL || (d->format[d->index] != 'r' &&
@@ -414,7 +414,7 @@ int cai_cli_input_wire_decode(cai_cli_input_wire_decoder *d,
       if (t->length != 0U)
         memcpy(d->string + d->offset, t->data, t->length);
       d->offset += t->length;
-    } else if (t->type == CAI_CBOR_END && t->argument == CAI_CBOR_BYTES &&
+    } else if (t->type == C89CBOR_END && t->argument == C89CBOR_BYTES &&
                d->offset == d->length) {
       d->string[d->length] = '\0';
       d->fields[d->index].text = d->string;
@@ -428,23 +428,23 @@ int cai_cli_input_wire_decode(cai_cli_input_wire_decoder *d,
   if (d->phase != 1)
     return invalid(error);
   if (d->index == count) {
-    if (t->type != CAI_CBOR_END || t->argument != CAI_CBOR_ARRAY)
+    if (t->type != C89CBOR_END || t->argument != C89CBOR_ARRAY)
       return invalid(error);
     d->phase = 4;
     return CAI_OK;
   }
   expected = d->format[d->index];
   if (expected == 'u' || expected == 'b') {
-    if (t->type != (expected == 'u' ? CAI_CBOR_UINT : CAI_CBOR_BOOL) ||
+    if (t->type != (expected == 'u' ? C89CBOR_UINT : C89CBOR_BOOL) ||
         (expected == 'b' && t->argument > 1U))
       return invalid(error);
     d->fields[d->index++].number = t->argument;
-  } else if (t->type == CAI_CBOR_NULL && expected == 't')
+  } else if (t->type == C89CBOR_NULL && expected == 't')
     ++d->index;
   else {
     size_t capacity;
     d->string = string_target(d, &capacity);
-    if (t->type != CAI_CBOR_BYTES || t->argument >= capacity)
+    if (t->type != C89CBOR_BYTES || t->argument >= capacity)
       return invalid(error);
     d->offset = 0U;
     d->length = (size_t)t->argument;
@@ -462,10 +462,10 @@ static uint32_t integer_size(uint64_t value) {
          : value <= 4294967295UL ? 5U
                                  : 9U;
 }
-static int token(const cai_cli_input_wire_output *out, cai_cbor_type type,
+static int token(const cai_cli_input_wire_output *out, c89cbor_type type,
                  uint64_t argument, const void *bytes, size_t length,
                  cai_error *error) {
-  cai_cbor_token t;
+  c89cbor_token t;
   memset(&t, 0, sizeof(t));
   t.type = type;
   t.argument = argument;
@@ -517,29 +517,29 @@ int cai_cli_input_wire_write(const cai_cli_input_wire_output *out,
     return invalid(error);
   rc = out->begin(out->context, &message->header, length, error);
   if (rc == CAI_OK)
-    rc = token(out, CAI_CBOR_ARRAY, count, NULL, 0U, error);
+    rc = token(out, C89CBOR_ARRAY, count, NULL, 0U, error);
   for (i = 0U; rc == CAI_OK && i < count; ++i) {
     if (f[i] == 'u' || f[i] == 'b')
-      rc = token(out, f[i] == 'u' ? CAI_CBOR_UINT : CAI_CBOR_BOOL,
+      rc = token(out, f[i] == 'u' ? C89CBOR_UINT : C89CBOR_BOOL,
                  fields[i].number, NULL, 0U, error);
     else if (f[i] == 't' && fields[i].text == NULL)
-      rc = token(out, CAI_CBOR_NULL, 0U, NULL, 0U, error);
+      rc = token(out, C89CBOR_NULL, 0U, NULL, 0U, error);
     else {
       size_t at = 0U;
-      rc = token(out, CAI_CBOR_BYTES, fields[i].length, NULL, 0U, error);
+      rc = token(out, C89CBOR_BYTES, fields[i].length, NULL, 0U, error);
       while (rc == CAI_OK && at < fields[i].length) {
         size_t n = fields[i].length - at;
-        if (n > CAI_CBOR_MAX_CHUNK_BYTES)
-          n = CAI_CBOR_MAX_CHUNK_BYTES;
-        rc = token(out, CAI_CBOR_DATA, 0U, fields[i].text + at, n, error);
+        if (n > C89CBOR_CHUNK)
+          n = C89CBOR_CHUNK;
+        rc = token(out, C89CBOR_DATA, 0U, fields[i].text + at, n, error);
         at += n;
       }
       if (rc == CAI_OK)
-        rc = token(out, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U, error);
+        rc = token(out, C89CBOR_END, C89CBOR_BYTES, NULL, 0U, error);
     }
   }
   if (rc == CAI_OK)
-    rc = token(out, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, error);
+    rc = token(out, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U, error);
   if (rc == CAI_OK)
     rc = out->end(out->context, error);
   return rc;

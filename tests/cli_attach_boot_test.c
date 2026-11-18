@@ -27,8 +27,7 @@ int __wrap_lc_client_open(void *config, void *out, void *error) {
   (void)error;
   abort();
 }
-static int ignore(void *context, const cai_wire_event *event,
-                  cai_error *error) {
+static int ignore(void *context, const c89cbor_event *event, cai_error *error) {
   (void)context;
   (void)event;
   (void)error;

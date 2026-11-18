@@ -74,7 +74,7 @@ static int output_begin(void *context, const cai_protocol_header *header,
   return cai_workspace_server_begin(peer->host->server, peer->attachment,
                                     header, size, error);
 }
-static int output_write(void *context, const cai_cbor_token *token,
+static int output_write(void *context, const c89cbor_token *token,
                         cai_error *error) {
   host_peer *peer = context;
   return cai_workspace_server_write(peer->host->server, peer->attachment, token,

@@ -49,6 +49,8 @@ cai_agent_register_view_image_tool
 cai_agent_review_and_fix_objective
 cai_agent_review_default_base
 cai_agent_review_request_init
+cai_agent_runtime_activate
+cai_agent_runtime_bind_agent
 cai_agent_runtime_can_compact
 cai_agent_runtime_cancel_turn
 cai_agent_runtime_clear_goal
@@ -65,6 +67,7 @@ cai_agent_runtime_export_journal_state
 cai_agent_runtime_export_markdown
 cai_agent_runtime_export_markdown_file
 cai_agent_runtime_finish_review
+cai_agent_runtime_get_agent
 cai_agent_runtime_get_goal
 cai_agent_runtime_get_ids
 cai_agent_runtime_get_instruction_status
@@ -77,6 +80,7 @@ cai_agent_runtime_history_event_visible
 cai_agent_runtime_is_quiescent
 cai_agent_runtime_model
 cai_agent_runtime_open
+cai_agent_runtime_open_agent
 cai_agent_runtime_pause_goal
 cai_agent_runtime_pending_input
 cai_agent_runtime_prepare_handover
@@ -133,18 +137,6 @@ cai_attachment_controller_open
 cai_attachment_controller_ready
 cai_attachment_controller_stop
 cai_attachment_controller_takeover
-cai_cbor_decoder_close
-cai_cbor_decoder_feed
-cai_cbor_decoder_finish
-cai_cbor_decoder_open
-cai_cbor_decoder_reset
-cai_cbor_encoder_close
-cai_cbor_encoder_finish
-cai_cbor_encoder_open
-cai_cbor_encoder_reset
-cai_cbor_encoder_write
-cai_cbor_token_get_float64
-cai_cbor_token_set_float64
 cai_chatgpt_auth_access_token
 cai_chatgpt_auth_account_id
 cai_chatgpt_auth_close
@@ -217,6 +209,7 @@ cai_config_apply_client
 cai_config_apply_environment
 cai_config_apply_runtime
 cai_config_apply_terminal
+cai_config_clone
 cai_config_close
 cai_config_create_template_file
 cai_config_directory
@@ -233,7 +226,6 @@ cai_config_load
 cai_config_load_file
 cai_config_open
 cai_config_open_schema
-cai_config_clone
 cai_config_origin
 cai_config_resolve_path
 cai_config_section_at
@@ -633,15 +625,6 @@ cai_usage_accounting_init
 cai_usage_limits_init
 cai_utf8_complete
 cai_utf8_feed
-cai_wire_decoder_close
-cai_wire_decoder_feed
-cai_wire_decoder_finish
-cai_wire_decoder_open
-cai_wire_encoder_begin
-cai_wire_encoder_close
-cai_wire_encoder_end
-cai_wire_encoder_open
-cai_wire_encoder_write
 cai_wire_peer_begin
 cai_wire_peer_close
 cai_wire_peer_end
@@ -688,8 +671,8 @@ cai_workspace_registry_next
 cai_workspace_registry_open
 cai_workspace_registry_prune
 cai_workspace_server_authorize
-cai_workspace_server_busy
 cai_workspace_server_begin
+cai_workspace_server_busy
 cai_workspace_server_close
 cai_workspace_server_config_init
 cai_workspace_server_directory
@@ -705,7 +688,3 @@ cai_workspace_server_pump
 cai_workspace_server_ready
 cai_workspace_server_stop
 cai_workspace_server_write
-cai_agent_runtime_bind_agent
-cai_agent_runtime_activate
-cai_agent_runtime_get_agent
-cai_agent_runtime_open_agent

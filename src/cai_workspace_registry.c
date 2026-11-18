@@ -2,7 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cai_internal.h"
 #include "cai_workspace_private.h"
-#include <cai/cbor.h>
+#include <c89cbor/cbor.h>
 #include <cai/workspace_registry.h>
 #include <dirent.h>
 #include <errno.h>
@@ -114,9 +114,8 @@ static int name_valid(const char *name) {
       return 0;
   return 1;
 }
-static int fd_write(void *context, const void *data, size_t count,
-                    cai_error *error) {
-  int fd = *(int *)context;
+static int write_metadata(int fd, const void *data, size_t count,
+                          cai_error *error) {
   const unsigned char *p = data;
   while (count) {
     ssize_t n = write(fd, p, count);
@@ -129,24 +128,44 @@ static int fd_write(void *context, const void *data, size_t count,
   }
   return CAI_OK;
 }
-static int encode(cai_cbor_encoder *encoder, cai_cbor_type type,
+static int encode(c89cbor_encoder *encoder, int fd, c89cbor_type type,
                   uint64_t argument, const void *data, size_t length,
                   cai_error *error) {
-  cai_cbor_token token;
+  c89cbor_token token;
   memset(&token, 0, sizeof(token));
   token.type = type;
   token.argument = argument;
   token.data = data;
   token.length = length;
-  return cai_cbor_encoder_write(encoder, &token, error);
+  if (c89cbor_encoder_put(encoder, &token) != C89CBOR_OK)
+    return bad(error);
+  for (;;) {
+    const void *bytes;
+    size_t count;
+    int status = c89cbor_encoder_peek(encoder, &bytes, &count);
+    if (status == C89CBOR_OK)
+      return CAI_OK;
+    if (status != C89CBOR_OUTPUT)
+      return bad(error);
+    {
+      int rc = write_metadata(fd, bytes, count, error);
+      if (rc != CAI_OK)
+        return rc;
+    }
+    status = c89cbor_encoder_advance(encoder, count);
+    if (status == C89CBOR_OK)
+      return CAI_OK;
+    if (status != C89CBOR_OUTPUT)
+      return bad(error);
+  }
 }
-static int string(cai_cbor_encoder *encoder, cai_cbor_type type,
+static int string(c89cbor_encoder *encoder, int fd, c89cbor_type type,
                   const void *data, size_t length, cai_error *error) {
-  int rc = encode(encoder, type, length, NULL, 0U, error);
+  int rc = encode(encoder, fd, type, length, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = encode(encoder, CAI_CBOR_DATA, 0U, data, length, error);
+    rc = encode(encoder, fd, C89CBOR_DATA, 0U, data, length, error);
   if (rc == CAI_OK)
-    rc = encode(encoder, CAI_CBOR_END, type, NULL, 0U, error);
+    rc = encode(encoder, fd, C89CBOR_END, type, NULL, 0U, error);
   return rc;
 }
 int cai_workspace_publication_open(const char *socket_path,
@@ -156,9 +175,7 @@ int cai_workspace_publication_open(const char *socket_path,
                                    cai_workspace_publication **out,
                                    cai_error *error) {
   cai_workspace_publication *p;
-  cai_cbor_encoder *encoder = NULL;
-  cai_sink *sink = NULL;
-  cai_sink_callbacks callbacks;
+  c89cbor_encoder *encoder = NULL;
   char *root, hash[33], temporary[64], lock[44];
   struct stat stale;
   int fd = -1, rc;
@@ -210,28 +227,25 @@ int cai_workspace_publication_open(const char *socket_path,
     if (fd < 0)
       rc = io(error, "create discovery publication");
   }
-  memset(&callbacks, 0, sizeof(callbacks));
-  callbacks.write = fd_write;
-  callbacks.context = &fd;
+  if (rc == CAI_OK &&
+      c89cbor_encoder_create(NULL, NULL, &encoder) != C89CBOR_OK)
+    rc = cai_set_error(error, CAI_ERR_NOMEM, "allocate discovery encoder");
   if (rc == CAI_OK)
-    rc = cai_sink_from_callbacks(&callbacks, &sink, error);
+    rc = encode(encoder, fd, C89CBOR_ARRAY, 4U, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = cai_cbor_encoder_open(sink, &encoder, error);
-  if (rc == CAI_OK)
-    rc = encode(encoder, CAI_CBOR_ARRAY, 4U, NULL, 0U, error);
-  if (rc == CAI_OK)
-    rc = string(encoder, CAI_CBOR_TEXT, REGISTRY_SCHEMA,
+    rc = string(encoder, fd, C89CBOR_TEXT, REGISTRY_SCHEMA,
                 strlen(REGISTRY_SCHEMA), error);
   if (rc == CAI_OK)
-    rc = string(encoder, CAI_CBOR_BYTES, workspace, strlen(workspace), error);
+    rc =
+        string(encoder, fd, C89CBOR_BYTES, workspace, strlen(workspace), error);
   if (rc == CAI_OK)
-    rc = string(encoder, CAI_CBOR_TEXT, name, strlen(name), error);
+    rc = string(encoder, fd, C89CBOR_TEXT, name, strlen(name), error);
   if (rc == CAI_OK)
-    rc = string(encoder, CAI_CBOR_BYTES, instance, 16U, error);
+    rc = string(encoder, fd, C89CBOR_BYTES, instance, 16U, error);
   if (rc == CAI_OK)
-    rc = encode(encoder, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, error);
+    rc = encode(encoder, fd, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = cai_cbor_encoder_finish(encoder, error);
+    rc = c89cbor_encoder_finish(encoder) == C89CBOR_OK ? CAI_OK : bad(error);
   if (rc == CAI_OK && fstat(fd, &p->published) != 0)
     rc = io(error, "inspect discovery publication");
   snprintf(p->file, sizeof(p->file), "ws-%s.info", id);
@@ -240,8 +254,7 @@ int cai_workspace_publication_open(const char *socket_path,
     rc = io(error, "publish workspace discovery metadata");
   if (rc != CAI_OK)
     p->published.st_ino = 0;
-  cai_cbor_encoder_close(encoder);
-  cai_sink_close(sink);
+  c89cbor_encoder_destroy(encoder);
   if (fd >= 0) {
     close(fd);
     (void)unlinkat(p->directory, temporary, 0);
@@ -266,7 +279,7 @@ void cai_workspace_publication_close(cai_workspace_publication *p) {
     cai_free_mem(NULL, p);
   }
 }
-static int decoded(void *context, const cai_cbor_token *t, cai_error *error) {
+static int decoded(void *context, const c89cbor_token *t, cai_error *error) {
   cai_workspace_registry *r = context;
   const char *schema = REGISTRY_SCHEMA;
   size_t size = r->part == 2U   ? strlen(schema)
@@ -276,14 +289,14 @@ static int decoded(void *context, const cai_cbor_token *t, cai_error *error) {
   void *out = r->part == 4U   ? (void *)r->workspace
               : r->part == 6U ? (void *)r->name
                               : (void *)r->record.instance;
-  cai_cbor_type type =
+  c89cbor_type type =
       r->part == 1U || r->part == 2U || r->part == 5U || r->part == 6U
-          ? CAI_CBOR_TEXT
-          : CAI_CBOR_BYTES;
+          ? C89CBOR_TEXT
+          : C89CBOR_BYTES;
   if (t->indefinite)
     return bad(error);
   if (r->part == 0U) {
-    if (t->type != CAI_CBOR_ARRAY || t->argument != 4U)
+    if (t->type != C89CBOR_ARRAY || t->argument != 4U)
       return bad(error);
   } else if (r->part == 1U || r->part == 3U || r->part == 5U || r->part == 7U) {
     size_t limit = r->part == 1U   ? strlen(schema)
@@ -295,7 +308,7 @@ static int decoded(void *context, const cai_cbor_token *t, cai_error *error) {
       return bad(error);
     r->offset = 0U;
   } else if (r->part == 2U || r->part == 4U || r->part == 6U || r->part == 8U) {
-    if (t->type == CAI_CBOR_DATA) {
+    if (t->type == C89CBOR_DATA) {
       if (t->length > size - r->offset ||
           (r->part != 8U && memchr(t->data, 0, t->length) != NULL))
         return bad(error);
@@ -307,10 +320,10 @@ static int decoded(void *context, const cai_cbor_token *t, cai_error *error) {
       r->offset += t->length;
       return CAI_OK;
     }
-    if (t->type != CAI_CBOR_END || t->argument != type)
+    if (t->type != C89CBOR_END || t->argument != type)
       return bad(error);
-  } else if (r->part != 9U || t->type != CAI_CBOR_END ||
-             t->argument != CAI_CBOR_ARRAY)
+  } else if (r->part != 9U || t->type != C89CBOR_END ||
+             t->argument != C89CBOR_ARRAY)
     return bad(error);
   ++r->part;
   return CAI_OK;
@@ -347,7 +360,7 @@ int cai_workspace_registry_next(cai_workspace_registry *r,
                                 const cai_workspace_record **out,
                                 cai_error *error) {
   struct dirent *entry;
-  cai_cbor_decoder *decoder = NULL;
+  c89cbor_decoder *decoder = NULL;
   char chunk[512], hash[33];
   int fd, rc = CAI_OK;
   ssize_t n = 0;
@@ -389,20 +402,38 @@ int cai_workspace_registry_next(cai_workspace_registry *r,
   memset(r->workspace, 0, sizeof(r->workspace));
   memset(r->name, 0, sizeof(r->name));
   r->part = r->offset = 0U;
-  rc = cai_cbor_decoder_open(decoded, r, &decoder, error);
+  if (c89cbor_decoder_create(NULL, NULL, &decoder) != C89CBOR_OK)
+    rc = cai_set_error(error, CAI_ERR_NOMEM, "allocate discovery decoder");
   while (rc == CAI_OK) {
     n = read(fd, chunk, sizeof(chunk));
     if (n < 0 && errno == EINTR)
       continue;
     if (n <= 0)
       break;
-    rc = cai_cbor_decoder_feed(decoder, chunk, (size_t)n, error);
+    {
+      const unsigned char *at = (const unsigned char *)chunk;
+      size_t left = (size_t)n;
+      while (rc == CAI_OK) {
+        c89cbor_token token;
+        size_t consumed;
+        int status = c89cbor_decoder_next(decoder, at, left, &consumed, &token);
+        at += consumed;
+        left -= consumed;
+        if (status == C89CBOR_INPUT || status == C89CBOR_DONE) {
+          if (left != 0U)
+            rc = bad(error);
+          break;
+        }
+        rc = status == C89CBOR_TOKEN ? decoded(r, &token, error) : bad(error);
+      }
+    }
   }
   if (rc == CAI_OK)
     rc = n < 0 ? io(error, "read discovery record")
-               : cai_cbor_decoder_finish(decoder, error);
+         : c89cbor_decoder_finish(decoder) == C89CBOR_OK ? CAI_OK
+                                                         : bad(error);
   close(fd);
-  cai_cbor_decoder_close(decoder);
+  c89cbor_decoder_destroy(decoder);
   if (rc == CAI_OK &&
       (r->part != 10U || r->workspace[0] != '/' || !name_valid(r->name)))
     rc = bad(error);

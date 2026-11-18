@@ -64,6 +64,18 @@
       "licenseIdentifier": "NOASSERTION",
       "bundled": false,
       "installRole": "public-header-logger-api"
+    },
+    {
+      "name": "libcbor",
+      "version": "@CAI_CBOR_VERSION@",
+      "targetId": "@CAI_TARGET_ID@",
+      "sourceSystem": "github-release",
+      "sourceUrl": "@CAI_CBOR_URL@",
+      "sha256": "@CAI_CBOR_SHA256@",
+      "archiveName": "@CAI_CBOR_ARCHIVE_NAME@",
+      "licenseIdentifier": "MIT",
+      "bundled": false,
+      "installRole": "public-link-interface"
     }
   ]
 }

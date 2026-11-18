@@ -229,6 +229,10 @@ if(CAI_DEPENDENCY_MODE STREQUAL "auto")
   find_library(_cai_auto_curl_library NAMES curl)
   find_path(_cai_auto_lonejson_include lonejson.h)
   find_path(_cai_auto_pslog_include pslog.h)
+  find_file(_cai_auto_cbor_config NAMES C89CborConfig.cmake
+    PATH_SUFFIXES lib/cmake/C89Cbor)
+  find_path(_cai_auto_cbor_include c89cbor/cbor.h)
+  find_library(_cai_auto_cbor_library NAMES cbor)
   find_library(_cai_auto_lonejson_library NAMES lonejson)
   find_library(_cai_auto_pslog_library NAMES pslog)
   foreach(component IN ITEMS Yaml Misc Core)
@@ -261,7 +265,8 @@ if(CAI_DEPENDENCY_MODE STREQUAL "auto")
      _cai_auto_pslog_include AND _cai_auto_lonejson_library AND
      _cai_auto_pslog_library AND
      _cai_auto_lonejson_abi_ok AND _cai_auto_Yaml_config AND
-     _cai_auto_Misc_config AND _cai_auto_Core_config)
+     _cai_auto_Misc_config AND _cai_auto_Core_config AND _cai_auto_cbor_config AND
+     _cai_auto_cbor_include AND _cai_auto_cbor_library)
     set(CAI_RESOLVED_DEPENDENCY_MODE "host")
   else()
     set(CAI_RESOLVED_DEPENDENCY_MODE "cpkt")
@@ -274,6 +279,9 @@ if(CAI_DEPENDENCY_MODE STREQUAL "auto")
   unset(_cai_auto_curl_version_line)
   unset(_cai_auto_lonejson_include CACHE)
   unset(_cai_auto_pslog_include CACHE)
+  unset(_cai_auto_cbor_config CACHE)
+  unset(_cai_auto_cbor_include CACHE)
+  unset(_cai_auto_cbor_library CACHE)
   unset(_cai_auto_lonejson_library CACHE)
   unset(_cai_auto_pslog_library CACHE)
   unset(_cai_auto_lonejson_abi_ok)
@@ -541,6 +549,8 @@ find_package(CURL ${CAI_MINIMUM_CURL_VERSION} REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 find_package(Threads REQUIRED)
 
+include(CaiCbor)
+
 set(CAI_CURL_STATIC_LINK CURL::libcurl)
 set(CAI_OPENSSL_CRYPTO_STATIC_LINK OpenSSL::Crypto)
 set(CAI_CURL_SHARED_LINK CURL::libcurl)
@@ -759,13 +769,11 @@ set(CAI_SOURCES
   src/cai_chrome.c
   src/cai_chrome_protocol.c
   src/cai_client.c
-  src/cai_cbor.c
   src/cai_utf8.c
   src/cai_network.c
   src/cai_network_tools.c
   src/cai_network_jsonl.c
   src/cai_event_source.c
-  src/cai_wire.c
   src/cai_wire_peer.c
   src/cai_protocol.c
   src/cai_workspace.c
@@ -876,10 +884,12 @@ foreach(_cai_target IN ITEMS cai_static cai_shared)
   endif()
 endforeach()
 if(TARGET cai_shared)
+  target_link_libraries(cai_shared PUBLIC C89Cbor::shared)
   target_link_libraries(cai_shared PRIVATE ${CAI_CURL_SHARED_LINK}
     Threads::Threads ${CAI_OPENSSL_CRYPTO_SHARED_LINK} ${CAI_LONEJSON_LINK} CpktYaml::Yaml m)
 endif()
 if(TARGET cai_static)
+  target_link_libraries(cai_static PUBLIC C89Cbor::static)
   target_link_libraries(cai_static PRIVATE CpktYaml::Yaml)
   target_link_libraries(cai_static INTERFACE
     m
@@ -1049,6 +1059,9 @@ if(CAI_BUILD_CLI)
         DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/third_party/${_cai_cli_dep_name}"
         COMPONENT cai-cli EXCLUDE_FROM_ALL)
     endforeach()
+    install(FILES "${CAI_CBOR_PREFIX}/share/doc/C89Cbor/LICENSE"
+      DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/libcai/third_party/libcbor"
+      COMPONENT cai-cli EXCLUDE_FROM_ALL)
     foreach(_cai_cli_core_dep curl openssl zlib nghttp2 libssh2)
       install(FILES
         "${CAI_CPKT_PREFIX}/share/doc/cpkt/core/third_party/${_cai_cli_core_dep}/LICENSE"
@@ -1689,7 +1702,7 @@ if(CAI_INSTALL)
       "${CAI_PSLOG_PKG_URL}" NAME)
   endif()
   set(CAI_PACKAGE_REQUIRES
-      "lonejson lonejson-curl lonejson-oidc lonejson-openssl")
+      "lonejson lonejson-curl lonejson-oidc lonejson-openssl c89cbor = ${CAI_CBOR_VERSION}")
   if(CAI_RESOLVED_DEPENDENCY_MODE STREQUAL "cpkt")
     set(CAI_PACKAGE_REQUIRES_PRIVATE
         "libcurl >= ${CAI_MINIMUM_CURL_VERSION}, openssl")

@@ -243,7 +243,7 @@ static int begin(void *context, const cai_protocol_header *header,
   return cai_workspace_server_begin(f->server, f->attachment, header, length,
                                     error);
 }
-static int write_token(void *context, const cai_cbor_token *token,
+static int write_token(void *context, const c89cbor_token *token,
                        cai_error *error) {
   fixture *f = context;
   return cai_workspace_server_write(f->server, f->attachment, token, error);
@@ -901,7 +901,7 @@ static void status_tests(const char *runtime, const char *workspace) {
   cai_app_view source;
   const cai_app_view *view;
   cai_protocol_header h;
-  cai_cbor_token t;
+  c89cbor_token t;
   size_t i;
   for (i = 0U; i < 3U; ++i) {
     open_fixture(&f, runtime, workspace);
@@ -938,7 +938,7 @@ static void status_tests(const char *runtime, const char *workspace) {
       h.sequence = 2U;
       assert(begin(&f, &h, 150U, NULL) == CAI_OK);
       memset(&t, 0, sizeof(t));
-      t.type = CAI_CBOR_ARRAY;
+      t.type = C89CBOR_ARRAY;
       t.argument = 2U;
       assert(write_token(&f, &t, NULL) == CAI_OK);
       assert(cai_workspace_server_pump(f.server, 2U, NULL) == CAI_OK);

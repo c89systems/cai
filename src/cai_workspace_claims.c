@@ -67,9 +67,9 @@ uint32_t cai_workspace_claim_size(const cai_workspace_claim *claims, size_t n) {
   }
   return size;
 }
-static int token(cai_wire_peer *peer, cai_cbor_type type, uint64_t value,
+static int token(cai_wire_peer *peer, c89cbor_type type, uint64_t value,
                  const void *data, size_t n, cai_error *error) {
-  cai_cbor_token t;
+  c89cbor_token t;
   memset(&t, 0, sizeof(t));
   t.type = type;
   t.argument = value;
@@ -77,54 +77,53 @@ static int token(cai_wire_peer *peer, cai_cbor_type type, uint64_t value,
   t.length = n;
   return cai_wire_peer_write(peer, &t, error);
 }
-static int bytes(cai_wire_peer *peer, cai_cbor_type type, const void *p,
+static int bytes(cai_wire_peer *peer, c89cbor_type type, const void *p,
                  size_t n, cai_error *error) {
   int rc = token(peer, type, n, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = token(peer, CAI_CBOR_DATA, 0U, p, n, error);
+    rc = token(peer, C89CBOR_DATA, 0U, p, n, error);
   if (rc == CAI_OK)
-    rc = token(peer, CAI_CBOR_END, type, NULL, 0U, error);
+    rc = token(peer, C89CBOR_END, type, NULL, 0U, error);
   return rc;
 }
 int cai_workspace_claim_write(cai_wire_peer *peer,
                               const cai_workspace_claim *claims, size_t n,
                               cai_error *error) {
   size_t i;
-  int rc = token(peer, CAI_CBOR_ARRAY, n, NULL, 0U, error);
+  int rc = token(peer, C89CBOR_ARRAY, n, NULL, 0U, error);
   for (i = 0U; i < n && rc == CAI_OK; ++i) {
-    rc = token(peer, CAI_CBOR_ARRAY, 2U, NULL, 0U, error);
+    rc = token(peer, C89CBOR_ARRAY, 2U, NULL, 0U, error);
     if (rc == CAI_OK)
-      rc = bytes(peer, CAI_CBOR_TEXT, claims[i].name, strlen(claims[i].name),
+      rc = bytes(peer, C89CBOR_TEXT, claims[i].name, strlen(claims[i].name),
                  error);
     if (rc == CAI_OK)
-      rc = bytes(peer, CAI_CBOR_BYTES, claims[i].digest,
+      rc = bytes(peer, C89CBOR_BYTES, claims[i].digest,
                  CAI_WORKSPACE_CLAIM_DIGEST, error);
     if (rc == CAI_OK)
-      rc = token(peer, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, error);
+      rc = token(peer, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U, error);
   }
-  return rc == CAI_OK
-             ? token(peer, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, error)
-             : rc;
+  return rc == CAI_OK ? token(peer, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U, error)
+                      : rc;
 }
 int cai_workspace_claim_read(cai_workspace_claim_reader *r,
-                             const cai_cbor_token *t) {
+                             const c89cbor_token *t) {
   size_t i;
   if (t == NULL || t->indefinite)
     return -1;
   switch (r->phase) {
   case 0:
-    if (t->type != CAI_CBOR_ARRAY || t->argument > CAI_WORKSPACE_CLAIM_LIMIT)
+    if (t->type != C89CBOR_ARRAY || t->argument > CAI_WORKSPACE_CLAIM_LIMIT)
       return -1;
     r->remaining = (size_t)t->argument;
     r->phase = r->remaining ? 1 : 8;
     break;
   case 1:
-    if (t->type != CAI_CBOR_ARRAY || t->argument != 2U)
+    if (t->type != C89CBOR_ARRAY || t->argument != 2U)
       return -1;
     r->phase = 2;
     break;
   case 2:
-    if (t->type != CAI_CBOR_TEXT || t->argument == 0U ||
+    if (t->type != C89CBOR_TEXT || t->argument == 0U ||
         t->argument > CAI_WORKSPACE_CLAIM_NAME)
       return -1;
     r->length = (size_t)t->argument;
@@ -132,14 +131,14 @@ int cai_workspace_claim_read(cai_workspace_claim_reader *r,
     r->phase = 3;
     break;
   case 3:
-    if (t->type == CAI_CBOR_DATA) {
+    if (t->type == C89CBOR_DATA) {
       if (t->length > r->length - r->offset ||
           (t->length && !cai_workspace_claim_name(t->data, t->length)))
         return -1;
       if (t->length)
         memcpy(r->name + r->offset, t->data, t->length);
       r->offset += t->length;
-    } else if (t->type == CAI_CBOR_END && t->argument == CAI_CBOR_TEXT &&
+    } else if (t->type == C89CBOR_END && t->argument == C89CBOR_TEXT &&
                r->offset == r->length) {
       r->name[r->length] = '\0';
       if (strcmp(r->previous, r->name) >= 0)
@@ -156,32 +155,32 @@ int cai_workspace_claim_read(cai_workspace_claim_reader *r,
       return -1;
     break;
   case 4:
-    if (t->type != CAI_CBOR_BYTES || t->argument != CAI_WORKSPACE_CLAIM_DIGEST)
+    if (t->type != C89CBOR_BYTES || t->argument != CAI_WORKSPACE_CLAIM_DIGEST)
       return -1;
     r->offset = 0U;
     r->phase = 5;
     break;
   case 5:
-    if (t->type == CAI_CBOR_DATA) {
+    if (t->type == C89CBOR_DATA) {
       if (t->length > CAI_WORKSPACE_CLAIM_DIGEST - r->offset)
         return -1;
       if (t->length && r->expected != NULL && !r->mismatch[0] &&
           memcmp(r->expected->digest + r->offset, t->data, t->length) != 0)
         strcpy(r->mismatch, r->name);
       r->offset += t->length;
-    } else if (t->type == CAI_CBOR_END && t->argument == CAI_CBOR_BYTES &&
+    } else if (t->type == C89CBOR_END && t->argument == C89CBOR_BYTES &&
                r->offset == CAI_WORKSPACE_CLAIM_DIGEST)
       r->phase = 6;
     else
       return -1;
     break;
   case 6:
-    if (t->type != CAI_CBOR_END || t->argument != CAI_CBOR_ARRAY)
+    if (t->type != C89CBOR_END || t->argument != C89CBOR_ARRAY)
       return -1;
     r->phase = --r->remaining ? 1 : 8;
     break;
   case 8:
-    if (t->type != CAI_CBOR_END || t->argument != CAI_CBOR_ARRAY)
+    if (t->type != C89CBOR_END || t->argument != C89CBOR_ARRAY)
       return -1;
     r->phase = 9;
     return 1;

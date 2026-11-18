@@ -1,60 +1,21 @@
 /** @file cai/wire.h
- * Incremental length-delimited CBOR records. No socket or application policy.
+ * Nonblocking socket peers using native libcbor LENGTH32 records and tokens.
  */
 #ifndef CAI_WIRE_H
 #define CAI_WIRE_H
-#include <cai/cbor.h>
+#include <c89cbor/io.h>
+#include <cai/cai.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define CAI_WIRE_MAX_RECORD (128U * 1024U)
 #define CAI_WIRE_CHUNK_SIZE (32U * 1024U)
-typedef enum cai_wire_event_type {
-  CAI_WIRE_BEGIN = 0,
-  CAI_WIRE_TOKEN,
-  CAI_WIRE_END
-} cai_wire_event_type;
-typedef struct cai_wire_event {
-  cai_wire_event_type type;
-  uint32_t length;
-  /** Borrowed during TOKEN only. BEGIN/TOKEN are provisional until END. */
-  const cai_cbor_token *token;
-} cai_wire_event;
-typedef int (*cai_wire_event_fn)(void *context, const cai_wire_event *event,
+/** Receives libcbor's native framing events without token conversion.
+ * Tokens remain provisional until RECORD_END. Schema and supported-value
+ * policies belong to the application consumer, not to this transport. */
+typedef int (*cai_wire_event_fn)(void *context, const c89cbor_event *event,
                                  cai_error *error);
-typedef struct cai_wire_decoder cai_wire_decoder;
-typedef struct cai_wire_encoder cai_wire_encoder;
-
-/** Four-byte unsigned big-endian length, then exactly one CBOR item. Accepts
- * fragmented/coalesced records; callbacks run as bytes arrive, including DATA
- * before a complete record. No record buffer. finish accepts an empty stream
- * or any record boundary, and rejects a partial header/body. Failures are
- * terminal. Duplicate/schema keys are the typed consumer's responsibility.
- */
-int cai_wire_decoder_open(cai_wire_event_fn callback, void *context,
-                          cai_wire_decoder **out, cai_error *error);
-int cai_wire_decoder_feed(cai_wire_decoder *decoder, const void *bytes,
-                          size_t length, cai_error *error);
-int cai_wire_decoder_finish(cai_wire_decoder *decoder, cai_error *error);
-void cai_wire_decoder_close(cai_wire_decoder *decoder);
-
-/** Borrow the sink. begin writes the known payload length immediately; write
- * forwards CBOR tokens immediately. end requires one complete item and exactly
- * the declared bytes. Derive lengths from known fields/chunks, never a sizing
- * serialization. Unknown-length producers send successive chunk records.
- * A sink error after partial delivery invalidates this stream; do not retry
- * the same token/record against the existing encoder. close never writes.
- */
-int cai_wire_encoder_open(cai_sink *sink, cai_wire_encoder **out,
-                          cai_error *error);
-int cai_wire_encoder_begin(cai_wire_encoder *encoder, uint32_t length,
-                           cai_error *error);
-int cai_wire_encoder_write(cai_wire_encoder *encoder,
-                           const cai_cbor_token *token, cai_error *error);
-int cai_wire_encoder_end(cai_wire_encoder *encoder, cai_error *error);
-void cai_wire_encoder_close(cai_wire_encoder *encoder);
-
 typedef struct cai_wire_peer cai_wire_peer;
 /** Nonblocking Unix-stream adapter, owned by the caller's event-loop thread.
  * Transfers descriptor ownership on success only. It must already be a
@@ -79,8 +40,14 @@ size_t cai_wire_peer_pending(const cai_wire_peer *peer);
 int cai_wire_peer_read(cai_wire_peer *peer, size_t budget, int *eof,
                        cai_error *error);
 int cai_wire_peer_flush(cai_wire_peer *peer, size_t budget, cai_error *error);
+/** Queue the native LENGTH32 prefix using a payload size derived from known
+ * fields/chunks, never a preliminary serialization. write consumes native
+ * tokens and drains their borrowed spans before returning. end requires one
+ * complete item and exactly the declared byte count. Errors are terminal;
+ * close never finishes a partial record. Unknown-size values use successive
+ * application chunk records, not a full-value buffer or backpatching. */
 int cai_wire_peer_begin(cai_wire_peer *peer, uint32_t length, cai_error *error);
-int cai_wire_peer_write(cai_wire_peer *peer, const cai_cbor_token *token,
+int cai_wire_peer_write(cai_wire_peer *peer, const c89cbor_token *token,
                         cai_error *error);
 int cai_wire_peer_end(cai_wire_peer *peer, cai_error *error);
 void cai_wire_peer_close(cai_wire_peer *peer);

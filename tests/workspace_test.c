@@ -97,15 +97,16 @@ static void identity(void) {
   cleanup(state, a);
   free(state);
 }
-static int receive(void *context, const cai_wire_event *event,
+static int receive(void *context, const c89cbor_event *event,
                    cai_error *error) {
   int *value = context;
   (void)error;
-  if (event->type == CAI_WIRE_TOKEN && event->token->type == CAI_CBOR_UINT) {
-    assert(event->token->argument == 42U);
+  if (event->type == C89CBOR_RECORD_TOKEN &&
+      event->token.type == C89CBOR_UINT) {
+    assert(event->token.argument == 42U);
     *value = 1;
   }
-  if (event->type == CAI_WIRE_END) {
+  if (event->type == C89CBOR_RECORD_END) {
     assert(*value == 1);
     *value = 2;
   }
@@ -115,7 +116,7 @@ static void connection(void) {
   fixture *state = calloc(1U, sizeof(*state));
   cai_workspace_endpoint *a = NULL, *b = NULL;
   cai_wire_peer *sender = NULL, *reader = NULL;
-  cai_cbor_token token;
+  c89cbor_token token;
   struct stat before, after;
   char lock[4096];
   int client, server, connecting, eof, value = 0;
@@ -153,7 +154,7 @@ static void connection(void) {
   assert(cai_wire_peer_open(server, 0U, receive, &value, &reader, NULL) ==
          CAI_OK);
   memset(&token, 0, sizeof(token));
-  token.type = CAI_CBOR_UINT;
+  token.type = C89CBOR_UINT;
   token.argument = 42U;
   assert(cai_wire_peer_begin(sender, 2U, NULL) == CAI_OK);
   assert(cai_wire_peer_write(sender, &token, NULL) == CAI_OK);

@@ -473,7 +473,7 @@ static int output_begin(void *context, const cai_protocol_header *h,
    * stale generations. Never upgrade a request's original scope here. */
   return cai_workspace_client_begin(client->socket, h, length, 0, error);
 }
-static int output_write(void *context, const cai_cbor_token *token,
+static int output_write(void *context, const c89cbor_token *token,
                         cai_error *error) {
   cai_app_client *client = context;
   return cai_workspace_client_write(client->socket, token, error);
@@ -868,7 +868,7 @@ int cai_app_client_subscribe(cai_app_client *c, uint64_t request,
 int cai_app_client_cancel(cai_app_client *c, uint64_t request,
                           uint64_t generation, cai_error *error) {
   cai_protocol_header header;
-  cai_cbor_token token;
+  c89cbor_token token;
   int rc = valid(c, error);
   if (rc != CAI_OK)
     return rc;
@@ -882,7 +882,7 @@ int cai_app_client_cancel(cai_app_client *c, uint64_t request,
   header.request = request;
   header.generation = generation;
   header.attachment = c->state.transport.attachment;
-  token.type = CAI_CBOR_NULL;
+  token.type = C89CBOR_NULL;
   rc = cai_workspace_client_begin(c->socket, &header, 1U, 1, error);
   if (rc == CAI_OK)
     rc = cai_workspace_client_write(c->socket, &token, error);

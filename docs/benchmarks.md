@@ -33,10 +33,10 @@ The executable also returns failure if its report cannot be written.
 
 | Case | Work inside the interval |
 |---|---|
-| `cbor_encode_bytes`, `cbor_encode_text` | Production encoder into a counting sink, resetting between values. |
-| `cbor_decode_bytes`, `cbor_decode_text` | Production decoder reading a bounded pre-encoded fixture, resetting between values. |
-| `cbor_roundtrip_text`, `cbor_roundtrip_utf8` | Encoder feeding decoder directly through a sink callback; ASCII and multibyte UTF-8 payloads. |
-| `framed_memory` | Production length-prefixed wire encoder feeding the production wire decoder in memory. |
+| `cbor_encode_bytes`, `cbor_encode_text` | Native libcbor encoder drained into a counting sink, resetting between values. |
+| `cbor_decode_bytes`, `cbor_decode_text` | Native libcbor decoder reading a bounded pre-encoded fixture, resetting between values. |
+| `cbor_roundtrip_text`, `cbor_roundtrip_utf8` | Native borrowed encoder spans consumed immediately by the native decoder; ASCII and multibyte UTF-8 payloads. |
+| `framed_memory` | Native libcbor LENGTH32 headers and encoded spans consumed by its framed reader in memory. |
 | `unix_raw` | Pre-encoded framed bytes through a nonblocking Unix stream socket to a second process, without CBOR parsing. |
 | `wire_peer_bytes`, `wire_peer_text` | Production wire peers encoding, queueing, sending, receiving and decoding through the same socket topology. |
 | `unix_rtt`, `wire_rtt` | One request outstanding at a time; the receiver sends the same five-byte framed NULL acknowledgement in both cases. |

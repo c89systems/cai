@@ -1,4 +1,5 @@
 #include "../cli/input_wire.h"
+#include "native_fixture.h"
 #include <assert.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -6,15 +7,14 @@
 
 typedef struct fixture {
   cai_cli_input_wire_decoder *input;
-  cai_cbor_decoder *decoder;
-  cai_cbor_encoder *encoder;
-  cai_sink *sink;
+  c89cbor_decoder *decoder;
+  c89cbor_encoder *encoder;
   cai_protocol_header header;
   const cai_cli_input_wire_message *complete;
   size_t bytes, tokens, declared, writes;
   int fail;
 } fixture;
-static int receive(void *context, const cai_cbor_token *token,
+static int receive(void *context, const c89cbor_token *token,
                    cai_error *error) {
   fixture *f = context;
   cai_protocol_event event;
@@ -43,7 +43,7 @@ static int bytes(void *context, const void *data, size_t size,
     int rc;
     if (n > 17U)
       n = 17U;
-    rc = cai_cbor_decoder_feed(f->decoder, at + i, n, error);
+    rc = test_native_feed(f->decoder, at + i, n, receive, f, error);
     if (rc != CAI_OK)
       return rc;
     i += n;
@@ -62,17 +62,17 @@ static int begin(void *context, const cai_protocol_header *header,
   event.token = NULL;
   return cai_cli_input_wire_decode(f->input, &event, &value, error);
 }
-static int write_token(void *context, const cai_cbor_token *token,
+static int write_token(void *context, const c89cbor_token *token,
                        cai_error *error) {
   fixture *f = context;
-  return cai_cbor_encoder_write(f->encoder, token, error);
+  return test_native_write(f->encoder, token, bytes, context, error);
 }
 static int end(void *context, cai_error *error) {
   fixture *f = context;
   cai_protocol_event event;
-  int rc = cai_cbor_encoder_finish(f->encoder, error);
+  int rc = test_native_result(c89cbor_encoder_finish(f->encoder));
   if (rc == CAI_OK)
-    rc = cai_cbor_decoder_finish(f->decoder, error);
+    rc = test_native_result(c89cbor_decoder_finish(f->decoder));
   if (rc != CAI_OK)
     return rc;
   assert(f->tokens > 0U && f->bytes == f->declared && f->complete == NULL);
@@ -82,21 +82,15 @@ static int end(void *context, cai_error *error) {
   return cai_cli_input_wire_decode(f->input, &event, &f->complete, error);
 }
 static void open_fixture(fixture *f) {
-  cai_sink_callbacks sink;
   memset(f, 0, sizeof(*f));
-  memset(&sink, 0, sizeof(sink));
-  sink.context = f;
-  sink.write = bytes;
   assert(cai_cli_input_wire_decoder_open(&f->input, NULL) == CAI_OK);
-  assert(cai_cbor_decoder_open(receive, f, &f->decoder, NULL) == CAI_OK);
-  assert(cai_sink_from_callbacks(&sink, &f->sink, NULL) == CAI_OK);
-  assert(cai_cbor_encoder_open(f->sink, &f->encoder, NULL) == CAI_OK);
+  assert(c89cbor_decoder_create(NULL, NULL, &f->decoder) == CAI_OK);
+  assert(c89cbor_encoder_create(NULL, NULL, &f->encoder) == CAI_OK);
 }
 static void close_fixture(fixture *f) {
-  cai_cbor_encoder_close(f->encoder);
-  cai_cbor_decoder_close(f->decoder);
+  c89cbor_encoder_destroy(f->encoder);
+  c89cbor_decoder_destroy(f->decoder);
   cai_cli_input_wire_decoder_close(f->input);
-  cai_sink_close(f->sink);
 }
 static int send(fixture *f, const cai_cli_input_wire_message *message) {
   cai_cli_input_wire_output output;
@@ -294,9 +288,9 @@ static void malformed(void) {
     int rc;
     open_fixture(f);
     assert(begin(f, &header, (uint32_t)sizes[i], NULL) == CAI_OK);
-    rc = cai_cbor_decoder_feed(f->decoder, cases[i], sizes[i], NULL);
+    rc = test_native_feed(f->decoder, cases[i], sizes[i], receive, f, NULL);
     if (rc == CAI_OK)
-      rc = cai_cbor_decoder_finish(f->decoder, NULL);
+      rc = test_native_result(c89cbor_decoder_finish(f->decoder));
     if (rc == CAI_OK) {
       cai_protocol_event event;
       event.type = CAI_PROTOCOL_COMPLETE;

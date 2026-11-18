@@ -14,34 +14,34 @@ typedef struct receiver {
   size_t begins, ends, bytes;
   int reply;
 } receiver;
-static int observe(void *context, const cai_wire_event *event,
+static int observe(void *context, const c89cbor_event *event,
                    cai_error *error) {
   receiver *state = context;
   (void)error;
-  if (event->type == CAI_WIRE_BEGIN)
+  if (event->type == C89CBOR_RECORD_BEGIN)
     ++state->begins;
-  else if (event->type == CAI_WIRE_END) {
+  else if (event->type == C89CBOR_RECORD_END) {
     ++state->ends;
     if (state->reply) {
-      cai_cbor_token token;
+      c89cbor_token token;
       memset(&token, 0, sizeof(token));
-      token.type = CAI_CBOR_NULL;
+      token.type = C89CBOR_NULL;
       assert(cai_wire_peer_begin(state->peer, 1U, NULL) == CAI_OK);
       assert(cai_wire_peer_write(state->peer, &token, NULL) == CAI_OK);
       assert(cai_wire_peer_end(state->peer, NULL) == CAI_OK);
     }
-  } else if (event->token->type == CAI_CBOR_DATA) {
-    const unsigned char *bytes = event->token->data;
+  } else if (event->token.type == C89CBOR_DATA) {
+    const unsigned char *bytes = event->token.data;
     size_t i;
-    for (i = 0U; i < event->token->length; ++i)
+    for (i = 0U; i < event->token.length; ++i)
       assert(bytes[i] == 'x');
-    state->bytes += event->token->length;
+    state->bytes += event->token.length;
   }
   return CAI_OK;
 }
-static int write_token(cai_wire_peer *peer, cai_cbor_type type,
+static int write_token(cai_wire_peer *peer, c89cbor_type type,
                        uint64_t argument, const void *bytes, size_t length) {
-  cai_cbor_token token;
+  c89cbor_token token;
   memset(&token, 0, sizeof(token));
   token.type = type;
   token.argument = argument;
@@ -55,13 +55,13 @@ static void string_record(cai_wire_peer *peer, size_t size) {
   memset(data, 'x', sizeof(data));
   assert(size >= 65536U && size <= CAI_WIRE_MAX_RECORD - 5U);
   assert(cai_wire_peer_begin(peer, (uint32_t)size + 5U, NULL) == CAI_OK);
-  assert(write_token(peer, CAI_CBOR_TEXT, size, NULL, 0U) == CAI_OK);
+  assert(write_token(peer, C89CBOR_TEXT, size, NULL, 0U) == CAI_OK);
   for (i = 0U; i < size;) {
     size_t take = size - i < sizeof(data) ? size - i : sizeof(data);
-    assert(write_token(peer, CAI_CBOR_DATA, 0U, data, take) == CAI_OK);
+    assert(write_token(peer, C89CBOR_DATA, 0U, data, take) == CAI_OK);
     i += take;
   }
-  assert(write_token(peer, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U) == CAI_OK);
+  assert(write_token(peer, C89CBOR_END, C89CBOR_TEXT, NULL, 0U) == CAI_OK);
   assert(cai_wire_peer_end(peer, NULL) == CAI_OK);
 }
 static void short_io(void) {
@@ -106,7 +106,7 @@ static void short_io(void) {
   assert(a.ends == 1U);
   for (i = 0U; i < 1000U; ++i) {
     assert(cai_wire_peer_begin(a.peer, 1U, NULL) == CAI_OK);
-    assert(write_token(a.peer, CAI_CBOR_NULL, 0U, NULL, 0U) == CAI_OK);
+    assert(write_token(a.peer, C89CBOR_NULL, 0U, NULL, 0U) == CAI_OK);
     assert(cai_wire_peer_end(a.peer, NULL) == CAI_OK);
     assert(cai_wire_peer_flush(a.peer, 0U, NULL) == CAI_OK);
     assert(cai_wire_peer_read(b.peer, 0U, &eof, NULL) == CAI_OK && !eof);
@@ -137,10 +137,10 @@ static void streamed_records(void) {
   for (record = 0U; record < 1024U; ++record) {
     assert(cai_wire_peer_begin(a.peer, CAI_WIRE_CHUNK_SIZE + 3U, NULL) ==
            CAI_OK);
-    assert(write_token(a.peer, CAI_CBOR_TEXT, CAI_WIRE_CHUNK_SIZE, NULL, 0U) ==
+    assert(write_token(a.peer, C89CBOR_TEXT, CAI_WIRE_CHUNK_SIZE, NULL, 0U) ==
            CAI_OK);
     for (chunk = 0U; chunk < CAI_WIRE_CHUNK_SIZE / sizeof(bytes); ++chunk) {
-      assert(write_token(a.peer, CAI_CBOR_DATA, 0U, bytes, sizeof(bytes)) ==
+      assert(write_token(a.peer, C89CBOR_DATA, 0U, bytes, sizeof(bytes)) ==
              CAI_OK);
       produced += sizeof(bytes);
       assert(cai_wire_peer_flush(a.peer, 0U, NULL) == CAI_OK);
@@ -151,8 +151,7 @@ static void streamed_records(void) {
       if (chunk == 0U)
         assert(b.begins == record + 1U && b.ends == record);
     }
-    assert(write_token(a.peer, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U) ==
-           CAI_OK);
+    assert(write_token(a.peer, C89CBOR_END, C89CBOR_TEXT, NULL, 0U) == CAI_OK);
     assert(cai_wire_peer_end(a.peer, NULL) == CAI_OK);
     assert(b.ends == record + 1U && cai_wire_peer_pending(a.peer) == 0U);
   }
@@ -208,7 +207,7 @@ static void sigpipe(void) {
                               NULL) == CAI_OK);
     close(sockets[1]);
     assert(cai_wire_peer_begin(state.peer, 1U, NULL) == CAI_OK);
-    assert(write_token(state.peer, CAI_CBOR_NULL, 0U, NULL, 0U) == CAI_OK);
+    assert(write_token(state.peer, C89CBOR_NULL, 0U, NULL, 0U) == CAI_OK);
     assert(cai_wire_peer_end(state.peer, NULL) == CAI_OK);
     assert(cai_wire_peer_flush(state.peer, 0U, NULL) == CAI_ERR_TRANSPORT);
     cai_wire_peer_close(state.peer);

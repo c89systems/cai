@@ -139,7 +139,7 @@ if(CAI_BUILD_TESTS)
       add_test(NAME cai_app_server_install COMMAND "${CMAKE_COMMAND}"
         "-DCAI_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}" "-DCAI_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
         "-DCAI_C_COMPILER=${CMAKE_C_COMPILER}"
-        "-DCAI_DEPENDENCY_PREFIXES=${CAI_CPKT_PREFIX};${CAI_CPKTMISC_PREFIX};${CAI_LONEJSON_PREFIX};${CAI_PSLOG_PREFIX};${_cai_lockdc_prefix};${_cai_liblql_prefix}"
+        "-DCAI_DEPENDENCY_PREFIXES=${CAI_CPKT_PREFIX};${CAI_CPKTMISC_PREFIX};${CAI_LONEJSON_PREFIX};${CAI_PSLOG_PREFIX};${CAI_CBOR_PREFIX};${_cai_lockdc_prefix};${_cai_liblql_prefix}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_server_install_test.cmake")
       set_tests_properties(cai_app_server_install PROPERTIES LABELS "local;offline;packaging" TIMEOUT 30)
     endif()

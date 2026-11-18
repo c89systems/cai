@@ -22,9 +22,9 @@ static uint32_t integer_size(uint64_t n) {
          : n <= UINT32_MAX ? 5U
                            : 9U;
 }
-static int emit(const cai_cli_input_wire_output *o, cai_cbor_type type,
+static int emit(const cai_cli_input_wire_output *o, c89cbor_type type,
                 uint64_t n, const void *data, size_t length, cai_error *e) {
-  cai_cbor_token t;
+  c89cbor_token t;
   memset(&t, 0, sizeof(t));
   t.type = type;
   t.argument = n;
@@ -68,19 +68,19 @@ int cai_cli_network_write(const cai_cli_input_wire_output *o,
   }
   rc = o->begin(o->context, &event->header, size, e);
   if (rc == CAI_OK)
-    rc = emit(o, CAI_CBOR_ARRAY, 11U, NULL, 0U, e);
+    rc = emit(o, C89CBOR_ARRAY, 11U, NULL, 0U, e);
   for (i = 0U; rc == CAI_OK && i < 5U; i++)
-    rc = emit(o, CAI_CBOR_UINT, numbers[i], NULL, 0U, e);
+    rc = emit(o, C89CBOR_UINT, numbers[i], NULL, 0U, e);
   for (i = 0U; rc == CAI_OK && i < 6U; i++) {
     size_t n = strings[i] != NULL ? strlen(strings[i]) : 0U;
-    rc = emit(o, CAI_CBOR_TEXT, n, NULL, 0U, e);
+    rc = emit(o, C89CBOR_TEXT, n, NULL, 0U, e);
     if (rc == CAI_OK && n)
-      rc = emit(o, CAI_CBOR_DATA, 0U, strings[i], n, e);
+      rc = emit(o, C89CBOR_DATA, 0U, strings[i], n, e);
     if (rc == CAI_OK)
-      rc = emit(o, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U, e);
+      rc = emit(o, C89CBOR_END, C89CBOR_TEXT, NULL, 0U, e);
   }
   if (rc == CAI_OK)
-    rc = emit(o, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, e);
+    rc = emit(o, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U, e);
   return rc == CAI_OK ? o->end(o->context, e) : rc;
 }
 static void clear(cai_cli_network_decoder *d) {
@@ -98,7 +98,7 @@ int cai_cli_network_decoder_open(cai_cli_network_decoder **out, cai_error *e) {
 int cai_cli_network_decode(cai_cli_network_decoder *d,
                            const cai_protocol_event *event,
                            const cai_app_network_event **out, cai_error *e) {
-  const cai_cbor_token *t = event->token;
+  const c89cbor_token *t = event->token;
   *out = NULL;
   if (event->type == CAI_PROTOCOL_HEADER) {
     clear(d);
@@ -120,11 +120,11 @@ int cai_cli_network_decode(cai_cli_network_decoder *d,
   if (t->indefinite || d->complete)
     return invalid(e);
   if (d->field == 0U) {
-    if (t->type != CAI_CBOR_ARRAY || t->argument != 11U)
+    if (t->type != C89CBOR_ARRAY || t->argument != 11U)
       return invalid(e);
     d->field++;
   } else if (d->field <= 5U) {
-    if (t->type != CAI_CBOR_UINT)
+    if (t->type != C89CBOR_UINT)
       return invalid(e);
     switch (d->field++) {
     case 1U:
@@ -153,7 +153,7 @@ int cai_cli_network_decode(cai_cli_network_decoder *d,
     size_t index = d->field - 6U;
     if (!d->data) {
       size_t limit = index == 4U ? CAI_CLI_INPUT_TEXT_MAX : 4096U;
-      if (t->type != CAI_CBOR_TEXT || t->argument > limit)
+      if (t->type != C89CBOR_TEXT || t->argument > limit)
         return invalid(e);
       d->length = (size_t)t->argument;
       d->offset = 0U;
@@ -162,21 +162,21 @@ int cai_cli_network_decode(cai_cli_network_decoder *d,
         return cai_cli_error(e, CAI_ERR_NOMEM,
                              "allocate bounded network field");
       d->data = 1;
-    } else if (t->type == CAI_CBOR_DATA) {
+    } else if (t->type == C89CBOR_DATA) {
       if (t->length > d->length - d->offset ||
           (t->length && memchr(t->data, 0, t->length)))
         return invalid(e);
       memcpy(d->strings[index] + d->offset, t->data, t->length);
       d->offset += t->length;
     } else {
-      if (t->type != CAI_CBOR_END || t->argument != CAI_CBOR_TEXT ||
+      if (t->type != C89CBOR_END || t->argument != C89CBOR_TEXT ||
           d->offset != d->length)
         return invalid(e);
       d->data = 0;
       d->field++;
     }
   } else {
-    if (t->type != CAI_CBOR_END || t->argument != CAI_CBOR_ARRAY)
+    if (t->type != C89CBOR_END || t->argument != C89CBOR_ARRAY)
       return invalid(e);
     d->complete = 1;
   }

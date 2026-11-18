@@ -20,5 +20,5 @@ int cai_workspace_claim_write(cai_wire_peer *, const cai_workspace_claim *,
 /** Consume one nested claims value; 1=complete, 0=more, negative=invalid.
  * Only comparisons are provisional. Admission/rejection waits for COMPLETE. */
 int cai_workspace_claim_read(cai_workspace_claim_reader *,
-                             const cai_cbor_token *);
+                             const c89cbor_token *);
 #endif

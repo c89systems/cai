@@ -523,7 +523,7 @@ static int wire_begin(void *context, const cai_protocol_header *header,
    * reject an observer/stale generation independently at owner admission. */
   return cai_workspace_client_begin(v->client, header, size, 0, error);
 }
-static int wire_write(void *context, const cai_cbor_token *token,
+static int wire_write(void *context, const c89cbor_token *token,
                       cai_error *error) {
   wire_view *v = context;
   return cai_workspace_client_write(v->client, token, error);
@@ -695,7 +695,7 @@ static void wire_scenario(host *h, wire_view *a, wire_view *b,
    * its provisional header nor fields may admit text to the queue. */
   {
     cai_protocol_header header;
-    cai_cbor_token token;
+    c89cbor_token token;
     memset(&header, 0, sizeof(header));
     header.kind = CAI_PROTOCOL_REQUEST;
     header.request = 1U;
@@ -704,7 +704,7 @@ static void wire_scenario(host *h, wire_view *a, wire_view *b,
     assert(cai_workspace_client_begin(extra.client, &header, 20U, 0, NULL) ==
            CAI_OK);
     memset(&token, 0, sizeof(token));
-    token.type = CAI_CBOR_ARRAY;
+    token.type = C89CBOR_ARRAY;
     token.argument = 9U;
     assert(cai_workspace_client_write(extra.client, &token, NULL) == CAI_OK);
     assert(cai_workspace_client_pump(extra.client, monotonic_ms(), NULL) ==

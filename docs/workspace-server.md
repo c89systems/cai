@@ -124,7 +124,7 @@ required.
 
 | Surface | Responsibility |
 | --- | --- |
-| `cai/cbor.h` in libcai | Incremental CBOR token reader and callback writer; no socket, JSON, DOM, logger or application dependency. |
+| libcbor public C89 API | Incremental tokens, encoders and framed readers with borrowed spans. No CAI-specific codec interface or token conversion. |
 | Core server/client transport | Bounded framed messages, connection identity, request admission, role enforcement, ordered observations, disconnect/backpressure and reconciliation. No terminal or application commands. |
 | libcai_app controller | Owner-thread lifecycle, runtime and storage setup, command interpretation, immutable configuration/environment, status and journal projection. |
 | libcai_app workspace host | Discovery, listener lifecycle and binding the reusable transport to the application controller. No renderer. |

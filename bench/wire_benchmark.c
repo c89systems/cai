@@ -119,17 +119,15 @@ typedef struct fixture {
   size_t length, encoded_length, used;
   uint64_t bytes, records;
   int verify, text, ended;
-  cai_cbor_encoder *encoder;
-  cai_cbor_decoder *decoder;
-  cai_wire_encoder *wire_encoder;
-  cai_wire_decoder *wire_decoder;
-  cai_sink *sink;
+  c89cbor_encoder *encoder;
+  c89cbor_decoder *decoder;
+  c89cbor_reader *reader;
 } fixture;
-static int count_token(void *context, const cai_cbor_token *token,
+static int count_token(void *context, const c89cbor_token *token,
                        cai_error *error) {
   fixture *f = context;
   (void)error;
-  if (token->type == CAI_CBOR_DATA) {
+  if (token->type == C89CBOR_DATA) {
     if (f->verify) {
       size_t offset = (size_t)(f->bytes % f->length);
       bench_require(
@@ -138,24 +136,43 @@ static int count_token(void *context, const cai_cbor_token *token,
           "decoded payload integrity");
     }
     f->bytes += token->length;
-  } else if (token->type == CAI_CBOR_END) {
+  } else if (token->type == C89CBOR_END) {
     ++f->records;
   }
   return CAI_OK;
 }
-static int count_wire(void *context, const cai_wire_event *event,
+static int count_wire(void *context, const c89cbor_event *event,
                       cai_error *error) {
-  return event->type == CAI_WIRE_TOKEN
-             ? count_token(context, event->token, error)
+  return event->type == C89CBOR_RECORD_TOKEN
+             ? count_token(context, &event->token, error)
              : CAI_OK;
 }
 static int memory_sink(void *context, const void *bytes, size_t length,
                        cai_error *error) {
   fixture *f = context;
-  if (f->decoder != NULL)
-    return cai_cbor_decoder_feed(f->decoder, bytes, length, error);
-  if (f->wire_decoder != NULL)
-    return cai_wire_decoder_feed(f->wire_decoder, bytes, length, error);
+  if (f->decoder != NULL || f->reader != NULL) {
+    const unsigned char *at = bytes;
+    for (;;) {
+      c89cbor_token token;
+      c89cbor_event event;
+      size_t consumed;
+      int rc =
+          f->reader != NULL
+              ? c89cbor_reader_next(f->reader, at, length, &consumed, &event)
+              : c89cbor_decoder_next(f->decoder, at, length, &consumed, &token);
+      at += consumed;
+      length -= consumed;
+      if (rc == C89CBOR_INPUT || rc == C89CBOR_DONE) {
+        bench_require(length == 0U, "native input consumed");
+        return CAI_OK;
+      }
+      bench_require(rc == C89CBOR_TOKEN, "native decode");
+      if (f->reader != NULL)
+        count_wire(f, &event, error);
+      else
+        count_token(f, &token, error);
+    }
+  }
   if (f->encoded != NULL) {
     bench_require(length <= f->length + 16U - f->used,
                   "bounded encoded fixture");
@@ -170,27 +187,42 @@ static int memory_sink(void *context, const void *bytes, size_t length,
   return CAI_OK;
 }
 static void emit(fixture *f, cai_wire_peer *peer) {
-  cai_cbor_token t;
-  cai_cbor_type type = f->text ? CAI_CBOR_TEXT : CAI_CBOR_BYTES;
+  c89cbor_token t;
+  c89cbor_type type = f->text ? C89CBOR_TEXT : C89CBOR_BYTES;
   unsigned int i;
   memset(&t, 0, sizeof(t));
   for (i = 0U; i < 3U; ++i) {
     int rc;
-    t.type = i == 0U ? type : i == 1U ? CAI_CBOR_DATA : CAI_CBOR_END;
+    t.type = i == 0U ? type : i == 1U ? C89CBOR_DATA : C89CBOR_END;
     t.argument = i == 0U ? f->length : i == 2U ? (uint64_t)type : 0U;
     t.data = i == 1U ? f->payload : NULL;
     t.length = i == 1U ? f->length : 0U;
-    rc = peer != NULL ? cai_wire_peer_write(peer, &t, NULL)
-         : f->wire_encoder != NULL
-             ? cai_wire_encoder_write(f->wire_encoder, &t, NULL)
-             : cai_cbor_encoder_write(f->encoder, &t, NULL);
+    if (peer != NULL)
+      rc = cai_wire_peer_write(peer, &t, NULL);
+    else {
+      bench_require(c89cbor_encoder_put(f->encoder, &t) == C89CBOR_OK,
+                    "native put");
+      for (;;) {
+        const void *bytes;
+        size_t length;
+        int status = c89cbor_encoder_peek(f->encoder, &bytes, &length);
+        if (status == C89CBOR_OK)
+          break;
+        bench_require(status == C89CBOR_OUTPUT, "native output");
+        memory_sink(f, bytes, length, NULL);
+        status = c89cbor_encoder_advance(f->encoder, length);
+        if (status == C89CBOR_OK)
+          break;
+        bench_require(status == C89CBOR_OUTPUT, "native advance");
+      }
+      rc = CAI_OK;
+    }
     bench_require(rc == CAI_OK, "encode benchmark value");
   }
 }
 static void fixture_open(fixture *f, size_t length, int text, int verify) {
   static const char corpus[] =
       "The **benchmark** measures `streaming` text with bounded chunks.\n\n";
-  cai_sink_callbacks callbacks;
   size_t i;
   if (length == 0U || length > 32768U) {
     fputs("benchmark: fixture size must be 1..32768 bytes\n", stderr);
@@ -214,24 +246,25 @@ static void fixture_open(fixture *f, size_t length, int text, int verify) {
     for (; i + 1U < length; ++i)
       f->payload[i] = ' ';
   }
-  memset(&callbacks, 0, sizeof(callbacks));
-  callbacks.context = f;
-  callbacks.write = memory_sink;
-  bench_require(cai_sink_from_callbacks(&callbacks, &f->sink, NULL) == CAI_OK &&
-                    cai_cbor_encoder_open(f->sink, &f->encoder, NULL) == CAI_OK,
-                "open fixture encoder");
+  f->encoder = calloc(1U, sizeof(*f->encoder));
+  bench_require(f->encoder != NULL &&
+                    c89cbor_encoder_init(NULL, f->encoder, NULL, 0U,
+                                         CAI_WIRE_CHUNK_SIZE) == C89CBOR_OK,
+                "open native fixture encoder");
   emit(f, NULL);
-  bench_require(cai_cbor_encoder_finish(f->encoder, NULL) == CAI_OK,
+  bench_require(c89cbor_encoder_finish(f->encoder) == C89CBOR_OK,
                 "finish fixture");
   f->encoded_length = f->used;
   f->used = 0U;
 }
 static void fixture_close(fixture *f) {
-  cai_cbor_encoder_close(f->encoder);
-  cai_cbor_decoder_close(f->decoder);
-  cai_wire_encoder_close(f->wire_encoder);
-  cai_wire_decoder_close(f->wire_decoder);
-  cai_sink_close(f->sink);
+  c89cbor_encoder_cleanup(f->encoder);
+  if (f->decoder != NULL)
+    c89cbor_decoder_cleanup(f->decoder);
+  if (f->reader != NULL)
+    c89cbor_reader_destroy(f->reader);
+  free(f->encoder);
+  free(f->decoder);
   free(f->encoded);
   free(f->payload);
 }
@@ -284,46 +317,47 @@ static void memory_run(const scenario *s, const bench_options *o,
   saved = f.encoded;
   f.reference = saved;
   f.encoded = NULL;
-  if (s->operation == DECODE || s->operation == ROUNDTRIP)
-    bench_require(cai_cbor_decoder_open(count_token, &f, &f.decoder, NULL) ==
-                      CAI_OK,
-                  "open decoder");
+  if (s->operation == DECODE || s->operation == ROUNDTRIP) {
+    f.decoder = calloc(1U, sizeof(*f.decoder));
+    bench_require(f.decoder != NULL &&
+                      c89cbor_decoder_init(NULL, f.decoder, NULL, 0U,
+                                           CAI_WIRE_CHUNK_SIZE) == C89CBOR_OK,
+                  "open native decoder");
+  }
   if (s->operation == FRAMED)
-    bench_require(
-        cai_wire_decoder_open(count_wire, &f, &f.wire_decoder, NULL) ==
-                CAI_OK &&
-            cai_wire_encoder_open(f.sink, &f.wire_encoder, NULL) == CAI_OK,
-        "open memory framing");
-  bench_require(cai_cbor_encoder_reset(f.encoder, NULL) == CAI_OK,
+    bench_require(c89cbor_reader_create(NULL, C89CBOR_LENGTH32,
+                                        CAI_WIRE_MAX_RECORD,
+                                        &f.reader) == C89CBOR_OK,
+                  "open memory framing");
+  bench_require(c89cbor_encoder_reset(f.encoder) == C89CBOR_OK,
                 "reset fixture encoder");
   start = bench_time();
   for (i = 0U; i < records; ++i) {
     if (s->operation == DECODE) {
-      bench_require(cai_cbor_decoder_feed(f.decoder, saved, f.encoded_length,
-                                          NULL) == CAI_OK,
+      bench_require(memory_sink(&f, saved, f.encoded_length, NULL) == CAI_OK,
                     "decode fixture");
     } else {
-      if (s->operation == FRAMED)
-        bench_require(cai_wire_encoder_begin(f.wire_encoder,
-                                             (uint32_t)f.encoded_length,
-                                             NULL) == CAI_OK,
-                      "begin memory frame");
+      if (s->operation == FRAMED) {
+        unsigned char header[4];
+        bench_require(c89cbor_length32(NULL, (uint32_t)f.encoded_length,
+                                       CAI_WIRE_MAX_RECORD,
+                                       header) == C89CBOR_OK,
+                      "begin native frame");
+        memory_sink(&f, header, sizeof(header), NULL);
+      }
       emit(&f, NULL);
-      bench_require(s->operation == FRAMED
-                        ? cai_wire_encoder_end(f.wire_encoder, NULL) == CAI_OK
-                        : cai_cbor_encoder_finish(f.encoder, NULL) == CAI_OK,
+      bench_require(c89cbor_encoder_finish(f.encoder) == C89CBOR_OK,
                     "finish memory encoding");
-      if (s->operation != FRAMED)
-        bench_require(cai_cbor_encoder_reset(f.encoder, NULL) == CAI_OK,
-                      "reuse encoder");
+      bench_require(c89cbor_encoder_reset(f.encoder) == C89CBOR_OK,
+                    "reuse encoder");
     }
     if (f.decoder != NULL)
-      bench_require(cai_cbor_decoder_finish(f.decoder, NULL) == CAI_OK &&
-                        cai_cbor_decoder_reset(f.decoder, NULL) == CAI_OK,
+      bench_require(c89cbor_decoder_finish(f.decoder) == C89CBOR_OK &&
+                        c89cbor_decoder_reset(f.decoder) == C89CBOR_OK,
                     "accept decoded value");
   }
-  if (f.wire_decoder != NULL)
-    bench_require(cai_wire_decoder_finish(f.wire_decoder, NULL) == CAI_OK,
+  if (f.reader != NULL)
+    bench_require(c89cbor_reader_finish(f.reader) == C89CBOR_OK,
                   "finish memory stream");
   end = bench_time();
   bench_require(
@@ -367,14 +401,14 @@ typedef struct receiving {
   cai_wire_peer *peer;
   int acknowledge;
 } receiving;
-static int receive_peer(void *context, const cai_wire_event *event,
+static int receive_peer(void *context, const c89cbor_event *event,
                         cai_error *error) {
   receiving *r = context;
   int rc = count_wire(&r->f, event, error);
-  if (rc == CAI_OK && event->type == CAI_WIRE_END && r->acknowledge) {
-    cai_cbor_token t;
+  if (rc == CAI_OK && event->type == C89CBOR_RECORD_END && r->acknowledge) {
+    c89cbor_token t;
     memset(&t, 0, sizeof(t));
-    t.type = CAI_CBOR_NULL;
+    t.type = C89CBOR_NULL;
     rc = cai_wire_peer_begin(r->peer, 1U, error);
     if (rc == CAI_OK)
       rc = cai_wire_peer_write(r->peer, &t, error);
@@ -383,11 +417,11 @@ static int receive_peer(void *context, const cai_wire_event *event,
   }
   return rc;
 }
-static int acknowledgement(void *context, const cai_wire_event *event,
+static int acknowledgement(void *context, const c89cbor_event *event,
                            cai_error *error) {
   uint64_t *count = context;
   (void)error;
-  if (event->type == CAI_WIRE_END)
+  if (event->type == C89CBOR_RECORD_END)
     ++*count;
   return CAI_OK;
 }

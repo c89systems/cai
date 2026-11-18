@@ -72,15 +72,15 @@ static int invalid(cai_error *error) {
 static int identity(cai_workspace_client *client,
                     const cai_protocol_event *event, cai_error *error) {
   const cai_protocol_header *h = event->header;
-  const cai_cbor_token *value = event->token;
+  const c89cbor_token *value = event->token;
   const char *expected = client->part == 3U || client->part == 4U
                              ? CAI_WORKSPACE_SCHEMA
                              : cai_workspace_client_directory(client);
   size_t length = client->part == 5U || client->part == 6U
                       ? sizeof(client->instance)
                       : strlen(expected);
-  cai_cbor_type type =
-      client->part == 3U || client->part == 4U ? CAI_CBOR_TEXT : CAI_CBOR_BYTES;
+  c89cbor_type type =
+      client->part == 3U || client->part == 4U ? C89CBOR_TEXT : C89CBOR_BYTES;
   if (event->type == CAI_PROTOCOL_HEADER) {
     if (client->state.has_identity || h->kind != CAI_PROTOCOL_IDENTITY ||
         h->request != 0U || h->conversation != 0U || h->generation != 0U ||
@@ -107,7 +107,7 @@ static int identity(cai_workspace_client *client,
     return invalid(error);
   switch (client->part) {
   case 0:
-    if (value->type != CAI_CBOR_ARRAY || value->argument != 5U)
+    if (value->type != C89CBOR_ARRAY || value->argument != 5U)
       return invalid(error);
     ++client->part;
     break;
@@ -122,7 +122,7 @@ static int identity(cai_workspace_client *client,
   case 2:
   case 4:
   case 6:
-    if (value->type == CAI_CBOR_DATA) {
+    if (value->type == C89CBOR_DATA) {
       if (value->length > length - client->offset)
         return invalid(error);
       if (client->part == 6U)
@@ -130,27 +130,27 @@ static int identity(cai_workspace_client *client,
       else if (memcmp(value->data, expected + client->offset, value->length))
         return invalid(error);
       client->offset += value->length;
-    } else if (value->type == CAI_CBOR_END && value->argument == type &&
+    } else if (value->type == C89CBOR_END && value->argument == type &&
                client->offset == length)
       ++client->part;
     else
       return invalid(error);
     break;
   case 7:
-    if (value->type != CAI_CBOR_BOOL)
+    if (value->type != C89CBOR_BOOL)
       return invalid(error);
     client->persistence = value->argument != 0U;
     ++client->part;
     break;
   case 8:
-    if (value->type != CAI_CBOR_UINT ||
+    if (value->type != C89CBOR_UINT ||
         value->argument > CAI_ATTACHMENT_STOPPING)
       return invalid(error);
     client->server_phase = (cai_attachment_phase)value->argument;
     ++client->part;
     break;
   case 9:
-    if (value->type != CAI_CBOR_END || value->argument != CAI_CBOR_ARRAY)
+    if (value->type != C89CBOR_END || value->argument != C89CBOR_ARRAY)
       return invalid(error);
     ++client->part;
     break;
@@ -162,7 +162,7 @@ static int identity(cai_workspace_client *client,
 static int welcome(cai_workspace_client *client,
                    const cai_protocol_event *event, cai_error *error) {
   const cai_protocol_header *h = event->header;
-  const cai_cbor_token *token = event->token;
+  const c89cbor_token *token = event->token;
   const char *directory = cai_workspace_client_directory(client);
   size_t length = strlen(directory);
   if (event->type == CAI_PROTOCOL_HEADER) {
@@ -190,13 +190,13 @@ static int welcome(cai_workspace_client *client,
     return invalid(error);
   switch (client->part) {
   case 0:
-    if (token->type != CAI_CBOR_ARRAY || token->argument != 3U)
+    if (token->type != C89CBOR_ARRAY || token->argument != 3U)
       return invalid(error);
     ++client->part;
     break;
   case 1:
   case 3:
-    if (token->type != CAI_CBOR_BYTES ||
+    if (token->type != C89CBOR_BYTES ||
         token->argument !=
             (client->part == 1U ? length : sizeof(client->instance)))
       return invalid(error);
@@ -205,7 +205,7 @@ static int welcome(cai_workspace_client *client,
     break;
   case 2:
   case 4:
-    if (token->type == CAI_CBOR_DATA) {
+    if (token->type == C89CBOR_DATA) {
       size_t size = client->part == 2U ? length : sizeof(client->instance);
       if (token->length > size - client->offset)
         return invalid(error);
@@ -215,8 +215,7 @@ static int welcome(cai_workspace_client *client,
       } else
         memcpy(client->instance + client->offset, token->data, token->length);
       client->offset += token->length;
-    } else if (token->type == CAI_CBOR_END &&
-               token->argument == CAI_CBOR_BYTES &&
+    } else if (token->type == C89CBOR_END && token->argument == C89CBOR_BYTES &&
                client->offset ==
                    (client->part == 2U ? length : sizeof(client->instance)))
       ++client->part;
@@ -224,13 +223,13 @@ static int welcome(cai_workspace_client *client,
       return invalid(error);
     break;
   case 5:
-    if (token->type != CAI_CBOR_BOOL)
+    if (token->type != C89CBOR_BOOL)
       return invalid(error);
     client->persistence = token->argument != 0U;
     ++client->part;
     break;
   case 6:
-    if (token->type != CAI_CBOR_END || token->argument != CAI_CBOR_ARRAY)
+    if (token->type != C89CBOR_END || token->argument != C89CBOR_ARRAY)
       return invalid(error);
     ++client->part;
     break;
@@ -247,7 +246,7 @@ static int receive(void *context, const cai_protocol_event *event,
     return client->state.error_code;
   if (!client->state.has_welcome && !client->state.has_identity &&
       (client->rejecting || h->kind == CAI_PROTOCOL_REJECT)) {
-    const cai_cbor_token *t = event->token;
+    const c89cbor_token *t = event->token;
     if (event->type == CAI_PROTOCOL_HEADER) {
       if (client->rejecting || h->request || h->conversation || h->generation ||
           h->sequence || h->stream || h->attachment)
@@ -276,19 +275,19 @@ static int receive(void *context, const cai_protocol_event *event,
     } else if (t->indefinite)
       return invalid(error);
     else if (client->part == 0U) {
-      if (t->type != CAI_CBOR_BYTES || t->argument == 0U ||
+      if (t->type != C89CBOR_BYTES || t->argument == 0U ||
           t->argument > CAI_WORKSPACE_CLAIM_NAME)
         return invalid(error);
       client->part = 1U;
       client->rejection_length = (size_t)t->argument;
-    } else if (client->part == 1U && t->type == CAI_CBOR_DATA) {
+    } else if (client->part == 1U && t->type == C89CBOR_DATA) {
       if (t->length > client->rejection_length - client->offset ||
           (t->length && !cai_workspace_claim_name(t->data, t->length)))
         return invalid(error);
       memcpy(client->rejection + client->offset, t->data, t->length);
       client->offset += t->length;
-    } else if (client->part == 1U && t->type == CAI_CBOR_END &&
-               t->argument == CAI_CBOR_BYTES &&
+    } else if (client->part == 1U && t->type == C89CBOR_END &&
+               t->argument == C89CBOR_BYTES &&
                client->offset == client->rejection_length) {
       client->rejection[client->offset] = '\0';
       client->part = 2U;
@@ -318,7 +317,7 @@ static int receive(void *context, const cai_protocol_event *event,
     if (h->conversation != 0U || h->sequence != 0U || h->stream != 0U)
       return invalid(error);
     if (event->type == CAI_PROTOCOL_PAYLOAD) {
-      if (event->token->type != CAI_CBOR_UINT)
+      if (event->token->type != C89CBOR_UINT)
         return invalid(error);
       client->role = event->token->argument;
     }
@@ -345,10 +344,10 @@ static int receive(void *context, const cai_protocol_event *event,
 static uint32_t size_of_string(size_t length) {
   return (uint32_t)length + (length < 24U ? 1U : length < 256U ? 2U : 3U);
 }
-static int token(cai_workspace_client *client, cai_cbor_type type,
+static int token(cai_workspace_client *client, c89cbor_type type,
                  uint64_t argument, const void *data, size_t length,
                  cai_error *error) {
-  cai_cbor_token value;
+  c89cbor_token value;
   memset(&value, 0, sizeof(value));
   value.type = type;
   value.argument = argument;
@@ -356,14 +355,14 @@ static int token(cai_workspace_client *client, cai_cbor_type type,
   value.length = length;
   return cai_wire_peer_write(client->wire, &value, error);
 }
-static int string(cai_workspace_client *client, cai_cbor_type type,
+static int string(cai_workspace_client *client, c89cbor_type type,
                   const char *value, cai_error *error) {
   size_t length = strlen(value);
   int rc = token(client, type, length, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = token(client, CAI_CBOR_DATA, 0U, value, length, error);
+    rc = token(client, C89CBOR_DATA, 0U, value, length, error);
   if (rc == CAI_OK)
-    rc = token(client, CAI_CBOR_END, type, NULL, 0U, error);
+    rc = token(client, C89CBOR_END, type, NULL, 0U, error);
   return rc;
 }
 static int connected(cai_workspace_client *client, cai_error *error) {
@@ -391,30 +390,30 @@ static int connected(cai_workspace_client *client, cai_error *error) {
                                    client->config.requirement_count),
       error);
   if (rc == CAI_OK)
-    rc = token(client, CAI_CBOR_ARRAY, client->config.probe ? 3U : 4U, NULL, 0U,
+    rc = token(client, C89CBOR_ARRAY, client->config.probe ? 3U : 4U, NULL, 0U,
                error);
   if (rc == CAI_OK)
-    rc = string(client, CAI_CBOR_BYTES, directory, error);
+    rc = string(client, C89CBOR_BYTES, directory, error);
   if (rc == CAI_OK)
-    rc = string(client, CAI_CBOR_TEXT, CAI_WORKSPACE_SCHEMA, error);
+    rc = string(client, C89CBOR_TEXT, CAI_WORKSPACE_SCHEMA, error);
   if (rc == CAI_OK && !client->config.probe) {
     if (!client->expecting)
-      rc = token(client, CAI_CBOR_NULL, 0U, NULL, 0U, error);
+      rc = token(client, C89CBOR_NULL, 0U, NULL, 0U, error);
     else {
-      rc = token(client, CAI_CBOR_BYTES, sizeof(client->expected), NULL, 0U,
+      rc = token(client, C89CBOR_BYTES, sizeof(client->expected), NULL, 0U,
                  error);
       if (rc == CAI_OK)
-        rc = token(client, CAI_CBOR_DATA, 0U, client->expected,
+        rc = token(client, C89CBOR_DATA, 0U, client->expected,
                    sizeof(client->expected), error);
       if (rc == CAI_OK)
-        rc = token(client, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U, error);
+        rc = token(client, C89CBOR_END, C89CBOR_BYTES, NULL, 0U, error);
     }
   }
   if (rc == CAI_OK)
     rc = cai_workspace_claim_write(client->wire, client->requirements,
                                    client->config.requirement_count, error);
   if (rc == CAI_OK)
-    rc = token(client, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, error);
+    rc = token(client, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U, error);
   if (rc == CAI_OK)
     rc = cai_protocol_peer_end(client->wire, error);
   return rc;
@@ -604,7 +603,7 @@ int cai_workspace_client_begin(cai_workspace_client *client,
   return rc == CAI_OK ? rc : failed(client, rc);
 }
 int cai_workspace_client_write(cai_workspace_client *client,
-                               const cai_cbor_token *value, cai_error *error) {
+                               const c89cbor_token *value, cai_error *error) {
   int rc = valid(client, error);
   if (rc != CAI_OK)
     return rc;
@@ -649,7 +648,7 @@ static int control(cai_workspace_client *client, cai_protocol_kind kind,
   header.generation = generation;
   rc = cai_protocol_peer_begin(client->wire, &header, 1U, error);
   if (rc == CAI_OK)
-    rc = token(client, CAI_CBOR_NULL, 0U, NULL, 0U, error);
+    rc = token(client, C89CBOR_NULL, 0U, NULL, 0U, error);
   if (rc == CAI_OK)
     rc = cai_protocol_peer_end(client->wire, error);
   return rc == CAI_OK ? rc : failed(client, rc);

@@ -14,7 +14,7 @@ test -f "$stage/share/doc/libcai/docs/model-metadata.md"
 test -f "$stage/share/doc/libcai/docs/embedding.md"
 test -f "$stage/share/doc/libcai/examples/app.c"
 test -f "$stage/share/doc/libcai/examples/app.lua"
-for dependency in liblockdc liblql softline libmdf libpslog liblonejson curl openssl zlib nghttp2 libssh2; do
+for dependency in liblockdc liblql softline libmdf libpslog liblonejson libcbor curl openssl zlib nghttp2 libssh2; do
   test -f "$stage/share/doc/libcai/third_party/$dependency/LICENSE"
 done
 for notice in LICENSE.md LICENSE.BSD-3-Clause AUTHORS README.softline.md provenance.json softline.patch; do

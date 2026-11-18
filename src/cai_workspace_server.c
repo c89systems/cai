@@ -93,9 +93,9 @@ static uint32_t integer_size(uint64_t n) {
          : n <= UINT32_MAX ? 5U
                            : 9U;
 }
-static int write_token(server_peer *peer, cai_cbor_type type, uint64_t argument,
+static int write_token(server_peer *peer, c89cbor_type type, uint64_t argument,
                        const void *data, size_t length, cai_error *error) {
-  cai_cbor_token token;
+  c89cbor_token token;
   memset(&token, 0, sizeof(token));
   token.type = type;
   token.argument = argument;
@@ -105,11 +105,11 @@ static int write_token(server_peer *peer, cai_cbor_type type, uint64_t argument,
 }
 static int write_bytes(server_peer *peer, const void *data, size_t count,
                        cai_error *error) {
-  int rc = write_token(peer, CAI_CBOR_BYTES, count, NULL, 0U, error);
+  int rc = write_token(peer, C89CBOR_BYTES, count, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_DATA, 0U, data, count, error);
+    rc = write_token(peer, C89CBOR_DATA, 0U, data, count, error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U, error);
+    rc = write_token(peer, C89CBOR_END, C89CBOR_BYTES, NULL, 0U, error);
   return rc;
 }
 static int identity(server_peer *peer, cai_error *error) {
@@ -129,24 +129,24 @@ static int identity(server_peer *peer, cai_error *error) {
                                     string_size(sizeof(server->instance)),
                                 error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_ARRAY, 5U, NULL, 0U, error);
+    rc = write_token(peer, C89CBOR_ARRAY, 5U, NULL, 0U, error);
   if (rc == CAI_OK)
     rc = write_bytes(peer, directory, length, error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_TEXT, schema, NULL, 0U, error);
+    rc = write_token(peer, C89CBOR_TEXT, schema, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_DATA, 0U, CAI_WORKSPACE_SCHEMA, schema,
+    rc = write_token(peer, C89CBOR_DATA, 0U, CAI_WORKSPACE_SCHEMA, schema,
                      error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U, error);
+    rc = write_token(peer, C89CBOR_END, C89CBOR_TEXT, NULL, 0U, error);
   if (rc == CAI_OK)
     rc = write_bytes(peer, server->instance, sizeof(server->instance), error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_BOOL, state.persist != 0, NULL, 0U, error);
+    rc = write_token(peer, C89CBOR_BOOL, state.persist != 0, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_UINT, state.phase, NULL, 0U, error);
+    rc = write_token(peer, C89CBOR_UINT, state.phase, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, error);
+    rc = write_token(peer, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U, error);
   return rc == CAI_OK ? cai_protocol_peer_end(peer->wire, error) : rc;
 }
 static int welcome(server_peer *peer, cai_error *error) {
@@ -167,15 +167,15 @@ static int welcome(server_peer *peer, cai_error *error) {
                                      string_size(sizeof(server->instance)),
                                  error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_ARRAY, 3U, NULL, 0U, error);
+    rc = write_token(peer, C89CBOR_ARRAY, 3U, NULL, 0U, error);
   if (rc == CAI_OK)
     rc = write_bytes(peer, directory, length, error);
   if (rc == CAI_OK)
     rc = write_bytes(peer, server->instance, sizeof(server->instance), error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_BOOL, state.persist != 0, NULL, 0U, error);
+    rc = write_token(peer, C89CBOR_BOOL, state.persist != 0, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, error);
+    rc = write_token(peer, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U, error);
   if (rc == CAI_OK)
     rc = cai_protocol_peer_end(peer->wire, error);
   return rc;
@@ -192,7 +192,7 @@ static int send_role(server_peer *peer, uint64_t generation,
   rc = cai_protocol_peer_begin(peer->wire, &header, integer_size(controller),
                                error);
   if (rc == CAI_OK)
-    rc = write_token(peer, CAI_CBOR_UINT, controller, NULL, 0U, error);
+    rc = write_token(peer, C89CBOR_UINT, controller, NULL, 0U, error);
   if (rc == CAI_OK)
     rc = cai_protocol_peer_end(peer->wire, error);
   return rc;
@@ -257,7 +257,7 @@ static int roles(cai_workspace_server *server, uint64_t requester,
 }
 static int greeting(server_peer *peer, const cai_protocol_event *event,
                     cai_error *error) {
-  const cai_cbor_token *token = event->token;
+  const c89cbor_token *token = event->token;
   const char *expected;
   size_t length;
   if (event->type == CAI_PROTOCOL_HEADER) {
@@ -307,7 +307,7 @@ static int greeting(server_peer *peer, const cai_protocol_event *event,
   }
   switch (peer->part) {
   case 0:
-    if (token->type != CAI_CBOR_ARRAY ||
+    if (token->type != C89CBOR_ARRAY ||
         token->argument != (peer->probe ? 3U : 4U))
       goto invalid;
     peer->part = 1U;
@@ -317,7 +317,7 @@ static int greeting(server_peer *peer, const cai_protocol_event *event,
     expected = peer->part == 1U ? cai_workspace_server_directory(peer->server)
                                 : CAI_WORKSPACE_SCHEMA;
     length = strlen(expected);
-    if (token->type != (peer->part == 1U ? CAI_CBOR_BYTES : CAI_CBOR_TEXT) ||
+    if (token->type != (peer->part == 1U ? C89CBOR_BYTES : C89CBOR_TEXT) ||
         token->argument != length)
       goto invalid;
     peer->offset = 0U;
@@ -328,23 +328,23 @@ static int greeting(server_peer *peer, const cai_protocol_event *event,
     expected = peer->part == 2U ? cai_workspace_server_directory(peer->server)
                                 : CAI_WORKSPACE_SCHEMA;
     length = strlen(expected);
-    if (token->type == CAI_CBOR_DATA) {
+    if (token->type == C89CBOR_DATA) {
       if (token->length > length - peer->offset ||
           memcmp(token->data, expected + peer->offset, token->length) != 0)
         goto invalid;
       peer->offset += token->length;
-    } else if (token->type == CAI_CBOR_END && peer->offset == length &&
+    } else if (token->type == C89CBOR_END && peer->offset == length &&
                token->argument ==
-                   (peer->part == 2U ? CAI_CBOR_BYTES : CAI_CBOR_TEXT))
+                   (peer->part == 2U ? C89CBOR_BYTES : C89CBOR_TEXT))
       ++peer->part;
     else
       goto invalid;
     break;
   case 5:
     if (!peer->probe) {
-      if (token->type == CAI_CBOR_NULL)
+      if (token->type == C89CBOR_NULL)
         peer->part = 7U;
-      else if (token->type == CAI_CBOR_BYTES &&
+      else if (token->type == C89CBOR_BYTES &&
                token->argument == CAI_WORKSPACE_INSTANCE_BYTES) {
         peer->offset = 0U;
         peer->part = 6U;
@@ -355,26 +355,25 @@ static int greeting(server_peer *peer, const cai_protocol_event *event,
     goto invalid; /* PROBE claims are consumed above. */
   case 6:
     if (peer->probe) {
-      if (token->type != CAI_CBOR_END || token->argument != CAI_CBOR_ARRAY)
+      if (token->type != C89CBOR_END || token->argument != C89CBOR_ARRAY)
         goto invalid;
       peer->part = 7U;
       break;
     }
-    if (token->type == CAI_CBOR_DATA) {
+    if (token->type == C89CBOR_DATA) {
       if (token->length > CAI_WORKSPACE_INSTANCE_BYTES - peer->offset ||
           memcmp(token->data, peer->server->instance + peer->offset,
                  token->length) != 0)
         goto invalid;
       peer->offset += token->length;
-    } else if (token->type == CAI_CBOR_END &&
-               token->argument == CAI_CBOR_BYTES &&
+    } else if (token->type == C89CBOR_END && token->argument == C89CBOR_BYTES &&
                peer->offset == CAI_WORKSPACE_INSTANCE_BYTES)
       peer->part = 7U;
     else
       goto invalid;
     break;
   case 8:
-    if (token->type != CAI_CBOR_END || token->argument != CAI_CBOR_ARRAY)
+    if (token->type != C89CBOR_END || token->argument != C89CBOR_ARRAY)
       goto invalid;
     peer->part = 9U;
     break;
@@ -420,7 +419,7 @@ static int receive(void *context, const cai_protocol_event *event,
       return cai_set_error(error, CAI_ERR_PROTOCOL,
                            "invalid workspace control metadata");
     if (event->type == CAI_PROTOCOL_PAYLOAD &&
-        event->token->type != CAI_CBOR_NULL)
+        event->token->type != C89CBOR_NULL)
       return cai_set_error(error, CAI_ERR_PROTOCOL,
                            "workspace controls require a null payload");
     if (event->type == CAI_PROTOCOL_COMPLETE) {
@@ -801,7 +800,7 @@ int cai_workspace_server_begin(cai_workspace_server *server,
   return rc;
 }
 int cai_workspace_server_write(cai_workspace_server *server,
-                               uint64_t attachment, const cai_cbor_token *token,
+                               uint64_t attachment, const c89cbor_token *token,
                                cai_error *error) {
   server_peer *peer;
   int rc = valid(server, error);

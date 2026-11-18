@@ -56,9 +56,9 @@ static void unchanged(cai_workspace_server *server,
          after.controller == before->controller &&
          after.deadline_ms == before->deadline_ms);
 }
-static int feed(cai_workspace_claim_reader *r, cai_cbor_type type,
+static int feed(cai_workspace_claim_reader *r, c89cbor_type type,
                 uint64_t value, const void *p, size_t n) {
-  cai_cbor_token t;
+  c89cbor_token t;
   memset(&t, 0, sizeof(t));
   t.type = type;
   t.argument = value;
@@ -68,16 +68,16 @@ static int feed(cai_workspace_claim_reader *r, cai_cbor_type type,
 }
 static void entry(cai_workspace_claim_reader *r, const cai_workspace_claim *c) {
   size_t i;
-  assert(feed(r, CAI_CBOR_ARRAY, 2U, NULL, 0U) == 0);
-  assert(feed(r, CAI_CBOR_TEXT, strlen(c->name), NULL, 0U) == 0);
+  assert(feed(r, C89CBOR_ARRAY, 2U, NULL, 0U) == 0);
+  assert(feed(r, C89CBOR_TEXT, strlen(c->name), NULL, 0U) == 0);
   for (i = 0U; c->name[i]; ++i)
-    assert(feed(r, CAI_CBOR_DATA, 0U, c->name + i, 1U) == 0);
-  assert(feed(r, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U) == 0);
-  assert(feed(r, CAI_CBOR_BYTES, 32U, NULL, 0U) == 0);
+    assert(feed(r, C89CBOR_DATA, 0U, c->name + i, 1U) == 0);
+  assert(feed(r, C89CBOR_END, C89CBOR_TEXT, NULL, 0U) == 0);
+  assert(feed(r, C89CBOR_BYTES, 32U, NULL, 0U) == 0);
   for (i = 0U; i < 32U; ++i)
-    assert(feed(r, CAI_CBOR_DATA, 0U, c->digest + i, 1U) == 0);
-  assert(feed(r, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U) == 0);
-  assert(feed(r, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U) == 0);
+    assert(feed(r, C89CBOR_DATA, 0U, c->digest + i, 1U) == 0);
+  assert(feed(r, C89CBOR_END, C89CBOR_BYTES, NULL, 0U) == 0);
+  assert(feed(r, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U) == 0);
 }
 static void codec(void) {
   cai_workspace_claim_reader r;
@@ -87,26 +87,25 @@ static void codec(void) {
   memset(&r, 0, sizeof(r));
   r.claims = &c;
   r.count = 1U;
-  assert(feed(&r, CAI_CBOR_ARRAY, 1U, NULL, 0U) == 0);
+  assert(feed(&r, C89CBOR_ARRAY, 1U, NULL, 0U) == 0);
   entry(&r, &c);
   assert(!r.mismatch[0]);
-  assert(feed(&r, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U) == 1);
-  assert(feed(&r, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U) < 0);
+  assert(feed(&r, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U) == 1);
+  assert(feed(&r, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U) < 0);
   memset(&r, 0, sizeof(r));
-  assert(feed(&r, CAI_CBOR_ARRAY, CAI_WORKSPACE_CLAIM_LIMIT + 1U, NULL, 0U) <
-         0);
-  assert(feed(&r, CAI_CBOR_ARRAY, 2U, NULL, 0U) == 0);
+  assert(feed(&r, C89CBOR_ARRAY, CAI_WORKSPACE_CLAIM_LIMIT + 1U, NULL, 0U) < 0);
+  assert(feed(&r, C89CBOR_ARRAY, 2U, NULL, 0U) == 0);
   entry(&r, &c);
   assert(strcmp(r.mismatch, c.name) == 0);
-  assert(feed(&r, CAI_CBOR_ARRAY, 2U, NULL, 0U) == 0);
-  assert(feed(&r, CAI_CBOR_TEXT, strlen(c.name), NULL, 0U) == 0);
-  assert(feed(&r, CAI_CBOR_DATA, 0U, c.name, strlen(c.name)) == 0);
-  assert(feed(&r, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U) < 0); /* duplicate */
+  assert(feed(&r, C89CBOR_ARRAY, 2U, NULL, 0U) == 0);
+  assert(feed(&r, C89CBOR_TEXT, strlen(c.name), NULL, 0U) == 0);
+  assert(feed(&r, C89CBOR_DATA, 0U, c.name, strlen(c.name)) == 0);
+  assert(feed(&r, C89CBOR_END, C89CBOR_TEXT, NULL, 0U) < 0); /* duplicate */
   memset(&r, 0, sizeof(r));
-  assert(feed(&r, CAI_CBOR_ARRAY, 1U, NULL, 0U) == 0);
-  assert(feed(&r, CAI_CBOR_ARRAY, 2U, NULL, 0U) == 0);
-  assert(feed(&r, CAI_CBOR_TEXT, 1U, NULL, 0U) == 0);
-  assert(feed(&r, CAI_CBOR_DATA, 0U, "\033", 1U) < 0);
+  assert(feed(&r, C89CBOR_ARRAY, 1U, NULL, 0U) == 0);
+  assert(feed(&r, C89CBOR_ARRAY, 2U, NULL, 0U) == 0);
+  assert(feed(&r, C89CBOR_TEXT, 1U, NULL, 0U) == 0);
+  assert(feed(&r, C89CBOR_DATA, 0U, "\033", 1U) < 0);
   assert(cai_workspace_claim_copy(&c, 1U, &copy, NULL) == CAI_OK);
   assert(copy != &c && copy->name != c.name && !strcmp(copy->name, c.name));
   cai_workspace_claim_free(copy, 1U);

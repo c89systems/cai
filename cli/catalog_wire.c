@@ -30,10 +30,10 @@ static uint32_t integer_size(uint64_t n) {
          : n <= UINT32_MAX ? 5U
                            : 9U;
 }
-static int token(const cai_cli_input_wire_output *out, cai_cbor_type type,
+static int token(const cai_cli_input_wire_output *out, c89cbor_type type,
                  uint64_t n, const void *data, size_t length,
                  cai_error *error) {
-  cai_cbor_token t;
+  c89cbor_token t;
   memset(&t, 0, sizeof(t));
   t.type = type;
   t.argument = n;
@@ -60,21 +60,21 @@ int cai_cli_catalog_write(const cai_cli_input_wire_output *out,
          integer_size(n) + (uint32_t)n;
   rc = out->begin(out->context, &h, size, error);
   if (rc == CAI_OK)
-    rc = token(out, CAI_CBOR_ARRAY, 4U, NULL, 0U, error);
+    rc = token(out, C89CBOR_ARRAY, 4U, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = token(out, CAI_CBOR_UINT, e->kind, NULL, 0U, error);
+    rc = token(out, C89CBOR_UINT, e->kind, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = token(out, CAI_CBOR_UINT, e->phase, NULL, 0U, error);
+    rc = token(out, C89CBOR_UINT, e->phase, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = token(out, CAI_CBOR_UINT, (uint64_t)e->code, NULL, 0U, error);
+    rc = token(out, C89CBOR_UINT, (uint64_t)e->code, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = token(out, CAI_CBOR_BYTES, n, NULL, 0U, error);
+    rc = token(out, C89CBOR_BYTES, n, NULL, 0U, error);
   if (rc == CAI_OK && n != 0U)
-    rc = token(out, CAI_CBOR_DATA, 0U, text, n, error);
+    rc = token(out, C89CBOR_DATA, 0U, text, n, error);
   if (rc == CAI_OK)
-    rc = token(out, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U, error);
+    rc = token(out, C89CBOR_END, C89CBOR_BYTES, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = token(out, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, error);
+    rc = token(out, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U, error);
   return rc == CAI_OK ? out->end(out->context, error) : rc;
 }
 int cai_cli_catalog_decoder_open(cai_cli_catalog_decoder **out,
@@ -88,7 +88,7 @@ int cai_cli_catalog_decode(cai_cli_catalog_decoder *d,
                            const cai_protocol_event *event,
                            const cai_app_catalog_event **out,
                            cai_error *error) {
-  const cai_cbor_token *t = event->token;
+  const c89cbor_token *t = event->token;
   *out = NULL;
   if (event->type == CAI_PROTOCOL_HEADER) {
     const cai_protocol_header *h = event->header;
@@ -111,10 +111,10 @@ int cai_cli_catalog_decode(cai_cli_catalog_decoder *d,
   if (t->indefinite)
     return invalid(error);
   if (d->part == 0U) {
-    if (t->type != CAI_CBOR_ARRAY || t->argument != 4U)
+    if (t->type != C89CBOR_ARRAY || t->argument != 4U)
       return invalid(error);
   } else if (d->part <= 3U) {
-    if (t->type != CAI_CBOR_UINT)
+    if (t->type != C89CBOR_UINT)
       return invalid(error);
     if (d->part == 1U) {
       if (t->argument != CAI_APP_CATALOG_SKILLS)
@@ -130,11 +130,11 @@ int cai_cli_catalog_decode(cai_cli_catalog_decoder *d,
       d->row.code = (int)t->argument;
     }
   } else if (d->part == 4U) {
-    if (t->type != CAI_CBOR_BYTES || t->argument >= sizeof(d->text))
+    if (t->type != C89CBOR_BYTES || t->argument >= sizeof(d->text))
       return invalid(error);
     d->length = (size_t)t->argument;
   } else if (d->part == 5U) {
-    if (t->type == CAI_CBOR_DATA) {
+    if (t->type == C89CBOR_DATA) {
       if (t->length > d->length - d->offset ||
           (t->length != 0U && memchr(t->data, '\0', t->length) != NULL))
         return invalid(error);
@@ -142,11 +142,11 @@ int cai_cli_catalog_decode(cai_cli_catalog_decoder *d,
       d->offset += t->length;
       return CAI_OK;
     }
-    if (t->type != CAI_CBOR_END || t->argument != CAI_CBOR_BYTES ||
+    if (t->type != C89CBOR_END || t->argument != C89CBOR_BYTES ||
         d->offset != d->length)
       return invalid(error);
   } else if (d->part == 6U) {
-    if (t->type != CAI_CBOR_END || t->argument != CAI_CBOR_ARRAY)
+    if (t->type != C89CBOR_END || t->argument != C89CBOR_ARRAY)
       return invalid(error);
     d->part = 8U;
     return CAI_OK;

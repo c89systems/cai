@@ -100,7 +100,7 @@ int cai_workspace_client_begin(cai_workspace_client *client,
                                uint32_t payload_length, int mutation,
                                cai_error *error);
 int cai_workspace_client_write(cai_workspace_client *client,
-                               const cai_cbor_token *token, cai_error *error);
+                               const c89cbor_token *token, cai_error *error);
 int cai_workspace_client_end(cai_workspace_client *client, cai_error *error);
 /** Explicit controls; original generation must still be current. */
 int cai_workspace_client_takeover(cai_workspace_client *client,

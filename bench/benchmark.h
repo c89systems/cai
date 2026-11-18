@@ -39,7 +39,7 @@ typedef struct bench_frontend bench_frontend;
  */
 int bench_frontend_open(int render, int verify, const void *expected,
                         size_t length, bench_frontend **out);
-int bench_frontend_receive(void *, const cai_wire_event *, cai_error *);
+int bench_frontend_receive(void *, const c89cbor_event *, cai_error *);
 void bench_frontend_send(cai_wire_peer *, uint64_t sequence, const void *,
                          size_t);
 void bench_frontend_finish(bench_frontend *, uint64_t records);

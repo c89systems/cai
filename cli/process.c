@@ -22,7 +22,7 @@ static uint64_t monotonic_ms(void) {
     return 0U;
   return (uint64_t)now.tv_sec * 1000U + (uint64_t)now.tv_nsec / 1000000U;
 }
-static int unexpected(void *context, const cai_wire_event *event,
+static int unexpected(void *context, const c89cbor_event *event,
                       cai_error *error) {
   (void)context;
   (void)event;

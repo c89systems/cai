@@ -1,20 +1,20 @@
 #include "../cli/catalog_wire.h"
 #include "../cli/command_help.h"
+#include "native_fixture.h"
 #include <assert.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 typedef struct fixture {
   cai_cli_catalog_decoder *catalog;
-  cai_cbor_decoder *decoder;
-  cai_cbor_encoder *encoder;
-  cai_sink *sink;
+  c89cbor_decoder *decoder;
+  c89cbor_encoder *encoder;
   cai_protocol_header header;
   const cai_app_catalog_event *row;
   size_t bytes, declared, writes;
   int fail;
 } fixture;
-static int receive(void *context, const cai_cbor_token *token,
+static int receive(void *context, const c89cbor_token *token,
                    cai_error *error) {
   fixture *f = context;
   const cai_app_catalog_event *row = NULL;
@@ -37,7 +37,7 @@ static int bytes(void *context, const void *data, size_t length,
     return CAI_ERR_CANCELLED;
   f->bytes += length;
   for (i = 0U; i < length; ++i) {
-    int rc = cai_cbor_decoder_feed(f->decoder, p + i, 1U, error);
+    int rc = test_native_feed(f->decoder, p + i, 1U, receive, f, error);
     if (rc != CAI_OK)
       return rc;
   }
@@ -54,15 +54,16 @@ static int begin(void *context, const cai_protocol_header *h, uint32_t n,
   event.token = NULL;
   return cai_cli_catalog_decode(f->catalog, &event, &f->row, error);
 }
-static int token(void *context, const cai_cbor_token *t, cai_error *error) {
-  return cai_cbor_encoder_write(((fixture *)context)->encoder, t, error);
+static int token(void *context, const c89cbor_token *t, cai_error *error) {
+  return test_native_write(((fixture *)context)->encoder, t, bytes, context,
+                           error);
 }
 static int end(void *context, cai_error *error) {
   fixture *f = context;
   cai_protocol_event event;
-  int rc = cai_cbor_encoder_finish(f->encoder, error);
+  int rc = test_native_result(c89cbor_encoder_finish(f->encoder));
   if (rc == CAI_OK)
-    rc = cai_cbor_decoder_finish(f->decoder, error);
+    rc = test_native_result(c89cbor_decoder_finish(f->decoder));
   if (rc != CAI_OK)
     return rc;
   assert(f->bytes == f->declared && f->row == NULL);
@@ -72,21 +73,15 @@ static int end(void *context, cai_error *error) {
   return cai_cli_catalog_decode(f->catalog, &event, &f->row, error);
 }
 static void open_fixture(fixture *f) {
-  cai_sink_callbacks sink;
   memset(f, 0, sizeof(*f));
-  memset(&sink, 0, sizeof(sink));
-  sink.write = bytes;
-  sink.context = f;
   assert(cai_cli_catalog_decoder_open(&f->catalog, NULL) == CAI_OK);
-  assert(cai_cbor_decoder_open(receive, f, &f->decoder, NULL) == CAI_OK);
-  assert(cai_sink_from_callbacks(&sink, &f->sink, NULL) == CAI_OK);
-  assert(cai_cbor_encoder_open(f->sink, &f->encoder, NULL) == CAI_OK);
+  assert(c89cbor_decoder_create(NULL, NULL, &f->decoder) == CAI_OK);
+  assert(c89cbor_encoder_create(NULL, NULL, &f->encoder) == CAI_OK);
 }
 static void close_fixture(fixture *f) {
-  cai_cbor_encoder_close(f->encoder);
-  cai_cbor_decoder_close(f->decoder);
+  c89cbor_encoder_destroy(f->encoder);
+  c89cbor_decoder_destroy(f->decoder);
   cai_cli_catalog_decoder_close(f->catalog);
-  cai_sink_close(f->sink);
 }
 static int send(fixture *f, const cai_app_catalog_event *row) {
   cai_cli_input_wire_output out;

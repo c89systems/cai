@@ -19,9 +19,12 @@ typedef struct wire_block {
 /** Nonblocking socket transport owning codecs and bounded queued output.
  * No worker or complete application-message buffer is created. */
 struct cai_wire_peer {
-  cai_wire_decoder *decoder;
-  cai_wire_encoder *encoder;
-  cai_sink *sink;
+  c89cbor_reader reader;
+  c89cbor_encoder encoder;
+  cai_wire_event_fn callback;
+  void *context;
+  uint32_t remaining;
+  int active;
   wire_block *head, *tail;
   size_t pending, limit;
   int fd, failed, eof, reading, writing;
@@ -38,6 +41,17 @@ static int valid(cai_wire_peer *peer, cai_error *error) {
              ? cai_set_error(error, peer->failed, "Wire peer has failed")
              : CAI_OK;
 }
+/** Map native failures only at the application transport boundary. */
+static int codec_result(cai_wire_peer *peer, int status, cai_error *error) {
+  int code;
+  if (status == C89CBOR_OK)
+    return CAI_OK;
+  code = status == C89CBOR_LIMIT     ? CAI_ERR_LIMIT
+         : status == C89CBOR_NOMEM   ? CAI_ERR_NOMEM
+         : status == C89CBOR_INVALID ? CAI_ERR_INVALID
+                                     : CAI_ERR_PROTOCOL;
+  return peer_fail(peer, error, code, c89cbor_status_string(NULL, status));
+}
 static int peer_transport(cai_wire_peer *peer, cai_error *error,
                           const char *message) {
   peer->failed = CAI_ERR_TRANSPORT;
@@ -46,9 +60,8 @@ static int peer_transport(cai_wire_peer *peer, cai_error *error,
 }
 /** Copy an encoded fragment into remaining transport credit.
  * Backlog exhaustion fails this peer rather than blocking its producer. */
-static int enqueue(void *context, const void *bytes, size_t count,
+static int enqueue(cai_wire_peer *peer, const void *bytes, size_t count,
                    cai_error *error) {
-  cai_wire_peer *peer = context;
   const unsigned char *input = bytes;
   if (count > peer->limit - peer->pending)
     return peer_fail(peer, error, CAI_ERR_LIMIT,
@@ -83,7 +96,6 @@ int cai_wire_peer_open(int descriptor, size_t backlog_limit,
                        cai_wire_peer **out, cai_error *error) {
   struct sockaddr_un address;
   socklen_t size = sizeof(address);
-  cai_sink_callbacks callbacks;
   cai_wire_peer *peer;
   int rc, flags, descriptor_flags, type;
   if (out != NULL)
@@ -116,14 +128,17 @@ int cai_wire_peer_open(int descriptor, size_t backlog_limit,
   memset(peer, 0, sizeof(*peer));
   peer->fd = -1;
   peer->limit = backlog_limit != 0U ? backlog_limit : 1024U * 1024U;
-  rc = cai_wire_decoder_open(callback, context, &peer->decoder, error);
-  memset(&callbacks, 0, sizeof(callbacks));
-  callbacks.write = enqueue;
-  callbacks.context = peer;
+  peer->callback = callback;
+  peer->context = context;
+  rc = codec_result(peer,
+                    c89cbor_reader_init(NULL, &peer->reader, C89CBOR_LENGTH32,
+                                        CAI_WIRE_MAX_RECORD),
+                    error);
   if (rc == CAI_OK)
-    rc = cai_sink_from_callbacks(&callbacks, &peer->sink, error);
-  if (rc == CAI_OK)
-    rc = cai_wire_encoder_open(peer->sink, &peer->encoder, error);
+    rc = codec_result(peer,
+                      c89cbor_encoder_init(NULL, &peer->encoder, NULL, 0U,
+                                           CAI_WIRE_CHUNK_SIZE),
+                      error);
 #ifdef SO_NOSIGPIPE
   if (rc == CAI_OK) {
     int enabled = 1;
@@ -177,10 +192,28 @@ int cai_wire_peer_read(cai_wire_peer *peer, size_t budget, int *eof,
     size_t take = budget < sizeof(bytes) ? budget : sizeof(bytes);
     ssize_t count = recv(peer->fd, bytes, take, 0);
     if (count > 0) {
+      const unsigned char *at = bytes;
+      size_t left = (size_t)count;
       budget -= (size_t)count;
-      rc = cai_wire_decoder_feed(peer->decoder, bytes, (size_t)count, error);
+      while (rc == CAI_OK) {
+        c89cbor_event event;
+        size_t consumed;
+        int status =
+            c89cbor_reader_next(&peer->reader, at, left, &consumed, &event);
+        at += consumed;
+        left -= consumed;
+        if (status == C89CBOR_INPUT)
+          break;
+        if (status != C89CBOR_TOKEN) {
+          rc = codec_result(peer, status, error);
+          break;
+        }
+        rc = peer->callback(peer->context, &event, error);
+        if (peer->failed)
+          rc = peer->failed;
+      }
     } else if (count == 0) {
-      rc = cai_wire_decoder_finish(peer->decoder, error);
+      rc = codec_result(peer, c89cbor_reader_finish(&peer->reader), error);
       if (rc == CAI_OK)
         *eof = peer->eof = 1;
       break;
@@ -190,8 +223,11 @@ int cai_wire_peer_read(cai_wire_peer *peer, size_t budget, int *eof,
       rc = peer_transport(peer, error, "Read wire socket");
   }
   peer->reading = 0;
-  if (rc != CAI_OK)
+  if (rc != CAI_OK) {
     peer->failed = rc;
+    if (error != NULL && error->code == CAI_OK)
+      cai_set_error(error, rc, "Wire consumer failed");
+  }
   return rc;
 }
 int cai_wire_peer_flush(cai_wire_peer *peer, size_t budget, cai_error *error) {
@@ -242,25 +278,73 @@ int cai_wire_peer_flush(cai_wire_peer *peer, size_t budget, cai_error *error) {
 int cai_wire_peer_begin(cai_wire_peer *peer, uint32_t length,
                         cai_error *error) {
   int rc = valid(peer, error);
-  if (rc == CAI_OK)
-    rc = cai_wire_encoder_begin(peer->encoder, length, error);
+  unsigned char header[4];
+  if (rc == CAI_OK &&
+      (peer->active || length == 0U || length > CAI_WIRE_MAX_RECORD))
+    rc = peer_fail(peer, error, CAI_ERR_INVALID,
+                   "Wire begin requires an idle peer and 1..128 KiB");
+  if (rc == CAI_OK) {
+    rc = codec_result(
+        peer, c89cbor_length32(NULL, length, CAI_WIRE_MAX_RECORD, header),
+        error);
+    if (rc == CAI_OK)
+      rc = enqueue(peer, header, sizeof(header), error);
+    peer->remaining = length;
+    peer->active = 1;
+  }
   if (peer != NULL && rc != CAI_OK)
     peer->failed = rc;
   return rc;
 }
-int cai_wire_peer_write(cai_wire_peer *peer, const cai_cbor_token *token,
+int cai_wire_peer_write(cai_wire_peer *peer, const c89cbor_token *token,
                         cai_error *error) {
   int rc = valid(peer, error);
+  if (rc == CAI_OK && !peer->active)
+    rc = peer_fail(peer, error, CAI_ERR_INVALID, "Wire record not begun");
   if (rc == CAI_OK)
-    rc = cai_wire_encoder_write(peer->encoder, token, error);
+    rc = codec_result(peer, c89cbor_encoder_put(&peer->encoder, token), error);
+  while (rc == CAI_OK) {
+    const void *bytes;
+    size_t length;
+    int status = c89cbor_encoder_peek(&peer->encoder, &bytes, &length);
+    if (status == C89CBOR_OK)
+      break;
+    if (status != C89CBOR_OUTPUT) {
+      rc = codec_result(peer, status, error);
+      break;
+    }
+    if (length > peer->remaining) {
+      rc = peer_fail(peer, error, CAI_ERR_PROTOCOL,
+                     "Wire payload exceeds declared record length");
+      break;
+    }
+    rc = enqueue(peer, bytes, length, error);
+    if (rc != CAI_OK)
+      break;
+    peer->remaining -= (uint32_t)length;
+    status = c89cbor_encoder_advance(&peer->encoder, length);
+    if (status == C89CBOR_OK)
+      break;
+    if (status != C89CBOR_OUTPUT)
+      rc = codec_result(peer, status, error);
+  }
   if (peer != NULL && rc != CAI_OK)
     peer->failed = rc;
   return rc;
 }
 int cai_wire_peer_end(cai_wire_peer *peer, cai_error *error) {
   int rc = valid(peer, error);
+  if (rc == CAI_OK && !peer->active)
+    rc = peer_fail(peer, error, CAI_ERR_INVALID, "Wire record not begun");
   if (rc == CAI_OK)
-    rc = cai_wire_encoder_end(peer->encoder, error);
+    rc = codec_result(peer, c89cbor_encoder_finish(&peer->encoder), error);
+  if (rc == CAI_OK && peer->remaining != 0U)
+    rc = peer_fail(peer, error, CAI_ERR_PROTOCOL,
+                   "Wire payload is shorter than declared record length");
+  if (rc == CAI_OK) {
+    rc = codec_result(peer, c89cbor_encoder_reset(&peer->encoder), error);
+    peer->active = 0;
+  }
   if (peer != NULL && rc != CAI_OK)
     peer->failed = rc;
   return rc;
@@ -274,9 +358,8 @@ void cai_wire_peer_close(cai_wire_peer *peer) {
       peer->head = block->next;
       cai_free_mem(NULL, block);
     }
-    cai_wire_encoder_close(peer->encoder);
-    cai_wire_decoder_close(peer->decoder);
-    cai_sink_close(peer->sink);
+    c89cbor_encoder_cleanup(&peer->encoder);
+    c89cbor_reader_cleanup(&peer->reader);
     cai_free_mem(NULL, peer);
   }
 }

@@ -116,7 +116,7 @@ int bench_frontend_open(int render, int verify, const void *expected,
   *out = f;
   return CAI_OK;
 }
-int bench_frontend_receive(void *context, const cai_wire_event *event,
+int bench_frontend_receive(void *context, const c89cbor_event *event,
                            cai_error *error) {
   bench_frontend *f = context;
   return cai_protocol_decoder_event(f->protocol, event, error);
@@ -125,7 +125,7 @@ static int output_begin(void *context, const cai_protocol_header *header,
                         uint32_t length, cai_error *error) {
   return cai_protocol_peer_begin(context, header, length, error);
 }
-static int output_write(void *context, const cai_cbor_token *token,
+static int output_write(void *context, const c89cbor_token *token,
                         cai_error *error) {
   return cai_wire_peer_write(context, token, error);
 }

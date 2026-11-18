@@ -223,13 +223,7 @@ so worker credential lookup does not depend on later global changes. Reopening
 the MCP context adopts updated configuration; `/mcp refresh` retains the current
 context's environment and still refreshes provider-managed authentication.
 
-The Unix transport foundation is also independent of libcai_app and terminal
-libraries. `<cai/cbor.h>` decodes fragments into borrowed tokens and writes
-tokens directly to a sink, without a DOM or retained value. A definite string
-can span many DATA calls; indefinite strings contain independently valid
-chunks. Every begun string/container has an END token. Finish verifies one
-complete root item. Callbacks are provisional until successful completion;
-never execute a partially decoded request.
+The Unix transport foundation is independent of libcai_app and terminal libraries. It uses libcbor's public C89 tokens, reader and encoder directly, without a CAI codec interface, token translation, DOM or retained value. A definite string can span many DATA events; indefinite strings contain independently valid chunks. Every begun string/container has an END token. Tokens and framing events remain provisional until the native reader validates RECORD_END; never execute a partially decoded request.
 
 `<cai/wire.h>` wraps one CBOR item in a four-byte big-endian length (at most
 128 KiB). Known record lengths come from field/chunk sizes; unknown-length
@@ -240,7 +234,7 @@ only while `cai_wire_peer_pending()` is nonzero. Drop a failed/overflowed peer
 and reconcile at the application layer; never retry part of a failed record.
 
 `<cai/protocol.h>` adds typed attachment envelopes without retaining their
-payloads. Pass `cai_protocol_decoder_event` directly as the wire decoder/peer
+payloads. Pass `cai_protocol_decoder_event` directly as the socket peer
 callback. HEADER/PAYLOAD notifications expose borrowed metadata/tokens;
 COMPLETE means the record is fully validated, not that work was durably
 accepted. The host still checks authenticated connection identity, control

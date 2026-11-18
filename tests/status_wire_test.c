@@ -1,4 +1,5 @@
 #include "../cli/status_wire.h"
+#include "native_fixture.h"
 #include <assert.h>
 #include <float.h>
 #include <limits.h>
@@ -8,46 +9,45 @@
 
 typedef struct fixture {
   cai_cli_status_decoder *decoder;
-  cai_cbor_decoder *cbor;
-  cai_cbor_encoder *encoder;
-  cai_sink *sink;
+  c89cbor_decoder *cbor;
+  c89cbor_encoder *encoder;
   cai_protocol_header header;
   const cai_app_view *complete;
   size_t declared, bytes, writes;
   int reject, incomplete, fault;
   size_t arrays;
 } fixture;
-static int receive(void *context, const cai_cbor_token *token, cai_error *e) {
+static int receive(void *context, const c89cbor_token *token, cai_error *e) {
   fixture *f = context;
   cai_protocol_event event;
   const cai_app_view *view = NULL;
-  cai_cbor_token changed = *token;
+  c89cbor_token changed = *token;
   static const unsigned char nul = 0U;
   int rc;
-  if (token->type == CAI_CBOR_ARRAY)
+  if (token->type == C89CBOR_ARRAY)
     ++f->arrays;
-  if ((f->fault == 1 && token->type == CAI_CBOR_ARRAY) ||
-      (f->fault == 2 && token->type == CAI_CBOR_BOOL) ||
-      (f->fault == 3 && token->type == CAI_CBOR_ARRAY && f->arrays == 3U)) {
+  if ((f->fault == 1 && token->type == C89CBOR_ARRAY) ||
+      (f->fault == 2 && token->type == C89CBOR_BOOL) ||
+      (f->fault == 3 && token->type == C89CBOR_ARRAY && f->arrays == 3U)) {
     changed.argument = 99U;
     f->fault = 0;
-  } else if (f->fault == 4 && token->type == CAI_CBOR_UINT) {
+  } else if (f->fault == 4 && token->type == C89CBOR_UINT) {
     changed.argument = 99U; /* Invalid application outcome at COMPLETE. */
     f->fault = 0;
-  } else if (f->fault == 5 && token->type == CAI_CBOR_BYTES) {
+  } else if (f->fault == 5 && token->type == C89CBOR_BYTES) {
     changed.argument = 129U; /* Session identity cannot exceed 128 bytes. */
     f->fault = 0;
-  } else if (f->fault == 6 && token->type == CAI_CBOR_DATA &&
+  } else if (f->fault == 6 && token->type == C89CBOR_DATA &&
              token->length != 0U) {
     changed.data = &nul;
     changed.length = 1U;
     f->fault = 0;
-  } else if (f->fault == 7 && token->type == CAI_CBOR_FLOAT64) {
+  } else if (f->fault == 7 && token->type == C89CBOR_FLOAT64) {
     changed.argument =
         0x7ff0000000000000ULL; /* Infinity is not a wire value. */
     f->fault = 0;
-  } else if (f->fault == 8 && token->type == CAI_CBOR_NULL) {
-    changed.type = CAI_CBOR_BOOL;
+  } else if (f->fault == 8 && token->type == C89CBOR_NULL) {
+    changed.type = C89CBOR_BOOL;
     f->fault = 0;
   }
   event.type = CAI_PROTOCOL_PAYLOAD;
@@ -66,7 +66,7 @@ static int bytes(void *context, const void *data, size_t length, cai_error *e) {
     return CAI_ERR_CANCELLED;
   f->bytes += length;
   for (i = 0U; i < length; ++i) {
-    int rc = cai_cbor_decoder_feed(f->cbor, p + i, 1U, e);
+    int rc = test_native_feed(f->cbor, p + i, 1U, receive, f, e);
     if (rc != CAI_OK)
       return rc;
   }
@@ -86,15 +86,15 @@ static int begin(void *context, const cai_protocol_header *h, uint32_t n,
   event.token = NULL;
   return cai_cli_status_decode(f->decoder, &event, &view, e);
 }
-static int token(void *context, const cai_cbor_token *t, cai_error *e) {
-  return cai_cbor_encoder_write(((fixture *)context)->encoder, t, e);
+static int token(void *context, const c89cbor_token *t, cai_error *e) {
+  return test_native_write(((fixture *)context)->encoder, t, bytes, context, e);
 }
 static int end(void *context, cai_error *e) {
   fixture *f = context;
   cai_protocol_event event;
-  int rc = cai_cbor_encoder_finish(f->encoder, e);
+  int rc = test_native_result(c89cbor_encoder_finish(f->encoder));
   if (rc == CAI_OK)
-    rc = cai_cbor_decoder_finish(f->cbor, e);
+    rc = test_native_result(c89cbor_decoder_finish(f->cbor));
   if (rc != CAI_OK)
     return rc;
   assert(f->bytes == f->declared && f->complete == NULL);
@@ -106,21 +106,15 @@ static int end(void *context, cai_error *e) {
   return cai_cli_status_decode(f->decoder, &event, &f->complete, e);
 }
 static void open_fixture(fixture *f) {
-  cai_sink_callbacks sink;
   memset(f, 0, sizeof(*f));
-  memset(&sink, 0, sizeof(sink));
-  sink.context = f;
-  sink.write = bytes;
   assert(cai_cli_status_decoder_open(&f->decoder, NULL) == CAI_OK);
-  assert(cai_cbor_decoder_open(receive, f, &f->cbor, NULL) == CAI_OK);
-  assert(cai_sink_from_callbacks(&sink, &f->sink, NULL) == CAI_OK);
-  assert(cai_cbor_encoder_open(f->sink, &f->encoder, NULL) == CAI_OK);
+  assert(c89cbor_decoder_create(NULL, NULL, &f->cbor) == CAI_OK);
+  assert(c89cbor_encoder_create(NULL, NULL, &f->encoder) == CAI_OK);
 }
 static void close_fixture(fixture *f) {
-  cai_cbor_encoder_close(f->encoder);
-  cai_cbor_decoder_close(f->cbor);
+  c89cbor_encoder_destroy(f->encoder);
+  c89cbor_decoder_destroy(f->cbor);
   cai_cli_status_decoder_close(f->decoder);
-  cai_sink_close(f->sink);
 }
 static int send(fixture *f, const cai_app_view *v) {
   cai_cli_input_wire_output out;
@@ -297,7 +291,7 @@ static void failures(void) {
   cai_protocol_header h;
   cai_protocol_event e;
   const cai_app_view *view = NULL;
-  cai_cbor_token t;
+  c89cbor_token t;
   size_t i;
   static const uint64_t nonfinite[] = {
       0x7ff0000000000000ULL, 0xfff0000000000000ULL, 0x7ff8000000000001ULL};
@@ -352,7 +346,7 @@ static void failures(void) {
       assert(cai_cli_status_decode(f.decoder, &e, &view, NULL) == CAI_OK);
       e.type = CAI_PROTOCOL_PAYLOAD;
       memset(&t, 0, sizeof(t));
-      t.type = CAI_CBOR_ARRAY;
+      t.type = C89CBOR_ARRAY;
       t.argument = 2U;
       t.indefinite = i == 6U;
       e.token = &t;

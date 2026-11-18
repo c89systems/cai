@@ -98,9 +98,11 @@ else
   kill -KILL "$owner_b"
   wait "$owner_b" 2>/dev/null || :
   owner_b=
-  expect 'workspace server disconnected'
   wait_for test -s "$term/status"
   wait "$terminal_pid" 2>/dev/null || :
   terminal_pid=
   [[ $(cat "$term/status") == 1 ]]
+  # Killing with unread traffic can reset the socket instead of returning EOF.
+  # Both paths must report the loss visibly and exit unsuccessfully.
+  rg -q 'workspace server disconnected|Read wire socket|Write wire socket' "$term/text"
 fi

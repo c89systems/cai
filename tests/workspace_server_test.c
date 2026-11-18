@@ -46,15 +46,15 @@ static int observed(void *context, const cai_protocol_event *event,
   }
   if (event->type == CAI_PROTOCOL_PAYLOAD) {
     if (event->header->kind == CAI_PROTOCOL_WELCOME) {
-      const cai_cbor_token *value = event->token;
-      if (value->type == CAI_CBOR_BYTES) {
+      const c89cbor_token *value = event->token;
+      if (value->type == C89CBOR_BYTES) {
         ++client->part;
         client->offset = 0U;
         assert(value->argument < sizeof(client->workspace));
         if (client->part == 2U)
           assert(value->argument == sizeof(client->instance));
       }
-      if (value->type == CAI_CBOR_DATA) {
+      if (value->type == C89CBOR_DATA) {
         void *out = client->part == 1U
                         ? (void *)(client->workspace + client->offset)
                         : (void *)(client->instance + client->offset);
@@ -64,15 +64,15 @@ static int observed(void *context, const cai_protocol_event *event,
         memcpy(out, value->data, value->length);
         client->offset += value->length;
       }
-      if (value->type == CAI_CBOR_BOOL)
+      if (value->type == C89CBOR_BOOL)
         client->persist = (int)value->argument;
     }
     if (event->header->kind == CAI_PROTOCOL_ROLE) {
-      assert(event->token->type == CAI_CBOR_UINT);
+      assert(event->token->type == C89CBOR_UINT);
       client->controller = event->token->argument;
     }
     if (event->header->kind == CAI_PROTOCOL_STREAM_CHUNK &&
-        event->token->type == CAI_CBOR_DATA)
+        event->token->type == C89CBOR_DATA)
       client->bytes += event->token->length;
   }
   return CAI_OK;
@@ -112,9 +112,9 @@ static int host_event(void *context, const cai_workspace_server_event *event,
   }
   return CAI_OK;
 }
-static void token(test_client *client, cai_cbor_type type, uint64_t argument,
+static void token(test_client *client, c89cbor_type type, uint64_t argument,
                   const void *bytes, size_t length) {
-  cai_cbor_token value;
+  c89cbor_token value;
   memset(&value, 0, sizeof(value));
   value.type = type;
   value.argument = argument;
@@ -137,18 +137,18 @@ static void greeting_kind(test_client *client, const char *workspace,
   header.kind = kind;
   assert(cai_protocol_peer_begin(client->wire, &header, length, NULL) ==
          CAI_OK);
-  token(client, CAI_CBOR_ARRAY, kind == CAI_PROTOCOL_HELLO ? 4U : 3U, NULL, 0U);
-  token(client, CAI_CBOR_BYTES, n, NULL, 0U);
-  token(client, CAI_CBOR_DATA, 0U, workspace, n);
-  token(client, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U);
-  token(client, CAI_CBOR_TEXT, s, NULL, 0U);
-  token(client, CAI_CBOR_DATA, 0U, schema, s);
-  token(client, CAI_CBOR_END, CAI_CBOR_TEXT, NULL, 0U);
+  token(client, C89CBOR_ARRAY, kind == CAI_PROTOCOL_HELLO ? 4U : 3U, NULL, 0U);
+  token(client, C89CBOR_BYTES, n, NULL, 0U);
+  token(client, C89CBOR_DATA, 0U, workspace, n);
+  token(client, C89CBOR_END, C89CBOR_BYTES, NULL, 0U);
+  token(client, C89CBOR_TEXT, s, NULL, 0U);
+  token(client, C89CBOR_DATA, 0U, schema, s);
+  token(client, C89CBOR_END, C89CBOR_TEXT, NULL, 0U);
   if (kind == CAI_PROTOCOL_HELLO)
-    token(client, CAI_CBOR_NULL, 0U, NULL, 0U);
-  token(client, CAI_CBOR_ARRAY, 0U, NULL, 0U);
-  token(client, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U);
-  token(client, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U);
+    token(client, C89CBOR_NULL, 0U, NULL, 0U);
+  token(client, C89CBOR_ARRAY, 0U, NULL, 0U);
+  token(client, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U);
+  token(client, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U);
   assert(cai_protocol_peer_end(client->wire, NULL) == CAI_OK);
 }
 static void greeting(test_client *client, const char *workspace,
@@ -198,7 +198,7 @@ static void command(test_client *client, cai_protocol_kind kind,
   header.generation = generation;
   header.request = 1U;
   assert(cai_protocol_peer_begin(client->wire, &header, 1U, NULL) == CAI_OK);
-  token(client, CAI_CBOR_NULL, 0U, NULL, 0U);
+  token(client, C89CBOR_NULL, 0U, NULL, 0U);
   assert(cai_protocol_peer_end(client->wire, NULL) == CAI_OK);
 }
 static void run(const char *runtime, const char *workspace, int persist) {
@@ -344,7 +344,7 @@ static void failures(const char *runtime, const char *workspace) {
 static void output_chunk(host *state, test_client *client, size_t length,
                          int expected) {
   cai_protocol_header header;
-  cai_cbor_token value;
+  c89cbor_token value;
   unsigned char *bytes = malloc(length);
   int rc;
   assert(bytes != NULL);
@@ -358,20 +358,20 @@ static void output_chunk(host *state, test_client *client, size_t length,
   rc = cai_workspace_server_begin(state->server, client->attachment, &header,
                                   (uint32_t)length + 3U, NULL);
   memset(&value, 0, sizeof(value));
-  value.type = CAI_CBOR_BYTES;
+  value.type = C89CBOR_BYTES;
   value.argument = length;
   if (rc == CAI_OK)
     rc = cai_workspace_server_write(state->server, client->attachment, &value,
                                     NULL);
-  value.type = CAI_CBOR_DATA;
+  value.type = C89CBOR_DATA;
   value.argument = 0U;
   value.data = bytes;
   value.length = length;
   if (rc == CAI_OK)
     rc = cai_workspace_server_write(state->server, client->attachment, &value,
                                     NULL);
-  value.type = CAI_CBOR_END;
-  value.argument = CAI_CBOR_BYTES;
+  value.type = C89CBOR_END;
+  value.argument = C89CBOR_BYTES;
   value.data = NULL;
   value.length = 0U;
   if (rc == CAI_OK)
@@ -386,7 +386,7 @@ static void output_progress(const char *runtime, const char *workspace) {
   cai_workspace_server_config config;
   cai_workspace_endpoint *endpoint;
   cai_protocol_header header;
-  cai_cbor_token value;
+  c89cbor_token value;
   unsigned char half[512];
   test_client owner, observer, newcomer;
   host state;
@@ -434,12 +434,12 @@ static void output_progress(const char *runtime, const char *workspace) {
   assert(cai_workspace_server_begin(state.server, owner.attachment, &header,
                                     1027U, NULL) == CAI_OK);
   memset(&value, 0, sizeof(value));
-  value.type = CAI_CBOR_BYTES;
+  value.type = C89CBOR_BYTES;
   value.argument = 1024U;
   assert(cai_workspace_server_write(state.server, owner.attachment, &value,
                                     NULL) == CAI_OK);
   memset(half, 'a', sizeof(half));
-  value.type = CAI_CBOR_DATA;
+  value.type = C89CBOR_DATA;
   value.argument = 0U;
   value.data = half;
   value.length = sizeof(half);
@@ -450,8 +450,8 @@ static void output_progress(const char *runtime, const char *workspace) {
   assert(owner.chunks == 0U && owner.bytes == sizeof(half));
   assert(cai_workspace_server_write(state.server, owner.attachment, &value,
                                     NULL) == CAI_OK);
-  value.type = CAI_CBOR_END;
-  value.argument = CAI_CBOR_BYTES;
+  value.type = C89CBOR_END;
+  value.argument = C89CBOR_BYTES;
   value.data = NULL;
   value.length = 0U;
   assert(cai_workspace_server_write(state.server, owner.attachment, &value,

@@ -19,7 +19,8 @@ foreach(path IN ITEMS
     "${CAI_CPKT_PREFIX}"
     "${CAI_CPKTMISC_PREFIX}"
     "${CAI_LONEJSON_PREFIX}"
-    "${CAI_PSLOG_PREFIX}")
+    "${CAI_PSLOG_PREFIX}"
+    "${CAI_CBOR_PREFIX}")
   if(NOT path STREQUAL "" AND EXISTS "${path}")
     list(APPEND prefix_paths "${path}")
   endif()
@@ -213,7 +214,8 @@ set(abi_configure_command
   "-DCAI_LONEJSON_INCLUDE_DIR=${fake_abi_prefix}/include"
   "-DCAI_LONEJSON_LIBRARY=${fake_abi_library}")
 set(abi_prefix_paths "")
-foreach(path IN ITEMS "${CAI_CPKT_PREFIX}" "${CAI_PSLOG_PREFIX}")
+foreach(path IN ITEMS "${CAI_CPKT_PREFIX}" "${CAI_CPKTMISC_PREFIX}"
+    "${CAI_PSLOG_PREFIX}" "${CAI_LONEJSON_PREFIX}" "${CAI_CBOR_PREFIX}")
   if(NOT path STREQUAL "" AND EXISTS "${path}")
     list(APPEND abi_prefix_paths "${path}")
   endif()

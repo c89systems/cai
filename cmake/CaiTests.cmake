@@ -1079,6 +1079,7 @@ if(CAI_BUILD_TESTS)
         "-DCAI_CPKTMISC_PREFIX=${CAI_CPKTMISC_PREFIX}"
         "-DCAI_LONEJSON_PREFIX=${CAI_LONEJSON_PREFIX}"
         "-DCAI_PSLOG_PREFIX=${CAI_PSLOG_PREFIX}"
+        "-DCAI_CBOR_PREFIX=${CAI_CBOR_PREFIX}"
         "-DCAI_RESOLVED_DEPENDENCY_MODE=${CAI_RESOLVED_DEPENDENCY_MODE}"
         "-DCAI_DEPS_DIR=${CAI_DEPS_DIR}"
         "-DCAI_LONEJSON_INCLUDE_DIR=${CAI_LONEJSON_INCLUDE_DIR}"
@@ -1099,8 +1100,8 @@ if(CAI_BUILD_TESTS)
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_metadata_test.cmake")
     set_tests_properties(cai_install_metadata_test PROPERTIES
       LABELS "packaging;local"
-      # Positive consumers share one validated SDK in sibling directory scopes;
-      # failing discovery and build-tree consumers retain separate configures.
+      # Static/shared consumers share one SDK configure; failing discovery and
+      # build-tree consumers retain separate configures.
       TIMEOUT 60)
     set(CAI_HOST_DEPENDENCY_MODE_TEST_ARGS
       "-DCAI_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
@@ -1111,6 +1112,7 @@ if(CAI_BUILD_TESTS)
       "-DCAI_CPKT_VERSION=${CAI_CPKT_VERSION}"
       "-DCAI_LONEJSON_PREFIX=${CAI_LONEJSON_PREFIX}"
       "-DCAI_PSLOG_PREFIX=${CAI_PSLOG_PREFIX}"
+      "-DCAI_CBOR_PREFIX=${CAI_CBOR_PREFIX}"
       "-DCAI_LONEJSON_INCLUDE_DIR=${CAI_LONEJSON_INCLUDE_DIR}"
       "-DCAI_LONEJSON_LIBRARY=${CAI_LONEJSON_LIBRARY}"
       "-DCAI_PSLOG_INCLUDE_DIR=${CAI_PSLOG_INCLUDE_DIR}"
@@ -1171,7 +1173,7 @@ if(CAI_BUILD_TESTS)
           COMMAND "${CMAKE_COMMAND}"
             "-DCAI_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
             "-DCAI_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-            "-DCAI_PREFIXES=${CAI_CPKT_PREFIX};${CAI_CPKTMISC_PREFIX};${CAI_LONEJSON_PREFIX};${CAI_PSLOG_PREFIX}"
+            "-DCAI_PREFIXES=${CAI_CPKT_PREFIX};${CAI_CPKTMISC_PREFIX};${CAI_LONEJSON_PREFIX};${CAI_PSLOG_PREFIX};${CAI_CBOR_PREFIX}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/host_dependency_runtime_test.cmake")
         set_tests_properties(cai_host_dependency_runtime_test PROPERTIES
           LABELS "packaging;local;host" TIMEOUT 120)
@@ -1272,6 +1274,7 @@ if(CAI_BUILD_TESTS)
         "-DCAI_CPKTMISC_PREFIX=${CAI_CPKTMISC_PREFIX}"
         "-DCAI_LONEJSON_PREFIX=${CAI_LONEJSON_PREFIX}"
         "-DCAI_PSLOG_PREFIX=${CAI_PSLOG_PREFIX}"
+        "-DCAI_CBOR_PREFIX=${CAI_CBOR_PREFIX}"
         "-DCAI_LONEJSON_INCLUDE_DIR=${CAI_LONEJSON_INCLUDE_DIR}"
         "-DCAI_LONEJSON_LIBRARY=${CAI_LONEJSON_LIBRARY}"
         "-DCAI_PSLOG_INCLUDE_DIR=${CAI_PSLOG_INCLUDE_DIR}"

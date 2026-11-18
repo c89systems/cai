@@ -50,7 +50,7 @@ int cai_cli_bootstrap_decode(cai_cli_bootstrap_decoder *d,
                              const cai_protocol_event *event,
                              const cai_cli_bootstrap_message **out,
                              cai_error *error) {
-  const cai_cbor_token *t;
+  const c89cbor_token *t;
   size_t capacity;
   void *target;
   if (out != NULL)
@@ -78,12 +78,12 @@ int cai_cli_bootstrap_decode(cai_cli_bootstrap_decoder *d,
   if (event->type != CAI_PROTOCOL_PAYLOAD || t == NULL || t->indefinite)
     return invalid(error);
   if (d->phase == 0) {
-    if (t->type != CAI_CBOR_ARRAY || t->argument != 9U)
+    if (t->type != C89CBOR_ARRAY || t->argument != 9U)
       return invalid(error);
     d->phase = 1;
   } else if (d->phase == 2) {
     target = field(&d->value, d->index, &capacity);
-    if (t->type == CAI_CBOR_DATA) {
+    if (t->type == C89CBOR_DATA) {
       if (t->length > d->length - d->offset ||
           (t->length &&
            (t->data == NULL ||
@@ -92,7 +92,7 @@ int cai_cli_bootstrap_decode(cai_cli_bootstrap_decoder *d,
       if (t->length)
         memcpy((unsigned char *)target + d->offset, t->data, t->length);
       d->offset += t->length;
-    } else if (t->type == CAI_CBOR_END && t->argument == CAI_CBOR_BYTES &&
+    } else if (t->type == C89CBOR_END && t->argument == C89CBOR_BYTES &&
                d->offset == d->length) {
       if (d->index != 3U)
         ((char *)target)[d->length] = '\0';
@@ -103,12 +103,12 @@ int cai_cli_bootstrap_decode(cai_cli_bootstrap_decoder *d,
   } else if (d->phase != 1)
     return invalid(error);
   else if (d->index == 9U) {
-    if (t->type != CAI_CBOR_END || t->argument != CAI_CBOR_ARRAY)
+    if (t->type != C89CBOR_END || t->argument != C89CBOR_ARRAY)
       return invalid(error);
     d->phase = 3;
   } else if (d->index >= 3U && d->index <= 6U) {
     (void)field(&d->value, d->index, &capacity);
-    if (t->type != CAI_CBOR_BYTES || t->argument > capacity ||
+    if (t->type != C89CBOR_BYTES || t->argument > capacity ||
         (d->index == 3U && t->argument != capacity))
       return invalid(error);
     d->offset = 0U;
@@ -117,8 +117,8 @@ int cai_cli_bootstrap_decode(cai_cli_bootstrap_decoder *d,
   } else {
     int boolean = d->index == 0U || d->index >= 7U;
     int n;
-    if ((boolean && (t->type != CAI_CBOR_BOOL || t->argument > 1U)) ||
-        (!boolean && (t->type != CAI_CBOR_UINT || t->argument > 255U)))
+    if ((boolean && (t->type != C89CBOR_BOOL || t->argument > 1U)) ||
+        (!boolean && (t->type != C89CBOR_UINT || t->argument > 255U)))
       return invalid(error);
     n = (int)t->argument;
     switch (d->index) {
@@ -146,9 +146,9 @@ void cai_cli_bootstrap_decoder_close(cai_cli_bootstrap_decoder *d) { free(d); }
 static uint32_t head_size(size_t n) {
   return n < 24U ? 1U : n <= 255U ? 2U : n <= 65535U ? 3U : 5U;
 }
-static int token(cai_wire_peer *peer, cai_cbor_type type, uint64_t argument,
+static int token(cai_wire_peer *peer, c89cbor_type type, uint64_t argument,
                  const void *data, size_t length, cai_error *error) {
-  cai_cbor_token t;
+  c89cbor_token t;
   memset(&t, 0, sizeof(t));
   t.type = type;
   t.argument = argument;
@@ -184,26 +184,26 @@ int cai_cli_bootstrap_write(cai_wire_peer *peer,
   header.sequence = v->ready ? 1U : 2U;
   rc = cai_protocol_peer_begin(peer, &header, size, error);
   if (rc == CAI_OK)
-    rc = token(peer, CAI_CBOR_ARRAY, 9U, NULL, 0U, error);
+    rc = token(peer, C89CBOR_ARRAY, 9U, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = token(peer, CAI_CBOR_BOOL, (uint64_t)v->ready, NULL, 0U, error);
+    rc = token(peer, C89CBOR_BOOL, (uint64_t)v->ready, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = token(peer, CAI_CBOR_UINT, (uint64_t)v->exit_code, NULL, 0U, error);
+    rc = token(peer, C89CBOR_UINT, (uint64_t)v->exit_code, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = token(peer, CAI_CBOR_UINT, (uint64_t)v->code, NULL, 0U, error);
+    rc = token(peer, C89CBOR_UINT, (uint64_t)v->code, NULL, 0U, error);
   for (i = 0U; i < 4U && rc == CAI_OK; i++) {
-    rc = token(peer, CAI_CBOR_BYTES, lengths[i], NULL, 0U, error);
+    rc = token(peer, C89CBOR_BYTES, lengths[i], NULL, 0U, error);
     if (rc == CAI_OK && lengths[i])
-      rc = token(peer, CAI_CBOR_DATA, 0U, strings[i], lengths[i], error);
+      rc = token(peer, C89CBOR_DATA, 0U, strings[i], lengths[i], error);
     if (rc == CAI_OK)
-      rc = token(peer, CAI_CBOR_END, CAI_CBOR_BYTES, NULL, 0U, error);
+      rc = token(peer, C89CBOR_END, C89CBOR_BYTES, NULL, 0U, error);
   }
   if (rc == CAI_OK)
-    rc = token(peer, CAI_CBOR_BOOL, (uint64_t)v->clipped, NULL, 0U, error);
+    rc = token(peer, C89CBOR_BOOL, (uint64_t)v->clipped, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = token(peer, CAI_CBOR_BOOL, (uint64_t)v->persist, NULL, 0U, error);
+    rc = token(peer, C89CBOR_BOOL, (uint64_t)v->persist, NULL, 0U, error);
   if (rc == CAI_OK)
-    rc = token(peer, CAI_CBOR_END, CAI_CBOR_ARRAY, NULL, 0U, error);
+    rc = token(peer, C89CBOR_END, C89CBOR_ARRAY, NULL, 0U, error);
   return rc == CAI_OK ? cai_protocol_peer_end(peer, error) : rc;
 }
 int cai_cli_bootstrap_status(cai_cli_bootstrap_message *v, int ready,

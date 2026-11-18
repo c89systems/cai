@@ -55,7 +55,7 @@ set(prefix "${CAI_BINARY_DIR}/install-metadata-test")
 string(REPLACE ";" "\\;" yaml_prefix_path_arg
   "${CAI_CPKT_PREFIX};${CAI_CPKTMISC_PREFIX}")
 string(REPLACE ";" "\\;" external_prefix_path_arg
-  "${CAI_CPKT_PREFIX};${CAI_CPKTMISC_PREFIX};${CAI_LONEJSON_PREFIX};${CAI_PSLOG_PREFIX}")
+  "${CAI_CPKT_PREFIX};${CAI_CPKTMISC_PREFIX};${CAI_LONEJSON_PREFIX};${CAI_PSLOG_PREFIX};${CAI_CBOR_PREFIX}")
 file(REMOVE_RECURSE "${prefix}")
 execute_process(
   COMMAND "${CMAKE_COMMAND}" --install "${CAI_BINARY_DIR}" --prefix "${prefix}"
@@ -199,6 +199,13 @@ if(pc_curl_pos EQUAL -1 OR pc_public_deps_pos EQUAL -1 OR
 endif()
 
 file(READ "${prefix}/share/cai/dependencies.json" dependencies_text)
+string(JSON cbor_name GET "${dependencies_text}" dependencies 5 name)
+string(JSON cbor_sha GET "${dependencies_text}" dependencies 5 sha256)
+if(NOT cbor_name STREQUAL "libcbor" OR NOT pc_text MATCHES "cbor_sha256=${cbor_sha}"
+    OR NOT pc_text MATCHES "c89cbor = 0[.]1[.]0"
+    OR NOT config_text MATCHES "find_dependency\\(C89Cbor 0[.]1[.]0 EXACT CONFIG\\)")
+  message(FATAL_ERROR "libcbor dependency metadata is missing or inconsistent")
+endif()
 string(JSON misc_name GET "${dependencies_text}" dependencies 1 name)
 string(JSON misc_id GET "${dependencies_text}" dependencies 1 packageId)
 string(JSON yaml_provider GET "${dependencies_text}" dependencies 0 providedBy)
@@ -258,7 +265,7 @@ if((NOT DEFINED CAI_RESOLVED_DEPENDENCY_MODE OR
   file(WRITE "${consumer_dir}/CMakeLists.txt"
 "cmake_minimum_required(VERSION 3.21)
 project(cai_consumer_smoke LANGUAGES C)
-set(CMAKE_PREFIX_PATH \"${prefix};${CAI_CPKT_PREFIX};${CAI_CPKTMISC_PREFIX};${CAI_LONEJSON_PREFIX};${CAI_PSLOG_PREFIX}\")
+set(CMAKE_PREFIX_PATH \"${prefix};${CAI_CPKT_PREFIX};${CAI_CPKTMISC_PREFIX};${CAI_LONEJSON_PREFIX};${CAI_PSLOG_PREFIX};${CAI_CBOR_PREFIX}\")
 find_package(cai CONFIG REQUIRED)
 add_executable(cai_consumer_smoke main.c)
 if(TARGET cai::cai_shared)
@@ -266,9 +273,16 @@ if(TARGET cai::cai_shared)
 else()
   target_link_libraries(cai_consumer_smoke PRIVATE cai::cai_static)
 endif()
+if(TARGET cai::cai_static)
+  add_executable(cai_consumer_static_smoke main.c)
+  target_link_libraries(cai_consumer_static_smoke PRIVATE cai::cai_static)
+else()
+  add_custom_target(cai_consumer_static_smoke DEPENDS cai_consumer_smoke)
+endif()
 ")
   file(WRITE "${consumer_dir}/main.c"
 "#include <cai/cai.h>
+#include <c89cbor/cbor.h>
 #include <cai/mcp.h>
 #include <cai/tools/exec.h>
 #include <cai/tools/read.h>
@@ -278,6 +292,7 @@ endif()
 #include <lonejson.h>
 int main(void) {
   cai_error error;
+  c89cbor_decoder *codec = 0;
   cai_tool_registry *registry = 0;
   int (*register_exec)(cai_tool_registry *, const cai_exec_tool_config *,
                        cai_error *);
@@ -394,6 +409,9 @@ int main(void) {
   mcp_client_register = cai_mcp_client_register_tools;
   mcp_client_destroy = cai_mcp_client_destroy;
   (void)sizeof(session_callbacks);
+  if (c89cbor_decoder_create(0, 0, &codec) != C89CBOR_OK)
+    return 1;
+  c89cbor_decoder_destroy(codec);
   (void)sizeof(session_state);
   if (register_exec == 0 || register_read == 0 ||
       register_list_files == 0 || register_revgeo == 0 ||
@@ -424,124 +442,8 @@ int main(void) {
   return 0;
 }
 ")
-  set(fallback_deps_dir "${CAI_BINARY_DIR}/install-metadata-fallback-deps")
-  file(REMOVE_RECURSE "${fallback_deps_dir}")
-  file(MAKE_DIRECTORY "${fallback_deps_dir}/include" "${fallback_deps_dir}/lib")
-  file(COPY "${CAI_LONEJSON_PREFIX}/include/"
-       DESTINATION "${fallback_deps_dir}/include")
-  file(GLOB fallback_lonejson_libs
-       "${CAI_LONEJSON_PREFIX}/lib/liblonejson.*"
-       "${CAI_LONEJSON_PREFIX}/lib/liblonejson.so*")
-  foreach(fallback_lib IN LISTS fallback_lonejson_libs)
-    file(COPY "${fallback_lib}" DESTINATION "${fallback_deps_dir}/lib"
-         FOLLOW_SYMLINK_CHAIN)
-  endforeach()
-
-  set(fallback_consumer_dir
-      "${CAI_BINARY_DIR}/install-metadata-fallback-consumer")
-  file(REMOVE_RECURSE "${fallback_consumer_dir}")
-  file(MAKE_DIRECTORY "${fallback_consumer_dir}")
-  file(WRITE "${fallback_consumer_dir}/CMakeLists.txt"
-"cmake_minimum_required(VERSION 3.21)
-project(cai_consumer_fallback_smoke LANGUAGES C)
-if(TARGET lonejson::lonejson OR TARGET cai::cai_shared OR TARGET cai::cai_static)
-  message(FATAL_ERROR \"installed consumer imports leaked between directory scopes\")
-endif()
-set(cai_DIR \"${prefix}/lib/cmake/cai\")
-set(CMAKE_PREFIX_PATH \"${CAI_CPKT_PREFIX};${CAI_CPKTMISC_PREFIX};${fallback_deps_dir}\")
-set(CMAKE_DISABLE_FIND_PACKAGE_lonejson TRUE)
-unset(cai_LONEJSON_LIBRARY CACHE)
-unset(cai_LONEJSON_INCLUDE_DIR CACHE)
-find_package(cai CONFIG REQUIRED)
-if(NOT cai_LONEJSON_LIBRARY MATCHES \"^${fallback_deps_dir}/lib/\" OR
-   NOT cai_LONEJSON_INCLUDE_DIR STREQUAL \"${fallback_deps_dir}/include\")
-  message(FATAL_ERROR \"fallback consumer did not resolve its isolated dependency\")
-endif()
-add_executable(cai_consumer_fallback_smoke main.c)
-if(TARGET cai::cai_shared)
-  target_link_libraries(cai_consumer_fallback_smoke PRIVATE cai::cai_shared)
-else()
-  target_link_libraries(cai_consumer_fallback_smoke PRIVATE cai::cai_static)
-endif()
-")
-  file(WRITE "${fallback_consumer_dir}/main.c"
-"#include <cai/cai.h>
-#include <lonejson.h>
-int main(void) {
-  cai_client_config config;
-  cai_client_config_init(&config);
-  return sizeof(config) == 0 ? 1 : 0;
-}
-")
-  if(CAI_BUILD_SHARED)
-    set(shared_only_consumer_dir
-        "${CAI_BINARY_DIR}/install-metadata-shared-only-consumer")
-    set(shared_only_fake_lonejson_dir
-        "${shared_only_consumer_dir}/fake-lonejson")
-    file(REMOVE_RECURSE "${shared_only_consumer_dir}")
-    file(MAKE_DIRECTORY "${shared_only_consumer_dir}"
-                        "${shared_only_fake_lonejson_dir}/lib")
-    file(WRITE "${shared_only_fake_lonejson_dir}/fake_lonejson.c"
-               "void cai_fake_lonejson(void) {}\n")
-    if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
-      set(shared_only_fake_lonejson_library
-          "${shared_only_fake_lonejson_dir}/lib/liblonejson.dylib")
-      set(shared_only_fake_lonejson_link_flag
-          "-Wl,-install_name,@rpath/liblonejson.${CAI_LONEJSON_ABI_VERSION}.dylib")
-    else()
-      set(shared_only_fake_lonejson_library
-          "${shared_only_fake_lonejson_dir}/lib/liblonejson.so")
-      set(shared_only_fake_lonejson_link_flag
-          "-Wl,-soname,liblonejson.so.${CAI_LONEJSON_ABI_VERSION}")
-    endif()
-    execute_process(
-      COMMAND "${CAI_C_COMPILER}" -shared
-              "${shared_only_fake_lonejson_link_flag}"
-              -o "${shared_only_fake_lonejson_library}"
-              "${shared_only_fake_lonejson_dir}/fake_lonejson.c"
-      RESULT_VARIABLE shared_only_fake_lib_result
-      OUTPUT_VARIABLE shared_only_fake_lib_output
-      ERROR_VARIABLE shared_only_fake_lib_error)
-    if(NOT shared_only_fake_lib_result EQUAL 0)
-      message(FATAL_ERROR
-        "failed to build fake lonejson shared library:\n"
-        "${shared_only_fake_lib_error}\n${shared_only_fake_lib_output}")
-    endif()
-    file(WRITE "${shared_only_consumer_dir}/CMakeLists.txt"
-"cmake_minimum_required(VERSION 3.21)
-project(cai_shared_only_consumer LANGUAGES C)
-if(TARGET lonejson::lonejson OR TARGET cai::cai_shared OR TARGET cai::cai_static)
-  message(FATAL_ERROR \"installed consumer imports leaked between directory scopes\")
-endif()
-set(cai_DIR \"${prefix}/lib/cmake/cai\")
-set(CMAKE_PREFIX_PATH \"${CAI_CPKT_PREFIX};${CAI_CPKTMISC_PREFIX}\")
-set(CMAKE_DISABLE_FIND_PACKAGE_lonejson TRUE)
-set(CMAKE_LIBRARY_PATH \"${shared_only_fake_lonejson_dir}/lib\")
-set(CMAKE_IGNORE_PATH \"${CAI_LONEJSON_PREFIX}/include;${CAI_LONEJSON_PREFIX}/lib;${fallback_deps_dir}/include;${fallback_deps_dir}/lib\")
-unset(cai_LONEJSON_LIBRARY CACHE)
-unset(cai_LONEJSON_INCLUDE_DIR CACHE)
-find_package(cai CONFIG REQUIRED)
-if(cai_LONEJSON_INCLUDE_DIR OR
-   NOT cai_LONEJSON_LIBRARY STREQUAL \"${shared_only_fake_lonejson_library}\")
-  message(FATAL_ERROR \"shared-only consumer did not resolve its headerless dependency\")
-endif()
-add_executable(cai_shared_only_consumer main.c)
-target_link_libraries(cai_shared_only_consumer PRIVATE cai::cai_shared)
-")
-    file(WRITE "${shared_only_consumer_dir}/main.c"
-"#include <cai/cai.h>
-int main(void) {
-  cai_error error;
-  cai_error_init(&error);
-  cai_error_cleanup(&error);
-  return 0;
-}
-")
-  endif()
-
-  # Imported targets are directory-scoped; SDK payload validation is a global
-  # property within one configure. Share only that unchanged prerequisite while
-  # exercising normal, fallback and headerless discovery in sibling scopes.
+  # The codec SDK requires lonejson metadata; headerless/raw-library
+  # discovery can no longer describe the complete link closure.
   set(consumers_dir "${CAI_BINARY_DIR}/install-metadata-consumers")
   file(REMOVE_RECURSE "${consumers_dir}")
   file(MAKE_DIRECTORY "${consumers_dir}")
@@ -549,12 +451,7 @@ int main(void) {
 "cmake_minimum_required(VERSION 3.21)
 project(cai_installed_consumers LANGUAGES C)
 add_subdirectory(\"${consumer_dir}\" normal)
-add_subdirectory(\"${fallback_consumer_dir}\" fallback)
 ")
-  if(CAI_BUILD_SHARED)
-    file(APPEND "${consumers_dir}/CMakeLists.txt"
-      "add_subdirectory(\"${shared_only_consumer_dir}\" shared-only)\n")
-  endif()
   set(consumers_configure_command "${CMAKE_COMMAND}"
     -S "${consumers_dir}" -B "${consumers_dir}/build")
   if(DEFINED CAI_GENERATOR AND NOT CAI_GENERATOR STREQUAL "")
@@ -566,7 +463,7 @@ add_subdirectory(\"${fallback_consumer_dir}\" fallback)
     message(FATAL_ERROR "failed to configure installed SDK consumers")
   endif()
   execute_process(COMMAND "${CMAKE_COMMAND}" --build "${consumers_dir}/build"
-    --target cai_consumer_smoke cai_consumer_fallback_smoke
+    --target cai_consumer_smoke cai_consumer_static_smoke
     RESULT_VARIABLE consumers_build_result)
   if(NOT consumers_build_result EQUAL 0)
     message(FATAL_ERROR "failed to build installed SDK consumers")
@@ -603,7 +500,7 @@ find_package(cai CONFIG REQUIRED)
       "discoverable")
   endif()
   if(NOT missing_dep_consumer_configure_error MATCHES
-        "cai requires external liblonejson")
+        "C89Cbor|lonejson")
     message(FATAL_ERROR
       "missing-lonejson consumer did not emit actionable error:\n"
       "${missing_dep_consumer_configure_error}\n"

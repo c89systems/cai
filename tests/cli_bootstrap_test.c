@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../cli/bootstrap.h"
+#include "wire_fixture.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +22,7 @@ static int event(void *context, const cai_protocol_event *e, cai_error *error) {
   }
   return rc;
 }
-static int unused(void *context, const cai_wire_event *e, cai_error *error) {
+static int unused(void *context, const c89cbor_event *e, cai_error *error) {
   (void)context;
   (void)e;
   (void)error;
@@ -50,30 +51,30 @@ static void decode(const unsigned char *bytes, size_t length, size_t fragment,
                    int expected, const cai_cli_bootstrap_message *value) {
   fixture *f = calloc(1U, sizeof(*f));
   cai_protocol_decoder *protocol;
-  cai_wire_decoder *wire;
+  test_wire_input *wire;
   size_t offset;
   int rc = CAI_OK;
   assert(f != NULL);
   assert(cai_cli_bootstrap_decoder_open(&f->decoder, NULL) == CAI_OK);
   assert(cai_protocol_decoder_open(event, f, &protocol, NULL) == CAI_OK);
-  assert(cai_wire_decoder_open(cai_protocol_decoder_event, protocol, &wire,
-                               NULL) == CAI_OK);
+  assert(test_wire_open(cai_protocol_decoder_event, protocol, &wire, NULL) ==
+         CAI_OK);
   for (offset = 0U; offset < length && rc == CAI_OK;) {
     size_t take = length - offset < fragment ? length - offset : fragment;
-    rc = cai_wire_decoder_feed(wire, bytes + offset, take, NULL);
+    rc = test_wire_feed(wire, bytes + offset, take, NULL);
     offset += take;
     if (offset < length)
       assert(f->complete == 0U);
   }
   if (rc == CAI_OK)
-    rc = cai_wire_decoder_finish(wire, NULL);
+    rc = test_wire_finish(wire, NULL);
   assert(rc == expected);
   if (expected == CAI_OK) {
     assert(f->complete == 1U);
     assert(memcmp(&f->result, value, sizeof(*value)) == 0);
   } else
     assert(f->complete == 0U);
-  cai_wire_decoder_close(wire);
+  test_wire_close(wire);
   cai_protocol_decoder_close(protocol);
   cai_cli_bootstrap_decoder_close(f->decoder);
   free(f);

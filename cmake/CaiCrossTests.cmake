@@ -18,7 +18,7 @@ endif()
 # Set the guest loader environment, never the host QEMU loader environment.
 set(_cai_guest_dirs "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_SYSROOT}/lib"
   "${CMAKE_SYSROOT}/usr/lib")
-foreach(_prefix CAI_CPKT_PREFIX CAI_LONEJSON_PREFIX CAI_PSLOG_PREFIX
+foreach(_prefix CAI_CPKT_PREFIX CAI_LONEJSON_PREFIX CAI_PSLOG_PREFIX CAI_CBOR_PREFIX
     _cai_softline_prefix _cai_libmdf_prefix _cai_lockdc_prefix _cai_liblql_prefix)
   if(DEFINED ${_prefix} AND NOT "${${_prefix}}" STREQUAL "")
     list(APPEND _cai_guest_dirs "${${_prefix}}/lib")
